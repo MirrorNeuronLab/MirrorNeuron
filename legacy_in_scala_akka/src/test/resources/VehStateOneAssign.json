@@ -1,7 +1,0 @@
-{"location":{"lat":32.86911,"lng":-117.21824},
-"assignmentOrder":["11e49cb0-7349-11e5-bae0-ff68b46c7e42"],
-"lastLocationUpdate":1444920345,
-"assignments":[{"task":"e5f582e0-7348-11e5-bae0-ff68b46c7e42","location":{"lat":32.5767068,"lng":-117.0845299},"id":"12695d10-7349-11e5-bae0-ff68b46c7e42","driver":"09626b80-7349-11e5-bae0-ff68b46c7e42","type":"oneway","props":
-     {"time":1444919400,"window":{"start":1444919400,"end":1444932000},"priority":1,"serviceTime":1647}}],"id":"09626b80-7349-11e5-bae0-ff68b46c7e42","driver":{"id":"09626b80-7349-11e5-bae0-ff68b46c7e42","profile":{"name":"Jean Luc Picard","phone":"+16172581000"},"props":{"shiftTime":[{"start":1431766800,"end":1431781200},{"start":1431799200,"end":1431817200}]}},
-"schedule":[{"assignment":"12695d10-7349-11e5-bae0-ff68b46c7e42","eta":1444925908,"status":0,"delay":0}],
-"props":{"type":"truck","weightCapacity":1000.0,"volumeCapacity":2.5}}

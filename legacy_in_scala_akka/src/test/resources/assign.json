@@ -1,5 +1,0 @@
-<<<<<<< HEAD
-{"task":"35334610-65ef-11e5-99f0-85579d363603","location":{"lat":42.3634474,"lng":-71.09965199999999},"id":"4e33e0c0-65ef-11e5-99f0-85579d363603","driver":"8468d8f0-65e8-11e5-84eb-49b69c5a3f3c","type":"oneway","props":{"time":1443416400,"window":{"start":1443416400,"end":1443453600},"priority":1,"serviceTime":600}}
-=======
-{"task":"c8bda700-662a-11e5-8d48-a38261e3447a","location":{"lat":42.3634474,"lng":-71.09965199999999},"id":"222e1df0-662c-11e5-8d48-a38261e3447a","driver":"4a8ad420-662a-11e5-8d48-a38261e3447a","type":"oneway","props":{"time":1443416400,"window":{"start":1443416400,"end":1443478500},"priority":1,"serviceTime":600}}
->>>>>>> f8d8abeb8c772f39ed4464d8eb0836aba658f1bf

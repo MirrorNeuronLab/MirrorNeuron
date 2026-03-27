@@ -67,7 +67,3 @@ var/
 /target/**
 /project/target/**/*
 /project/project
-/legacy_in_scala_akka/target/**
-/legacy_in_scala_akka/src/target/**
-/legacy_in_scala_akka/project/target/**
-/legacy_in_scala_akka/project/project/target/**
