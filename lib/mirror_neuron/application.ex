@@ -4,17 +4,33 @@ defmodule MirrorNeuron.Application do
   @impl true
   def start(_type, _args) do
     topologies = Application.get_env(:libcluster, :topologies, [])
+    role = node_role()
 
-    children = [
+    common_children = [
       {Registry, keys: :duplicate, name: MirrorNeuron.Runtime.EventRegistry},
       {Cluster.Supervisor, [topologies, [name: MirrorNeuron.ClusterSupervisor]]},
-      MirrorNeuron.Redis,
-      MirrorNeuron.Execution.LeaseManager,
-      MirrorNeuron.DistributedRegistry,
-      MirrorNeuron.Runtime.JobSupervisor,
-      MirrorNeuron.Runtime.AgentSupervisor
+      MirrorNeuron.Redis
     ]
 
+    children =
+      case role do
+        "control" ->
+          common_children
+
+        _ ->
+          common_children ++
+            [
+              MirrorNeuron.Execution.LeaseManager,
+              MirrorNeuron.DistributedRegistry,
+              MirrorNeuron.Runtime.JobSupervisor,
+              MirrorNeuron.Runtime.AgentSupervisor
+            ]
+      end
+
     Supervisor.start_link(children, strategy: :one_for_one, name: MirrorNeuron.Supervisor)
+  end
+
+  def node_role do
+    System.get_env("MIRROR_NEURON_NODE_ROLE", "runtime")
   end
 end

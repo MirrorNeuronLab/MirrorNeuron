@@ -116,6 +116,7 @@ CLI_PORT="$(find_free_port "$CLI_PORT")"
 
 export ERL_AFLAGS="-kernel inet_dist_listen_min ${CLI_PORT} inet_dist_listen_max ${CLI_PORT}"
 export MIRROR_NEURON_NODE_NAME="cli-$(date +%s)-$$@${SELF_IP}"
+export MIRROR_NEURON_NODE_ROLE="control"
 export MIRROR_NEURON_COOKIE="$COOKIE"
 export MIRROR_NEURON_CLUSTER_NODES="mn1@${BOX1_IP},mn2@${BOX2_IP}"
 export MIRROR_NEURON_REDIS_URL="redis://${REDIS_HOST}:${REDIS_PORT}/0"

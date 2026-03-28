@@ -42,6 +42,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     })
 
     with :ok <- start_agents(state),
+         :ok <- wait_for_agents_ready(state),
          :ok <- seed_entrypoints(state) do
       next_state = %{state | status: "running"}
       persist_job(next_state)
@@ -205,6 +206,37 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
+  end
+
+  defp wait_for_agents_ready(state, timeout_ms \\ 5_000) do
+    started_at = System.monotonic_time(:millisecond)
+    do_wait_for_agents_ready(state, started_at, timeout_ms)
+  end
+
+  defp do_wait_for_agents_ready(state, started_at, timeout_ms) do
+    missing_agents =
+      Enum.reject(state.agent_ids, fn agent_id ->
+        match?(
+          [{_pid, _meta}],
+          Horde.Registry.lookup(
+            MirrorNeuron.DistributedRegistry,
+            {:agent, state.job_id, agent_id}
+          )
+        )
+      end)
+
+    case missing_agents do
+      [] ->
+        :ok
+
+      missing ->
+        if System.monotonic_time(:millisecond) - started_at > timeout_ms do
+          {:error, "timed out waiting for agents to register: #{Enum.join(missing, ", ")}"}
+        else
+          Process.sleep(25)
+          do_wait_for_agents_ready(state, started_at, timeout_ms)
+        end
+    end
   end
 
   defp broadcast_agent_control(state, command) do

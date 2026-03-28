@@ -14,6 +14,9 @@ RETRY_BACKOFF_MS="500"
 DRY_RUN="0"
 SANDBOX_PREFIX="${MIRROR_NEURON_SCALE_SANDBOX_PREFIX:-prime-worker-}"
 SKIP_SANDBOX_CLEANUP="${MIRROR_NEURON_SKIP_BENCHMARK_SANDBOX_CLEANUP:-0}"
+CLUSTER_BOX1_IP=""
+CLUSTER_BOX2_IP=""
+SELF_IP=""
 
 usage() {
   cat <<'EOF'
@@ -24,6 +27,7 @@ usage:
 examples:
   bash examples/prime_sweep_scale/run_scale_test.sh --workers 2 --start 1000003 --end 1100007
   bash examples/prime_sweep_scale/run_scale_test.sh -w 1000 -s 1000003 -e 1100007 -c 100 --wave-size 5 --wave-delay-ms 1000 --max-attempts 3 --retry-backoff-ms 1000
+  bash examples/prime_sweep_scale/run_scale_test.sh --workers 4 --start 1000003 --box1-ip 192.168.4.29 --box2-ip 192.168.4.35 --self-ip 192.168.4.29
   bash examples/prime_sweep_scale/run_scale_test.sh --workers 1000 --start 1000003 --end 1100007 --dry-run
 
 options:
@@ -31,6 +35,9 @@ options:
   -s, --start <n>              Inclusive start of the scanned range
   -e, --end <n>                Optional inclusive upper boundary
   -c, --chunk-size <n>         Numbers assigned to each worker
+      --box1-ip <ip>           Use cluster_cli.sh with this box 1 IP
+      --box2-ip <ip>           Use cluster_cli.sh with this box 2 IP
+      --self-ip <ip>           Use cluster_cli.sh with this machine IP
       --wave-size <n>          Workers released in each launch wave
       --wave-delay-ms <n>      Delay between launch waves in milliseconds
       --max-attempts <n>       Maximum OpenShell attempts per worker
@@ -57,6 +64,18 @@ while [ "$#" -gt 0 ]; do
       ;;
     -c|--chunk-size)
       CHUNK_SIZE="$2"
+      shift 2
+      ;;
+    --box1-ip)
+      CLUSTER_BOX1_IP="$2"
+      shift 2
+      ;;
+    --box2-ip)
+      CLUSTER_BOX2_IP="$2"
+      shift 2
+      ;;
+    --self-ip)
+      SELF_IP="$2"
       shift 2
       ;;
     --wave-size)
@@ -106,6 +125,31 @@ if [ "${#POSITIONAL_ARGS[@]}" -ge 6 ]; then WAVE_DELAY_MS="${POSITIONAL_ARGS[5]}
 if [ "${#POSITIONAL_ARGS[@]}" -ge 7 ]; then MAX_ATTEMPTS="${POSITIONAL_ARGS[6]}"; fi
 if [ "${#POSITIONAL_ARGS[@]}" -ge 8 ]; then RETRY_BACKOFF_MS="${POSITIONAL_ARGS[7]}"; fi
 
+RUNNER=("$ROOT_DIR/mirror_neuron")
+
+if [ -n "$CLUSTER_BOX1_IP" ] || [ -n "$CLUSTER_BOX2_IP" ] || [ -n "$SELF_IP" ]; then
+  if [ -z "$CLUSTER_BOX1_IP" ] || [ -z "$CLUSTER_BOX2_IP" ] || [ -z "$SELF_IP" ]; then
+    echo "cluster mode requires --box1-ip, --box2-ip, and --self-ip together" >&2
+    exit 1
+  fi
+
+  RUNNER=(
+    bash "$ROOT_DIR/scripts/cluster_cli.sh"
+    --box1-ip "$CLUSTER_BOX1_IP"
+    --box2-ip "$CLUSTER_BOX2_IP"
+    --self-ip "$SELF_IP"
+    --
+  )
+fi
+
+cluster_peer_ip() {
+  if [ "$SELF_IP" = "$CLUSTER_BOX1_IP" ]; then
+    echo "$CLUSTER_BOX2_IP"
+  else
+    echo "$CLUSTER_BOX1_IP"
+  fi
+}
+
 cleanup_prime_sandboxes() {
   if [ "$SKIP_SANDBOX_CLEANUP" = "1" ] || ! command -v openshell >/dev/null 2>&1; then
     return
@@ -148,6 +192,11 @@ GENERATOR_ARGS=(
 
 if [ -n "$END" ]; then
   GENERATOR_ARGS+=(--end "$END")
+fi
+
+if [ -n "$SELF_IP" ]; then
+  CLUSTER_OUTPUT_DIR="/tmp/mirror_neuron_cluster_bundles"
+  GENERATOR_ARGS+=(--output-dir "$CLUSTER_OUTPUT_DIR")
 fi
 
 if [ "$DRY_RUN" = "1" ]; then
@@ -204,6 +253,14 @@ PY
 echo "Generated bundle:"
 echo "  $BUNDLE_PATH"
 
+if [ -n "$SELF_IP" ] && [ "$DRY_RUN" != "1" ]; then
+  PEER_IP="$(cluster_peer_ip)"
+  echo "Syncing bundle to peer box:"
+  echo "  peer=$PEER_IP"
+  ssh "$PEER_IP" "mkdir -p \"$(dirname "$BUNDLE_PATH")\" && rm -rf \"$BUNDLE_PATH\""
+  scp -r "$BUNDLE_PATH" "${PEER_IP}:$(dirname "$BUNDLE_PATH")/"
+fi
+
 if [ -n "$END" ]; then
   echo "Range:"
   echo "  $START - $END"
@@ -220,7 +277,7 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 echo "Validating bundle..."
-"$ROOT_DIR/mirror_neuron" validate "$BUNDLE_PATH" >/dev/null
+"${RUNNER[@]}" validate "$BUNDLE_PATH" >/dev/null
 
 echo "Running scale test with $ACTUAL_WORKERS workers and chunk size $CHUNK_SIZE..."
 echo "Launch waves: $WAVE_SIZE workers every ${WAVE_DELAY_MS}ms; retries: $MAX_ATTEMPTS attempts with ${RETRY_BACKOFF_MS}ms base backoff"
@@ -228,7 +285,11 @@ echo "Executor lease cap: default=${MIRROR_NEURON_EXECUTOR_MAX_CONCURRENCY:-4} s
 if [ -n "${MIRROR_NEURON_EXECUTOR_POOL_CAPACITIES:-}" ]; then
   echo "Executor pool capacities override: ${MIRROR_NEURON_EXECUTOR_POOL_CAPACITIES}"
 fi
-time "$ROOT_DIR/mirror_neuron" run "$BUNDLE_PATH" --json >"$RESULT_PATH"
+if [ "${#RUNNER[@]}" -gt 1 ]; then
+  echo "Submitting through cluster CLI:"
+  echo "  box1=$CLUSTER_BOX1_IP box2=$CLUSTER_BOX2_IP self=$SELF_IP"
+fi
+time "${RUNNER[@]}" run "$BUNDLE_PATH" --json >"$RESULT_PATH"
 
 echo "Result written to:"
 echo "  $RESULT_PATH"

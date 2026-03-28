@@ -166,6 +166,58 @@ defmodule MirrorNeuron.RuntimeTest do
     assert (default_pool["capacity"] || default_pool[:capacity]) >= 1
   end
 
+  test "waits for all agents to register before seeding entrypoints" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "fanout_registration_test",
+      "entrypoints" => ["dispatcher"],
+      "initial_inputs" => %{
+        "dispatcher" => [%{"text" => "fan out"}]
+      },
+      "nodes" =>
+        [
+          %{
+            "node_id" => "dispatcher",
+            "agent_type" => "router",
+            "role" => "root_coordinator",
+            "config" => %{"emit_type" => "fanout"}
+          },
+          %{
+            "node_id" => "sink",
+            "agent_type" => "aggregator",
+            "config" => %{"complete_after" => 4}
+          }
+        ] ++
+          Enum.map(1..4, fn index ->
+            %{"node_id" => "worker_#{index}", "agent_type" => "router"}
+          end),
+      "edges" =>
+        Enum.flat_map(1..4, fn index ->
+          [
+            %{
+              "from_node" => "dispatcher",
+              "to_node" => "worker_#{index}",
+              "message_type" => "fanout"
+            },
+            %{
+              "from_node" => "worker_#{index}",
+              "to_node" => "sink",
+              "message_type" => "fanout"
+            }
+          ]
+        end),
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, job_id, job} = MirrorNeuron.run_manifest(manifest, await: true, timeout: 2_000)
+    assert job["status"] == "completed"
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+    refute Enum.any?(events, &(&1["type"] == "dead_letter"))
+
+    RedisStore.delete_job(job_id)
+  end
+
   defp running_status?(job_id) do
     case MirrorNeuron.inspect_job(job_id) do
       {:ok, %{"status" => "running"}} -> true
