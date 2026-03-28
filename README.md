@@ -16,8 +16,7 @@ MirrorNeuron is an Elixir/BEAM runtime for orchestrating distributed workflows w
 Instead of managing job orchestration through external workflow engines or ad-hoc scripting, MirrorNeuron keeps the control plane lightweight while scaling your agent logic independently. Separate concerns: logical workflows stay in BEAM, heavy execution happens in isolated sandboxes.
 
 ---
-
-**Note:** This is a modern rewrite of [a legacy Scala/Akka implementation](https://github.com/homerquan/mirrorneuron_legacy_scala_actor) from earlier scalability work on distributed agent systems.
+**Note:** This is partially inspired by the author's real-time decision engine using multi-actor systems for large-scale monitoring and simulation (e.g., traffic optimization problems). The original work from 2015 demonstrated how distributed agents could coordinate complex workflows at scale; this implementation brings those patterns to AI multi agent problem.
 
 ## What is included
 
