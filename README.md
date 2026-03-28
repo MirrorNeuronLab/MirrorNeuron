@@ -462,6 +462,26 @@ Each machine must:
 - start the runtime with a node name
 - point `MIRROR_NEURON_CLUSTER_NODES` at the full list of runtime nodes
 
+The helper script can bootstrap a two-box cluster directly:
+
+```bash
+bash scripts/start_cluster_node.sh --box1-ip 10.0.0.11 --box2-ip 10.0.0.12 --box 1
+```
+
+and on the second machine:
+
+```bash
+bash scripts/start_cluster_node.sh --box1-ip 10.0.0.11 --box2-ip 10.0.0.12 --box 2
+```
+
+It derives `mn1@...` / `mn2@...`, sets the cluster env vars, and starts `./mirror_neuron server`.
+
+OpenShell behavior in the helper:
+
+- if the gateway is already healthy, the script reuses it
+- if you want a full reset first, pass `--recreate-openshell`
+- if you want to leave OpenShell alone entirely, pass `--skip-openshell`
+
 Example for node 1:
 
 ```bash
