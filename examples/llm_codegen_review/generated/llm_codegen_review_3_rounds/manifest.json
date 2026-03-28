@@ -1,0 +1,301 @@
+{
+  "manifest_version": "1.0",
+  "graph_id": "llm_codegen_review_3_rounds",
+  "job_name": "llm-codegen-review-3-rounds",
+  "entrypoints": [
+    "codegen_round_1"
+  ],
+  "initial_inputs": {
+    "codegen_round_1": [
+      {
+        "task_id": "inventory-report-cli",
+        "title": "Inventory report CLI",
+        "description": "Create a Python 3 script named inventory_report.py. The script must read a JSON array of inventory records from a file passed with --input or from stdin when --input is omitted. Each record has sku, category, quantity, and price. The CLI must support --format text|json and --low-stock-threshold (default 5).",
+        "requirements": [
+          "Use only the Python standard library.",
+          "Include a pure function build_report(records, low_stock_threshold=5).",
+          "The JSON output must include total_quantity, total_value, category_totals, and low_stock_skus.",
+          "Category totals must be sorted alphabetically by category name.",
+          "low_stock_skus must be sorted alphabetically.",
+          "Round total_value to two decimal places.",
+          "Expose a main() entrypoint and guard it with if __name__ == '__main__'."
+        ],
+        "sample_records": [
+          {
+            "sku": "A-100",
+            "category": "books",
+            "quantity": 3,
+            "price": 12.5
+          },
+          {
+            "sku": "B-200",
+            "category": "books",
+            "quantity": 7,
+            "price": 8.0
+          },
+          {
+            "sku": "C-300",
+            "category": "games",
+            "quantity": 2,
+            "price": 59.99
+          }
+        ],
+        "validation": {
+          "low_stock_threshold": 4,
+          "expected": {
+            "total_quantity": 12,
+            "total_value": 213.48,
+            "category_totals": [
+              {
+                "category": "books",
+                "quantity": 10
+              },
+              {
+                "category": "games",
+                "quantity": 2
+              }
+            ],
+            "low_stock_skus": [
+              "A-100",
+              "C-300"
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "node_id": "codegen_round_1",
+      "agent_type": "executor",
+      "role": "root_coordinator",
+      "config": {
+        "from": "base",
+        "upload_path": "llm_worker",
+        "upload_as": "llm_worker",
+        "workdir": "/sandbox/job/llm_worker",
+        "pool": "default",
+        "pool_slots": 1,
+        "no_keep": true,
+        "no_auto_providers": true,
+        "tty": false,
+        "pass_env": [
+          "GEMINI_API_KEY",
+          "GOOGLE_API_KEY"
+        ],
+        "environment": {
+          "LLM_MODEL": "gemini-2.5-flash-lite"
+        },
+        "max_attempts": 2,
+        "retry_backoff_ms": 500,
+        "runner_module": "MirrorNeuron.Runner.HostLocal",
+        "name_prefix": "codegen-r1",
+        "command": [
+          "python3",
+          "scripts/run_llm_step.py",
+          "codegen",
+          "1"
+        ],
+        "output_message_type": "codegen_round_1_result"
+      }
+    },
+    {
+      "node_id": "review_round_1",
+      "agent_type": "executor",
+      "config": {
+        "from": "base",
+        "upload_path": "llm_worker",
+        "upload_as": "llm_worker",
+        "workdir": "/sandbox/job/llm_worker",
+        "pool": "default",
+        "pool_slots": 1,
+        "no_keep": true,
+        "no_auto_providers": true,
+        "tty": false,
+        "pass_env": [
+          "GEMINI_API_KEY",
+          "GOOGLE_API_KEY"
+        ],
+        "environment": {
+          "LLM_MODEL": "gemini-2.5-flash-lite"
+        },
+        "max_attempts": 2,
+        "retry_backoff_ms": 500,
+        "runner_module": "MirrorNeuron.Runner.HostLocal",
+        "name_prefix": "review-r1",
+        "command": [
+          "python3",
+          "scripts/run_llm_step.py",
+          "review",
+          "1"
+        ],
+        "output_message_type": "review_round_1_result"
+      }
+    },
+    {
+      "node_id": "codegen_round_2",
+      "agent_type": "executor",
+      "config": {
+        "from": "base",
+        "upload_path": "llm_worker",
+        "upload_as": "llm_worker",
+        "workdir": "/sandbox/job/llm_worker",
+        "pool": "default",
+        "pool_slots": 1,
+        "no_keep": true,
+        "no_auto_providers": true,
+        "tty": false,
+        "pass_env": [
+          "GEMINI_API_KEY",
+          "GOOGLE_API_KEY"
+        ],
+        "environment": {
+          "LLM_MODEL": "gemini-2.5-flash-lite"
+        },
+        "max_attempts": 2,
+        "retry_backoff_ms": 500,
+        "runner_module": "MirrorNeuron.Runner.HostLocal",
+        "name_prefix": "codegen-r2",
+        "command": [
+          "python3",
+          "scripts/run_llm_step.py",
+          "codegen",
+          "2"
+        ],
+        "output_message_type": "codegen_round_2_result"
+      }
+    },
+    {
+      "node_id": "review_round_2",
+      "agent_type": "executor",
+      "config": {
+        "from": "base",
+        "upload_path": "llm_worker",
+        "upload_as": "llm_worker",
+        "workdir": "/sandbox/job/llm_worker",
+        "pool": "default",
+        "pool_slots": 1,
+        "no_keep": true,
+        "no_auto_providers": true,
+        "tty": false,
+        "pass_env": [
+          "GEMINI_API_KEY",
+          "GOOGLE_API_KEY"
+        ],
+        "environment": {
+          "LLM_MODEL": "gemini-2.5-flash-lite"
+        },
+        "max_attempts": 2,
+        "retry_backoff_ms": 500,
+        "runner_module": "MirrorNeuron.Runner.HostLocal",
+        "name_prefix": "review-r2",
+        "command": [
+          "python3",
+          "scripts/run_llm_step.py",
+          "review",
+          "2"
+        ],
+        "output_message_type": "review_round_2_result"
+      }
+    },
+    {
+      "node_id": "codegen_round_3",
+      "agent_type": "executor",
+      "config": {
+        "from": "base",
+        "upload_path": "llm_worker",
+        "upload_as": "llm_worker",
+        "workdir": "/sandbox/job/llm_worker",
+        "pool": "default",
+        "pool_slots": 1,
+        "no_keep": true,
+        "no_auto_providers": true,
+        "tty": false,
+        "pass_env": [
+          "GEMINI_API_KEY",
+          "GOOGLE_API_KEY"
+        ],
+        "environment": {
+          "LLM_MODEL": "gemini-2.5-flash-lite"
+        },
+        "max_attempts": 2,
+        "retry_backoff_ms": 500,
+        "runner_module": "MirrorNeuron.Runner.HostLocal",
+        "name_prefix": "codegen-r3",
+        "command": [
+          "python3",
+          "scripts/run_llm_step.py",
+          "codegen",
+          "3"
+        ],
+        "output_message_type": "codegen_round_3_result"
+      }
+    },
+    {
+      "node_id": "validator",
+      "agent_type": "executor",
+      "config": {
+        "from": "base",
+        "upload_path": "llm_worker",
+        "upload_as": "llm_worker",
+        "workdir": "/sandbox/job/llm_worker",
+        "pool": "default",
+        "pool_slots": 1,
+        "no_keep": true,
+        "no_auto_providers": true,
+        "tty": false,
+        "pass_env": [
+          "GEMINI_API_KEY",
+          "GOOGLE_API_KEY"
+        ],
+        "environment": {
+          "LLM_MODEL": "gemini-2.5-flash-lite"
+        },
+        "max_attempts": 2,
+        "retry_backoff_ms": 500,
+        "name_prefix": "validator",
+        "command": [
+          "python3",
+          "scripts/validate_candidate.py"
+        ],
+        "output_message_type": "validation_result",
+        "complete_job": true
+      }
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "codegen_r1_to_review_r1",
+      "from_node": "codegen_round_1",
+      "to_node": "review_round_1",
+      "message_type": "codegen_round_1_result"
+    },
+    {
+      "edge_id": "review_r1_to_codegen_r2",
+      "from_node": "review_round_1",
+      "to_node": "codegen_round_2",
+      "message_type": "review_round_1_result"
+    },
+    {
+      "edge_id": "codegen_r2_to_review_r2",
+      "from_node": "codegen_round_2",
+      "to_node": "review_round_2",
+      "message_type": "codegen_round_2_result"
+    },
+    {
+      "edge_id": "review_r2_to_codegen_r3",
+      "from_node": "review_round_2",
+      "to_node": "codegen_round_3",
+      "message_type": "review_round_2_result"
+    },
+    {
+      "edge_id": "codegen_r3_to_validator",
+      "from_node": "codegen_round_3",
+      "to_node": "validator",
+      "message_type": "codegen_round_3_result"
+    }
+  ],
+  "policies": {
+    "recovery_mode": "cluster_recover"
+  }
+}

@@ -138,7 +138,7 @@ defmodule MirrorNeuron.Builtins.Executor do
     do: run_with_retry(payload, config, context, message, 1)
 
   defp run_with_retry(payload, config, context, message, attempt) do
-    runner = Map.get(config, "runner_module") || Map.get(config, :runner_module) || OpenShell
+    runner = resolve_runner(config)
 
     case runner.run(
            payload,
@@ -225,6 +225,22 @@ defmodule MirrorNeuron.Builtins.Executor do
 
   defp configured_lease_manager(config) do
     Map.get(config, "lease_manager") || Map.get(config, :lease_manager) || LeaseManager
+  end
+
+  defp resolve_runner(config) do
+    case Map.get(config, "runner_module") || Map.get(config, :runner_module) do
+      nil ->
+        OpenShell
+
+      module when is_atom(module) ->
+        module
+
+      module_name when is_binary(module_name) ->
+        module_name
+        |> String.split(".", trim: true)
+        |> Enum.map(&String.to_atom/1)
+        |> Module.concat()
+    end
   end
 
   defp lease_metadata(context) do

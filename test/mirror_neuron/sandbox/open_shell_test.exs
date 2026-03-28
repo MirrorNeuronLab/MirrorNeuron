@@ -312,6 +312,103 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
     File.rm_rf!(tmp_dir)
   end
 
+  test "passes selected host environment variables through to sandbox commands" do
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "mirror_neuron_openshell_env_test_#{System.unique_integer([:positive])}"
+      )
+
+    bundle_dir = Path.join(tmp_dir, "job_bundle")
+    payloads_dir = Path.join(bundle_dir, "payloads")
+    upload_dir = Path.join(payloads_dir, "bundle")
+    remote_dir = Path.join(tmp_dir, "remote_job")
+    fake_cli = Path.join(tmp_dir, "fake_openshell.sh")
+
+    File.mkdir_p!(Path.join(upload_dir, "scripts"))
+
+    File.write!(
+      Path.join(upload_dir, "scripts/read_env.py"),
+      """
+      import json
+      import os
+
+      print(json.dumps({
+          "gemini_api_key": os.environ.get("GEMINI_API_KEY"),
+          "worker_label": os.environ.get("WORKER_LABEL"),
+      }))
+      """
+    )
+
+    File.write!(
+      fake_cli,
+      """
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      upload_spec=""
+      args=("$@")
+      i=0
+      while [ "$i" -lt "$#" ]; do
+        current="${args[$i]}"
+        if [ "$current" = "--upload" ]; then
+          i=$((i + 1))
+          upload_spec="${args[$i]}"
+        elif [ "$current" = "--" ]; then
+          break
+        fi
+        i=$((i + 1))
+      done
+
+      local_path="${upload_spec%%:*}"
+      remote_path="${upload_spec#*:}"
+      rm -rf "$remote_path"
+      mkdir -p "$remote_path"
+      cp -R "$local_path"/. "$remote_path"
+
+      shift $((i + 1))
+      exec "$@"
+      """
+    )
+
+    File.chmod!(fake_cli, 0o755)
+
+    System.put_env("GEMINI_API_KEY", "test-gemini-key")
+
+    config = %{
+      "sandbox_cli" => fake_cli,
+      "reuse_shared_sandbox" => false,
+      "upload_path" => "bundle",
+      "upload_as" => "bundle",
+      "sandbox_upload_path" => remote_dir,
+      "workdir" => Path.join(remote_dir, "bundle"),
+      "command" => ["python3", "scripts/read_env.py"],
+      "pass_env" => ["GEMINI_API_KEY"],
+      "environment" => %{"WORKER_LABEL" => "sandbox-env-test"},
+      "no_keep" => true,
+      "no_auto_providers" => true,
+      "tty" => false,
+      "name_prefix" => "env-test"
+    }
+
+    assert {:ok, result} =
+             OpenShell.run(
+               %{},
+               config,
+               job_id: "job-env-1",
+               agent_id: "agent-env-1",
+               bundle_root: bundle_dir,
+               payloads_path: payloads_dir
+             )
+
+    assert result["exit_code"] == 0
+    assert result["stdout"] =~ "\"gemini_api_key\": \"test-gemini-key\""
+    assert result["stdout"] =~ "\"worker_label\": \"sandbox-env-test\""
+
+    System.delete_env("GEMINI_API_KEY")
+    File.rm_rf!(tmp_dir)
+  end
+
   test "reuses one shared sandbox per job and deletes it on cleanup" do
     Application.ensure_all_started(:mirror_neuron)
 

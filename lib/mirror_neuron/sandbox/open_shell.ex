@@ -134,6 +134,8 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
           |> Enum.join(" ")
       end
 
+    extra_env_exports = build_extra_env_exports(config)
+
     wrapper = """
     set +e
     export MIRROR_NEURON_INPUT_FILE=#{shell_escape(input_file)}
@@ -143,6 +145,7 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
     export MIRROR_NEURON_BODY_CONTENT_TYPE=#{shell_escape(Message.content_type(message))}
     export MIRROR_NEURON_BODY_CONTENT_ENCODING=#{shell_escape(Message.content_encoding(message))}
     export MIRROR_NEURON_WORKDIR=#{shell_escape(workdir)}
+    #{extra_env_exports}
     mkdir -p #{shell_escape(remote_dir)}
     cd #{shell_escape(workdir)}
     #{actual_command} >#{shell_escape(stdout_file)} 2>#{shell_escape(stderr_file)}
@@ -512,6 +515,40 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
     value
     |> to_string()
     |> String.replace(~r/[^a-zA-Z0-9._-]/, "-")
+  end
+
+  defp build_extra_env_exports(config) do
+    explicit =
+      config
+      |> Map.get("environment", %{})
+      |> Enum.map(fn {key, value} ->
+        "export #{sanitize_env_key(key)}=#{shell_escape(to_string(value))}"
+      end)
+
+    passthrough =
+      config
+      |> Map.get("pass_env", [])
+      |> Enum.flat_map(fn key ->
+        env_key = sanitize_env_key(key)
+
+        case System.get_env(env_key) do
+          nil -> []
+          value -> ["export #{env_key}=#{shell_escape(value)}"]
+        end
+      end)
+
+    (explicit ++ passthrough)
+    |> Enum.join("\n")
+  end
+
+  defp sanitize_env_key(key) do
+    key
+    |> to_string()
+    |> String.trim()
+    |> case do
+      "" -> raise ArgumentError, "environment variable name cannot be empty"
+      value -> value
+    end
   end
 
   defp maybe_put_flag(args, _flag, false), do: args
