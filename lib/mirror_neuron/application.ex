@@ -21,6 +21,9 @@ defmodule MirrorNeuron.Application do
           common_children ++
             [
               MirrorNeuron.Execution.LeaseManager,
+              {Registry, keys: :unique, name: MirrorNeuron.Sandbox.Registry},
+              {DynamicSupervisor,
+               strategy: :one_for_one, name: MirrorNeuron.Sandbox.JobSandboxSupervisor},
               MirrorNeuron.DistributedRegistry,
               MirrorNeuron.Runtime.JobSupervisor,
               MirrorNeuron.Runtime.AgentSupervisor

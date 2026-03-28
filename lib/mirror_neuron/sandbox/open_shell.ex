@@ -1,15 +1,21 @@
 defmodule MirrorNeuron.Sandbox.OpenShell do
   alias MirrorNeuron.Message
+  alias MirrorNeuron.Sandbox.JobSandbox
 
   @result_start "__MIRROR_NEURON_RESULT_START__"
   @result_end "__MIRROR_NEURON_RESULT_END__"
 
   def run(payload, config, opts \\ []) do
+    if reuse_shared_sandbox?(config) do
+      run_in_shared_sandbox(payload, config, opts)
+    else
+      run_one_shot(payload, config, opts)
+    end
+  end
+
+  defp run_one_shot(payload, config, opts) do
     sandbox_name = build_sandbox_name(config, opts)
-
-    executable =
-      Map.get(config, "sandbox_cli", System.get_env("MIRROR_NEURON_OPENSHELL_BIN", "openshell"))
-
+    executable = sandbox_cli(config)
     remote_dir = Map.get(config, "sandbox_upload_path", "/sandbox/job")
 
     with {:ok, staged_dir} <- stage_workspace(payload, config, opts) do
@@ -27,9 +33,38 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
       after
         File.rm_rf(staged_dir)
       end
-    else
-      {:error, reason} ->
-        {:error, reason}
+    end
+  end
+
+  defp run_in_shared_sandbox(payload, config, opts) do
+    executable = sandbox_cli(config)
+
+    with {:ok, sandbox} <- JobSandbox.ensure(Keyword.fetch!(opts, :job_id), config),
+         {:ok, staged_dir} <- stage_workspace(payload, config, opts) do
+      remote_dir = build_shared_remote_dir(config, opts)
+
+      try do
+        with {:ok, :uploaded} <-
+               upload_workspace(
+                 executable,
+                 sandbox["sandbox_name"],
+                 staged_dir,
+                 remote_dir
+               ),
+             command <- build_command(config, remote_dir, opts),
+             {:ok, output, ssh_exit_code} <-
+               run_ssh_command(config, sandbox["sandbox_name"], sandbox["ssh_host"], command),
+             {:ok, result} <-
+               extract_result(output, sandbox["sandbox_name"], remote_dir, ssh_exit_code) do
+          if result["exit_code"] == 0 do
+            {:ok, result}
+          else
+            {:error, result}
+          end
+        end
+      after
+        File.rm_rf(staged_dir)
+      end
     end
   end
 
@@ -65,11 +100,13 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
   end
 
   defp build_command(config, remote_dir, opts) do
-    workdir = Map.get(config, "workdir", remote_dir)
+    workdir = resolve_workdir(config, remote_dir)
     input_file = Path.join(remote_dir, "mirror_neuron_input.json")
     context_file = Path.join(remote_dir, "mirror_neuron_context.json")
     message_file = Path.join(remote_dir, "mirror_neuron_message.json")
     body_file = Path.join(remote_dir, "mirror_neuron_body.bin")
+    stdout_file = Path.join(remote_dir, "mirror_neuron_stdout.txt")
+    stderr_file = Path.join(remote_dir, "mirror_neuron_stderr.txt")
     message = build_message(%{}, config, opts)
 
     substitutions = %{
@@ -106,16 +143,17 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
     export MIRROR_NEURON_BODY_CONTENT_TYPE=#{shell_escape(Message.content_type(message))}
     export MIRROR_NEURON_BODY_CONTENT_ENCODING=#{shell_escape(Message.content_encoding(message))}
     export MIRROR_NEURON_WORKDIR=#{shell_escape(workdir)}
+    mkdir -p #{shell_escape(remote_dir)}
     cd #{shell_escape(workdir)}
-    #{actual_command} >/tmp/mirror_neuron_stdout 2>/tmp/mirror_neuron_stderr
+    #{actual_command} >#{shell_escape(stdout_file)} 2>#{shell_escape(stderr_file)}
     status=$?
     MIRROR_NEURON_EXIT_CODE="$status" python3 - <<'PY'
     import json
     import os
     import pathlib
 
-    stdout = pathlib.Path("/tmp/mirror_neuron_stdout").read_text()
-    stderr = pathlib.Path("/tmp/mirror_neuron_stderr").read_text()
+    stdout = pathlib.Path(#{shell_escape(stdout_file)}).read_text()
+    stderr = pathlib.Path(#{shell_escape(stderr_file)}).read_text()
     result = {
         "exit_code": int(os.environ["MIRROR_NEURON_EXIT_CODE"]),
         "stdout": stdout,
@@ -125,6 +163,7 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
     print(json.dumps(result))
     print("#{@result_end}")
     PY
+    rm -rf #{shell_escape(remote_dir)} >/dev/null 2>&1 || true
     exit "$status"
     """
 
@@ -144,6 +183,64 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
   rescue
     error in ErlangError ->
       {:error, "failed to invoke #{executable}: #{Exception.message(error)}"}
+  end
+
+  defp upload_workspace(executable, sandbox_name, staged_dir, remote_dir) do
+    case System.cmd(
+           executable,
+           ["sandbox", "upload", sandbox_name, staged_dir, remote_dir, "--no-git-ignore"],
+           stderr_to_stdout: true,
+           env: [{"NO_COLOR", "1"}]
+         ) do
+      {_output, 0} ->
+        {:ok, :uploaded}
+
+      {output, exit_code} ->
+        {:error,
+         %{
+           "error" => "failed to upload workspace to shared sandbox",
+           "sandbox_name" => sandbox_name,
+           "remote_dir" => remote_dir,
+           "exit_code" => exit_code,
+           "logs" => output
+         }}
+    end
+  rescue
+    error in ErlangError ->
+      {:error, "failed to invoke #{executable}: #{Exception.message(error)}"}
+  end
+
+  defp run_ssh_command(config, sandbox_name, ssh_host, command) do
+    ssh_bin = Map.get(config, "ssh_bin", "ssh")
+    executable = sandbox_cli(config)
+
+    temp_config =
+      Path.join(System.tmp_dir!(), "mirror_neuron_ssh_#{System.unique_integer([:positive])}")
+
+    try do
+      case System.cmd(executable, ["sandbox", "ssh-config", sandbox_name],
+             stderr_to_stdout: true,
+             env: [{"NO_COLOR", "1"}]
+           ) do
+        {ssh_config, 0} ->
+          File.write!(temp_config, ssh_config)
+          run_command(ssh_bin, ["-F", temp_config, ssh_host | command])
+
+        {output, exit_code} ->
+          {:error,
+           %{
+             "error" => "failed to resolve shared sandbox ssh config",
+             "sandbox_name" => sandbox_name,
+             "exit_code" => exit_code,
+             "logs" => output
+           }}
+      end
+    after
+      File.rm_rf(temp_config)
+    end
+  rescue
+    error in ErlangError ->
+      {:error, "failed to invoke ssh for #{sandbox_name}: #{Exception.message(error)}"}
   end
 
   defp extract_result(output, sandbox_name, remote_dir, openshell_exit_code) do
@@ -198,7 +295,12 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
   end
 
   defp stage_workspace(payload, config, opts) do
-    sandbox_name = build_sandbox_name(config, opts)
+    sandbox_name =
+      if reuse_shared_sandbox?(config) do
+        "shared-#{Keyword.get(opts, :job_id, "job")}"
+      else
+        build_sandbox_name(config, opts)
+      end
 
     base_dir =
       Path.join(
@@ -373,6 +475,43 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
       "" -> suffix
       base -> "#{base}-#{suffix}"
     end
+  end
+
+  defp build_shared_remote_dir(config, opts) do
+    root = Map.get(config, "sandbox_upload_path", "/sandbox/job")
+    agent = sanitize_path_segment(Keyword.get(opts, :agent_id, "agent"))
+    attempt = Keyword.get(opts, :attempt, 1)
+    unique = Integer.to_string(System.unique_integer([:positive]))
+    Path.join([root, "runs", agent, "a#{attempt}-#{unique}"])
+  end
+
+  defp resolve_workdir(config, remote_dir) do
+    default_root = Map.get(config, "sandbox_upload_path", "/sandbox/job")
+    configured = Map.get(config, "workdir", remote_dir)
+
+    cond do
+      configured == default_root ->
+        remote_dir
+
+      String.starts_with?(configured, default_root <> "/") ->
+        suffix = String.replace_prefix(configured, default_root, "")
+        remote_dir <> suffix
+
+      true ->
+        configured
+    end
+  end
+
+  defp reuse_shared_sandbox?(config), do: Map.get(config, "reuse_shared_sandbox", true)
+
+  defp sandbox_cli(config) do
+    Map.get(config, "sandbox_cli", System.get_env("MIRROR_NEURON_OPENSHELL_BIN", "openshell"))
+  end
+
+  defp sanitize_path_segment(value) do
+    value
+    |> to_string()
+    |> String.replace(~r/[^a-zA-Z0-9._-]/, "-")
   end
 
   defp maybe_put_flag(args, _flag, false), do: args

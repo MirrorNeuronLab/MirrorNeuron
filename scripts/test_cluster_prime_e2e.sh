@@ -7,12 +7,15 @@ BOX2_IP=""
 START=""
 END=""
 CHUNK_SIZE="100"
+CHUNK_SIZE_EXPLICIT="0"
 COOKIE="${MIRROR_NEURON_COOKIE:-mirrorneuron}"
 DIST_PORT="${MIRROR_NEURON_DIST_PORT:-4370}"
 EXECUTOR_CAPACITY="${MIRROR_NEURON_EXECUTOR_MAX_CONCURRENCY:-2}"
 REMOTE_ROOT="${MIRROR_NEURON_REMOTE_ROOT:-/Users/homer/Personal_Projects/MirrorNeuron}"
 SKIP_SYNC="0"
 KEEP_CLUSTER_UP="0"
+WAIT_TIMEOUT_SECONDS=""
+POLL_INTERVAL_SECONDS="5"
 REMOTE_PATH_PREFIX='export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH";'
 
 usage() {
@@ -33,6 +36,9 @@ options:
       --cookie <cookie>          Erlang cookie, defaults to mirrorneuron
       --dist-port <port>         Erlang distribution port, defaults to 4370
       --executor-capacity <n>    Executor lease cap per node, defaults to 2
+      --wait-timeout-seconds <n> Maximum time to wait for job completion
+      --poll-interval-seconds <n>
+                                 Progress poll interval while waiting, defaults to 5
       --skip-sync                Do not rsync the repo to box 2 first
       --keep-cluster-up          Leave both runtime nodes running after the test
   -h, --help                     Show this help
@@ -59,6 +65,7 @@ while [ "$#" -gt 0 ]; do
       ;;
     --chunk-size)
       CHUNK_SIZE="$2"
+      CHUNK_SIZE_EXPLICIT="1"
       shift 2
       ;;
     --remote-root)
@@ -75,6 +82,14 @@ while [ "$#" -gt 0 ]; do
       ;;
     --executor-capacity)
       EXECUTOR_CAPACITY="$2"
+      shift 2
+      ;;
+    --wait-timeout-seconds)
+      WAIT_TIMEOUT_SECONDS="$2"
+      shift 2
+      ;;
+    --poll-interval-seconds)
+      POLL_INTERVAL_SECONDS="$2"
       shift 2
       ;;
     --skip-sync)
@@ -107,6 +122,23 @@ if [ "$END" -lt "$START" ]; then
   exit 1
 fi
 
+TOTAL_CLUSTER_CAPACITY=$((EXECUTOR_CAPACITY * 2))
+
+if [ "$CHUNK_SIZE_EXPLICIT" != "1" ]; then
+  CHUNK_SIZE="$(
+    python3 - <<PY
+import math
+start = int("$START")
+end = int("$END")
+capacity = max(1, int("$TOTAL_CLUSTER_CAPACITY"))
+range_size = (end - start) + 1
+target_workers = min(128, max(capacity * 10, 24))
+chunk = max(100, math.ceil(range_size / target_workers))
+print(chunk)
+PY
+  )"
+fi
+
 WORKERS="$(
   python3 - <<PY
 start = int("$START")
@@ -115,6 +147,18 @@ chunk = int("$CHUNK_SIZE")
 print(((end - start) // chunk) + 1)
 PY
 )"
+
+if [ -z "$WAIT_TIMEOUT_SECONDS" ]; then
+  WAIT_TIMEOUT_SECONDS="$(
+    python3 - <<PY
+import math
+workers = int("$WORKERS")
+capacity = max(1, int("$TOTAL_CLUSTER_CAPACITY"))
+estimated = math.ceil((workers * 2.0) / capacity) + 120
+print(max(120, estimated))
+PY
+  )"
+fi
 
 LOCAL_LOG="/tmp/mirror_neuron_mn1_e2e.log"
 REMOTE_LOG="/tmp/mirror_neuron_mn2_e2e.log"
@@ -156,11 +200,11 @@ cleanup_sandboxes_local() {
   local names
   names="$(
     NO_COLOR=1 openshell sandbox list 2>/dev/null \
-      | awk 'NR > 1 && index($1, "prime-worker-") == 1 {print $1}'
+      | awk 'NR > 1 && (index($1, "prime-worker-") == 1 || index($1, "mirror-neuron-job-") == 1) {print $1}'
   )"
 
   if [ -n "$names" ]; then
-    echo "Deleting local prime sandboxes..."
+    echo "Deleting local benchmark sandboxes..."
     printf '%s\n' "$names" | xargs -n 20 openshell sandbox delete >/dev/null 2>&1 || true
   fi
 }
@@ -170,7 +214,7 @@ cleanup_sandboxes_remote() {
     if command -v openshell >/dev/null 2>&1; then
       names=\$(
         NO_COLOR=1 openshell sandbox list 2>/dev/null \
-          | awk 'NR > 1 && index(\$1, \"prime-worker-\") == 1 {print \$1}'
+          | awk 'NR > 1 && (index(\$1, \"prime-worker-\") == 1 || index(\$1, \"mirror-neuron-job-\") == 1) {print \$1}'
       )
       if [ -n \"\$names\" ]; then
         printf \"%s\n\" \"\$names\" | xargs -n 20 openshell sandbox delete >/dev/null 2>&1 || true
@@ -421,6 +465,13 @@ scp -r "$BUNDLE_PATH" "${BOX2_IP}:$(dirname "$BUNDLE_PATH")/" >/dev/null
 
 echo "Range:"
 echo "  $START - $END"
+if [ "$CHUNK_SIZE_EXPLICIT" != "1" ]; then
+  echo "Chunk size:"
+  echo "  $CHUNK_SIZE (auto-selected)"
+else
+  echo "Chunk size:"
+  echo "  $CHUNK_SIZE"
+fi
 echo "Validating bundle..."
 bash "$ROOT_DIR/scripts/cluster_cli.sh" \
   --box1-ip "$BOX1_IP" \
@@ -445,6 +496,8 @@ JOB_ID="$(
 echo "Submitted job:"
 echo "  $JOB_ID"
 echo "Waiting for completion..."
+echo "  timeout: ${WAIT_TIMEOUT_SECONDS}s"
+echo "  poll interval: ${POLL_INTERVAL_SECONDS}s"
 
 JOB_JSON="$(
   cd "$ROOT_DIR"
@@ -453,7 +506,18 @@ JOB_JSON="$(
     mix run --no-start -e '
       Application.ensure_all_started(:mirror_neuron)
       job_id = System.argv() |> List.first()
-      deadline = System.monotonic_time(:millisecond) + 120_000
+      timeout_seconds =
+        System.argv()
+        |> Enum.at(1)
+        |> String.to_integer()
+
+      poll_interval_ms =
+        System.argv()
+        |> Enum.at(2)
+        |> String.to_integer()
+        |> Kernel.*(1_000)
+
+      deadline = System.monotonic_time(:millisecond) + timeout_seconds * 1_000
 
       wait = fn wait ->
         case MirrorNeuron.inspect_job(job_id) do
@@ -461,18 +525,33 @@ JOB_JSON="$(
             IO.puts(Jason.encode!(job))
 
           _ ->
+            progress =
+              case MirrorNeuron.inspect_agents(job_id) do
+                {:ok, agents} ->
+                  execs = Enum.filter(agents, &(&1["agent_type"] == "executor"))
+                  done = Enum.count(execs, &(get_in(&1, ["current_state", "runs"]) == 1))
+                  agg = Enum.find(agents, &(&1["agent_id"] == "aggregator"))
+                  agg_count = if agg, do: length(get_in(agg, ["current_state", "messages"]) || []), else: 0
+                  "progress executors=#{done}/#{length(execs)} aggregator=#{agg_count}"
+
+                _ ->
+                  "progress unavailable"
+              end
+
+            IO.puts(:stderr, progress)
+
             if System.monotonic_time(:millisecond) >= deadline do
               IO.puts(:stderr, "timed out waiting for job #{job_id}")
               System.halt(2)
             else
-              Process.sleep(500)
+              Process.sleep(poll_interval_ms)
               wait.(wait)
             end
         end
       end
 
       wait.(wait)
-    ' -- "$JOB_ID"
+    ' -- "$JOB_ID" "$WAIT_TIMEOUT_SECONDS" "$POLL_INTERVAL_SECONDS"
 )"
 
 printf '%s\n' "$JOB_JSON" >"$RESULT_PATH"

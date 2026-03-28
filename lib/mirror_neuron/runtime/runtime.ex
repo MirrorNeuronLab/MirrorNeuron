@@ -1,11 +1,16 @@
 defmodule MirrorNeuron.Runtime do
+  require Logger
+
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime.{EventBus, JobRunner}
 
   def start_job(manifest, opts \\ []) do
     job_id = Keyword.get(opts, :job_id, generate_job_id(manifest.graph_id))
+    bundle = Keyword.get(opts, :job_bundle)
 
     spec = {JobRunner, {job_id, manifest, opts}}
+
+    persist_initial_job(job_id, manifest, bundle)
 
     with {:ok, pid} <-
            Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) do
@@ -26,10 +31,25 @@ defmodule MirrorNeuron.Runtime do
   end
 
   def deliver(job_id, agent_id, message) do
+    deliver_with_retry(job_id, agent_id, message, 50)
+  end
+
+  defp call_job(job_id, message) do
+    case Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:job, job_id}) do
+      [{pid, _}] -> GenServer.call(pid, message, 15_000)
+      [] -> {:error, "job #{job_id} is not running in the connected cluster"}
+    end
+  end
+
+  defp deliver_with_retry(job_id, agent_id, message, attempts_left) do
     case Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:agent, job_id, agent_id}) do
       [{pid, _}] ->
         GenServer.cast(pid, {:deliver, message})
         :ok
+
+      [] when attempts_left > 0 ->
+        Process.sleep(50)
+        deliver_with_retry(job_id, agent_id, message, attempts_left - 1)
 
       [] ->
         EventBus.publish(job_id, %{
@@ -40,13 +60,6 @@ defmodule MirrorNeuron.Runtime do
         })
 
         {:error, "agent #{agent_id} is not running for job #{job_id}"}
-    end
-  end
-
-  defp call_job(job_id, message) do
-    case Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:job, job_id}) do
-      [{pid, _}] -> GenServer.call(pid, message, 15_000)
-      [] -> {:error, "job #{job_id} is not running in the connected cluster"}
     end
   end
 
@@ -84,4 +97,33 @@ defmodule MirrorNeuron.Runtime do
 
   def timestamp,
     do: DateTime.utc_now() |> DateTime.truncate(:millisecond) |> DateTime.to_iso8601()
+
+  defp persist_initial_job(job_id, manifest, bundle) do
+    job_map = %{
+      "job_id" => job_id,
+      "graph_id" => manifest.graph_id,
+      "job_name" => manifest.job_name,
+      "status" => "pending",
+      "submitted_at" => timestamp(),
+      "updated_at" => timestamp(),
+      "root_agent_ids" => manifest.entrypoints,
+      "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
+      "recovery_policy" => Map.get(manifest.policies, "recovery_mode", "local_restart"),
+      "result" => nil,
+      "manifest_ref" => %{
+        "graph_id" => manifest.graph_id,
+        "manifest_version" => manifest.manifest_version,
+        "manifest_path" => bundle && bundle.manifest_path,
+        "job_path" => bundle && bundle.root_path
+      }
+    }
+
+    case RedisStore.persist_job(job_id, job_map) do
+      {:ok, _job} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("failed to persist initial job #{job_id}: #{inspect(reason)}")
+    end
+  end
 end

@@ -157,7 +157,7 @@ cleanup_prime_sandboxes() {
 
   sandbox_names="$(
     NO_COLOR=1 openshell sandbox list 2>/dev/null \
-      | awk -v prefix="$SANDBOX_PREFIX" 'NR > 1 && index($1, prefix) == 1 { print $1 }'
+      | awk -v prefix="$SANDBOX_PREFIX" 'NR > 1 && (index($1, prefix) == 1 || index($1, "mirror-neuron-job-") == 1) { print $1 }'
   )"
 
   sandbox_count="$(
@@ -171,7 +171,7 @@ cleanup_prime_sandboxes() {
     return
   fi
 
-  echo "Cleaning up ${sandbox_count} stale benchmark sandboxes with prefix ${SANDBOX_PREFIX}..."
+  echo "Cleaning up ${sandbox_count} stale benchmark sandboxes..."
   printf '%s\n' "$sandbox_names" | xargs -n 50 openshell sandbox delete >/dev/null 2>&1 || true
 }
 

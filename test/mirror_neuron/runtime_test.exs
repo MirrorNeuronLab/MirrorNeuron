@@ -250,7 +250,8 @@ defmodule MirrorNeuron.RuntimeTest do
       manifest_version: "1.0"
     }
 
-    assert {:ok, pid} = AgentWorker.start_link({job_id, node, [], coordinator, runtime_context})
+    assert {:ok, pid} =
+             AgentWorker.start_link({job_id, node, [], [], coordinator, runtime_context})
 
     message =
       Message.new(job_id, "external", "sink", "manual_result", %{"value" => "done"},

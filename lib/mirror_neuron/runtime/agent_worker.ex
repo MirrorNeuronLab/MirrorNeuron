@@ -8,26 +8,28 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.Naming
 
-  def child_spec({job_id, node, edges, coordinator, runtime_context}) do
+  def child_spec({job_id, node, outbound_edges, inbound_edges, coordinator, runtime_context}) do
     %{
       id: {:agent_worker, job_id, node.node_id},
-      start: {__MODULE__, :start_link, [{job_id, node, edges, coordinator, runtime_context}]},
+      start:
+        {__MODULE__, :start_link,
+         [{job_id, node, outbound_edges, inbound_edges, coordinator, runtime_context}]},
       restart: :transient,
       type: :worker
     }
   end
 
-  def start_link({job_id, node, edges, coordinator, runtime_context}) do
-    GenServer.start_link(__MODULE__, {job_id, node, edges, coordinator, runtime_context},
+  def start_link({job_id, node, outbound_edges, inbound_edges, coordinator, runtime_context}) do
+    GenServer.start_link(
+      __MODULE__,
+      {job_id, node, outbound_edges, inbound_edges, coordinator, runtime_context},
       name: Naming.via_agent(job_id, node.node_id)
     )
   end
 
   @impl true
-  def init({job_id, node, edges, coordinator, runtime_context}) do
+  def init({job_id, node, outbound_edges, inbound_edges, coordinator, runtime_context}) do
     module = AgentRegistry.fetch!(node.agent_type)
-    outbound_edges = Enum.filter(edges, &(&1.from_node == node.node_id))
-    inbound_edges = Enum.filter(edges, &(&1.to_node == node.node_id))
 
     case module.init(node) do
       {:ok, local_state} ->

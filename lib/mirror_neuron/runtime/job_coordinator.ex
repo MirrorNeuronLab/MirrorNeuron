@@ -6,6 +6,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.{AgentWorker, EventBus, Naming}
+  alias MirrorNeuron.Sandbox.JobSandbox
 
   def start_link({job_id, manifest, opts}) do
     GenServer.start_link(__MODULE__, {job_id, manifest, opts}, name: Naming.via_job(job_id))
@@ -53,6 +54,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       {:error, reason} ->
         failed_state = %{state | status: "failed", result: %{error: reason}}
         persist_job(failed_state)
+        cleanup_sandboxes(failed_state)
 
         EventBus.publish(state.job_id, %{
           type: :job_failed,
@@ -91,6 +93,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     broadcast_agent_control(state, :cancel)
     next_state = %{state | status: "cancelled", result: %{reason: "cancelled by operator"}}
     persist_job(next_state)
+    cleanup_sandboxes(next_state)
     EventBus.publish(state.job_id, %{type: :job_cancelled, timestamp: Runtime.timestamp()})
     {:stop, :normal, {:ok, "cancelled"}, next_state}
   end
@@ -134,6 +137,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   def handle_info({:agent_completed_job, agent_id, result}, state) do
     next_state = %{state | status: "completed", result: %{agent_id: agent_id, output: result}}
     persist_job(next_state)
+    cleanup_sandboxes(next_state)
 
     EventBus.publish(state.job_id, %{
       type: :job_completed,
@@ -153,6 +157,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     }
 
     persist_job(next_state)
+    cleanup_sandboxes(next_state)
 
     EventBus.publish(state.job_id, %{
       type: :job_failed,
@@ -165,10 +170,14 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp start_agents(state) do
+    outbound_edges_by_node = Enum.group_by(state.manifest.edges, & &1.from_node)
+    inbound_edges_by_node = Enum.group_by(state.manifest.edges, & &1.to_node)
+
     Enum.reduce_while(state.manifest.nodes, :ok, fn node, :ok ->
       spec =
         {AgentWorker,
-         {state.job_id, node, state.manifest.edges, self(), agent_runtime_context(state)}}
+         {state.job_id, node, Map.get(outbound_edges_by_node, node.node_id, []),
+          Map.get(inbound_edges_by_node, node.node_id, []), self(), agent_runtime_context(state)}}
 
       case Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.AgentSupervisor, spec) do
         {:ok, _pid} ->
@@ -300,6 +309,25 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       {:error, reason} ->
         Logger.warning("failed to persist job #{state.job_id}: #{inspect(reason)}")
     end
+  end
+
+  defp cleanup_sandboxes(state) do
+    [Node.self() | Node.list()]
+    |> Enum.uniq()
+    |> Enum.each(fn node ->
+      case :rpc.call(node, JobSandbox, :cleanup_job_local, [state.job_id], 15_000) do
+        :ok ->
+          :ok
+
+        {:badrpc, reason} ->
+          Logger.warning(
+            "failed to clean up shared sandbox for #{state.job_id} on #{node}: #{inspect(reason)}"
+          )
+
+        _other ->
+          :ok
+      end
+    end)
   end
 
   defp agent_runtime_context(state) do
