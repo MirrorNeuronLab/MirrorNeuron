@@ -4,7 +4,7 @@ MirrorNeuron includes a terminal monitor designed to be the CLI equivalent of a 
 
 Tool:
 
-- [mirror_neuron_monitor](/Volumes/1TB/Personal_projects/MirrorNeuron/mirror_neuron_monitor)
+- [mirror_neuron_monitor](../mirror_neuron_monitor)
 
 ## What it shows
 
@@ -46,7 +46,7 @@ Controls:
 ./mirror_neuron_monitor --json
 ```
 
-This uses the monitor API from [monitor.ex](/Volumes/1TB/Personal_projects/MirrorNeuron/lib/mirror_neuron/monitor.ex).
+This uses the monitor API from [monitor.ex](../lib/mirror_neuron/monitor.ex).
 
 ## Cluster usage
 
@@ -117,6 +117,6 @@ Use `mirror_neuron_monitor` when you want to:
 
 ## Related docs
 
-- [CLI Guide](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/cli.md)
-- [API Reference](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/api.md)
-- [Troubleshooting](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/troubleshooting.md)
+- [CLI Guide](cli.md)
+- [API Reference](api.md)
+- [Troubleshooting](troubleshooting.md)

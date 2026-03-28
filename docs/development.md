@@ -6,14 +6,14 @@ This guide is for contributors and integrators working on MirrorNeuron itself.
 
 Important files and directories:
 
-- [mix.exs](/Volumes/1TB/Personal_projects/MirrorNeuron/mix.exs)
-- [lib/mirror_neuron.ex](/Volumes/1TB/Personal_projects/MirrorNeuron/lib/mirror_neuron.ex)
-- [lib/mirror_neuron/runtime](/Volumes/1TB/Personal_projects/MirrorNeuron/lib/mirror_neuron/runtime)
-- [lib/mirror_neuron/builtins](/Volumes/1TB/Personal_projects/MirrorNeuron/lib/mirror_neuron/builtins)
-- [lib/mirror_neuron/sandbox](/Volumes/1TB/Personal_projects/MirrorNeuron/lib/mirror_neuron/sandbox)
-- [lib/mirror_neuron/execution](/Volumes/1TB/Personal_projects/MirrorNeuron/lib/mirror_neuron/execution)
-- [lib/mirror_neuron/monitor.ex](/Volumes/1TB/Personal_projects/MirrorNeuron/lib/mirror_neuron/monitor.ex)
-- [test](/Volumes/1TB/Personal_projects/MirrorNeuron/test)
+- [mix.exs](../mix.exs)
+- [lib/mirror_neuron.ex](../lib/mirror_neuron.ex)
+- [lib/mirror_neuron/runtime](../lib/mirror_neuron/runtime)
+- [lib/mirror_neuron/builtins](../lib/mirror_neuron/builtins)
+- [lib/mirror_neuron/sandbox](../lib/mirror_neuron/sandbox)
+- [lib/mirror_neuron/execution](../lib/mirror_neuron/execution)
+- [lib/mirror_neuron/monitor.ex](../lib/mirror_neuron/monitor.ex)
+- [test](../test)
 
 ## Development loop
 
@@ -66,9 +66,9 @@ For real sandbox behavior, you also need OpenShell running.
 
 The best starting points are:
 
-- [agent.ex](/Volumes/1TB/Personal_projects/MirrorNeuron/lib/mirror_neuron/agent.ex)
-- [agent_template.ex](/Volumes/1TB/Personal_projects/MirrorNeuron/lib/mirror_neuron/agent_template.ex)
-- [agent_templates/accumulator.ex](/Volumes/1TB/Personal_projects/MirrorNeuron/lib/mirror_neuron/agent_templates/accumulator.ex)
+- [agent.ex](../lib/mirror_neuron/agent.ex)
+- [agent_template.ex](../lib/mirror_neuron/agent_template.ex)
+- [agent_templates/accumulator.ex](../lib/mirror_neuron/agent_templates/accumulator.ex)
 
 For operational tooling, prefer building on:
 
@@ -82,6 +82,6 @@ instead of reaching directly into Redis.
 
 If you add a user-visible feature, update:
 
-- [README.md](/Volumes/1TB/Personal_projects/MirrorNeuron/README.md)
-- at least one page under [/Volumes/1TB/Personal_projects/MirrorNeuron/docs](/Volumes/1TB/Personal_projects/MirrorNeuron/docs)
-- [docs/api.md](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/api.md) if the feature changes public inspection or control APIs
+- [README.md](../README.md)
+- at least one page under [docs](../docs)
+- [docs/api.md](api.md) if the feature changes public inspection or control APIs

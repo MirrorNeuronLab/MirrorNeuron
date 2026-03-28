@@ -6,7 +6,7 @@ MirrorNeuron currently includes several examples that cover different parts of t
 
 Path:
 
-- [examples/research_flow](/Volumes/1TB/Personal_projects/MirrorNeuron/examples/research_flow)
+- [examples/research_flow](../examples/research_flow)
 
 Purpose:
 
@@ -25,7 +25,7 @@ Run:
 
 Path:
 
-- [examples/openshell_worker_demo](/Volumes/1TB/Personal_projects/MirrorNeuron/examples/openshell_worker_demo)
+- [examples/openshell_worker_demo](../examples/openshell_worker_demo)
 
 Purpose:
 
@@ -50,7 +50,7 @@ bash demo/openshell_pipeline/run_demo.sh
 
 Path:
 
-- [examples/prime_sweep_scale](/Volumes/1TB/Personal_projects/MirrorNeuron/examples/prime_sweep_scale)
+- [examples/prime_sweep_scale](../examples/prime_sweep_scale)
 
 Purpose:
 
@@ -60,9 +60,9 @@ Purpose:
 
 Key files:
 
-- [generate_bundle.py](/Volumes/1TB/Personal_projects/MirrorNeuron/examples/prime_sweep_scale/generate_bundle.py)
-- [run_scale_test.sh](/Volumes/1TB/Personal_projects/MirrorNeuron/examples/prime_sweep_scale/run_scale_test.sh)
-- [summarize_result.py](/Volumes/1TB/Personal_projects/MirrorNeuron/examples/prime_sweep_scale/summarize_result.py)
+- [generate_bundle.py](../examples/prime_sweep_scale/generate_bundle.py)
+- [run_scale_test.sh](../examples/prime_sweep_scale/run_scale_test.sh)
+- [summarize_result.py](../examples/prime_sweep_scale/summarize_result.py)
 
 Run locally:
 
@@ -85,7 +85,7 @@ bash examples/prime_sweep_scale/run_scale_test.sh \
 
 Path:
 
-- [examples/llm_codegen_review](/Volumes/1TB/Personal_projects/MirrorNeuron/examples/llm_codegen_review)
+- [examples/llm_codegen_review](../examples/llm_codegen_review)
 
 Purpose:
 

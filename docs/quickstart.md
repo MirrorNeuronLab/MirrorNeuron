@@ -85,6 +85,6 @@ It uses Gemini 2.5 Flash Lite by default.
 
 ## Next steps
 
-- [CLI Guide](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/cli.md)
-- [Examples Guide](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/examples.md)
-- [Monitor Guide](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/monitor.md)
+- [CLI Guide](cli.md)
+- [Examples Guide](examples.md)
+- [Monitor Guide](monitor.md)

@@ -157,5 +157,5 @@ Possible causes:
 
 ## Related docs
 
-- [Troubleshooting](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/troubleshooting.md)
-- [Monitor Guide](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/monitor.md)
+- [Troubleshooting](troubleshooting.md)
+- [Monitor Guide](monitor.md)

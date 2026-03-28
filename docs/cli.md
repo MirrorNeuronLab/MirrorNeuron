@@ -2,8 +2,8 @@
 
 MirrorNeuron currently ships two terminal tools:
 
-- [mirror_neuron](/Volumes/1TB/Personal_projects/MirrorNeuron/mirror_neuron)
-- [mirror_neuron_monitor](/Volumes/1TB/Personal_projects/MirrorNeuron/mirror_neuron_monitor)
+- [mirror_neuron](../mirror_neuron)
+- [mirror_neuron_monitor](../mirror_neuron_monitor)
 
 ## `mirror_neuron`
 
@@ -170,5 +170,5 @@ This creates a temporary control node that attaches to the runtime cluster.
 
 For more details:
 
-- [Monitor Guide](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/monitor.md)
-- [Cluster Guide](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/cluster.md)
+- [Monitor Guide](monitor.md)
+- [Cluster Guide](cluster.md)

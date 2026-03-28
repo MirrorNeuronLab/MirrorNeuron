@@ -124,7 +124,7 @@ Options:
 
 Use the checked-in wrapper:
 
-- [mirror_neuron_monitor](/Volumes/1TB/Personal_projects/MirrorNeuron/mirror_neuron_monitor)
+- [mirror_neuron_monitor](../mirror_neuron_monitor)
 
 It starts the app in a cleaner mode than raw `mix run`.
 

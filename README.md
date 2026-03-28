@@ -17,8 +17,8 @@ MirrorNeuron is not trying to be a general-purpose batch scheduler. It is design
 - bounded execution capacity through executor leases and pools
 - shared OpenShell sandbox reuse per job per runtime node
 - terminal-first tooling with:
-  - [mirror_neuron](/Volumes/1TB/Personal_projects/MirrorNeuron/mirror_neuron)
-  - [mirror_neuron_monitor](/Volumes/1TB/Personal_projects/MirrorNeuron/mirror_neuron_monitor)
+  - [mirror_neuron](mirror_neuron)
+  - [mirror_neuron_monitor](mirror_neuron_monitor)
 - example bundles for:
   - local workflows
   - shell and Python execution
@@ -40,26 +40,26 @@ mix escript.build
 
 For full setup instructions:
 
-- [Installation](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/installation.md)
-- [Quickstart](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/quickstart.md)
+- [Installation](docs/installation.md)
+- [Quickstart](docs/quickstart.md)
 
 ## Documentation
 
 Main documentation index:
 
-- [docs/index.md](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/index.md)
+- [docs/index.md](docs/index.md)
 
 Recommended reading order:
 
-1. [Installation](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/installation.md)
-2. [Quickstart](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/quickstart.md)
-3. [Examples Guide](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/examples.md)
-4. [CLI Guide](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/cli.md)
-5. [Monitor Guide](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/monitor.md)
-6. [Runtime Architecture](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/runtime-architecture.md)
-7. [API Reference](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/api.md)
-8. [Troubleshooting](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/troubleshooting.md)
-9. [Development Guide](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/development.md)
+1. [Installation](docs/installation.md)
+2. [Quickstart](docs/quickstart.md)
+3. [Examples Guide](docs/examples.md)
+4. [CLI Guide](docs/cli.md)
+5. [Monitor Guide](docs/monitor.md)
+6. [Runtime Architecture](docs/runtime-architecture.md)
+7. [API Reference](docs/api.md)
+8. [Troubleshooting](docs/troubleshooting.md)
+9. [Development Guide](docs/development.md)
 
 ## Core ideas
 
@@ -98,14 +98,14 @@ job-folder/
 
 ## Included examples
 
-- [examples/research_flow](/Volumes/1TB/Personal_projects/MirrorNeuron/examples/research_flow)
-- [examples/openshell_worker_demo](/Volumes/1TB/Personal_projects/MirrorNeuron/examples/openshell_worker_demo)
-- [examples/prime_sweep_scale](/Volumes/1TB/Personal_projects/MirrorNeuron/examples/prime_sweep_scale)
-- [examples/llm_codegen_review](/Volumes/1TB/Personal_projects/MirrorNeuron/examples/llm_codegen_review)
+- [examples/research_flow](examples/research_flow)
+- [examples/openshell_worker_demo](examples/openshell_worker_demo)
+- [examples/prime_sweep_scale](examples/prime_sweep_scale)
+- [examples/llm_codegen_review](examples/llm_codegen_review)
 
 For details:
 
-- [Examples Guide](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/examples.md)
+- [Examples Guide](docs/examples.md)
 
 ## Main commands
 
@@ -120,7 +120,7 @@ For details:
 
 For full command reference:
 
-- [CLI Guide](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/cli.md)
+- [CLI Guide](docs/cli.md)
 
 ## Cluster and monitoring
 
@@ -128,14 +128,14 @@ MirrorNeuron supports two-box dev-mode clustering and clustered example harnesse
 
 Key docs:
 
-- [Cluster Guide](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/cluster.md)
-- [Monitor Guide](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/monitor.md)
+- [Cluster Guide](docs/cluster.md)
+- [Monitor Guide](docs/monitor.md)
 
 ## Public API surface
 
 The current public inspection and control APIs are documented here:
 
-- [API Reference](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/api.md)
+- [API Reference](docs/api.md)
 
 These APIs are intended to support:
 
@@ -165,4 +165,4 @@ It is still evolving in areas like:
 
 If you are working on the runtime itself, start here:
 
-- [Development Guide](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/development.md)
+- [Development Guide](docs/development.md)

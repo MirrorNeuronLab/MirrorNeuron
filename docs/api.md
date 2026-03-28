@@ -11,7 +11,7 @@ The goal is to keep these shapes stable enough for future tools such as:
 
 ## Public Elixir API
 
-These functions are exposed from [MirrorNeuron](/Volumes/1TB/Personal_projects/MirrorNeuron/lib/mirror_neuron.ex).
+These functions are exposed from [MirrorNeuron](../lib/mirror_neuron.ex).
 
 ### Job execution
 
@@ -200,7 +200,7 @@ These are the control-plane mutation APIs currently used by the main CLI.
 
 ## Monitor API
 
-These functions are implemented in [monitor.ex](/Volumes/1TB/Personal_projects/MirrorNeuron/lib/mirror_neuron/monitor.ex) and are intended as the stable read model for operational tooling.
+These functions are implemented in [monitor.ex](../lib/mirror_neuron/monitor.ex) and are intended as the stable read model for operational tooling.
 
 ### `MirrorNeuron.list_jobs(opts \\ [])`
 
@@ -281,7 +281,7 @@ Return:
 
 ## Redis persistence keys
 
-The current monitor API is backed by these Redis structures in [redis_store.ex](/Volumes/1TB/Personal_projects/MirrorNeuron/lib/mirror_neuron/persistence/redis_store.ex).
+The current monitor API is backed by these Redis structures in [redis_store.ex](../lib/mirror_neuron/persistence/redis_store.ex).
 
 Namespace prefix:
 
@@ -313,13 +313,13 @@ This event channel is written today but not yet consumed by the terminal monitor
 
 Built escript:
 
-- [mirror_neuron](/Volumes/1TB/Personal_projects/MirrorNeuron/mirror_neuron)
+- [mirror_neuron](../mirror_neuron)
 
 ### Monitor CLI
 
 Wrapper command:
 
-- [mirror_neuron_monitor](/Volumes/1TB/Personal_projects/MirrorNeuron/mirror_neuron_monitor)
+- [mirror_neuron_monitor](../mirror_neuron_monitor)
 
 It currently uses:
 

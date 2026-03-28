@@ -81,8 +81,8 @@ mix escript.build
 
 This creates:
 
-- [mirror_neuron](/Volumes/1TB/Personal_projects/MirrorNeuron/mirror_neuron)
-- [mirror_neuron_monitor](/Volumes/1TB/Personal_projects/MirrorNeuron/mirror_neuron_monitor)
+- [mirror_neuron](../mirror_neuron)
+- [mirror_neuron_monitor](../mirror_neuron_monitor)
 
 ## 6. Recommended local environment
 
@@ -112,10 +112,10 @@ export GEMINI_API_KEY="..."
 
 For two-box or larger clusters, see:
 
-- [Cluster Guide](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/cluster.md)
+- [Cluster Guide](cluster.md)
 
 ## Common install issues
 
 If setup does not work as expected, start with:
 
-- [Troubleshooting](/Volumes/1TB/Personal_projects/MirrorNeuron/docs/troubleshooting.md)
+- [Troubleshooting](troubleshooting.md)
