@@ -7,11 +7,9 @@ defmodule MirrorNeuron.Application do
 
     children = [
       {Registry, keys: :duplicate, name: MirrorNeuron.Runtime.EventRegistry},
-      %{
-        id: MirrorNeuron.ClusterSupervisor,
-        start: {Cluster.Supervisor, :start_link, [topologies, [name: MirrorNeuron.ClusterSupervisor]]}
-      },
+      {Cluster.Supervisor, [topologies, [name: MirrorNeuron.ClusterSupervisor]]},
       MirrorNeuron.Redis,
+      MirrorNeuron.Execution.LeaseManager,
       MirrorNeuron.DistributedRegistry,
       MirrorNeuron.Runtime.JobSupervisor,
       MirrorNeuron.Runtime.AgentSupervisor

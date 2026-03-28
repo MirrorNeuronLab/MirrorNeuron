@@ -1,25 +1,29 @@
 defmodule MirrorNeuron.AgentRegistry do
-  alias MirrorNeuron.Agents
+  alias MirrorNeuron.Builtins
 
-  @agent_types %{
-    "planner" => Agents.Planner,
-    "relay" => Agents.Relay,
-    "collector" => Agents.Collector,
-    "sandbox_worker" => Agents.SandboxWorker,
-    "conversation" => Agents.Conversation,
-    "visitor" => Agents.Visitor,
-    "helper" => Agents.Helper,
-    "policy" => Agents.Policy,
-    "knowledge" => Agents.Knowledge,
-    "user" => Agents.User,
-    "intention" => Agents.Intention,
-    "language" => Agents.Language
+  @builtins %{
+    "router" => Builtins.Router,
+    "executor" => Builtins.Executor,
+    "aggregator" => Builtins.Aggregator,
+    "sensor" => Builtins.Sensor
   }
 
-  def supported_types, do: Map.keys(@agent_types)
-  def supported_type?(type), do: Map.has_key?(@agent_types, type)
+  @compatibility_aliases %{
+    "relay" => "router",
+    "sandbox_worker" => "executor",
+    "collector" => "aggregator"
+  }
 
-  def fetch(type), do: Map.fetch(@agent_types, type)
+  def supported_types, do: Map.keys(@builtins)
+
+  def supported_type?(type),
+    do: Map.has_key?(@builtins, type) or Map.has_key?(@compatibility_aliases, type)
+
+  def fetch(type) do
+    type
+    |> canonical_type()
+    |> then(&Map.fetch(@builtins, &1))
+  end
 
   def fetch!(type) do
     case fetch(type) do
@@ -27,4 +31,6 @@ defmodule MirrorNeuron.AgentRegistry do
       :error -> raise ArgumentError, "unsupported agent_type #{inspect(type)}"
     end
   end
+
+  def canonical_type(type), do: Map.get(@compatibility_aliases, type, type)
 end

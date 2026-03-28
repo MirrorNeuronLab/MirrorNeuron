@@ -7,7 +7,8 @@ defmodule MirrorNeuron.Runtime do
 
     spec = {JobRunner, {job_id, manifest, opts}}
 
-    with {:ok, pid} <- Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) do
+    with {:ok, pid} <-
+           Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) do
       {:ok, job_id, pid}
     end
   end
@@ -81,5 +82,6 @@ defmodule MirrorNeuron.Runtime do
     "#{graph_id}-#{System.system_time(:millisecond)}-#{suffix}"
   end
 
-  def timestamp, do: DateTime.utc_now() |> DateTime.truncate(:millisecond) |> DateTime.to_iso8601()
+  def timestamp,
+    do: DateTime.utc_now() |> DateTime.truncate(:millisecond) |> DateTime.to_iso8601()
 end

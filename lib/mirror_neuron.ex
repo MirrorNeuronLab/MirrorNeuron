@@ -1,17 +1,18 @@
 defmodule MirrorNeuron do
-  alias MirrorNeuron.Manifest
+  alias MirrorNeuron.JobBundle
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
 
   def validate_manifest(input) do
-    with {:ok, manifest} <- Manifest.load(input) do
-      {:ok, manifest}
+    with {:ok, bundle} <- JobBundle.load(input) do
+      {:ok, bundle}
     end
   end
 
   def run_manifest(input, opts \\ []) do
-    with {:ok, manifest} <- Manifest.load(input),
-         {:ok, job_id, _pid} <- Runtime.start_job(manifest, opts) do
+    with {:ok, bundle} <- JobBundle.load(input),
+         {:ok, job_id, _pid} <-
+           Runtime.start_job(bundle.manifest, Keyword.put(opts, :job_bundle, bundle)) do
       if Keyword.get(opts, :await, false) do
         case wait_for_job(job_id, Keyword.get(opts, :timeout, :infinity)) do
           {:ok, job} -> {:ok, job_id, job}

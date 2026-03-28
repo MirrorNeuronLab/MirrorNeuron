@@ -1,6 +1,7 @@
 defmodule MirrorNeuron.RuntimeTest do
   use ExUnit.Case
 
+  alias MirrorNeuron.Message
   alias MirrorNeuron.Persistence.RedisStore
 
   setup do
@@ -19,18 +20,27 @@ defmodule MirrorNeuron.RuntimeTest do
     manifest = %{
       "manifest_version" => "1.0",
       "graph_id" => "research_test",
-      "entrypoints" => ["planner"],
+      "entrypoints" => ["ingress"],
       "initial_inputs" => %{
-        "planner" => [%{"text" => "Summarize charging adoption"}]
+        "ingress" => [%{"text" => "Summarize charging adoption"}]
       },
       "nodes" => [
-        %{"node_id" => "planner", "agent_type" => "planner", "role" => "root_coordinator"},
-        %{"node_id" => "relay", "agent_type" => "relay"},
-        %{"node_id" => "sink", "agent_type" => "collector", "config" => %{"complete_on_message" => true}}
+        %{
+          "node_id" => "ingress",
+          "agent_type" => "router",
+          "role" => "root_coordinator",
+          "config" => %{"emit_type" => "research_request"}
+        },
+        %{"node_id" => "router", "agent_type" => "router"},
+        %{
+          "node_id" => "sink",
+          "agent_type" => "aggregator",
+          "config" => %{"complete_on_message" => true}
+        }
       ],
       "edges" => [
-        %{"from_node" => "planner", "to_node" => "relay", "message_type" => "research_request"},
-        %{"from_node" => "relay", "to_node" => "sink", "message_type" => "research_request"}
+        %{"from_node" => "ingress", "to_node" => "router", "message_type" => "research_request"},
+        %{"from_node" => "router", "to_node" => "sink", "message_type" => "research_request"}
       ],
       "policies" => %{"recovery_mode" => "local_restart"}
     }
@@ -43,7 +53,7 @@ defmodule MirrorNeuron.RuntimeTest do
     assert persisted_job["status"] == "completed"
 
     assert {:ok, agents} = MirrorNeuron.inspect_agents(job_id)
-    assert Enum.any?(agents, &(&1["agent_id"] == "planner"))
+    assert Enum.any?(agents, &(&1["agent_id"] == "ingress"))
     assert Enum.any?(agents, &(&1["agent_id"] == "sink"))
 
     assert {:ok, events} = MirrorNeuron.events(job_id)
@@ -57,8 +67,17 @@ defmodule MirrorNeuron.RuntimeTest do
       "manifest_version" => "1.0",
       "graph_id" => "pause_resume_test",
       "nodes" => [
-        %{"node_id" => "root", "agent_type" => "user", "role" => "root_coordinator"},
-        %{"node_id" => "sink", "agent_type" => "collector", "config" => %{"complete_on_message" => true}}
+        %{
+          "node_id" => "root",
+          "agent_type" => "router",
+          "role" => "root_coordinator",
+          "config" => %{"emit_type" => "manual_result"}
+        },
+        %{
+          "node_id" => "sink",
+          "agent_type" => "aggregator",
+          "config" => %{"complete_on_message" => true}
+        }
       ],
       "edges" => [],
       "policies" => %{"recovery_mode" => "local_restart"}
@@ -80,6 +99,71 @@ defmodule MirrorNeuron.RuntimeTest do
     assert job["status"] == "completed"
 
     RedisStore.delete_job(job_id)
+  end
+
+  test "accepts spec stream messages through the runtime and preserves stream metadata in events" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "stream_message_test",
+      "nodes" => [
+        %{"node_id" => "root", "agent_type" => "router", "role" => "root_coordinator"},
+        %{
+          "node_id" => "sink",
+          "agent_type" => "aggregator",
+          "config" => %{"complete_on_message" => true}
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    wait_until(fn -> running_status?(job_id) end)
+
+    stream_message =
+      Message.new(job_id, "external-client", "sink", "progress_chunk", "{\"checked\":10}\n",
+        class: "stream",
+        content_type: "application/x-ndjson",
+        headers: %{"schema_ref" => "com.test.progress", "schema_version" => "1.0.0"},
+        stream: %{"stream_id" => "stream-1", "seq" => 1, "open" => true, "close" => false}
+      )
+
+    assert {:ok, "delivered"} = MirrorNeuron.send_message(job_id, "sink", stream_message)
+    assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 2_000)
+    assert job["status"] == "completed"
+    assert get_in(job, ["result", "output", "last_message"]) == "{\"checked\":10}\n"
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+
+    received =
+      Enum.find(events, fn event ->
+        event["type"] == "agent_message_received" and event["agent_id"] == "sink"
+      end)
+
+    assert received["payload"]["stream"]["stream_id"] == "stream-1"
+    assert received["payload"]["class"] == "stream"
+    assert received["payload"]["content_type"] == "application/x-ndjson"
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "reports executor pool capacity in cluster inspection" do
+    assert {:ok, nodes} = {:ok, MirrorNeuron.inspect_nodes()}
+
+    assert Enum.any?(nodes, fn node ->
+             node["self?"] || node[:self?]
+           end)
+
+    local_node =
+      Enum.find(nodes, fn node ->
+        (node["self?"] || node[:self?]) == true
+      end)
+
+    pools = local_node["executor_pools"] || local_node[:executor_pools]
+    default_pool = pools["default"] || pools[:default]
+
+    assert is_map(default_pool)
+    assert (default_pool["capacity"] || default_pool[:capacity]) >= 1
   end
 
   defp running_status?(job_id) do

@@ -1,6 +1,6 @@
 {
   "manifest_version": "1.0",
-  "graph_id": "openshell_worker_demo_v1",
+  "graph_id": "openshell_worker_demo_v2",
   "job_name": "openshell-worker-demo",
   "entrypoints": ["shell_worker"],
   "initial_inputs": {
@@ -15,13 +15,17 @@
   "nodes": [
     {
       "node_id": "shell_worker",
-      "agent_type": "sandbox_worker",
+      "agent_type": "executor",
       "role": "root_coordinator",
       "config": {
         "name_prefix": "shell-worker",
         "from": "base",
-        "workdir": "/sandbox/job",
-        "command": "TEXT=\"$(python - <<'PY'\nimport json\nimport os\nfrom pathlib import Path\npayload = json.loads(Path(os.environ['MN_INPUT_FILE']).read_text())\nprint(payload['text'])\nPY\n)\"\nWORD_COUNT=\"$(printf '%s\\n' \"$TEXT\" | wc -w | tr -d ' ')\"\nCHAR_COUNT=\"$(printf '%s' \"$TEXT\" | wc -c | tr -d ' ')\"\nexport TEXT WORD_COUNT CHAR_COUNT\npython - <<'PY'\nimport json\nimport os\nprint(json.dumps({'text': os.environ['TEXT'], 'word_count': int(os.environ['WORD_COUNT']), 'char_count': int(os.environ['CHAR_COUNT'])}))\nPY",
+        "upload_path": "word_count",
+        "upload_as": "word_count",
+        "workdir": "/sandbox/job/word_count",
+        "command": ["bash", "scripts/collect_metrics.sh"],
+        "pool": "default",
+        "pool_slots": 1,
         "output_message_type": "shell_metrics",
         "no_keep": true,
         "no_auto_providers": true,
@@ -30,12 +34,16 @@
     },
     {
       "node_id": "python_worker",
-      "agent_type": "sandbox_worker",
+      "agent_type": "executor",
       "config": {
         "name_prefix": "python-worker",
         "from": "base",
-        "workdir": "/sandbox/job",
-        "command": "python - <<'PY'\nimport json\nimport os\nfrom pathlib import Path\npayload = json.loads(Path(os.environ['MN_INPUT_FILE']).read_text())\nshell_metrics = json.loads(payload['sandbox']['stdout'])\nsource = payload['input']\nresult = {\n    'request_id': source['request_id'],\n    'headline': f\"{source['label']}: {shell_metrics['word_count']} words, {shell_metrics['char_count']} chars\",\n    'explanation': 'BEAM orchestrated the flow and OpenShell executed the worker commands in isolated sandboxes.',\n    'text_preview': shell_metrics['text'][:40]\n}\nprint(json.dumps(result))\nPY",
+        "upload_path": "report",
+        "upload_as": "report",
+        "workdir": "/sandbox/job/report",
+        "command": ["python3", "scripts/build_report.py"],
+        "pool": "default",
+        "pool_slots": 1,
         "output_message_type": "python_report",
         "no_keep": true,
         "no_auto_providers": true,
@@ -44,7 +52,7 @@
     },
     {
       "node_id": "result_sink",
-      "agent_type": "collector",
+      "agent_type": "aggregator",
       "config": {
         "complete_on_message": true
       }

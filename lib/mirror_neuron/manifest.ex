@@ -101,9 +101,18 @@ defmodule MirrorNeuron.Manifest do
     edge_errors =
       Enum.flat_map(manifest.edges, fn edge ->
         []
-        |> maybe_collect_error(not MapSet.member?(node_ids, edge.from_node), "edge #{edge.edge_id || "unknown"} references missing from_node #{edge.from_node}")
-        |> maybe_collect_error(not MapSet.member?(node_ids, edge.to_node), "edge #{edge.edge_id || "unknown"} references missing to_node #{edge.to_node}")
-        |> maybe_collect_error(is_nil(edge.message_type) or edge.message_type == "", "edge #{edge.edge_id || "unknown"} must define message_type")
+        |> maybe_collect_error(
+          not MapSet.member?(node_ids, edge.from_node),
+          "edge #{edge.edge_id || "unknown"} references missing from_node #{edge.from_node}"
+        )
+        |> maybe_collect_error(
+          not MapSet.member?(node_ids, edge.to_node),
+          "edge #{edge.edge_id || "unknown"} references missing to_node #{edge.to_node}"
+        )
+        |> maybe_collect_error(
+          is_nil(edge.message_type) or edge.message_type == "",
+          "edge #{edge.edge_id || "unknown"} must define message_type"
+        )
       end)
 
     add_errors(errors, edge_errors)
@@ -127,7 +136,10 @@ defmodule MirrorNeuron.Manifest do
 
     errors =
       if manifest.entrypoints == [] and root_roles == [] do
-        ["manifest must define at least one entrypoint or one node with role root/root_coordinator" | errors]
+        [
+          "manifest must define at least one entrypoint or one node with role root/root_coordinator"
+          | errors
+        ]
       else
         errors
       end

@@ -79,7 +79,10 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   defp key(part1), do: Enum.join([namespace(), part1], ":")
   defp key(part1, part2), do: Enum.join([namespace(), part1, part2], ":")
   defp key(part1, part2, part3), do: Enum.join([namespace(), part1, part2, part3], ":")
-  defp key(part1, part2, part3, part4), do: Enum.join([namespace(), part1, part2, part3, part4], ":")
+
+  defp key(part1, part2, part3, part4),
+    do: Enum.join([namespace(), part1, part2, part3, part4], ":")
+
   defp channel(part1, part2), do: Enum.join([namespace(), "channel", part1, part2], ":")
 
   defp namespace, do: Application.get_env(:mirror_neuron, :redis_namespace, "mirror_neuron")

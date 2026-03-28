@@ -2,25 +2,28 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   use GenServer
 
   alias MirrorNeuron.AgentRegistry
+  alias MirrorNeuron.Message
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.Naming
 
-  def child_spec({job_id, node, edges, coordinator}) do
+  def child_spec({job_id, node, edges, coordinator, runtime_context}) do
     %{
       id: {:agent_worker, job_id, node.node_id},
-      start: {__MODULE__, :start_link, [{job_id, node, edges, coordinator}]},
+      start: {__MODULE__, :start_link, [{job_id, node, edges, coordinator, runtime_context}]},
       restart: :transient,
       type: :worker
     }
   end
 
-  def start_link({job_id, node, edges, coordinator}) do
-    GenServer.start_link(__MODULE__, {job_id, node, edges, coordinator}, name: Naming.via_agent(job_id, node.node_id))
+  def start_link({job_id, node, edges, coordinator, runtime_context}) do
+    GenServer.start_link(__MODULE__, {job_id, node, edges, coordinator, runtime_context},
+      name: Naming.via_agent(job_id, node.node_id)
+    )
   end
 
   @impl true
-  def init({job_id, node, edges, coordinator}) do
+  def init({job_id, node, edges, coordinator, runtime_context}) do
     module = AgentRegistry.fetch!(node.agent_type)
     outbound_edges = Enum.filter(edges, &(&1.from_node == node.node_id))
     inbound_edges = Enum.filter(edges, &(&1.to_node == node.node_id))
@@ -34,6 +37,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
           local_state: local_state,
           outbound_edges: outbound_edges,
           inbound_edges: inbound_edges,
+          runtime_context: runtime_context,
           coordinator: coordinator,
           paused?: false,
           pending: :queue.new(),
@@ -60,14 +64,20 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   def handle_cast(:cancel, state), do: {:stop, :normal, state}
 
   def handle_cast({:deliver, message}, %{paused?: true} = state) do
-    queued = :queue.in(message, state.pending)
+    queued =
+      :queue.in(
+        Message.normalize!(message, job_id: state.job_id, to: state.node.node_id),
+        state.pending
+      )
+
     next_state = %{state | pending: queued, mailbox_depth: state.mailbox_depth + 1}
     persist_snapshot(next_state)
     {:noreply, next_state}
   end
 
   def handle_cast({:deliver, message}, state) do
-    {:noreply, process_message(message, state)}
+    normalized = Message.normalize!(message, job_id: state.job_id, to: state.node.node_id)
+    {:noreply, process_message(normalized, state)}
   end
 
   defp drain_pending(%{paused?: true} = state), do: state
@@ -79,7 +89,8 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
           state
           |> Map.put(:pending, remaining)
           |> Map.put(:mailbox_depth, max(state.mailbox_depth - 1, 0))
-          |> process_message(message)
+
+        drained_state = process_message(message, drained_state)
 
         drain_pending(drained_state)
 
@@ -93,11 +104,18 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     context = %{
       job_id: state.job_id,
       node: state.node,
+      coordinator: state.coordinator,
       outbound_edges: state.outbound_edges,
-      inbound_edges: state.inbound_edges
+      inbound_edges: state.inbound_edges,
+      bundle_root: state.runtime_context[:bundle_root],
+      manifest_path: state.runtime_context[:manifest_path],
+      payloads_path: state.runtime_context[:payloads_path]
     }
 
-    send(state.coordinator, {:agent_event, state.node.node_id, :agent_message_received, summarize_message(message)})
+    send(
+      state.coordinator,
+      {:agent_event, state.node.node_id, :agent_message_received, Message.summary(message)}
+    )
 
     case state.module.handle_message(message, state.local_state, context) do
       {:ok, new_local_state, actions} ->
@@ -120,40 +138,39 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   end
 
   defp execute_action({:emit, message_type, payload}, incoming, state) do
+    execute_action({:emit, message_type, payload, []}, incoming, state)
+  end
+
+  defp execute_action({:emit, message_type, payload, opts}, incoming, state) do
     matching_edges =
       Enum.filter(state.outbound_edges, fn edge ->
         edge.message_type == message_type or edge.message_type == "*"
       end)
 
     Enum.each(matching_edges, fn edge ->
-      envelope = %{
-        message_id: unique_id(),
-        from: state.node.node_id,
-        to: edge.to_node,
-        type: message_type,
-        payload: payload,
-        correlation_id: Map.get(incoming, :correlation_id) || Map.get(incoming, "correlation_id") || unique_id(),
-        causation_id: Map.get(incoming, :message_id) || Map.get(incoming, "message_id"),
-        timestamp: Runtime.timestamp()
-      }
-
-      Runtime.deliver(state.job_id, edge.to_node, envelope)
+      Runtime.deliver(
+        state.job_id,
+        edge.to_node,
+        build_message(state, incoming, edge.to_node, message_type, payload, opts)
+      )
     end)
   end
 
   defp execute_action({:emit_to, to_node, message_type, payload}, incoming, state) do
-    envelope = %{
-      message_id: unique_id(),
-      from: state.node.node_id,
-      to: to_node,
-      type: message_type,
-      payload: payload,
-      correlation_id: Map.get(incoming, :correlation_id) || Map.get(incoming, "correlation_id") || unique_id(),
-      causation_id: Map.get(incoming, :message_id) || Map.get(incoming, "message_id"),
-      timestamp: Runtime.timestamp()
-    }
+    execute_action({:emit_to, to_node, message_type, payload, []}, incoming, state)
+  end
 
-    Runtime.deliver(state.job_id, to_node, envelope)
+  defp execute_action({:emit_to, to_node, message_type, payload, opts}, incoming, state) do
+    Runtime.deliver(
+      state.job_id,
+      to_node,
+      build_message(state, incoming, to_node, message_type, payload, opts)
+    )
+  end
+
+  defp execute_action({:emit_message, message}, _incoming, state) do
+    normalized = Message.normalize!(message, job_id: state.job_id, from: state.node.node_id)
+    Runtime.deliver(state.job_id, Message.to(normalized), normalized)
   end
 
   defp execute_action({:event, event_type, payload}, _incoming, state) do
@@ -189,14 +206,6 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     send(state.coordinator, {:agent_checkpoint, state.node.node_id, snapshot})
   end
 
-  defp summarize_message(message) do
-    %{
-      from: Map.get(message, :from) || Map.get(message, "from"),
-      to: Map.get(message, :to) || Map.get(message, "to"),
-      type: Map.get(message, :type) || Map.get(message, "type")
-    }
-  end
-
   defp stringify_local_state(map) when is_map(map) do
     Enum.into(map, %{}, fn {key, value} ->
       key = if is_atom(key), do: Atom.to_string(key), else: key
@@ -204,12 +213,26 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     end)
   end
 
-  defp stringify_local_state(list) when is_list(list), do: Enum.map(list, &stringify_local_state/1)
+  defp stringify_local_state(list) when is_list(list),
+    do: Enum.map(list, &stringify_local_state/1)
+
   defp stringify_local_state(value), do: value
 
-  defp unique_id do
-    6
-    |> :crypto.strong_rand_bytes()
-    |> Base.url_encode64(padding: false)
+  defp build_message(state, incoming, to_node, message_type, payload, opts) do
+    Message.new(
+      state.job_id,
+      state.node.node_id,
+      to_node,
+      message_type,
+      payload,
+      class: Keyword.get(opts, :class, Message.class(incoming)),
+      correlation_id: Keyword.get(opts, :correlation_id, Message.correlation_id(incoming)),
+      causation_id: Keyword.get(opts, :causation_id, Message.id(incoming)),
+      content_type: Keyword.get(opts, :content_type, Message.content_type(incoming)),
+      content_encoding: Keyword.get(opts, :content_encoding, Message.content_encoding(incoming)),
+      headers: Map.merge(Message.headers(incoming), Keyword.get(opts, :headers, %{})),
+      artifacts: Keyword.get(opts, :artifacts, Message.artifacts(incoming)),
+      stream: Keyword.get(opts, :stream, Message.stream(incoming))
+    )
   end
 end

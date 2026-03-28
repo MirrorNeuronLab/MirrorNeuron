@@ -1,6 +1,7 @@
 defmodule MirrorNeuron.Runtime.JobCoordinator do
   use GenServer
 
+  alias MirrorNeuron.Message
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.{AgentWorker, EventBus, Naming}
@@ -11,9 +12,12 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   @impl true
   def init({job_id, manifest, opts}) do
+    bundle = Keyword.get(opts, :job_bundle)
+
     state = %{
       job_id: job_id,
       manifest: manifest,
+      bundle: bundle,
       opts: opts,
       status: "pending",
       result: nil,
@@ -30,7 +34,12 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   @impl true
   def handle_continue(:bootstrap, state) do
     EventBus.publish(state.job_id, %{type: :job_validated, timestamp: Runtime.timestamp()})
-    EventBus.publish(state.job_id, %{type: :job_scheduled, node: to_string(Node.self()), timestamp: Runtime.timestamp()})
+
+    EventBus.publish(state.job_id, %{
+      type: :job_scheduled,
+      node: to_string(Node.self()),
+      timestamp: Runtime.timestamp()
+    })
 
     with :ok <- start_agents(state),
          :ok <- seed_entrypoints(state) do
@@ -42,7 +51,13 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       {:error, reason} ->
         failed_state = %{state | status: "failed", result: %{error: reason}}
         persist_job(failed_state)
-        EventBus.publish(state.job_id, %{type: :job_failed, reason: reason, timestamp: Runtime.timestamp()})
+
+        EventBus.publish(state.job_id, %{
+          type: :job_failed,
+          reason: reason,
+          timestamp: Runtime.timestamp()
+        })
+
         {:stop, {:shutdown, reason}, failed_state}
     end
   end
@@ -120,7 +135,12 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   def handle_info({:agent_failed, agent_id, reason}, state) do
-    next_state = %{state | status: "failed", result: %{agent_id: agent_id, error: inspect(reason)}}
+    next_state = %{
+      state
+      | status: "failed",
+        result: %{agent_id: agent_id, error: inspect(reason)}
+    }
+
     persist_job(next_state)
 
     EventBus.publish(state.job_id, %{
@@ -135,11 +155,19 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   defp start_agents(state) do
     Enum.reduce_while(state.manifest.nodes, :ok, fn node, :ok ->
-      spec = {AgentWorker, {state.job_id, node, state.manifest.edges, self()}}
+      spec =
+        {AgentWorker,
+         {state.job_id, node, state.manifest.edges, self(), agent_runtime_context(state)}}
 
       case Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.AgentSupervisor, spec) do
-        {:ok, _pid} -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, "failed to start agent #{node.node_id}: #{inspect(reason)}"}}
+        {:ok, _pid} ->
+          {:cont, :ok}
+
+        {:error, {:already_started, _pid}} ->
+          {:cont, :ok}
+
+        {:error, reason} ->
+          {:halt, {:error, "failed to start agent #{node.node_id}: #{inspect(reason)}"}}
       end
     end)
   end
@@ -155,16 +183,16 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
       result =
         Enum.reduce_while(payloads, :ok, fn payload, :ok ->
-          message = %{
-            message_id: unique_id(),
-            from: "runtime",
-            to: agent_id,
-            type: "init",
-            payload: payload,
-            correlation_id: unique_id(),
-            causation_id: nil,
-            timestamp: Runtime.timestamp()
-          }
+          message =
+            Message.normalize!(
+              payload,
+              job_id: state.job_id,
+              from: "runtime",
+              to: agent_id,
+              type: "init",
+              class: "command",
+              correlation_id: unique_id()
+            )
 
           case Runtime.deliver(state.job_id, agent_id, message) do
             :ok -> {:cont, :ok}
@@ -181,7 +209,10 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   defp broadcast_agent_control(state, command) do
     Enum.each(state.agent_ids, fn agent_id ->
-      case Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:agent, state.job_id, agent_id}) do
+      case Horde.Registry.lookup(
+             MirrorNeuron.DistributedRegistry,
+             {:agent, state.job_id, agent_id}
+           ) do
         [{pid, _}] -> GenServer.cast(pid, command)
         [] -> :ok
       end
@@ -189,17 +220,15 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp build_external_message(job_id, agent_id, message) do
-    %{
-      message_id: Map.get(message, "message_id", unique_id()),
-      from: Map.get(message, "from", "external"),
+    Message.normalize!(
+      message,
+      job_id: job_id,
+      from: "external",
       to: agent_id,
-      type: Map.get(message, "type", "command"),
-      payload: Map.get(message, "payload", message),
-      correlation_id: Map.get(message, "correlation_id", unique_id()),
-      causation_id: Map.get(message, "causation_id"),
-      timestamp: Map.get(message, "timestamp", Runtime.timestamp()),
-      job_id: job_id
-    }
+      type: "command",
+      class: "command",
+      correlation_id: unique_id()
+    )
   end
 
   defp persist_job(state) do
@@ -214,10 +243,23 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       placement_policy: Map.get(state.manifest.policies, "placement_policy", "local"),
       recovery_policy: Map.get(state.manifest.policies, "recovery_mode", "local_restart"),
       result: state.result,
-      manifest_ref: %{graph_id: state.manifest.graph_id, manifest_version: state.manifest.manifest_version}
+      manifest_ref: %{
+        graph_id: state.manifest.graph_id,
+        manifest_version: state.manifest.manifest_version,
+        manifest_path: state.bundle && state.bundle.manifest_path,
+        job_path: state.bundle && state.bundle.root_path
+      }
     }
 
     RedisStore.persist_job(state.job_id, job_map)
+  end
+
+  defp agent_runtime_context(state) do
+    %{
+      bundle_root: state.bundle && state.bundle.root_path,
+      manifest_path: state.bundle && state.bundle.manifest_path,
+      payloads_path: state.bundle && state.bundle.payloads_path
+    }
   end
 
   defp unique_id do
