@@ -58,9 +58,10 @@ Recommended reading order:
 4. [CLI Guide](docs/cli.md)
 5. [Monitor Guide](docs/monitor.md)
 6. [Runtime Architecture](docs/runtime-architecture.md)
-7. [API Reference](docs/api.md)
-8. [Troubleshooting](docs/troubleshooting.md)
-9. [Development Guide](docs/development.md)
+7. [Reliability Guide](docs/reliability.md)
+8. [API Reference](docs/api.md)
+9. [Troubleshooting](docs/troubleshooting.md)
+10. [Development Guide](docs/development.md)
 
 ## Core ideas
 
@@ -132,6 +133,7 @@ Key docs:
 
 - [Cluster Guide](docs/cluster.md)
 - [Monitor Guide](docs/monitor.md)
+- [Reliability Guide](docs/reliability.md)
 
 ## Public API surface
 
@@ -162,6 +164,10 @@ It is still evolving in areas like:
 - richer deferred/sensor semantics
 - broader artifact-store integration
 - more advanced scheduling and recovery policies
+
+For the current reliability model and known limits:
+
+- [Reliability Guide](docs/reliability.md)
 
 ## Contributing
 

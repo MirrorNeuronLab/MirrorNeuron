@@ -15,6 +15,7 @@ Use this directory as the main documentation entry point.
 
 - [Runtime Architecture](runtime-architecture.md)
 - [Cluster Guide](cluster.md)
+- [Reliability Guide](reliability.md)
 - [Troubleshooting](troubleshooting.md)
 
 ## Examples and APIs
@@ -41,3 +42,4 @@ If you are new to the project, use this order:
 3. [Examples Guide](examples.md)
 4. [CLI Guide](cli.md)
 5. [Runtime Architecture](runtime-architecture.md)
+6. [Reliability Guide](reliability.md)

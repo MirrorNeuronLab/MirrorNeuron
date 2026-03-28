@@ -8,6 +8,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   alias MirrorNeuron.Runtime.{AgentWorker, EventBus, Naming}
   alias MirrorNeuron.Sandbox.JobSandbox
 
+  @default_health_check_interval_ms 2_000
+  @default_max_agent_restart_attempts 3
+
   def start_link({job_id, manifest, opts}) do
     GenServer.start_link(__MODULE__, {job_id, manifest, opts}, name: Naming.via_job(job_id))
   end
@@ -24,7 +27,23 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       status: "pending",
       result: nil,
       submitted_at: Runtime.timestamp(),
-      agent_ids: Enum.map(manifest.nodes, & &1.node_id)
+      agent_ids: Enum.map(manifest.nodes, & &1.node_id),
+      nodes_by_id: Map.new(manifest.nodes, &{&1.node_id, &1}),
+      outbound_edges_by_node: Enum.group_by(manifest.edges, & &1.from_node),
+      inbound_edges_by_node: Enum.group_by(manifest.edges, & &1.to_node),
+      agent_restart_attempts: %{},
+      max_agent_restart_attempts:
+        Map.get(
+          manifest.policies,
+          "max_agent_restart_attempts",
+          @default_max_agent_restart_attempts
+        ),
+      health_check_interval_ms:
+        Application.get_env(
+          :mirror_neuron,
+          :job_health_check_interval_ms,
+          @default_health_check_interval_ms
+        )
     }
 
     persist_job(state)
@@ -49,6 +68,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       next_state = %{state | status: "running"}
       persist_job(next_state)
       EventBus.publish(state.job_id, %{type: :job_running, timestamp: Runtime.timestamp()})
+      schedule_health_check(next_state.health_check_interval_ms)
       {:noreply, next_state}
     else
       {:error, reason} ->
@@ -169,17 +189,39 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     {:stop, {:shutdown, reason}, next_state}
   end
 
+  def handle_info(:health_check, %{status: status} = state)
+      when status in ["running", "paused"] do
+    case recover_missing_agents(state) do
+      {:ok, next_state} ->
+        schedule_health_check(next_state.health_check_interval_ms)
+        {:noreply, next_state}
+
+      {:error, reason, next_state} ->
+        failed_state = %{
+          next_state
+          | status: "failed",
+            result: %{agent_id: "job_coordinator", error: reason}
+        }
+
+        persist_job(failed_state)
+        cleanup_sandboxes(failed_state)
+
+        EventBus.publish(state.job_id, %{
+          type: :job_failed,
+          agent_id: "job_coordinator",
+          reason: reason,
+          timestamp: Runtime.timestamp()
+        })
+
+        {:stop, {:shutdown, reason}, failed_state}
+    end
+  end
+
+  def handle_info(:health_check, state), do: {:noreply, state}
+
   defp start_agents(state) do
-    outbound_edges_by_node = Enum.group_by(state.manifest.edges, & &1.from_node)
-    inbound_edges_by_node = Enum.group_by(state.manifest.edges, & &1.to_node)
-
     Enum.reduce_while(state.manifest.nodes, :ok, fn node, :ok ->
-      spec =
-        {AgentWorker,
-         {state.job_id, node, Map.get(outbound_edges_by_node, node.node_id, []),
-          Map.get(inbound_edges_by_node, node.node_id, []), self(), agent_runtime_context(state)}}
-
-      case Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.AgentSupervisor, spec) do
+      case start_agent(state, node.node_id) do
         {:ok, _pid} ->
           {:cont, :ok}
 
@@ -230,6 +272,111 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp wait_for_agents_ready(state, timeout_ms \\ 20_000) do
     started_at = System.monotonic_time(:millisecond)
     do_wait_for_agents_ready(state, started_at, timeout_ms)
+  end
+
+  defp recover_missing_agents(state) do
+    Enum.reduce_while(state.agent_ids, {:ok, state}, fn agent_id, {:ok, acc_state} ->
+      if agent_ready?(acc_state, agent_id) do
+        {:cont, {:ok, acc_state}}
+      else
+        case recover_agent(acc_state, agent_id) do
+          {:ok, next_state} -> {:cont, {:ok, next_state}}
+          {:error, reason, next_state} -> {:halt, {:error, reason, next_state}}
+        end
+      end
+    end)
+  end
+
+  defp recover_agent(state, agent_id) do
+    attempts = Map.get(state.agent_restart_attempts, agent_id, 0)
+
+    if attempts >= state.max_agent_restart_attempts do
+      {:error,
+       "agent #{agent_id} exceeded restart attempts (#{state.max_agent_restart_attempts})", state}
+    else
+      recovery_snapshot =
+        case RedisStore.fetch_agent(state.job_id, agent_id) do
+          {:ok, snapshot} -> snapshot
+          _ -> nil
+        end
+
+      EventBus.publish(state.job_id, %{
+        type: :agent_recovery_started,
+        agent_id: agent_id,
+        attempt: attempts + 1,
+        timestamp: Runtime.timestamp()
+      })
+
+      case start_agent(state, agent_id, recovery_snapshot) do
+        {:ok, _pid} ->
+          wait_result = wait_for_agent_ready(state, agent_id, 5_000)
+
+          case wait_result do
+            :ok ->
+              EventBus.publish(state.job_id, %{
+                type: :agent_recovered,
+                agent_id: agent_id,
+                attempt: attempts + 1,
+                timestamp: Runtime.timestamp()
+              })
+
+              {:ok, put_in(state.agent_restart_attempts[agent_id], attempts + 1)}
+
+            {:error, reason} ->
+              {:error, reason, state}
+          end
+
+        {:error, {:already_started, _pid}} ->
+          {:ok, state}
+
+        {:error, reason} ->
+          {:error, "failed to recover agent #{agent_id}: #{inspect(reason)}", state}
+      end
+    end
+  end
+
+  defp start_agent(state, agent_id, recovery_snapshot \\ nil) do
+    node = Map.fetch!(state.nodes_by_id, agent_id)
+
+    spec =
+      {AgentWorker,
+       {state.job_id, node, Map.get(state.outbound_edges_by_node, agent_id, []),
+        Map.get(state.inbound_edges_by_node, agent_id, []), self(), agent_runtime_context(state),
+        recovery_snapshot}}
+
+    Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.AgentSupervisor, spec)
+  end
+
+  defp wait_for_agent_ready(state, agent_id, timeout_ms) do
+    started_at = System.monotonic_time(:millisecond)
+    do_wait_for_agent_ready(state, agent_id, started_at, timeout_ms)
+  end
+
+  defp do_wait_for_agent_ready(state, agent_id, started_at, timeout_ms) do
+    if agent_ready?(state, agent_id) do
+      :ok
+    else
+      if System.monotonic_time(:millisecond) - started_at > timeout_ms do
+        {:error, "timed out waiting for recovered agent #{agent_id} to register"}
+      else
+        Process.sleep(25)
+        do_wait_for_agent_ready(state, agent_id, started_at, timeout_ms)
+      end
+    end
+  end
+
+  defp agent_ready?(state, agent_id) do
+    match?(
+      [{_pid, _meta}],
+      Horde.Registry.lookup(
+        MirrorNeuron.DistributedRegistry,
+        {:agent, state.job_id, agent_id}
+      )
+    )
+  end
+
+  defp schedule_health_check(interval_ms) do
+    Process.send_after(self(), :health_check, interval_ms)
   end
 
   defp do_wait_for_agents_ready(state, started_at, timeout_ms) do

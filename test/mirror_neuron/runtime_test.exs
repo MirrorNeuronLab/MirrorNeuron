@@ -79,6 +79,47 @@ defmodule MirrorNeuron.RuntimeTest do
     end
   end
 
+  defmodule CrashOnceCounter do
+    use Agent
+
+    def start_link(_opts \\ []) do
+      Agent.start_link(fn -> 0 end, name: __MODULE__)
+    end
+
+    def next_invocation do
+      Agent.get_and_update(__MODULE__, fn count ->
+        next = count + 1
+        {next, next}
+      end)
+    end
+  end
+
+  defmodule CrashOnceRunner do
+    def run(_payload, _config, _opts) do
+      case CrashOnceCounter.next_invocation() do
+        1 ->
+          Process.sleep(10_000)
+          {:ok, %{"sandbox_name" => "crash-once", "exit_code" => 0, "stdout" => "{}", "stderr" => "", "logs" => ""}}
+
+        invocation ->
+          {:ok,
+           %{
+             "sandbox_name" => "crash-once",
+             "exit_code" => 0,
+             "stdout" =>
+               Jason.encode!(%{
+                 "complete_job" => %{
+                   "recovered" => true,
+                   "invocation" => invocation
+                 }
+               }),
+             "stderr" => "",
+             "logs" => ""
+           }}
+      end
+    end
+  end
+
   setup do
     Application.ensure_all_started(:mirror_neuron)
 
@@ -89,6 +130,30 @@ defmodule MirrorNeuron.RuntimeTest do
       _ ->
         raise "Redis must be running for runtime tests"
     end
+  end
+
+  setup do
+    original_health = Application.get_env(:mirror_neuron, :job_health_check_interval_ms)
+    original_heartbeat = Application.get_env(:mirror_neuron, :agent_heartbeat_interval_ms)
+
+    Application.put_env(:mirror_neuron, :job_health_check_interval_ms, 100)
+    Application.put_env(:mirror_neuron, :agent_heartbeat_interval_ms, 100)
+
+    on_exit(fn ->
+      if original_health == nil do
+        Application.delete_env(:mirror_neuron, :job_health_check_interval_ms)
+      else
+        Application.put_env(:mirror_neuron, :job_health_check_interval_ms, original_health)
+      end
+
+      if original_heartbeat == nil do
+        Application.delete_env(:mirror_neuron, :agent_heartbeat_interval_ms)
+      else
+        Application.put_env(:mirror_neuron, :agent_heartbeat_interval_ms, original_heartbeat)
+      end
+    end)
+
+    :ok
   end
 
   test "runs a manifest to completion and persists job state" do
@@ -396,6 +461,74 @@ defmodule MirrorNeuron.RuntimeTest do
     assert get_in(job, ["result", "output", "last_message", "value"]) == "done"
 
     GenServer.stop(pid)
+    RedisStore.delete_job(job_id)
+  end
+
+  test "restarts a missing agent and replays its inflight message" do
+    {:ok, counter_pid} = start_supervised(CrashOnceCounter)
+
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "agent_recovery_test",
+      "entrypoints" => ["root"],
+      "initial_inputs" => %{"root" => [%{"work" => "recover"}]},
+      "nodes" => [
+        %{
+          "node_id" => "root",
+          "agent_type" => "router",
+          "role" => "root_coordinator",
+          "config" => %{"emit_type" => "do_work"}
+        },
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "config" => %{
+            "runner_module" => CrashOnceRunner,
+            "output_message_type" => nil
+          }
+        }
+      ],
+      "edges" => [
+        %{"from_node" => "root", "to_node" => "worker", "message_type" => "do_work"}
+      ],
+      "policies" => %{
+        "recovery_mode" => "local_restart",
+        "max_agent_restart_attempts" => 2
+      }
+    }
+
+    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    wait_until(fn -> running_status?(job_id) end, 2_000)
+
+    wait_until(
+      fn ->
+        case MirrorNeuron.inspect_agents(job_id) do
+          {:ok, agents} ->
+            worker = Enum.find(agents, &(&1["agent_id"] == "worker"))
+            not is_nil(worker) and is_map(worker["inflight_message"])
+
+          _ ->
+            false
+        end
+      end,
+      2_000
+    )
+
+    [{pid, _}] =
+      Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:agent, job_id, "worker"})
+
+    Process.exit(pid, :kill)
+
+    assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 8_000)
+    assert job["status"] == "completed"
+    assert get_in(job, ["result", "output", "recovered"]) == true
+    assert get_in(job, ["result", "output", "invocation"]) == 2
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+    assert Enum.any?(events, &(&1["type"] == "agent_recovery_started"))
+    assert Enum.any?(events, &(&1["type"] == "agent_recovered"))
+
+    GenServer.stop(counter_pid)
     RedisStore.delete_job(job_id)
   end
 

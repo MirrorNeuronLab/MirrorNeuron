@@ -7,6 +7,7 @@ defmodule MirrorNeuron.Builtins.Aggregator do
      %{
        config: node.config,
        messages: [],
+       seen_agent_ids: [],
        complete_on_message: Map.get(node.config, "complete_on_message", false),
        complete_after: Map.get(node.config, "complete_after")
      }}
@@ -15,22 +16,34 @@ defmodule MirrorNeuron.Builtins.Aggregator do
   @impl true
   def handle_message(message, state, _context) do
     payload = payload(message) || %{}
-    messages = state.messages ++ [payload]
-    next_state = %{state | messages: messages}
+    agent_id = if is_map(payload), do: Map.get(payload, "agent_id"), else: nil
 
-    actions = [
-      {:event, :aggregator_received, %{"count" => length(messages)}}
-    ]
-
-    if should_complete?(next_state, messages) do
-      result = aggregate(messages, state.config, payload)
-
-      completion_actions =
-        maybe_emit_aggregate(state.config, result) ++ maybe_complete_job(state.config, result)
-
-      {:ok, next_state, actions ++ completion_actions}
+    if is_binary(agent_id) and agent_id in state.seen_agent_ids do
+      {:ok, state, [{:event, :aggregator_duplicate_ignored, %{"agent_id" => agent_id}}]}
     else
-      {:ok, next_state, actions}
+      messages = state.messages ++ [payload]
+
+      next_state =
+        if is_binary(agent_id) do
+          %{state | messages: messages, seen_agent_ids: state.seen_agent_ids ++ [agent_id]}
+        else
+          %{state | messages: messages}
+        end
+
+      actions = [
+        {:event, :aggregator_received, %{"count" => length(messages)}}
+      ]
+
+      if should_complete?(next_state, messages) do
+        result = aggregate(messages, state.config, payload)
+
+        completion_actions =
+          maybe_emit_aggregate(state.config, result) ++ maybe_complete_job(state.config, result)
+
+        {:ok, next_state, actions ++ completion_actions}
+      else
+        {:ok, next_state, actions}
+      end
     end
   end
 

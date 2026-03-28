@@ -164,6 +164,80 @@ stop_runtime_remote() {
   fi
 }
 
+ensure_local_docker() {
+  if docker info >/dev/null 2>&1; then
+    return
+  fi
+
+  if command -v open >/dev/null 2>&1; then
+    echo "Starting Docker Desktop on box 1..."
+    open -a Docker >/dev/null 2>&1 || true
+  fi
+
+  local attempt
+  for attempt in $(seq 1 60); do
+    if docker info >/dev/null 2>&1; then
+      return
+    fi
+    sleep 2
+  done
+
+  echo "Docker is not ready on box 1. Verify Docker Desktop is running." >&2
+  return 1
+}
+
+ensure_remote_docker() {
+  ssh "$BOX2_IP" "$REMOTE_PATH_PREFIX
+    if docker info >/dev/null 2>&1; then
+      exit 0
+    fi
+
+    if command -v open >/dev/null 2>&1; then
+      echo \"Starting Docker Desktop on box 2...\"
+      open -a Docker >/dev/null 2>&1 || true
+    fi
+
+    for attempt in \$(seq 1 60); do
+      if docker info >/dev/null 2>&1; then
+        exit 0
+      fi
+      sleep 2
+    done
+
+    echo \"Docker is not ready on box 2. Verify Docker Desktop is running.\" >&2
+    exit 1
+  "
+}
+
+ensure_local_gateway() {
+  if openshell status >/dev/null 2>&1 && NO_COLOR=1 openshell sandbox list >/dev/null 2>&1; then
+    return
+  fi
+
+  openshell gateway destroy --name openshell >/dev/null 2>&1 || true
+
+  openshell gateway start >/dev/null
+
+  if ! NO_COLOR=1 openshell sandbox list >/dev/null 2>&1; then
+    echo "OpenShell gateway on box 1 is not usable after restart." >&2
+    return 1
+  fi
+}
+
+ensure_remote_gateway() {
+  ssh "$BOX2_IP" "$REMOTE_PATH_PREFIX
+    if openshell status >/dev/null 2>&1 && NO_COLOR=1 openshell sandbox list >/dev/null 2>&1; then
+      exit 0
+    fi
+
+    openshell gateway destroy --name openshell >/dev/null 2>&1 || true
+
+    openshell gateway start >/dev/null
+
+    NO_COLOR=1 openshell sandbox list >/dev/null 2>&1
+  "
+}
+
 build_local() {
   echo "Building box 1 runtime..."
   (cd "$ROOT_DIR" && mix escript.build >/dev/null)
@@ -351,6 +425,10 @@ trap cleanup_all EXIT
 
 stop_runtime_local
 stop_runtime_remote
+ensure_local_docker
+ensure_remote_docker
+ensure_local_gateway
+ensure_remote_gateway
 sync_remote_repo
 build_local
 build_remote

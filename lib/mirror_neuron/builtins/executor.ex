@@ -26,6 +26,7 @@ defmodule MirrorNeuron.Builtins.Executor do
        config: node.config,
        runs: 0,
        agent_state: %{},
+       last_output_payload: nil,
        last_result: nil,
        last_error: nil
      }}
@@ -94,6 +95,7 @@ defmodule MirrorNeuron.Builtins.Executor do
            state
            | runs: state.runs + 1,
              agent_state: structured_state,
+             last_output_payload: output_payload,
              last_result: Map.put(Map.put(result, "attempts", attempts), "lease", lease),
              last_error: nil
          }, actions}
@@ -111,6 +113,22 @@ defmodule MirrorNeuron.Builtins.Executor do
       "slots" => lease["slots"]
     })
   end
+
+  @impl true
+  def recover(%{last_output_payload: payload} = state, _context) when is_map(payload) do
+    actions =
+      [
+        {:event, :executor_output_replayed,
+         %{
+           "reason" => "agent_recovery",
+           "agent_id" => payload["agent_id"]
+         }}
+      ] ++ default_output_actions(state.config, payload)
+
+    {:ok, state, actions}
+  end
+
+  def recover(state, _context), do: {:ok, state, []}
 
   defp default_output_actions(config, payload) do
     output_actions =

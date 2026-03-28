@@ -157,5 +157,6 @@ Possible causes:
 
 ## Related docs
 
+- [Reliability Guide](reliability.md)
 - [Troubleshooting](troubleshooting.md)
 - [Monitor Guide](monitor.md)

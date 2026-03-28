@@ -1,7 +1,50 @@
 
-08:30:24.871 [info] Starting Horde.RegistryImpl with name MirrorNeuron.DistributedRegistry
+09:16:46.137 [info] Starting Horde.RegistryImpl with name MirrorNeuron.DistributedRegistry
 
-08:30:24.876 [info] Starting Horde.DynamicSupervisorImpl with name MirrorNeuron.Runtime.JobSupervisor
-
-08:30:24.876 [info] Starting Horde.DynamicSupervisorImpl with name MirrorNeuron.Runtime.AgentSupervisor
-{"graph_id":"streaming_peak_demo_v1","job_id":"streaming_peak_demo_v1-1774701024511-d0482eabaf4f","job_name":"streaming-peak-demo","manifest_ref":{"graph_id":"streaming_peak_demo_v1","job_path":"/Volumes/1TB/Personal_projects/MirrorNeuron/examples/streaming_peak_demo/generated/streaming_peak_demo_24_samples_4_chunk_gzip","manifest_path":"/Volumes/1TB/Personal_projects/MirrorNeuron/examples/streaming_peak_demo/generated/streaming_peak_demo_24_samples_4_chunk_gzip/manifest.json","manifest_version":"1.0"},"placement_policy":"local","recovery_policy":"cluster_recover","result":{"agent_id":"peak_detector","error":"%{\"attempts\" => 1, \"error\" => \"\\\"upload source does not exist: /Volumes/1TB/Personal_projects/MirrorNeuron/examples/streaming_peak_demo/generated/streaming_peak_demo_24_samples_4_chunk_gzip/payloads/stream_worker\\\"\"}"},"root_agent_ids":["ingress"],"status":"failed","submitted_at":"2026-03-28T12:30:24.519Z","updated_at":"2026-03-28T12:30:24.793Z"}
+09:16:46.143 [info] Starting Horde.DynamicSupervisorImpl with name MirrorNeuron.Runtime.AgentSupervisor
+{
+  "ok": true,
+  "status": "completed",
+  "result": {
+    "agent_id": "peak_detector",
+    "output": {
+      "anomaly_detected": true,
+      "chunks_received": 6,
+      "largest_peak": {
+        "baseline": 30.88,
+        "delta": 48.12,
+        "device_id": "sensor-alpha",
+        "metric": "throughput",
+        "sample_index": 16,
+        "ts": "sample-16",
+        "value": 79
+      },
+      "last_value": 26,
+      "mode": "stream_peak_detection",
+      "peak_count": 2,
+      "peaks": [
+        {
+          "baseline": 24.86,
+          "delta": 52.14,
+          "device_id": "sensor-alpha",
+          "metric": "throughput",
+          "sample_index": 8,
+          "ts": "sample-8",
+          "value": 77
+        },
+        {
+          "baseline": 30.88,
+          "delta": 48.12,
+          "device_id": "sensor-alpha",
+          "metric": "throughput",
+          "sample_index": 16,
+          "ts": "sample-16",
+          "value": 79
+        }
+      ],
+      "points_seen": 24,
+      "stream_id": "streaming_peak_demo_v1-1774703806166-79ab999fd146:telemetry_source:telemetry"
+    }
+  },
+  "job_id": "streaming_peak_demo_v1-1774703806166-79ab999fd146"
+}

@@ -11,6 +11,9 @@ defmodule MirrorNeuron.AgentTemplate do
       def artifacts(message), do: MirrorNeuron.Agent.artifacts(message)
       def stream(message), do: MirrorNeuron.Agent.stream(message)
       def envelope(message), do: MirrorNeuron.Agent.envelope(message)
+      def recover(state, _context), do: {:ok, state, []}
+
+      defoverridable recover: 2
     end
   end
 end

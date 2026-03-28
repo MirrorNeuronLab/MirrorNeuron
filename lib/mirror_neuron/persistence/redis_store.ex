@@ -102,6 +102,14 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
+  def fetch_agent(job_id, agent_id) do
+    case command(["GET", key("job", job_id, "agent", agent_id)]) do
+      {:ok, nil} -> {:error, "agent #{agent_id} was not found for job #{job_id}"}
+      {:ok, encoded} -> Jason.decode(encoded)
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
   def delete_job(job_id) do
     with {:ok, agent_ids} <- command(["SMEMBERS", key("job", job_id, "agents")]) do
       keys =
@@ -119,7 +127,65 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
-  defp command(args), do: Redix.command(MirrorNeuron.Redis.Connection, args)
+  defp command(args), do: command(args, 1)
+
+  defp command(args, attempts_left) do
+    case safe_command(MirrorNeuron.Redis.Connection, args) do
+      {:error, reason} = error ->
+        if attempts_left > 0 and reconnectable_error?(reason) do
+          _ = MirrorNeuron.Redis.reconnect()
+          Process.sleep(50)
+
+          case one_shot_command(args) do
+            {:ok, _result} = ok ->
+              ok
+
+            {:error, retry_reason} = retry_error ->
+              if reconnectable_error?(retry_reason) do
+                command(args, attempts_left - 1)
+              else
+                retry_error
+              end
+
+            other ->
+              other
+          end
+        else
+          error
+        end
+
+      other ->
+        other
+    end
+  end
+
+  defp one_shot_command(args) do
+    redis_url = Application.fetch_env!(:mirror_neuron, :redis_url)
+
+    with {:ok, conn} <- Redix.start_link(redis_url),
+         result <- safe_command(conn, args) do
+      GenServer.stop(conn, :normal, 1_000)
+      result
+    end
+  end
+
+  defp safe_command(connection, args) do
+    Redix.command(connection, args)
+  catch
+    :exit, {:redix_exited_during_call, reason} ->
+      {:error, {:redix_exited_during_call, reason}}
+
+    :exit, {:noproc, _} = reason ->
+      {:error, {:redix_exit, reason}}
+
+    :exit, reason ->
+      {:error, {:redix_exit, reason}}
+  end
+
+  defp reconnectable_error?(%Redix.ConnectionError{}), do: true
+  defp reconnectable_error?({:redix_exited_during_call, _reason}), do: true
+  defp reconnectable_error?({:redix_exit, _reason}), do: true
+  defp reconnectable_error?(_reason), do: false
 
   defp key(part1), do: Enum.join([namespace(), part1], ":")
   defp key(part1, part2), do: Enum.join([namespace(), part1, part2], ":")

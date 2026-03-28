@@ -12,6 +12,10 @@ defmodule MirrorNeuron.Agent do
   @callback init(node :: map()) :: {:ok, map()} | {:error, term()}
   @callback handle_message(message :: map(), state :: map(), context :: map()) ::
               {:ok, map(), [action()]} | {:error, term(), map()}
+  @callback recover(state :: map(), context :: map()) ::
+              {:ok, map(), [action()]} | {:error, term(), map()}
+
+  @optional_callbacks recover: 2
 
   def payload(message), do: MirrorNeuron.Message.body(message)
   def type(message), do: MirrorNeuron.Message.type(message)

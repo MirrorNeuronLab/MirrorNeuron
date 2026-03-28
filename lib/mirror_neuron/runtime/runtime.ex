@@ -13,7 +13,7 @@ defmodule MirrorNeuron.Runtime do
     persist_initial_job(job_id, manifest, bundle)
 
     with {:ok, pid} <-
-           Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) do
+           DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) do
       {:ok, job_id, pid}
     end
   end

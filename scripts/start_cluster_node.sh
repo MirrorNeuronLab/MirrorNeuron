@@ -147,22 +147,24 @@ echo "  executor capacity: $MIRROR_NEURON_EXECUTOR_MAX_CONCURRENCY"
 echo "  dist port: $MIRROR_NEURON_DIST_PORT"
 
 ensure_openshell_gateway() {
-  if openshell status >/dev/null 2>&1; then
+  if openshell status >/dev/null 2>&1 && NO_COLOR=1 openshell sandbox list >/dev/null 2>&1; then
     echo "OpenShell gateway is already healthy; reusing it."
     openshell status
     return
   fi
 
+  echo "OpenShell gateway is unavailable or unhealthy; recreating it..."
+  openshell gateway destroy --name openshell >/dev/null 2>&1 || true
+
   if [ "$RECREATE_OPENSHELL" = "1" ]; then
     echo "Recreating OpenShell gateway..."
     openshell gateway start --recreate
-    openshell status
-    return
+  else
+    echo "OpenShell gateway is not healthy; starting it..."
+    openshell gateway start
   fi
 
-  echo "OpenShell gateway is not healthy; starting it..."
-
-  if openshell gateway start; then
+  if openshell status >/dev/null 2>&1 && NO_COLOR=1 openshell sandbox list >/dev/null 2>&1; then
     openshell status
     return
   fi

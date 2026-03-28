@@ -4,34 +4,33 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BOX1_IP=""
 BOX2_IP=""
-BOX1_NODE_IP=""
-BOX2_NODE_IP=""
+START="1000003"
+END="1006002"
+CHUNK_SIZE="100"
 COOKIE="${MIRROR_NEURON_COOKIE:-mirrorneuron}"
 DIST_PORT="${MIRROR_NEURON_DIST_PORT:-4370}"
 EXECUTOR_CAPACITY="${MIRROR_NEURON_EXECUTOR_MAX_CONCURRENCY:-2}"
 REMOTE_ROOT="${MIRROR_NEURON_REMOTE_ROOT:-/Users/homer/Personal_Projects/MirrorNeuron}"
 SKIP_SYNC="0"
 KEEP_CLUSTER_UP="0"
-WAIT_TIMEOUT_SECONDS="${MIRROR_NEURON_LLM_WAIT_TIMEOUT_SECONDS:-300}"
+WAIT_TIMEOUT_SECONDS=""
 POLL_INTERVAL_SECONDS="5"
-MODEL="${MIRROR_NEURON_GEMINI_MODEL:-gemini-2.5-flash-lite}"
 REMOTE_PATH_PREFIX='export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH";'
-LOCAL_LOG="/tmp/mirror_neuron_mn1_llm_e2e.log"
-REMOTE_LOG="/tmp/mirror_neuron_mn2_llm_e2e.log"
-BUNDLE_ROOT="/tmp/mirror_neuron_cluster_bundles"
 
 usage() {
   cat <<'EOF'
 usage:
-  bash scripts/test_cluster_llm_codegen_e2e.sh --box1-ip <ip> --box2-ip <ip> [options]
+  bash scripts/test_cluster_prime_failover_e2e.sh --box1-ip <ip> --box2-ip <ip> [options]
 
 example:
-  bash scripts/test_cluster_llm_codegen_e2e.sh --box1-ip 192.168.4.29 --box2-ip 192.168.4.35
+  bash scripts/test_cluster_prime_failover_e2e.sh --box1-ip 192.168.4.29 --box2-ip 192.168.4.35
 
 options:
       --box1-ip <ip>             IP of box 1
       --box2-ip <ip>             IP of box 2
-      --model <name>             Gemini model, defaults to gemini-2.5-flash-lite
+      --start <n>                Inclusive prime range start, defaults to 1000003
+      --end <n>                  Inclusive prime range end, defaults to 1006002
+      --chunk-size <n>           Numbers assigned per worker, defaults to 100
       --remote-root <path>       MirrorNeuron checkout on box 2
       --cookie <cookie>          Erlang cookie, defaults to mirrorneuron
       --dist-port <port>         Erlang distribution port, defaults to 4370
@@ -40,7 +39,7 @@ options:
       --poll-interval-seconds <n>
                                  Progress poll interval while waiting, defaults to 5
       --skip-sync                Do not rsync the repo to box 2 first
-      --keep-cluster-up          Leave both runtime nodes running after the test
+      --keep-cluster-up          Leave runtime nodes running after the test
   -h, --help                     Show this help
 EOF
 }
@@ -55,8 +54,16 @@ while [ "$#" -gt 0 ]; do
       BOX2_IP="$2"
       shift 2
       ;;
-    --model)
-      MODEL="$2"
+    --start)
+      START="$2"
+      shift 2
+      ;;
+    --end)
+      END="$2"
+      shift 2
+      ;;
+    --chunk-size)
+      CHUNK_SIZE="$2"
       shift 2
       ;;
     --remote-root)
@@ -108,79 +115,35 @@ if [ -z "$BOX1_IP" ] || [ -z "$BOX2_IP" ]; then
   exit 1
 fi
 
-if [ -z "${GEMINI_API_KEY:-${GOOGLE_API_KEY:-}}" ]; then
-  echo "GEMINI_API_KEY or GOOGLE_API_KEY must be set before running this e2e test." >&2
+if [ "$END" -lt "$START" ]; then
+  echo "--end must be greater than or equal to --start" >&2
   exit 1
 fi
 
-quote_env_value() {
-  python3 - "$1" <<'PY'
-import shlex
-import sys
-
-print(shlex.quote(sys.argv[1]))
+WORKERS="$(
+  python3 - <<PY
+start = int("$START")
+end = int("$END")
+chunk = int("$CHUNK_SIZE")
+print(((end - start) // chunk) + 1)
 PY
-}
+)"
 
-detect_local_ip() {
-  local peer_ip="${1:-8.8.8.8}"
-
-  python3 - "$peer_ip" <<'PY'
-import socket
-import sys
-
-peer_ip = sys.argv[1]
-s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-try:
-    s.connect((peer_ip, 80))
-    print(s.getsockname()[0])
-finally:
-    s.close()
+if [ -z "$WAIT_TIMEOUT_SECONDS" ]; then
+  WAIT_TIMEOUT_SECONDS="$(
+    python3 - <<PY
+import math
+workers = int("$WORKERS")
+capacity = max(1, int("$EXECUTOR_CAPACITY"))
+estimated = math.ceil((workers * 2.0) / capacity) + 180
+print(max(180, estimated))
 PY
-}
-
-detect_remote_ip() {
-  ssh "$BOX2_IP" "$REMOTE_PATH_PREFIX
-    python3 - <<'PY'
-import socket
-import subprocess
-
-for interface in ('en0', 'en1'):
-    try:
-        result = subprocess.run(
-            ['ipconfig', 'getifaddr', interface],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        value = result.stdout.strip()
-        if value:
-            print(value)
-            raise SystemExit(0)
-    except FileNotFoundError:
-        break
-
-s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-try:
-    s.connect(('8.8.8.8', 80))
-    print(s.getsockname()[0])
-finally:
-    s.close()
-PY
-  "
-}
-
-BOX1_NODE_IP="$(detect_local_ip "$BOX2_IP")"
-BOX2_NODE_IP="$(detect_remote_ip)"
-
-if [ "$BOX1_NODE_IP" != "$BOX1_IP" ] || [ "$BOX2_NODE_IP" != "$BOX2_IP" ]; then
-  echo "Detected runtime node IPs:"
-  echo "  box1 runtime ip: $BOX1_NODE_IP (ssh target was $BOX1_IP)"
-  echo "  box2 runtime ip: $BOX2_NODE_IP (ssh target was $BOX2_IP)"
+  )"
 fi
 
-LOCAL_GEMINI_KEY="${GEMINI_API_KEY:-${GOOGLE_API_KEY:-}}"
-LOCAL_GEMINI_KEY_QUOTED="$(quote_env_value "$LOCAL_GEMINI_KEY")"
+LOCAL_LOG="/tmp/mirror_neuron_mn1_failover.log"
+REMOTE_LOG="/tmp/mirror_neuron_mn2_failover.log"
+BUNDLE_ROOT="/tmp/mirror_neuron_cluster_bundles"
 
 local_runtime_pids() {
   pgrep -f 'mirror_neuron.*server' || true
@@ -218,11 +181,11 @@ cleanup_sandboxes_local() {
   local names
   names="$(
     NO_COLOR=1 openshell sandbox list 2>/dev/null \
-      | awk 'NR > 1 && index($1, "mirror-neuron-job-") == 1 {print $1}'
+      | awk 'NR > 1 && (index($1, "prime-worker-") == 1 || index($1, "mirror-neuron-job-") == 1) {print $1}'
   )"
 
   if [ -n "$names" ]; then
-    echo "Deleting local LLM test sandboxes..."
+    echo "Deleting local benchmark sandboxes..."
     printf '%s\n' "$names" | xargs -n 20 openshell sandbox delete >/dev/null 2>&1 || true
   fi
 }
@@ -232,7 +195,7 @@ cleanup_sandboxes_remote() {
     if command -v openshell >/dev/null 2>&1; then
       names=\$(
         NO_COLOR=1 openshell sandbox list 2>/dev/null \
-          | awk 'NR > 1 && index(\$1, \"mirror-neuron-job-\") == 1 {print \$1}'
+          | awk 'NR > 1 && (index(\$1, \"prime-worker-\") == 1 || index(\$1, \"mirror-neuron-job-\") == 1) {print \$1}'
       )
       if [ -n \"\$names\" ]; then
         printf \"%s\n\" \"\$names\" | xargs -n 20 openshell sandbox delete >/dev/null 2>&1 || true
@@ -292,7 +255,6 @@ ensure_local_gateway() {
   fi
 
   openshell gateway destroy --name openshell >/dev/null 2>&1 || true
-
   openshell gateway start >/dev/null
 
   if ! NO_COLOR=1 openshell sandbox list >/dev/null 2>&1; then
@@ -308,7 +270,6 @@ ensure_remote_gateway() {
     fi
 
     openshell gateway destroy --name openshell >/dev/null 2>&1 || true
-
     openshell gateway start >/dev/null
 
     NO_COLOR=1 openshell sandbox list >/dev/null 2>&1
@@ -324,6 +285,7 @@ sync_remote_repo() {
   if [ "$SKIP_SYNC" = "1" ]; then
     return
   fi
+
   echo "Syncing repo to box 2..."
   ssh "$BOX2_IP" "mkdir -p \"$REMOTE_ROOT\""
   rsync -az --delete \
@@ -346,15 +308,14 @@ start_local_runtime() {
     cd "$ROOT_DIR"
     epmd -daemon
     env \
-      MIRROR_NEURON_NODE_NAME="mn1@${BOX1_NODE_IP}" \
+      MIRROR_NEURON_NODE_NAME="mn1@${BOX1_IP}" \
       MIRROR_NEURON_NODE_ROLE="runtime" \
       MIRROR_NEURON_COOKIE="$COOKIE" \
-      MIRROR_NEURON_CLUSTER_NODES="mn1@${BOX1_NODE_IP},mn2@${BOX2_NODE_IP}" \
-      MIRROR_NEURON_REDIS_URL="redis://${BOX1_NODE_IP}:6379/0" \
+      MIRROR_NEURON_CLUSTER_NODES="mn1@${BOX1_IP},mn2@${BOX2_IP}" \
+      MIRROR_NEURON_REDIS_URL="redis://${BOX1_IP}:6379/0" \
       MIRROR_NEURON_EXECUTOR_MAX_CONCURRENCY="$EXECUTOR_CAPACITY" \
       MIRROR_NEURON_DIST_PORT="$DIST_PORT" \
       ERL_AFLAGS="-kernel inet_dist_listen_min ${DIST_PORT} inet_dist_listen_max ${DIST_PORT}" \
-      GEMINI_API_KEY="$LOCAL_GEMINI_KEY" \
       MIRROR_NEURON_LOG_PATH="$LOCAL_LOG" \
       python3 - <<'PY'
 import os
@@ -384,15 +345,14 @@ start_remote_runtime() {
     epmd -daemon
     : >\"$REMOTE_LOG\"
     env \
-      MIRROR_NEURON_NODE_NAME=\"mn2@${BOX2_NODE_IP}\" \
+      MIRROR_NEURON_NODE_NAME=\"mn2@${BOX2_IP}\" \
       MIRROR_NEURON_NODE_ROLE=\"runtime\" \
       MIRROR_NEURON_COOKIE=\"$COOKIE\" \
-      MIRROR_NEURON_CLUSTER_NODES=\"mn1@${BOX1_NODE_IP},mn2@${BOX2_NODE_IP}\" \
-      MIRROR_NEURON_REDIS_URL=\"redis://${BOX1_NODE_IP}:6379/0\" \
+      MIRROR_NEURON_CLUSTER_NODES=\"mn1@${BOX1_IP},mn2@${BOX2_IP}\" \
+      MIRROR_NEURON_REDIS_URL=\"redis://${BOX1_IP}:6379/0\" \
       MIRROR_NEURON_EXECUTOR_MAX_CONCURRENCY=\"$EXECUTOR_CAPACITY\" \
       MIRROR_NEURON_DIST_PORT=\"$DIST_PORT\" \
       ERL_AFLAGS=\"-kernel inet_dist_listen_min ${DIST_PORT} inet_dist_listen_max ${DIST_PORT}\" \
-      GEMINI_API_KEY=${LOCAL_GEMINI_KEY_QUOTED} \
       MIRROR_NEURON_LOG_PATH=\"$REMOTE_LOG\" \
       python3 - <<'PY'
 import os
@@ -415,14 +375,17 @@ PY
 
 force_cluster_connect() {
   echo "Forcing runtime nodes to connect..."
+
   local deadline now
   deadline=$((SECONDS + 20))
 
   while true; do
-    if ERL_AFLAGS='-kernel inet_dist_listen_min 4373 inet_dist_listen_max 4373' \
-      elixir --name "bootstrap_${$}@${BOX1_NODE_IP}" --cookie "$COOKIE" -e "
-        mn1 = :\"mn1@${BOX1_NODE_IP}\"
-        mn2 = :\"mn2@${BOX2_NODE_IP}\"
+    if ssh "$BOX2_IP" "$REMOTE_PATH_PREFIX
+      ERL_AFLAGS='-kernel inet_dist_listen_min 4374 inet_dist_listen_max 4374' \
+      elixir --name 'bootstrap_${$}@${BOX2_IP}' --cookie '$COOKIE' -e '
+        mn1 = :\"mn1@${BOX1_IP}\"
+        mn2 = :\"mn2@${BOX2_IP}\"
+        Node.connect(mn1)
         Node.connect(mn2)
         :rpc.call(mn1, Node, :connect, [mn2])
         :timer.sleep(500)
@@ -432,34 +395,37 @@ force_cluster_connect() {
             _ -> false
           end
         System.halt(if(ok, do: 0, else: 1))
-      " >/dev/null 2>&1; then
+      ' >/dev/null 2>&1"; then
       return
     fi
+
     now=$SECONDS
     if [ "$now" -ge "$deadline" ]; then
       echo "Could not establish runtime-to-runtime connection." >&2
       return 1
     fi
+
     sleep 1
   done
 }
 
 wait_for_cluster() {
   echo "Waiting for both runtime nodes to join..."
+
   local deadline now output
   deadline=$((SECONDS + 30))
 
   while true; do
     output="$(
       bash "$ROOT_DIR/scripts/cluster_cli.sh" \
-        --box1-ip "$BOX1_NODE_IP" \
-        --box2-ip "$BOX2_NODE_IP" \
-        --self-ip "$BOX1_NODE_IP" \
+        --box1-ip "$BOX1_IP" \
+        --box2-ip "$BOX2_IP" \
+        --self-ip "$BOX1_IP" \
         -- inspect nodes 2>/dev/null || true
     )"
 
-    if printf '%s\n' "$output" | grep -q "mn1@${BOX1_NODE_IP}" \
-      && printf '%s\n' "$output" | grep -q "mn2@${BOX2_NODE_IP}"; then
+    if printf '%s\n' "$output" | grep -q "mn1@${BOX1_IP}" \
+      && printf '%s\n' "$output" | grep -q "mn2@${BOX2_IP}"; then
       echo "Cluster is healthy."
       return
     fi
@@ -467,8 +433,13 @@ wait_for_cluster() {
     now=$SECONDS
     if [ "$now" -ge "$deadline" ]; then
       echo "Timed out waiting for cluster formation." >&2
+      echo "Box 1 log:" >&2
+      tail -n 50 "$LOCAL_LOG" >&2 || true
+      echo "Box 2 log:" >&2
+      ssh "$BOX2_IP" "tail -n 50 \"$REMOTE_LOG\"" >&2 || true
       exit 1
     fi
+
     sleep 1
   done
 }
@@ -503,12 +474,16 @@ start_remote_runtime
 force_cluster_connect
 wait_for_cluster
 
-echo "Running cluster LLM codegen/review test..."
+echo "Running cluster prime failover test..."
 BUNDLE_PATH="$(
-  python3 "$ROOT_DIR/examples/llm_codegen_review/generate_bundle.py" \
-    --model "$MODEL" \
+  python3 "$ROOT_DIR/examples/prime_sweep_scale/generate_bundle.py" \
+    --workers "$WORKERS" \
+    --start "$START" \
+    --end "$END" \
+    --chunk-size "$CHUNK_SIZE" \
     --output-dir "$BUNDLE_ROOT"
 )"
+
 RESULT_PATH="$BUNDLE_PATH/result.json"
 
 echo "Generated bundle:"
@@ -520,52 +495,165 @@ scp -r "$BUNDLE_PATH" "${BOX2_IP}:$(dirname "$BUNDLE_PATH")/" >/dev/null
 
 echo "Validating bundle..."
 bash "$ROOT_DIR/scripts/cluster_cli.sh" \
-  --box1-ip "$BOX1_NODE_IP" \
-  --box2-ip "$BOX2_NODE_IP" \
-  --self-ip "$BOX1_NODE_IP" \
+  --box1-ip "$BOX1_IP" \
+  --box2-ip "$BOX2_IP" \
+  --self-ip "$BOX1_IP" \
   -- validate "$BUNDLE_PATH" >/dev/null
 
-echo "Submitting LLM job through cluster CLI..."
-echo "Running awaited cluster job..."
-time bash "$ROOT_DIR/scripts/cluster_cli.sh" \
-  --box1-ip "$BOX1_NODE_IP" \
-  --box2-ip "$BOX2_NODE_IP" \
-  --self-ip "$BOX1_NODE_IP" \
-  -- run "$BUNDLE_PATH" --json | tee "$RESULT_PATH"
+echo "Submitting prime job through cluster CLI..."
+SUBMIT_JSON="$(
+  bash "$ROOT_DIR/scripts/cluster_cli.sh" \
+    --box1-ip "$BOX1_IP" \
+    --box2-ip "$BOX2_IP" \
+    --self-ip "$BOX1_IP" \
+    -- run "$BUNDLE_PATH" --json --no-await
+)"
 
 JOB_ID="$(
-  python3 - "$RESULT_PATH" <<'PY'
+  printf '%s\n' "$SUBMIT_JSON" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["job_id"])'
+)"
+
+echo "Submitted job:"
+echo "  $JOB_ID"
+echo "Waiting for remote executors before killing box 2..."
+
+REMOTE_KILLED="0"
+for _attempt in $(seq 1 60); do
+  AGENTS_JSON="$(
+    cd "$ROOT_DIR"
+    env MIRROR_NEURON_REDIS_URL="redis://${BOX1_IP}:6379/0" \
+      mix run --no-start -e '
+        Application.ensure_all_started(:mirror_neuron)
+        case MirrorNeuron.inspect_agents(System.argv() |> List.first()) do
+          {:ok, agents} -> IO.puts(Jason.encode!(agents))
+          _ -> IO.puts("[]")
+        end
+      ' -- "$JOB_ID"
+  )"
+
+  REMOTE_ASSIGNMENTS="$(
+    AGENTS_JSON_INPUT="$AGENTS_JSON" python3 - <<'PY'
 import json
-import sys
-from pathlib import Path
+import os
 
-raw = Path(sys.argv[1]).read_text()
+data = os.environ["AGENTS_JSON_INPUT"]
 decoder = json.JSONDecoder()
+agents = []
 
-for index, char in enumerate(raw):
-    if char != "{":
+for index, char in enumerate(data):
+    if char != "[":
         continue
+
     try:
-        payload, _ = decoder.raw_decode(raw[index:])
-        print(payload["job_id"])
-        break
+        value, _ = decoder.raw_decode(data[index:])
     except json.JSONDecodeError:
         continue
-else:
-    raise SystemExit("could not decode cluster result JSON")
+
+    if isinstance(value, list):
+        agents = value
+        break
+
+count = sum(
+    1
+    for agent in agents
+    if agent.get("assigned_node") == "mn2@192.168.4.35"
+    and agent.get("agent_type") == "executor"
+)
+
+print(count)
 PY
+  )"
+
+  if [ "$REMOTE_ASSIGNMENTS" -gt 0 ]; then
+    echo "Detected $REMOTE_ASSIGNMENTS executor(s) on box 2. Stopping box 2 runtime now."
+    stop_runtime_remote
+    REMOTE_KILLED="1"
+    break
+  fi
+
+  sleep 1
+done
+
+if [ "$REMOTE_KILLED" != "1" ]; then
+  echo "Did not observe any remote executor placement before timeout." >&2
+  exit 1
+fi
+
+echo "Waiting for completion after failover..."
+echo "  timeout: ${WAIT_TIMEOUT_SECONDS}s"
+echo "  poll interval: ${POLL_INTERVAL_SECONDS}s"
+
+JOB_JSON="$(
+  cd "$ROOT_DIR"
+  env MIRROR_NEURON_REDIS_URL="redis://${BOX1_IP}:6379/0" \
+    mix run --no-start -e '
+      Application.ensure_all_started(:mirror_neuron)
+      job_id = System.argv() |> Enum.at(0)
+      timeout_seconds = System.argv() |> Enum.at(1) |> String.to_integer()
+      poll_interval_ms = System.argv() |> Enum.at(2) |> String.to_integer() |> Kernel.*(1_000)
+      deadline = System.monotonic_time(:millisecond) + timeout_seconds * 1_000
+
+      wait = fn wait ->
+        case MirrorNeuron.inspect_job(job_id) do
+          {:ok, %{"status" => status} = job} when status in ["completed", "failed", "cancelled"] ->
+            IO.puts(Jason.encode!(job))
+
+          _ ->
+            case MirrorNeuron.inspect_agents(job_id) do
+              {:ok, agents} ->
+                execs = Enum.filter(agents, &(&1["agent_type"] == "executor"))
+                done = Enum.count(execs, &(get_in(&1, ["current_state", "runs"]) == 1))
+                remote = Enum.count(execs, &(&1["assigned_node"] == "mn2@192.168.4.35"))
+                IO.puts(:stderr, "progress executors=#{done}/#{length(execs)} remote_assigned=#{remote}")
+
+              _ ->
+                IO.puts(:stderr, "progress unavailable")
+            end
+
+            if System.monotonic_time(:millisecond) >= deadline do
+              IO.puts(:stderr, "timed out waiting for job #{job_id}")
+              System.halt(2)
+            else
+              Process.sleep(poll_interval_ms)
+              wait.(wait)
+            end
+        end
+      end
+
+      wait.(wait)
+    ' -- "$JOB_ID" "$WAIT_TIMEOUT_SECONDS" "$POLL_INTERVAL_SECONDS"
 )"
+
+printf '%s\n' "$JOB_JSON" >"$RESULT_PATH"
 
 echo "Result written to:"
 echo "  $RESULT_PATH"
 echo "Summary:"
-python3 "$ROOT_DIR/examples/llm_codegen_review/summarize_result.py" "$RESULT_PATH"
+python3 "$ROOT_DIR/examples/prime_sweep_scale/summarize_result.py" "$RESULT_PATH"
 
-echo "Worker placement by node:"
+echo "Recovery events:"
 (
   cd "$ROOT_DIR"
-  env \
-    MIRROR_NEURON_REDIS_URL="redis://${BOX1_NODE_IP}:6379/0" \
+  env MIRROR_NEURON_REDIS_URL="redis://${BOX1_IP}:6379/0" \
+    mix run --no-start -e '
+      Application.ensure_all_started(:mirror_neuron)
+      job_id = System.argv() |> List.first()
+      {:ok, events} = MirrorNeuron.Persistence.RedisStore.read_events(job_id)
+      started = Enum.count(events, &(&1["type"] == "agent_recovery_started"))
+      recovered = Enum.count(events, &(&1["type"] == "agent_recovered"))
+      IO.puts("  agent_recovery_started=#{started}")
+      IO.puts("  agent_recovered=#{recovered}")
+      if started == 0 or recovered == 0 do
+        System.halt(1)
+      end
+    ' -- "$JOB_ID"
+)
+
+echo "Worker placement by node after recovery:"
+(
+  cd "$ROOT_DIR"
+  env MIRROR_NEURON_REDIS_URL="redis://${BOX1_IP}:6379/0" \
     mix run --no-start -e '
       Application.ensure_all_started(:mirror_neuron)
       job_id = System.argv() |> List.first()
@@ -587,4 +675,4 @@ echo "Worker placement by node:"
     ' -- "$JOB_ID"
 )
 
-echo "End-to-end cluster LLM test completed."
+echo "Cluster prime failover test completed."
