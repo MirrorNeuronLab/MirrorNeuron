@@ -223,6 +223,51 @@ cleanup_sandboxes_remote() {
   "
 }
 
+ensure_local_docker() {
+  if docker info >/dev/null 2>&1; then
+    return
+  fi
+
+  if command -v open >/dev/null 2>&1; then
+    echo "Starting Docker Desktop on box 1..."
+    open -a Docker >/dev/null 2>&1 || true
+  fi
+
+  local attempt
+  for attempt in $(seq 1 60); do
+    if docker info >/dev/null 2>&1; then
+      return
+    fi
+    sleep 2
+  done
+
+  echo "Docker is not ready on box 1. Verify Docker Desktop is running." >&2
+  return 1
+}
+
+ensure_remote_docker() {
+  ssh "$BOX2_IP" "$REMOTE_PATH_PREFIX
+    if docker info >/dev/null 2>&1; then
+      exit 0
+    fi
+
+    if command -v open >/dev/null 2>&1; then
+      echo \"Starting Docker Desktop on box 2...\"
+      open -a Docker >/dev/null 2>&1 || true
+    fi
+
+    for attempt in \$(seq 1 60); do
+      if docker info >/dev/null 2>&1; then
+        exit 0
+      fi
+      sleep 2
+    done
+
+    echo \"Docker is not ready on box 2. Verify Docker Desktop is running.\" >&2
+    exit 1
+  "
+}
+
 ensure_local_gateway() {
   if openshell status >/dev/null 2>&1; then
     return
@@ -434,6 +479,8 @@ stop_runtime_local
 stop_runtime_remote
 cleanup_sandboxes_local
 cleanup_sandboxes_remote
+ensure_local_docker
+ensure_remote_docker
 ensure_local_gateway
 ensure_remote_gateway
 sync_remote_repo

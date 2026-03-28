@@ -38,6 +38,36 @@ defmodule MirrorNeuron.ExecutorTest do
     end
   end
 
+  defmodule StructuredRunner do
+    def run(_payload, _config, opts) do
+      count = get_in(opts, [:agent_state, "count"]) || 0
+      next = count + 1
+
+      stdout =
+        Jason.encode!(%{
+          "next_state" => %{"count" => next},
+          "events" => [%{"type" => "custom_metric", "payload" => %{"count" => next}}],
+          "emit_messages" => [
+            %{
+              "type" => "stream_chunk",
+              "body" => %{"count" => next},
+              "headers" => %{"kind" => "demo"}
+            }
+          ],
+          "complete_job" => if(next >= 2, do: %{"count" => next}, else: nil)
+        })
+
+      {:ok,
+       %{
+         "sandbox_name" => "structured-runner",
+         "exit_code" => 0,
+         "stdout" => stdout,
+         "stderr" => "",
+         "logs" => ""
+       }}
+    end
+  end
+
   test "retries transient sandbox failures and emits the successful result" do
     lease_manager =
       start_supervised!({LeaseManager, name: unique_name(), capacities: %{"default" => 1}})
@@ -126,6 +156,45 @@ defmodule MirrorNeuron.ExecutorTest do
     assert_receive {:agent_event, "prime_worker_0002", :executor_lease_requested, _}
     assert_receive {:agent_event, "prime_worker_0002", :executor_lease_acquired, _}
     assert_receive {:agent_event, "prime_worker_0002", :executor_lease_released, _}
+  end
+
+  test "accepts structured stdout actions and carries agent state forward" do
+    lease_manager =
+      start_supervised!({LeaseManager, name: unique_name(), capacities: %{"default" => 1}})
+
+    node = %{
+      node_id: "stream_worker",
+      config: %{
+        :runner_module => StructuredRunner,
+        :lease_manager => lease_manager,
+        "output_message_type" => nil
+      }
+    }
+
+    {:ok, state0} = Executor.init(node)
+
+    context = %{
+      job_id: "job-structured",
+      node: %{node_id: "stream_worker"},
+      coordinator: self(),
+      bundle_root: "/tmp",
+      manifest_path: "/tmp/manifest.json",
+      payloads_path: "/tmp/payloads"
+    }
+
+    {:ok, state1, actions1} =
+      Executor.handle_message(%{type: "tick", payload: %{}}, state0, context)
+
+    assert state1.agent_state["count"] == 1
+    assert Enum.any?(actions1, &match?({:event, :custom_metric, _}, &1))
+    assert Enum.any?(actions1, &match?({:emit, "stream_chunk", _, _}, &1))
+    refute Enum.any?(actions1, &match?({:complete_job, _}, &1))
+
+    {:ok, state2, actions2} =
+      Executor.handle_message(%{type: "tick", payload: %{}}, state1, context)
+
+    assert state2.agent_state["count"] == 2
+    assert {:complete_job, %{"count" => 2}} = Enum.find(actions2, &match?({:complete_job, _}, &1))
   end
 
   defp unique_name do

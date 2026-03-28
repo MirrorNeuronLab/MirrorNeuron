@@ -5,6 +5,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional, Tuple
 
 
 def load_message() -> dict:
@@ -105,7 +106,9 @@ def parse_json_blob(raw_text: str) -> dict:
         return json.loads(match.group(0))
 
 
-def codegen_prompt(task: dict, round_number: int, prior_code: str | None, review: dict | None) -> tuple[str, str]:
+def codegen_prompt(
+    task: dict, round_number: int, prior_code: Optional[str], review: Optional[dict]
+) -> Tuple[str, str]:
     system_instruction = (
         "You are a careful senior Python engineer. Return only a JSON object with keys "
         "file_name, summary, changes, and code. The code field must be a complete Python source file "
@@ -137,7 +140,7 @@ Return JSON with:
     return system_instruction, prompt
 
 
-def review_prompt(candidate: dict, round_number: int) -> tuple[str, str]:
+def review_prompt(candidate: dict, round_number: int) -> Tuple[str, str]:
     system_instruction = (
         "You are a strict code reviewer. Return only a JSON object with keys summary, strengths, "
         "improvement_suggestions, and risk_flags. Keep suggestions actionable and concrete."

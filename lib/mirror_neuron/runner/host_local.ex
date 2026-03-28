@@ -6,6 +6,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
 
   def run(payload, config, opts \\ []) do
     runner_name = build_runner_name(config, opts)
+
     base_dir =
       Path.join(
         System.tmp_dir!(),
@@ -57,8 +58,16 @@ defmodule MirrorNeuron.Runner.HostLocal do
   end
 
   defp write_runtime_files(base_dir, message, opts) do
-    with :ok <- File.write(Path.join(base_dir, "mirror_neuron_input.json"), Jason.encode!(Message.body(message), pretty: true)),
-         :ok <- File.write(Path.join(base_dir, "mirror_neuron_message.json"), Jason.encode!(message, pretty: true)),
+    with :ok <-
+           File.write(
+             Path.join(base_dir, "mirror_neuron_input.json"),
+             Jason.encode!(Message.body(message), pretty: true)
+           ),
+         :ok <-
+           File.write(
+             Path.join(base_dir, "mirror_neuron_message.json"),
+             Jason.encode!(message, pretty: true)
+           ),
          {:ok, body_binary} <- Message.body_binary(message),
          :ok <- File.write(Path.join(base_dir, "mirror_neuron_body.bin"), body_binary),
          :ok <-
@@ -68,6 +77,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
                %{
                  job_id: Keyword.get(opts, :job_id),
                  agent_id: Keyword.get(opts, :agent_id),
+                 agent_state: Keyword.get(opts, :agent_state, %{}),
                  timestamp: MirrorNeuron.Runtime.timestamp()
                },
                pretty: true

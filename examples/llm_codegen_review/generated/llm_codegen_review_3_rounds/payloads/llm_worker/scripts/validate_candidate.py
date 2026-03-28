@@ -6,6 +6,7 @@ import sys
 import tempfile
 from pathlib import Path
 import os
+from typing import List, Optional, Tuple
 
 
 def load_message() -> dict:
@@ -23,7 +24,7 @@ def extract_payload(message: dict) -> dict:
     return body
 
 
-def check_module_has_build_report(script_path: Path) -> tuple[bool, str]:
+def check_module_has_build_report(script_path: Path) -> Tuple[bool, str]:
     spec = importlib.util.spec_from_file_location("candidate_module", script_path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
@@ -32,7 +33,7 @@ def check_module_has_build_report(script_path: Path) -> tuple[bool, str]:
     return exists, "build_report function exists" if exists else "build_report function missing"
 
 
-def run_command(command: list[str], stdin_text: str | None = None) -> tuple[int, str, str]:
+def run_command(command: List[str], stdin_text: Optional[str] = None) -> Tuple[int, str, str]:
     proc = subprocess.run(
         command,
         input=stdin_text,

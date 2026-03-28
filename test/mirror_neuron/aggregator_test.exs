@@ -3,11 +3,11 @@ defmodule MirrorNeuron.AggregatorTest do
 
   alias MirrorNeuron.Builtins.Aggregator
 
-  test "aggregates prime chunk results and completes after the configured count" do
+  test "emits a collected aggregate result when output_message_type is configured" do
     node = %{
       config: %{
-        "mode" => "prime_sweep",
-        "complete_after" => 2
+        "complete_after" => 2,
+        "output_message_type" => "collected"
       }
     }
 
@@ -17,20 +17,7 @@ defmodule MirrorNeuron.AggregatorTest do
       Aggregator.handle_message(
         %{
           type: "prime_chunk_result",
-          payload: %{
-            "agent_id" => "prime_worker_0001",
-            "sandbox" => %{
-              "stdout" =>
-                Jason.encode!(%{
-                  "worker_id" => "prime_worker_0001",
-                  "range_start" => 11,
-                  "range_end" => 20,
-                  "checked_numbers" => 10,
-                  "prime_count" => 4,
-                  "primes" => [11, 13, 17, 19]
-                })
-            }
-          }
+          payload: %{"value" => 1}
         },
         state0,
         %{}
@@ -42,31 +29,17 @@ defmodule MirrorNeuron.AggregatorTest do
       Aggregator.handle_message(
         %{
           type: "prime_chunk_result",
-          payload: %{
-            "agent_id" => "prime_worker_0002",
-            "sandbox" => %{
-              "stdout" =>
-                Jason.encode!(%{
-                  "worker_id" => "prime_worker_0002",
-                  "range_start" => 21,
-                  "range_end" => 30,
-                  "checked_numbers" => 10,
-                  "prime_count" => 2,
-                  "primes" => [23, 29]
-                })
-            }
-          }
+          payload: %{"value" => 2}
         },
         state1,
         %{}
       )
 
-    assert {:complete_job, result} = Enum.find(actions2, &match?({:complete_job, _}, &1))
-    assert result["worker_count"] == 2
-    assert result["checked_numbers"] == 20
-    assert result["prime_count"] == 6
-    assert result["first_25_primes"] == [11, 13, 17, 19, 23, 29]
-    assert result["range_start"] == 11
-    assert result["range_end"] == 30
+    assert {:emit, "collected", result, _opts} =
+             Enum.find(actions2, &match?({:emit, _, _, _}, &1))
+
+    assert result["count"] == 2
+    assert result["messages"] == [%{"value" => 1}, %{"value" => 2}]
+    refute Enum.any?(actions2, &match?({:complete_job, _}, &1))
   end
 end

@@ -345,6 +345,7 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
                %{
                  job_id: Keyword.get(opts, :job_id),
                  agent_id: Keyword.get(opts, :agent_id),
+                 agent_state: Keyword.get(opts, :agent_state, %{}),
                  timestamp: MirrorNeuron.Runtime.timestamp()
                },
                pretty: true

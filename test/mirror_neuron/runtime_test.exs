@@ -5,6 +5,80 @@ defmodule MirrorNeuron.RuntimeTest do
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime.AgentWorker
 
+  defmodule StreamProducerRunner do
+    def run(_payload, _config, opts) do
+      job_id = Keyword.fetch!(opts, :job_id)
+      agent_id = Keyword.fetch!(opts, :agent_id)
+
+      {:ok,
+       %{
+         "sandbox_name" => "producer",
+         "exit_code" => 0,
+         "stdout" =>
+           Jason.encode!(%{
+             "emit_messages" => [
+               %{
+                 "type" => "telemetry_chunk",
+                 "body" => "{\"value\":10}\n",
+                 "class" => "stream",
+                 "content_type" => "application/x-ndjson",
+                 "content_encoding" => "identity",
+                 "stream" => %{
+                   "stream_id" => "#{job_id}:#{agent_id}",
+                   "seq" => 1,
+                   "open" => true,
+                   "close" => false
+                 }
+               },
+               %{
+                 "type" => "telemetry_chunk",
+                 "body" => "{\"value\":90}\n",
+                 "class" => "stream",
+                 "content_type" => "application/x-ndjson",
+                 "content_encoding" => "identity",
+                 "stream" => %{
+                   "stream_id" => "#{job_id}:#{agent_id}",
+                   "seq" => 2,
+                   "open" => false,
+                   "close" => true,
+                   "eof" => true
+                 }
+               }
+             ]
+           }),
+         "stderr" => "",
+         "logs" => ""
+       }}
+    end
+  end
+
+  defmodule StreamDetectorRunner do
+    def run(_payload, _config, opts) do
+      message = Keyword.fetch!(opts, :message)
+      state = Keyword.get(opts, :agent_state, %{})
+      count = Map.get(state, "count", 0) + 1
+
+      completion =
+        if get_in(message, ["stream", "close"]) do
+          %{"chunks_received" => count, "peak_detected" => true}
+        end
+
+      {:ok,
+       %{
+         "sandbox_name" => "detector",
+         "exit_code" => 0,
+         "stdout" =>
+           Jason.encode!(%{
+             "next_state" => %{"count" => count},
+             "events" => [%{"type" => "stream_chunk_processed", "payload" => %{"count" => count}}],
+             "complete_job" => completion
+           }),
+         "stderr" => "",
+         "logs" => ""
+       }}
+    end
+  end
+
   setup do
     Application.ensure_all_started(:mirror_neuron)
 
@@ -144,6 +218,57 @@ defmodule MirrorNeuron.RuntimeTest do
     assert received["payload"]["stream"]["stream_id"] == "stream-1"
     assert received["payload"]["class"] == "stream"
     assert received["payload"]["content_type"] == "application/x-ndjson"
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "runs the streaming peak demo manifest to completion" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "streaming_peak_runtime_test",
+      "entrypoints" => ["ingress"],
+      "initial_inputs" => %{
+        "ingress" => [%{"scenario" => "runtime_stream_test"}]
+      },
+      "nodes" => [
+        %{
+          "node_id" => "ingress",
+          "agent_type" => "router",
+          "role" => "root_coordinator",
+          "config" => %{"emit_type" => "stream_start"}
+        },
+        %{
+          "node_id" => "source",
+          "agent_type" => "executor",
+          "config" => %{
+            "runner_module" => StreamProducerRunner,
+            "output_message_type" => nil
+          }
+        },
+        %{
+          "node_id" => "detector",
+          "agent_type" => "executor",
+          "config" => %{
+            "runner_module" => StreamDetectorRunner,
+            "output_message_type" => nil
+          }
+        }
+      ],
+      "edges" => [
+        %{"from_node" => "ingress", "to_node" => "source", "message_type" => "stream_start"},
+        %{"from_node" => "source", "to_node" => "detector", "message_type" => "telemetry_chunk"}
+      ],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, job_id, job} = MirrorNeuron.run_manifest(manifest, await: true, timeout: 3_000)
+    assert job["status"] == "completed"
+    assert get_in(job, ["result", "output", "chunks_received"]) == 2
+    assert get_in(job, ["result", "output", "peak_detected"]) == true
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+    assert Enum.any?(events, &(&1["type"] == "stream_chunk_processed"))
+    assert Enum.any?(events, &(&1["type"] == "agent_message_received"))
 
     RedisStore.delete_job(job_id)
   end

@@ -23,6 +23,7 @@ MirrorNeuron is not trying to be a general-purpose batch scheduler. It is design
   - local workflows
   - shell and Python execution
   - large fan-out scale tests
+  - streaming telemetry and anomaly detection
   - LLM codegen/review loops
 
 ## Quickstart
@@ -101,6 +102,7 @@ job-folder/
 - [examples/research_flow](examples/research_flow)
 - [examples/openshell_worker_demo](examples/openshell_worker_demo)
 - [examples/prime_sweep_scale](examples/prime_sweep_scale)
+- [examples/streaming_peak_demo](examples/streaming_peak_demo)
 - [examples/llm_codegen_review](examples/llm_codegen_review)
 
 For details:

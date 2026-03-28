@@ -108,6 +108,40 @@ bash scripts/test_cluster_llm_codegen_e2e.sh \
   --box2-ip 192.168.4.35
 ```
 
+## 5. Streaming peak detection demo
+
+Path:
+
+- [examples/streaming_peak_demo](../examples/streaming_peak_demo)
+
+Purpose:
+
+- demonstrates runtime-level streaming messages
+- uses gzipped NDJSON chunks as the wire payload
+- shows one agent producing a stream and another consuming it incrementally
+- detects abnormal peaks and reports the largest anomaly
+
+Key files:
+
+- [generate_bundle.py](../examples/streaming_peak_demo/generate_bundle.py)
+- [run_streaming_e2e.sh](../examples/streaming_peak_demo/run_streaming_e2e.sh)
+- [summarize_result.py](../examples/streaming_peak_demo/summarize_result.py)
+- [test_cluster_streaming_e2e.sh](../scripts/test_cluster_streaming_e2e.sh)
+
+Run locally:
+
+```bash
+bash examples/streaming_peak_demo/run_streaming_e2e.sh
+```
+
+Run on cluster:
+
+```bash
+bash scripts/test_cluster_streaming_e2e.sh \
+  --box1-ip 192.168.4.29 \
+  --box2-ip 192.168.4.35
+```
+
 ## Choosing the right example
 
 Use this order:
@@ -115,11 +149,13 @@ Use this order:
 1. `research_flow`
 2. `openshell_worker_demo`
 3. `prime_sweep_scale`
-4. `llm_codegen_review`
+4. `streaming_peak_demo`
+5. `llm_codegen_review`
 
 That progression moves from:
 
 - local routing
 - local sandbox execution
 - scale and cluster placement
+- runtime streaming and incremental consumption
 - richer multi-agent collaboration

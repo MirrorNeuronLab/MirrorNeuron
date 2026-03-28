@@ -48,11 +48,24 @@ def build_manifest(
             "config": {"emit_type": "prime_chunk_request"},
         },
         {
-            "node_id": "aggregator",
+            "node_id": "collector",
             "agent_type": "aggregator",
             "config": {
-                "mode": "prime_sweep",
                 "complete_after": actual_workers,
+                "output_message_type": "prime_chunk_collection",
+            },
+        },
+        {
+            "node_id": "summarizer",
+            "agent_type": "executor",
+            "config": {
+                "name_prefix": "prime-summary",
+                "upload_path": "summary_worker",
+                "upload_as": "summary_worker",
+                "workdir": "/sandbox/job/summary_worker",
+                "runner_module": "MirrorNeuron.Runner.HostLocal",
+                "command": ["python3", "scripts/summarize_prime_sweep.py"],
+                "output_message_type": None,
             },
         },
     ]
@@ -105,10 +118,19 @@ def build_manifest(
             {
                 "edge_id": f"{worker_id}_to_aggregator",
                 "from_node": worker_id,
-                "to_node": "aggregator",
+                "to_node": "collector",
                 "message_type": "prime_chunk_result",
             }
         )
+
+    edges.append(
+        {
+            "edge_id": "collector_to_summarizer",
+            "from_node": "collector",
+            "to_node": "summarizer",
+            "message_type": "prime_chunk_collection",
+        }
+    )
 
     return {
         "manifest_version": "1.0",

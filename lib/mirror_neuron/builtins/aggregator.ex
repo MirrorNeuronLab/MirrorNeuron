@@ -1,71 +1,79 @@
 defmodule MirrorNeuron.Builtins.Aggregator do
   use MirrorNeuron.AgentTemplate
 
-  alias MirrorNeuron.AgentTemplates.Accumulator
-
   @impl true
   def init(node) do
-    Accumulator.init(node,
-      complete_on_message: Map.get(node.config, "complete_on_message", false)
-    )
+    {:ok,
+     %{
+       config: node.config,
+       messages: [],
+       complete_on_message: Map.get(node.config, "complete_on_message", false),
+       complete_after: Map.get(node.config, "complete_after")
+     }}
   end
 
   @impl true
   def handle_message(message, state, _context) do
-    Accumulator.collect(message, state,
-      event_type: :aggregator_received,
-      build_result: &aggregate/3
-    )
-  end
+    payload = payload(message) || %{}
+    messages = state.messages ++ [payload]
+    next_state = %{state | messages: messages}
 
-  defp aggregate(messages, config, last_message) do
-    case Map.get(config, "mode") do
-      "prime_sweep" -> aggregate_prime_sweep(messages)
-      _ -> %{"messages" => messages, "count" => length(messages), "last_message" => last_message}
+    actions = [
+      {:event, :aggregator_received, %{"count" => length(messages)}}
+    ]
+
+    if should_complete?(next_state, messages) do
+      result = aggregate(messages, state.config, payload)
+
+      completion_actions =
+        maybe_emit_aggregate(state.config, result) ++ maybe_complete_job(state.config, result)
+
+      {:ok, next_state, actions ++ completion_actions}
+    else
+      {:ok, next_state, actions}
     end
   end
 
-  defp aggregate_prime_sweep(messages) do
-    chunk_results =
-      Enum.map(messages, fn payload ->
-        chunk =
-          payload
-          |> get_in(["sandbox", "stdout"])
-          |> Jason.decode!()
+  defp aggregate(messages, _config, last_message) do
+    %{"messages" => messages, "count" => length(messages), "last_message" => last_message}
+  end
 
-        %{
-          "agent_id" => payload["agent_id"],
-          "worker_id" => chunk["worker_id"],
-          "range_start" => chunk["range_start"],
-          "range_end" => chunk["range_end"],
-          "checked_numbers" => chunk["checked_numbers"],
-          "prime_count" => chunk["prime_count"],
-          "primes" => chunk["primes"]
-        }
-      end)
+  defp maybe_emit_aggregate(config, result) do
+    case Map.fetch(config, "output_message_type") do
+      {:ok, message_type} when is_binary(message_type) and message_type != "" ->
+        [
+          {:emit, message_type, result,
+           [
+             class: "event",
+             headers: %{
+               "schema_ref" => "com.mirrorneuron.aggregator.result",
+               "schema_version" => "1.0.0"
+             }
+           ]}
+        ]
 
-    primes =
-      chunk_results
-      |> Enum.flat_map(& &1["primes"])
-      |> Enum.sort()
+      _ ->
+        []
+    end
+  end
 
-    checked_numbers =
-      chunk_results
-      |> Enum.map(& &1["checked_numbers"])
-      |> Enum.sum()
+  defp maybe_complete_job(config, result) do
+    default =
+      case Map.fetch(config, "output_message_type") do
+        {:ok, _message_type} -> false
+        :error -> true
+      end
 
-    sorted_chunks = Enum.sort_by(chunk_results, & &1["range_start"])
+    if Map.get(config, "complete_job", default) do
+      [{:complete_job, result}]
+    else
+      []
+    end
+  end
 
-    %{
-      "mode" => "prime_sweep",
-      "worker_count" => length(chunk_results),
-      "checked_numbers" => checked_numbers,
-      "prime_count" => length(primes),
-      "range_start" => sorted_chunks |> List.first() |> Map.get("range_start"),
-      "range_end" => sorted_chunks |> List.last() |> Map.get("range_end"),
-      "first_25_primes" => Enum.take(primes, 25),
-      "last_25_primes" => Enum.take(Enum.reverse(primes), 25) |> Enum.reverse(),
-      "chunks" => Enum.map(sorted_chunks, &Map.drop(&1, ["primes"]))
-    }
+  defp should_complete?(state, messages) do
+    state.complete_on_message or
+      (is_integer(state.complete_after) and state.complete_after > 0 and
+         length(messages) >= state.complete_after)
   end
 end
