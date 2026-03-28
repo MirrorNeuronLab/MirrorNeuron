@@ -329,7 +329,19 @@ defmodule MirrorNeuron.CLI do
           Node.set_cookie(String.to_atom(cookie))
         end
 
+        connect_configured_cluster_nodes(node_name)
+
         :ok
     end
+  end
+
+  defp connect_configured_cluster_nodes(self_node_name) do
+    "MIRROR_NEURON_CLUSTER_NODES"
+    |> System.get_env("")
+    |> String.split(",", trim: true)
+    |> Enum.reject(&(&1 == self_node_name))
+    |> Enum.each(fn peer ->
+      Node.connect(String.to_atom(peer))
+    end)
   end
 end

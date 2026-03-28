@@ -9,6 +9,7 @@ COOKIE="${MIRROR_NEURON_COOKIE:-mirrorneuron}"
 REDIS_HOST=""
 REDIS_PORT="${MIRROR_NEURON_REDIS_PORT:-6379}"
 EXECUTOR_CAPACITY="${MIRROR_NEURON_EXECUTOR_MAX_CONCURRENCY:-2}"
+DIST_PORT="${MIRROR_NEURON_DIST_PORT:-4370}"
 START_OPENSHELL="1"
 RECREATE_OPENSHELL="0"
 
@@ -18,8 +19,8 @@ usage:
   bash scripts/start_cluster_node.sh [options]
 
 examples:
-  bash scripts/start_cluster_node.sh --box1-ip 10.0.0.11 --box2-ip 10.0.0.12 --box 1
-  bash scripts/start_cluster_node.sh --box1-ip 10.0.0.11 --box2-ip 10.0.0.12 --box 2 --redis-host 10.0.0.11
+  bash scripts/start_cluster_node.sh --box1-ip 192.168.4.29 --box2-ip 192.168.4.35 --box 1
+  bash scripts/start_cluster_node.sh --box1-ip 192.168.4.29 --box2-ip 192.168.4.35 --box 2 --redis-host 192.168.4.29
 
 options:
       --box1-ip <ip>             IP of box 1
@@ -29,6 +30,7 @@ options:
       --redis-port <port>        Redis port, defaults to 6379
       --cookie <cookie>          Erlang cookie, defaults to mirrorneuron
       --executor-capacity <n>    Local executor lease capacity, defaults to 2
+      --dist-port <port>         Erlang distribution port, defaults to 4370
       --skip-openshell           Do not start openshell gateway automatically
       --recreate-openshell       Force destroy/recreate of the openshell gateway
   -h, --help                     Show this help
@@ -72,6 +74,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --executor-capacity)
       EXECUTOR_CAPACITY="$2"
+      shift 2
+      ;;
+    --dist-port)
+      DIST_PORT="$2"
       shift 2
       ;;
     --skip-openshell)
@@ -120,12 +126,18 @@ export MIRROR_NEURON_COOKIE="$COOKIE"
 export MIRROR_NEURON_CLUSTER_NODES="mn1@${BOX1_IP},mn2@${BOX2_IP}"
 export MIRROR_NEURON_REDIS_URL="redis://${REDIS_HOST}:${REDIS_PORT}/0"
 export MIRROR_NEURON_EXECUTOR_MAX_CONCURRENCY="$EXECUTOR_CAPACITY"
+export MIRROR_NEURON_DIST_PORT="$DIST_PORT"
+
+if [ -z "${ERL_AFLAGS:-}" ]; then
+  export ERL_AFLAGS="-kernel inet_dist_listen_min ${DIST_PORT} inet_dist_listen_max ${DIST_PORT}"
+fi
 
 echo "Starting MirrorNeuron cluster node"
 echo "  node: $MIRROR_NEURON_NODE_NAME"
 echo "  cluster: $MIRROR_NEURON_CLUSTER_NODES"
 echo "  redis: $MIRROR_NEURON_REDIS_URL"
 echo "  executor capacity: $MIRROR_NEURON_EXECUTOR_MAX_CONCURRENCY"
+echo "  dist port: $MIRROR_NEURON_DIST_PORT"
 
 ensure_openshell_gateway() {
   if openshell status >/dev/null 2>&1; then

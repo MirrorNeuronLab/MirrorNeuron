@@ -465,16 +465,17 @@ Each machine must:
 The helper script can bootstrap a two-box cluster directly:
 
 ```bash
-bash scripts/start_cluster_node.sh --box1-ip 10.0.0.11 --box2-ip 10.0.0.12 --box 1
+bash scripts/start_cluster_node.sh --box1-ip 192.168.4.29 --box2-ip 192.168.4.35 --box 1
 ```
 
 and on the second machine:
 
 ```bash
-bash scripts/start_cluster_node.sh --box1-ip 10.0.0.11 --box2-ip 10.0.0.12 --box 2
+bash scripts/start_cluster_node.sh --box1-ip 192.168.4.29 --box2-ip 192.168.4.35 --box 2
 ```
 
 It derives `mn1@...` / `mn2@...`, sets the cluster env vars, and starts `./mirror_neuron server`.
+By default it also pins the Erlang distribution port to `4370`, which makes two-box dev-mode networking much easier to debug.
 
 OpenShell behavior in the helper:
 
@@ -485,11 +486,12 @@ OpenShell behavior in the helper:
 Example for node 1:
 
 ```bash
-export ERL_AFLAGS="-setcookie mirrorneuron"
-export MIRROR_NEURON_REDIS_URL="redis://10.0.0.10:6379/0"
-export MIRROR_NEURON_CLUSTER_NODES="mn1@10.0.0.11,mn2@10.0.0.12"
+export ERL_AFLAGS="-kernel inet_dist_listen_min 4370 inet_dist_listen_max 4370"
+export MIRROR_NEURON_REDIS_URL="redis://192.168.4.29:6379/0"
+export MIRROR_NEURON_CLUSTER_NODES="mn1@192.168.4.29,mn2@192.168.4.35"
+export MIRROR_NEURON_COOKIE="mirrorneuron"
 
-iex --name mn1@10.0.0.11 -S mix
+iex --name mn1@192.168.4.29 -S mix
 ```
 
 Then inside `iex`:
@@ -501,11 +503,12 @@ MirrorNeuron.CLI.main(["server"])
 Example for node 2:
 
 ```bash
-export ERL_AFLAGS="-setcookie mirrorneuron"
-export MIRROR_NEURON_REDIS_URL="redis://10.0.0.10:6379/0"
-export MIRROR_NEURON_CLUSTER_NODES="mn1@10.0.0.11,mn2@10.0.0.12"
+export ERL_AFLAGS="-kernel inet_dist_listen_min 4370 inet_dist_listen_max 4370"
+export MIRROR_NEURON_REDIS_URL="redis://192.168.4.29:6379/0"
+export MIRROR_NEURON_CLUSTER_NODES="mn1@192.168.4.29,mn2@192.168.4.35"
+export MIRROR_NEURON_COOKIE="mirrorneuron"
 
-iex --name mn2@10.0.0.12 -S mix
+iex --name mn2@192.168.4.35 -S mix
 ```
 
 Then inside `iex`:
@@ -516,17 +519,19 @@ MirrorNeuron.CLI.main(["server"])
 
 Once the nodes see each other through EPMD, `Horde` can place jobs and agent workers across the cluster and agent-to-agent communication uses BEAM messaging between nodes.
 
-To run one-shot CLI commands from any machine and have them join the cluster, set a temporary node name and cookie first:
+To run one-shot CLI commands from either box in dev mode, use the helper so the temporary CLI node gets its own fixed distribution port:
 
 ```bash
-export MIRROR_NEURON_NODE_NAME="cli@10.0.0.20"
-export MIRROR_NEURON_COOKIE="mirrorneuron"
-export MIRROR_NEURON_REDIS_URL="redis://10.0.0.10:6379/0"
-export MIRROR_NEURON_CLUSTER_NODES="mn1@10.0.0.11,mn2@10.0.0.12"
-
-./mirror_neuron inspect nodes
-./mirror_neuron run examples/research_flow
+bash scripts/cluster_cli.sh --box1-ip 192.168.4.29 --box2-ip 192.168.4.35 --self-ip 192.168.4.29 -- inspect nodes
+bash scripts/cluster_cli.sh --box1-ip 192.168.4.29 --box2-ip 192.168.4.35 --self-ip 192.168.4.29 -- run examples/research_flow
 ```
+
+This helper uses:
+
+- `4370` for the long-running runtime nodes
+- `4371` for the temporary CLI node
+
+That avoids port collisions and makes `inspect nodes` deterministic in dev mode.
 
 ## Demo: shell + Python worker bundle
 
