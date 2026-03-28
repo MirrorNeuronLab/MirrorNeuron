@@ -8,6 +8,24 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
+  def persist_terminal_job(job_id, updates, defaults \\ %{}) do
+    existing =
+      case fetch_job(job_id) do
+        {:ok, job} when is_map(job) -> job
+        _ -> %{}
+      end
+
+    job_map =
+      defaults
+      |> Map.merge(existing)
+      |> Map.merge(updates)
+      |> Map.put("job_id", job_id)
+      |> Map.put_new("submitted_at", timestamp())
+      |> Map.put("updated_at", timestamp())
+
+    persist_job(job_id, job_map)
+  end
+
   def fetch_job(job_id) do
     case command(["GET", key("job", job_id)]) do
       {:ok, nil} -> {:error, "job #{job_id} was not found"}
@@ -89,4 +107,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   defp format_reason(reason) when is_binary(reason), do: reason
   defp format_reason(reason), do: inspect(reason)
+
+  defp timestamp,
+    do: DateTime.utc_now() |> DateTime.truncate(:millisecond) |> DateTime.to_iso8601()
 end

@@ -1,5 +1,6 @@
 defmodule MirrorNeuron.Runtime.JobCoordinator do
   use GenServer
+  require Logger
 
   alias MirrorNeuron.Message
   alias MirrorNeuron.Persistence.RedisStore
@@ -117,7 +118,16 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   def handle_info({:agent_checkpoint, agent_id, snapshot}, state) do
-    RedisStore.persist_agent(state.job_id, agent_id, snapshot)
+    case RedisStore.persist_agent(state.job_id, agent_id, snapshot) do
+      {:ok, _snapshot} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "failed to persist agent checkpoint for #{state.job_id}/#{agent_id}: #{inspect(reason)}"
+        )
+    end
+
     {:noreply, state}
   end
 
@@ -208,7 +218,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     end)
   end
 
-  defp wait_for_agents_ready(state, timeout_ms \\ 5_000) do
+  defp wait_for_agents_ready(state, timeout_ms \\ 20_000) do
     started_at = System.monotonic_time(:millisecond)
     do_wait_for_agents_ready(state, started_at, timeout_ms)
   end
@@ -283,14 +293,27 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       }
     }
 
-    RedisStore.persist_job(state.job_id, job_map)
+    case RedisStore.persist_job(state.job_id, job_map) do
+      {:ok, _job} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("failed to persist job #{state.job_id}: #{inspect(reason)}")
+    end
   end
 
   defp agent_runtime_context(state) do
     %{
       bundle_root: state.bundle && state.bundle.root_path,
       manifest_path: state.bundle && state.bundle.manifest_path,
-      payloads_path: state.bundle && state.bundle.payloads_path
+      payloads_path: state.bundle && state.bundle.payloads_path,
+      graph_id: state.manifest.graph_id,
+      job_name: state.manifest.job_name,
+      entrypoints: state.manifest.entrypoints,
+      placement_policy: Map.get(state.manifest.policies, "placement_policy", "local"),
+      recovery_policy: Map.get(state.manifest.policies, "recovery_mode", "local_restart"),
+      submitted_at: state.submitted_at,
+      manifest_version: state.manifest.manifest_version
     }
   end
 

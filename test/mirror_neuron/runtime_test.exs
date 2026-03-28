@@ -3,6 +3,7 @@ defmodule MirrorNeuron.RuntimeTest do
 
   alias MirrorNeuron.Message
   alias MirrorNeuron.Persistence.RedisStore
+  alias MirrorNeuron.Runtime.AgentWorker
 
   setup do
     Application.ensure_all_started(:mirror_neuron)
@@ -215,6 +216,60 @@ defmodule MirrorNeuron.RuntimeTest do
     assert {:ok, events} = MirrorNeuron.events(job_id)
     refute Enum.any?(events, &(&1["type"] == "dead_letter"))
 
+    RedisStore.delete_job(job_id)
+  end
+
+  test "persists a terminal job record even if the coordinator is gone" do
+    job_id = "worker_fallback_test-#{System.unique_integer([:positive])}"
+
+    node = %{
+      node_id: "sink",
+      agent_type: "aggregator",
+      role: "sink",
+      config: %{"complete_on_message" => true}
+    }
+
+    coordinator =
+      spawn(fn ->
+        receive do
+        after
+          1 -> :ok
+        end
+      end)
+
+    Process.exit(coordinator, :kill)
+
+    runtime_context = %{
+      graph_id: "worker_fallback_test",
+      job_name: "worker_fallback_test",
+      entrypoints: ["sink"],
+      placement_policy: "local",
+      recovery_policy: "local_restart",
+      submitted_at:
+        DateTime.utc_now() |> DateTime.truncate(:millisecond) |> DateTime.to_iso8601(),
+      manifest_version: "1.0"
+    }
+
+    assert {:ok, pid} = AgentWorker.start_link({job_id, node, [], coordinator, runtime_context})
+
+    message =
+      Message.new(job_id, "external", "sink", "manual_result", %{"value" => "done"},
+        correlation_id: "test-correlation"
+      )
+
+    GenServer.cast(pid, {:deliver, message})
+
+    wait_until(fn ->
+      match?({:ok, %{"status" => "completed"}}, MirrorNeuron.inspect_job(job_id))
+    end)
+
+    assert {:ok, job} = MirrorNeuron.inspect_job(job_id)
+    assert job["status"] == "completed"
+    assert get_in(job, ["result", "agent_id"]) == "sink"
+    assert get_in(job, ["result", "output", "count"]) == 1
+    assert get_in(job, ["result", "output", "last_message", "value"]) == "done"
+
+    GenServer.stop(pid)
     RedisStore.delete_job(job_id)
   end
 

@@ -1,5 +1,6 @@
 defmodule MirrorNeuron.Runtime.AgentWorker do
   use GenServer
+  require Logger
 
   alias MirrorNeuron.AgentRegistry
   alias MirrorNeuron.Message
@@ -132,6 +133,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       {:error, reason, new_local_state} ->
         failed_state = %{state | local_state: new_local_state}
         persist_snapshot(failed_state)
+        persist_terminal_failure(failed_state, reason)
         send(state.coordinator, {:agent_failed, state.node.node_id, reason})
         failed_state
     end
@@ -182,6 +184,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   end
 
   defp execute_action({:complete_job, result}, _incoming, state) do
+    persist_terminal_completion(state, result)
     send(state.coordinator, {:agent_completed_job, state.node.node_id, result})
   end
 
@@ -202,8 +205,62 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       }
     }
 
-    RedisStore.persist_agent(state.job_id, state.node.node_id, snapshot)
+    case RedisStore.persist_agent(state.job_id, state.node.node_id, snapshot) do
+      {:ok, _snapshot} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "failed to persist agent snapshot for #{state.job_id}/#{state.node.node_id}: #{inspect(reason)}"
+        )
+    end
+
     send(state.coordinator, {:agent_checkpoint, state.node.node_id, snapshot})
+  end
+
+  defp persist_terminal_completion(state, result) do
+    updates = %{
+      "status" => "completed",
+      "result" => %{"agent_id" => state.node.node_id, "output" => result}
+    }
+
+    persist_terminal_job(state, updates)
+  end
+
+  defp persist_terminal_failure(state, reason) do
+    updates = %{
+      "status" => "failed",
+      "result" => %{"agent_id" => state.node.node_id, "error" => inspect(reason)}
+    }
+
+    persist_terminal_job(state, updates)
+  end
+
+  defp persist_terminal_job(state, updates) do
+    defaults = %{
+      "graph_id" => state.runtime_context[:graph_id],
+      "job_name" => state.runtime_context[:job_name],
+      "root_agent_ids" => state.runtime_context[:entrypoints] || [],
+      "placement_policy" => state.runtime_context[:placement_policy] || "local",
+      "recovery_policy" => state.runtime_context[:recovery_policy] || "local_restart",
+      "manifest_ref" => %{
+        "graph_id" => state.runtime_context[:graph_id],
+        "manifest_version" => state.runtime_context[:manifest_version],
+        "manifest_path" => state.runtime_context[:manifest_path],
+        "job_path" => state.runtime_context[:bundle_root]
+      },
+      "submitted_at" => state.runtime_context[:submitted_at] || Runtime.timestamp()
+    }
+
+    case RedisStore.persist_terminal_job(state.job_id, updates, defaults) do
+      {:ok, _job} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "failed to persist terminal job state for #{state.job_id}/#{state.node.node_id}: #{inspect(reason)}"
+        )
+    end
   end
 
   defp stringify_local_state(map) when is_map(map) do
