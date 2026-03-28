@@ -56,14 +56,14 @@ This makes failures much easier to reason about than random dynamic ports.
 Box 1:
 
 ```bash
-cd /Volumes/1TB/Personal_projects/MirrorNeuron
+cd MirrorNeuron
 bash scripts/start_cluster_node.sh --box1-ip 192.168.4.29 --box2-ip 192.168.4.35 --box 1
 ```
 
 Box 2:
 
 ```bash
-cd /Users/homer/Personal_Projects/MirrorNeuron
+cd MirrorNeuron
 bash scripts/start_cluster_node.sh --box1-ip 192.168.4.29 --box2-ip 192.168.4.35 --box 2 --redis-host 192.168.4.29
 ```
 

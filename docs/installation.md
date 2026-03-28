@@ -73,7 +73,7 @@ You want `Status: Connected`.
 ## 5. Fetch dependencies and build
 
 ```bash
-cd /Volumes/1TB/Personal_projects/MirrorNeuron
+cd MirrorNeuron
 mix deps.get
 mix test
 mix escript.build

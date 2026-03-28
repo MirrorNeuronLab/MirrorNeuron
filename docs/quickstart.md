@@ -5,7 +5,7 @@ This guide gets MirrorNeuron running quickly on one machine.
 ## Validate a simple workflow
 
 ```bash
-cd /Volumes/1TB/Personal_projects/MirrorNeuron
+cd MirrorNeuron
 ./mirror_neuron validate examples/research_flow
 ```
 

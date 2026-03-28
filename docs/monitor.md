@@ -28,7 +28,7 @@ At the job detail level:
 ## Local usage
 
 ```bash
-cd /Volumes/1TB/Personal_projects/MirrorNeuron
+cd MirrorNeuron
 ./mirror_neuron_monitor
 ```
 
