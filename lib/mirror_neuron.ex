@@ -1,6 +1,7 @@
 defmodule MirrorNeuron do
   alias MirrorNeuron.Cluster.Control
   alias MirrorNeuron.JobBundle
+  alias MirrorNeuron.Monitor
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
 
@@ -50,6 +51,10 @@ defmodule MirrorNeuron do
       MirrorNeuron.Cluster.Manager.nodes()
     end
   end
+
+  def list_jobs(opts \\ []), do: Monitor.list_jobs(opts)
+  def job_details(job_id, opts \\ []), do: Monitor.job_details(job_id, opts)
+  def cluster_overview(opts \\ []), do: Monitor.cluster_overview(opts)
 
   def pause(job_id) do
     if control_node?(),

@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$ROOT_DIR"
+
+BOX1_IP=""
+BOX2_IP=""
+SELF_IP=""
+SEED_IP=""
+REDIS_HOST=""
+REDIS_PORT="${MIRROR_NEURON_REDIS_PORT:-6379}"
+COOKIE="${MIRROR_NEURON_COOKIE:-mirrorneuron}"
+CLI_PORT="${MIRROR_NEURON_CLI_DIST_PORT:-4374}"
+PASSTHROUGH=()
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --box1-ip)
+      BOX1_IP="$2"
+      shift 2
+      ;;
+    --box2-ip)
+      BOX2_IP="$2"
+      shift 2
+      ;;
+    --self-ip)
+      SELF_IP="$2"
+      shift 2
+      ;;
+    --seed-ip)
+      SEED_IP="$2"
+      shift 2
+      ;;
+    --redis-host)
+      REDIS_HOST="$2"
+      shift 2
+      ;;
+    --redis-port)
+      REDIS_PORT="$2"
+      shift 2
+      ;;
+    --cookie)
+      COOKIE="$2"
+      shift 2
+      ;;
+    --cli-port)
+      CLI_PORT="$2"
+      shift 2
+      ;;
+    *)
+      PASSTHROUGH+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [ -n "$BOX1_IP" ] || [ -n "$BOX2_IP" ] || [ -n "$SELF_IP" ]; then
+  if [ -z "$BOX1_IP" ] || [ -z "$BOX2_IP" ] || [ -z "$SELF_IP" ]; then
+    echo "cluster mode requires --box1-ip, --box2-ip, and --self-ip" >&2
+    exit 1
+  fi
+
+  if [ -z "$REDIS_HOST" ]; then
+    REDIS_HOST="$BOX1_IP"
+  fi
+
+  if [ -z "$SEED_IP" ]; then
+    SEED_IP="$SELF_IP"
+  fi
+
+  if [ "$SEED_IP" = "$BOX1_IP" ]; then
+    SEED_NODE="mn1@${BOX1_IP}"
+  elif [ "$SEED_IP" = "$BOX2_IP" ]; then
+    SEED_NODE="mn2@${BOX2_IP}"
+  else
+    echo "--seed-ip must match either --box1-ip or --box2-ip" >&2
+    exit 1
+  fi
+
+  epmd -daemon
+
+  export ERL_AFLAGS="-connect_all false -kernel inet_dist_listen_min ${CLI_PORT} inet_dist_listen_max ${CLI_PORT}"
+  export MIRROR_NEURON_NODE_NAME="monitor-$(date +%s)-$$@${SELF_IP}"
+  export MIRROR_NEURON_NODE_ROLE="control"
+  export MIRROR_NEURON_COOKIE="$COOKIE"
+  export MIRROR_NEURON_CLUSTER_NODES="$SEED_NODE"
+  export MIRROR_NEURON_REDIS_URL="redis://${REDIS_HOST}:${REDIS_PORT}/0"
+fi
+
+exec mix run --no-start -e 'MirrorNeuron.MonitorCLI.main(System.argv())' -- "${PASSTHROUGH[@]-}"

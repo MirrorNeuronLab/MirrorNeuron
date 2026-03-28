@@ -34,6 +34,29 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
+  def list_job_ids do
+    case command(["SMEMBERS", key(@jobs_set)]) do
+      {:ok, job_ids} -> {:ok, Enum.sort(job_ids)}
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  def list_jobs do
+    with {:ok, job_ids} <- list_job_ids() do
+      jobs =
+        job_ids
+        |> Enum.map(fn job_id ->
+          case fetch_job(job_id) do
+            {:ok, job} -> job
+            {:error, _reason} -> nil
+          end
+        end)
+        |> Enum.reject(&is_nil/1)
+
+      {:ok, jobs}
+    end
+  end
+
   def append_event(job_id, event) do
     encoded = Jason.encode!(event)
 
@@ -65,9 +88,13 @@ defmodule MirrorNeuron.Persistence.RedisStore do
         agent_ids
         |> Enum.sort()
         |> Enum.map(fn agent_id ->
-          {:ok, encoded} = command(["GET", key("job", job_id, "agent", agent_id)])
-          Jason.decode!(encoded)
+          case command(["GET", key("job", job_id, "agent", agent_id)]) do
+            {:ok, nil} -> nil
+            {:ok, encoded} -> Jason.decode!(encoded)
+            {:error, _reason} -> nil
+          end
         end)
+        |> Enum.reject(&is_nil/1)
 
       {:ok, agents}
     else
