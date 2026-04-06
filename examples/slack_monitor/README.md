@@ -12,11 +12,11 @@ This is a long-lived, continuous MirrorNeuron workflow that monitors a Slack cha
 
 To start the monitor:
 ```bash
-./run_monitor.sh
+SLACK_DEFAULT_CHANNEL="#claw" SLACK_BOT_TOKEN="<your slack bot oauth token>" ./run_monitor.sh
 ```
 Or use the MirrorNeuron CLI directly from the project root:
 ```bash
-./mirror_neuron run examples/slack_monitor
+SLACK_DEFAULT_CHANNEL="#claw" SLACK_BOT_TOKEN="<your slack bot oauth token>" ./mirror_neuron run examples/slack_monitor
 ```
 
 ## ⚠️ Important Note on Recovery (Duplicate Messages)
