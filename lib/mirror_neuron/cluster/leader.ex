@@ -26,6 +26,7 @@ defmodule MirrorNeuron.Cluster.Leader do
   def handle_info(:campaign, state) do
     current_node = to_string(Node.self())
 
+    # If the node name changed (e.g. CLI fully initialized)
     state =
       if current_node != state.node_name do
         if state.is_leader do
@@ -41,8 +42,8 @@ defmodule MirrorNeuron.Cluster.Leader do
       if state.is_leader do
         case RedisStore.renew_lease("cluster:leader", state.node_name, @lease_duration_ms) do
           :ok ->
-            # Renewed successfully
-            handle_became_leader(state)
+            # Keep leadership
+            state
 
           {:error, _} ->
             # Failed to renew (e.g. expired and someone else took it)
@@ -54,7 +55,7 @@ defmodule MirrorNeuron.Cluster.Leader do
             handle_became_leader(state)
 
           {:error, :locked} ->
-            handle_lost_leadership(state)
+            state
 
           {:error, reason} ->
             Logger.warning("Redis error during leader campaign: #{inspect(reason)}")
