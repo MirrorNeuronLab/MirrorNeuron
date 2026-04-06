@@ -32,13 +32,17 @@ defmodule MirrorNeuron.Runtime.JobRunner do
     node_name = to_string(Node.self())
 
     case RedisStore.acquire_lease(lease_name, node_name, 10_000) do
-      :ok -> :ok
+      :ok ->
+        :ok
+
       {:error, :locked} ->
         case RedisStore.renew_lease(lease_name, node_name, 10_000) do
           :ok -> :ok
           _ -> exit(:normal)
         end
-      _ -> :ok
+
+      _ ->
+        :ok
     end
 
     :timer.send_interval(3_000, :renew_lease)
@@ -64,12 +68,17 @@ defmodule MirrorNeuron.Runtime.JobRunner do
   @impl true
   def handle_info(:renew_lease, state) do
     lease_name = "job:#{state.job_id}"
+
     case RedisStore.renew_lease(lease_name, state.node_name, 10_000) do
-      :ok -> {:noreply, state}
+      :ok ->
+        {:noreply, state}
+
       {:error, :not_owner} ->
         Logger.warning("Lost lease for job #{state.job_id}. Shutting down.")
         {:stop, :normal, state}
-      _ -> {:noreply, state}
+
+      _ ->
+        {:noreply, state}
     end
   end
 
@@ -87,6 +96,13 @@ defmodule MirrorNeuron.Runtime.JobRunner do
   end
 
   def handle_info(_message, state), do: {:noreply, state}
+
+  @impl true
+  def terminate(_reason, state) do
+    lease_name = "job:#{state.job_id}"
+    _ = RedisStore.release_lease(lease_name, state.node_name)
+    :ok
+  end
 
   defp persist_missing_terminal_state(state, reason) do
     case RedisStore.fetch_job(state.job_id) do

@@ -14,9 +14,9 @@ defmodule MirrorNeuron.CLI do
   def main(args) do
     {verbose, args_without_v} = extract_verbose(args)
     prepared_args = prepare_environment(args_without_v)
-    configure_logger(prepared_args, verbose)
     maybe_start_distribution()
     Application.ensure_all_started(:mirror_neuron)
+    configure_logger(prepared_args, verbose)
     dispatch(prepared_args)
   end
 
@@ -64,14 +64,18 @@ defmodule MirrorNeuron.CLI do
   defp configure_logger(["cluster", "join" | _], false), do: set_log_level(:notice)
   defp configure_logger(_args, false), do: set_log_level(:warning)
 
-  # Keep default info/debug level
-  defp configure_logger(_args, true), do: :ok
+  # Set verbose info level
+  defp configure_logger(_args, true), do: set_log_level(:info)
 
   defp set_log_level(level) do
     :logger.set_primary_config(:level, level)
     :logger.set_handler_config(:default, :level, level)
+
+    if MirrorNeuron.CLI.UI.interactive?() do
+      :logger.update_handler_config(:default, :config, %{type: {:device, Owl.LiveScreen}})
+    end
+
     Logger.configure(level: level)
-    Logger.configure_backend(:default, level: level)
   end
 
   defp maybe_start_distribution do

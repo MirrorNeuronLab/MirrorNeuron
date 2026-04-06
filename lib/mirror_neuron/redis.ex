@@ -7,7 +7,11 @@ defmodule MirrorNeuron.Redis do
 
   @impl true
   def init(:ok) do
-    redis_url = Application.fetch_env!(:mirror_neuron, :redis_url)
+    redis_url =
+      System.get_env(
+        "MIRROR_NEURON_REDIS_URL",
+        Application.get_env(:mirror_neuron, :redis_url, "redis://127.0.0.1:6379/0")
+      )
 
     children = [
       %{

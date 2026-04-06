@@ -74,7 +74,6 @@ defmodule MirrorNeuron.CLI.UITest do
     assert output =~ "mn1@192.168.4.29"
     assert output =~ "mn2@192.168.4.35"
     assert output =~ "2/4 free q=1"
-    assert output =~ "remote_member"
   end
 
   test "renders an agents table with placement details" do

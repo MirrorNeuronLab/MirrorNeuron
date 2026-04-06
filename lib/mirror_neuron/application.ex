@@ -3,7 +3,24 @@ defmodule MirrorNeuron.Application do
 
   @impl true
   def start(_type, _args) do
-    topologies = Application.get_env(:libcluster, :topologies, [])
+    cluster_hosts =
+      "MIRROR_NEURON_CLUSTER_NODES"
+      |> System.get_env("")
+      |> String.split(",", trim: true)
+      |> Enum.map(&String.to_atom/1)
+
+    topologies =
+      if cluster_hosts == [] do
+        []
+      else
+        [
+          mirror_neuron: [
+            strategy: Cluster.Strategy.Epmd,
+            config: [hosts: cluster_hosts]
+          ]
+        ]
+      end
+
     role = node_role()
 
     api_port = String.to_integer(System.get_env("MIRROR_NEURON_API_PORT", "4000"))

@@ -8,13 +8,17 @@ defmodule MirrorNeuron.Runtime do
     job_id = Keyword.get(opts, :job_id, generate_job_id(manifest.graph_id))
     bundle = Keyword.get(opts, :job_bundle)
 
-    spec = {JobRunner, {job_id, manifest, opts}}
+    case persist_initial_job(job_id, manifest, bundle) do
+      :ok ->
+        spec = {JobRunner, {job_id, manifest, opts}}
 
-    persist_initial_job(job_id, manifest, bundle)
+        with {:ok, pid} <-
+               Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) do
+          {:ok, job_id, pid}
+        end
 
-    with {:ok, pid} <-
-           Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) do
-      {:ok, job_id, pid}
+      {:error, reason} ->
+        {:error, "failed to persist initial job: #{inspect(reason)}"}
     end
   end
 
@@ -123,7 +127,7 @@ defmodule MirrorNeuron.Runtime do
         :ok
 
       {:error, reason} ->
-        Logger.warning("failed to persist initial job #{job_id}: #{inspect(reason)}")
+        {:error, reason}
     end
   end
 end

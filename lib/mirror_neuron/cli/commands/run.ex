@@ -45,6 +45,11 @@ defmodule MirrorNeuron.CLI.Commands.Run do
           end
 
         true ->
+          if :logger.get_primary_config().level != :info do
+            Logger.configure(level: :error)
+            :logger.set_primary_config(:level, :error)
+          end
+
           case track_job_progress(job_id, bundle.manifest, Keyword.get(opts, :timeout, :infinity)) do
             {:ok, job} ->
               Output.print_human_run_summary(job_id, job, opts)

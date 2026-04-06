@@ -22,12 +22,29 @@ defmodule MirrorNeuron.Execution.LeaseManager do
 
   @impl true
   def init(opts) do
+    default_capacities =
+      "MIRROR_NEURON_EXECUTOR_POOL_CAPACITIES"
+      |> System.get_env("")
+      |> String.split(",", trim: true)
+      |> Enum.reduce(
+        %{@default_pool => parse_positive_integer("MIRROR_NEURON_EXECUTOR_MAX_CONCURRENCY", 4)},
+        fn entry, acc ->
+          case String.split(entry, "=", parts: 2) do
+            [pool, raw_capacity] ->
+              case Integer.parse(raw_capacity) do
+                {capacity, ""} when capacity > 0 -> Map.put(acc, pool, capacity)
+                _ -> acc
+              end
+
+            _ ->
+              acc
+          end
+        end
+      )
+
     capacities =
       opts
-      |> Keyword.get(
-        :capacities,
-        Application.get_env(:mirror_neuron, :executor_pool_capacities, %{@default_pool => 4})
-      )
+      |> Keyword.get(:capacities, default_capacities)
       |> normalize_capacities()
 
     state = %{
@@ -307,4 +324,17 @@ defmodule MirrorNeuron.Execution.LeaseManager do
   end
 
   defp now_ms, do: System.monotonic_time(:millisecond)
+
+  defp parse_positive_integer(env_name, default) do
+    case System.get_env(env_name) do
+      nil ->
+        default
+
+      value ->
+        case Integer.parse(value) do
+          {parsed, ""} when parsed > 0 -> parsed
+          _ -> default
+        end
+    end
+  end
 end
