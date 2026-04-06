@@ -69,9 +69,6 @@ defmodule MirrorNeuron.Cluster.Leader do
   defp handle_became_leader(state) do
     if not state.is_leader do
       Logger.info("Node #{state.node_name} became cluster leader")
-    else
-      # we were already leader, just renew lease
-      RedisStore.renew_lease("cluster:leader", state.node_name, @lease_duration_ms)
     end
 
     sweep_orphaned_jobs()
