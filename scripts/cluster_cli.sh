@@ -140,10 +140,13 @@ export MIRROR_NEURON_COOKIE="$COOKIE"
 export MIRROR_NEURON_CLUSTER_NODES="$SEED_NODE"
 export MIRROR_NEURON_REDIS_URL="redis://${REDIS_HOST}:${REDIS_PORT}/0"
 
+export MIRROR_NEURON_API_PORT="$(find_free_port 4010)"
+
 >&2 echo "Running MirrorNeuron cluster CLI"
 >&2 echo "  node: $MIRROR_NEURON_NODE_NAME"
 >&2 echo "  seed: $MIRROR_NEURON_CLUSTER_NODES"
 >&2 echo "  redis: $MIRROR_NEURON_REDIS_URL"
 >&2 echo "  cli dist port: $CLI_PORT"
+>&2 echo "  cli api port: $MIRROR_NEURON_API_PORT"
 
 exec "$ROOT_DIR/mirror_neuron" "$@"
