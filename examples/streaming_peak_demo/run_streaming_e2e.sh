@@ -133,6 +133,7 @@ if [ -n "$BOX1_IP" ] || [ -n "$BOX2_IP" ] || [ -n "$SELF_IP" ]; then
     --box1-ip "$BOX1_IP"
     --box2-ip "$BOX2_IP"
     --self-ip "$SELF_IP"
+    --cookie "${MIRROR_NEURON_COOKIE:-mirrorneuron}"
     --
   )
 
