@@ -138,6 +138,7 @@ if [ -n "$CLUSTER_BOX1_IP" ] || [ -n "$CLUSTER_BOX2_IP" ] || [ -n "$SELF_IP" ]; 
     --box1-ip "$CLUSTER_BOX1_IP"
     --box2-ip "$CLUSTER_BOX2_IP"
     --self-ip "$SELF_IP"
+    --cookie "${MIRROR_NEURON_COOKIE:-mirrorneuron}"
     --
   )
 fi
