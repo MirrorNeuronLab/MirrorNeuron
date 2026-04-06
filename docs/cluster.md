@@ -106,6 +106,19 @@ Usually means:
 - port `4369` is blocked
 - the BEAM node port is blocked
 
+### Invalid challenge reply (Cookie mismatch)
+
+Usually means:
+- The `MIRROR_NEURON_COOKIE` differs between machines. 
+- Ensure `export MIRROR_NEURON_COOKIE="your_shared_secret"` is identical on all physical boxes.
+
+### Port `4000` already in use (`eaddrinuse`)
+
+Usually means:
+- Two nodes on the same box are trying to start the web API on `4000`.
+- The Erlang `--bind` distribution port is clashing with the Web API.
+- Use `export MIRROR_NEURON_API_PORT=4001` to change the web port.
+
 ### node name already in use
 
 Usually means:
