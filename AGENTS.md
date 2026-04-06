@@ -63,7 +63,7 @@ Important paths:
 - `lib/mirror_neuron/execution/`: execution lease management
 - `docs/`: user and operator documentation
 - `examples/`: runnable example bundles
-- `test/`: ExUnit coverage for runtime, CLI, manifests, and templates
+- `tests/`: ExUnit coverage for runtime, CLI, manifests, and templates
 
 ## Where To Start By Task
 
@@ -71,7 +71,7 @@ If the request is about manifests:
 
 - inspect `lib/mirror_neuron/manifest.ex`
 - inspect `lib/mirror_neuron/job_bundle.ex`
-- inspect `test/mirror_neuron/manifest_test.exs`
+- inspect `tests/mirror_neuron/manifest_test.exs`
 - update example bundles if manifest semantics change
 
 If the request is about runtime lifecycle, job states, or supervision:
@@ -80,13 +80,13 @@ If the request is about runtime lifecycle, job states, or supervision:
 - inspect `lib/mirror_neuron/runtime/job_runner.ex`
 - inspect `lib/mirror_neuron/runtime/agent_worker.ex`
 - inspect `lib/mirror_neuron/runtime/job_supervisor.ex`
-- inspect `test/mirror_neuron/runtime_test.exs`
+- inspect `tests/mirror_neuron/runtime_test.exs`
 
 If the request is about built-in agent behavior:
 
 - inspect `lib/mirror_neuron/builtins/`
 - inspect `lib/mirror_neuron/agent_templates/`
-- inspect `test/mirror_neuron/agent_templates_test.exs`
+- inspect `tests/mirror_neuron/agent_templates_test.exs`
 - keep the runtime generic; avoid domain-specific built-ins
 
 If the request is about CLI behavior:
@@ -95,7 +95,7 @@ If the request is about CLI behavior:
 - inspect `lib/mirror_neuron/cli/commands/`
 - inspect `lib/mirror_neuron/cli/output.ex`
 - inspect `lib/mirror_neuron/cli/ui.ex`
-- inspect `test/mirror_neuron/cli_ui_test.exs`
+- inspect `tests/mirror_neuron/cli_ui_test.exs`
 
 If the request is about persistence or recovery:
 
