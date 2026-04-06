@@ -1,0 +1,9 @@
+defmodule Test do
+  def run do
+    :logger.set_primary_config(:level, :warning)
+    Application.ensure_all_started(:mirror_neuron)
+    require Logger
+    Logger.info("Info level")
+  end
+end
+Test.run()
