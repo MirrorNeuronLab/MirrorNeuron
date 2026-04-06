@@ -18,6 +18,14 @@ defmodule MirrorNeuron.CLI.UI do
     match?(width when is_integer(width) and width > 0, OwlIO.columns())
   end
 
+  def success(message) do
+    [Data.tag("==>", :green), " ", Data.tag(message, :green)]
+  end
+
+  def error(message) do
+    [Data.tag("==>", :red), " ", Data.tag(message, :red)]
+  end
+
   def banner(command, subtitle \\ nil) do
     subtitle_data =
       case subtitle do
