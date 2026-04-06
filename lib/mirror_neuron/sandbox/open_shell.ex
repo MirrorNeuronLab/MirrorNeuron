@@ -233,7 +233,10 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
     executable = sandbox_cli(config)
 
     temp_config =
-      Path.join(System.tmp_dir!(), "mirror_neuron_ssh_#{System.unique_integer([:positive])}")
+      Path.join(
+        System.get_env("MIRROR_NEURON_TEMP_DIR") || "/temp/mirror_neuron",
+        "mirror_neuron_ssh_#{System.unique_integer([:positive])}"
+      )
 
     try do
       case System.cmd(executable, ["sandbox", "ssh-config", sandbox_name],
@@ -322,7 +325,7 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
 
     base_dir =
       Path.join(
-        System.tmp_dir!(),
+        System.get_env("MIRROR_NEURON_TEMP_DIR") || "/temp/mirror_neuron",
         "mirror_neuron_#{sandbox_name}_#{System.unique_integer([:positive])}"
       )
 

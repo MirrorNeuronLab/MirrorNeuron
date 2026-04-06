@@ -1,0 +1,59 @@
+{
+  "manifest_version": "1.0",
+  "graph_id": "slack_money_monitor_v1",
+  "job_name": "slack-money-monitor",
+  "entrypoints": ["ingress"],
+  "initial_inputs": {
+    "ingress": [
+      {
+        "channel": "#claw"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "node_id": "ingress",
+      "agent_type": "router",
+      "type": "map",
+      "config": {
+        "emit_type": "start"
+      }
+    },
+    {
+      "node_id": "slack_sensor",
+      "agent_type": "module",
+      "type": "map",
+      "config": {
+        "module": "MirrorNeuron.Examples.SlackMonitor.SlackSensor",
+        "module_source": "beam_modules/slack_sensor.ex",
+        "poll_interval_ms": 3000
+      }
+    },
+    {
+      "node_id": "money_detector",
+      "agent_type": "module",
+      "type": "map",
+      "config": {
+        "module": "MirrorNeuron.Examples.SlackMonitor.MoneyDetector",
+        "module_source": "beam_modules/money_detector.ex"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "ingress_to_sensor",
+      "from_node": "ingress",
+      "to_node": "slack_sensor",
+      "message_type": "start"
+    },
+    {
+      "edge_id": "sensor_to_detector",
+      "from_node": "slack_sensor",
+      "to_node": "money_detector",
+      "message_type": "slack_message"
+    }
+  ],
+  "policies": {
+    "recovery_mode": "cluster_recover"
+  }
+}

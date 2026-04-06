@@ -9,7 +9,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
 
     base_dir =
       Path.join(
-        System.tmp_dir!(),
+        System.get_env("MIRROR_NEURON_TEMP_DIR") || "/temp/mirror_neuron",
         "mirror_neuron_host_local_#{runner_name}_#{System.unique_integer([:positive])}"
       )
 
