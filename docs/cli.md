@@ -10,18 +10,51 @@ MirrorNeuron currently ships two terminal tools:
 ### Main commands
 
 ```bash
-mirror_neuron server
+mirror_neuron standalone-start
+mirror_neuron cluster start --node-id <id> --bind <ip:port> [--data-dir <dir>] [--join <seeds>]
+mirror_neuron cluster join --node-id <id> --bind <ip:port> --seeds <seeds>
+mirror_neuron cluster discover --seeds <seeds>
+mirror_neuron cluster status
+mirror_neuron cluster nodes
+mirror_neuron cluster leave --node-id <id>
+mirror_neuron cluster rebalance
+mirror_neuron cluster elect-leader
+mirror_neuron cluster health
+mirror_neuron cluster reload --node-id <id>
 mirror_neuron validate <job-folder>
 mirror_neuron run <job-folder> [--json] [--timeout <ms>] [--no-await]
+mirror_neuron monitor [--json] [--running-only] [--limit <n>]
 mirror_neuron inspect job <job_id>
 mirror_neuron inspect agents <job_id>
 mirror_neuron inspect nodes
 mirror_neuron events <job_id>
+mirror_neuron bundle reload <bundle_id>
+mirror_neuron bundle check <bundle_id>
+mirror_neuron node add <node_name>
+mirror_neuron node remove <node_name>
 mirror_neuron pause <job_id>
 mirror_neuron resume <job_id>
 mirror_neuron cancel <job_id>
 mirror_neuron send <job_id> <agent_id> <message.json>
 ```
+
+### `standalone-start`
+
+```bash
+./mirror_neuron standalone-start
+```
+
+Starts an isolated, standalone runtime server instance.
+
+### `cluster`
+
+```bash
+./mirror_neuron cluster start --node-id my-node --bind 127.0.0.1:4000
+./mirror_neuron cluster join --node-id my-node-2 --bind 127.0.0.1:4001 --seeds my-node@127.0.0.1
+./mirror_neuron cluster nodes --join my-node@127.0.0.1
+```
+
+Use the `cluster` command to start, discover, inspect, and manage the peer-to-peer distribution and membership lifecycle.
 
 ### `validate`
 
