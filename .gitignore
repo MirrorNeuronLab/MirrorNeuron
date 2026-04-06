@@ -1,0 +1,47 @@
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+
+# Elixir / Erlang build output
+/_build/
+/deps/
+/.elixir_ls/
+/cover/
+/doc/
+/*.ez
+/erl_crash.dump
+
+# Project runtime output
+/var/
+/tmp/
+/*.log
+/mirror_neuron
+/mirror_neuron_monitor
+
+# Example-generated bundles and results
+/examples/**/generated/
+/examples/*/.venv/
+/examples/*/__pycache__/
+/examples/**/*.pyc
+
+# Historical demo output
+/demo/**/generated/
+
+# Build tools
+/target/
+/project/target/
+/project/project
+
+# Environment / local machine overrides
+.env
+.env.*
+!.env.example
+!.env.sample
