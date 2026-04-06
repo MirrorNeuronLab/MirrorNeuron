@@ -12,11 +12,20 @@ defmodule MirrorNeuron.CLI do
   alias MirrorNeuron.MonitorCLI
 
   def main(args) do
-    prepared_args = prepare_environment(args)
-    configure_logger(prepared_args)
+    {verbose, args_without_v} = extract_verbose(args)
+    prepared_args = prepare_environment(args_without_v)
+    configure_logger(prepared_args, verbose)
     maybe_start_distribution()
     Application.ensure_all_started(:mirror_neuron)
     dispatch(prepared_args)
+  end
+
+  defp extract_verbose(args) do
+    if Enum.any?(args, &(&1 in ["-v", "--verbose"])) do
+      {true, Enum.reject(args, &(&1 in ["-v", "--verbose"]))}
+    else
+      {false, args}
+    end
   end
 
   defp prepare_environment(["monitor" | rest]),
@@ -49,16 +58,20 @@ defmodule MirrorNeuron.CLI do
 
   defp dispatch(_args), do: Output.usage()
 
-  defp configure_logger(["standalone-start"]), do: :ok
-  defp configure_logger(["server"]), do: :ok
-  defp configure_logger(["cluster", "start" | _]), do: :ok
-  defp configure_logger(["cluster", "join" | _]), do: :ok
+  defp configure_logger(["standalone-start"], false), do: set_log_level(:notice)
+  defp configure_logger(["server"], false), do: set_log_level(:notice)
+  defp configure_logger(["cluster", "start" | _], false), do: set_log_level(:notice)
+  defp configure_logger(["cluster", "join" | _], false), do: set_log_level(:notice)
+  defp configure_logger(_args, false), do: set_log_level(:warning)
 
-  defp configure_logger(_args) do
-    :logger.set_primary_config(:level, :warning)
-    :logger.set_handler_config(:default, :level, :warning)
-    Logger.configure(level: :warning)
-    Logger.configure_backend(:default, level: :warning)
+  # Keep default info/debug level
+  defp configure_logger(_args, true), do: :ok
+
+  defp set_log_level(level) do
+    :logger.set_primary_config(:level, level)
+    :logger.set_handler_config(:default, :level, level)
+    Logger.configure(level: level)
+    Logger.configure_backend(:default, level: level)
   end
 
   defp maybe_start_distribution do
@@ -93,7 +106,7 @@ defmodule MirrorNeuron.CLI do
       peer_atom = String.to_atom(peer)
 
       if Node.connect(peer_atom) do
-        Logger.info("Successfully connected to cluster peer: #{peer}")
+        Logger.notice("Successfully connected to cluster peer: #{peer}")
       else
         Logger.warning("Failed to connect to cluster peer: #{peer}")
       end

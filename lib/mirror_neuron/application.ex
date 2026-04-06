@@ -23,6 +23,7 @@ defmodule MirrorNeuron.Application do
         _ ->
           common_children ++
             [
+              MirrorNeuron.Cluster.NodeMonitor,
               MirrorNeuron.Cluster.Leader,
               MirrorNeuron.Execution.LeaseManager,
               {Registry, keys: :unique, name: MirrorNeuron.Sandbox.Registry},

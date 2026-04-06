@@ -69,7 +69,7 @@ defmodule MirrorNeuron.Cluster.Leader do
 
   defp handle_became_leader(state) do
     if not state.is_leader do
-      Logger.info("Node #{state.node_name} became cluster leader")
+      Logger.notice("Node #{state.node_name} became cluster leader")
     end
 
     sweep_orphaned_jobs()
@@ -78,7 +78,7 @@ defmodule MirrorNeuron.Cluster.Leader do
 
   defp handle_lost_leadership(state) do
     if state.is_leader do
-      Logger.info("Node #{state.node_name} lost cluster leadership")
+      Logger.notice("Node #{state.node_name} lost cluster leadership")
     end
 
     %{state | is_leader: false}
