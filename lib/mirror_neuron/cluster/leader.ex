@@ -28,16 +28,28 @@ defmodule MirrorNeuron.Cluster.Leader do
     state = %{state | node_name: current_node}
 
     new_state =
-      case RedisStore.acquire_lease("cluster:leader", state.node_name, @lease_duration_ms) do
-        :ok ->
-          handle_became_leader(state)
+      if state.is_leader do
+        case RedisStore.renew_lease("cluster:leader", state.node_name, @lease_duration_ms) do
+          :ok ->
+            # Renewed successfully
+            handle_became_leader(state)
 
-        {:error, :locked} ->
-          handle_lost_leadership(state)
+          {:error, _} ->
+            # Failed to renew (e.g. expired and someone else took it)
+            handle_lost_leadership(state)
+        end
+      else
+        case RedisStore.acquire_lease("cluster:leader", state.node_name, @lease_duration_ms) do
+          :ok ->
+            handle_became_leader(state)
 
-        {:error, reason} ->
-          Logger.warning("Redis error during leader campaign: #{inspect(reason)}")
-          state
+          {:error, :locked} ->
+            handle_lost_leadership(state)
+
+          {:error, reason} ->
+            Logger.warning("Redis error during leader campaign: #{inspect(reason)}")
+            state
+        end
       end
 
     Process.send_after(self(), :campaign, @refresh_interval_ms)
