@@ -53,6 +53,7 @@ defmodule MirrorNeuron.CLI do
   defp configure_logger(["server"]), do: :ok
   defp configure_logger(["cluster", "start" | _]), do: :ok
   defp configure_logger(["cluster", "join" | _]), do: :ok
+
   defp configure_logger(_args) do
     :logger.set_primary_config(:level, :warning)
     :logger.set_handler_config(:default, :level, :warning)
@@ -89,7 +90,13 @@ defmodule MirrorNeuron.CLI do
     |> String.split(",", trim: true)
     |> Enum.reject(&(&1 == self_node_name))
     |> Enum.each(fn peer ->
-      Node.connect(String.to_atom(peer))
+      peer_atom = String.to_atom(peer)
+
+      if Node.connect(peer_atom) do
+        Logger.info("Successfully connected to cluster peer: #{peer}")
+      else
+        Logger.warning("Failed to connect to cluster peer: #{peer}")
+      end
     end)
   end
 end
