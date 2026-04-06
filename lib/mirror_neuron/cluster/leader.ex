@@ -24,6 +24,9 @@ defmodule MirrorNeuron.Cluster.Leader do
 
   @impl true
   def handle_info(:campaign, state) do
+    current_node = to_string(Node.self())
+    state = %{state | node_name: current_node}
+
     new_state =
       case RedisStore.acquire_lease("cluster:leader", state.node_name, @lease_duration_ms) do
         :ok ->
@@ -94,16 +97,18 @@ defmodule MirrorNeuron.Cluster.Leader do
         # Construct a dummy manifest and opts to re-trigger JobRunner via Horde
         # JobRunner.init will fetch the actual state and manifest from Redis.
         manifest_ref = job_map["manifest_ref"] || %{}
+
         manifest = %{
-            graph_id: job_map["graph_id"],
-            job_name: job_map["job_name"],
-            manifest_version: manifest_ref["manifest_version"],
-            entrypoints: job_map["root_agent_ids"],
-            policies: %{
-              "placement_policy" => job_map["placement_policy"],
-              "recovery_mode" => job_map["recovery_policy"]
-            }
+          graph_id: job_map["graph_id"],
+          job_name: job_map["job_name"],
+          manifest_version: manifest_ref["manifest_version"],
+          entrypoints: job_map["root_agent_ids"],
+          policies: %{
+            "placement_policy" => job_map["placement_policy"],
+            "recovery_mode" => job_map["recovery_policy"]
+          }
         }
+
         # In a real implementation we would fetch the bundle properly.
         # But JobRunner expects a manifest. 
         spec = {MirrorNeuron.Runtime.JobRunner, {job_id, manifest, []}}
