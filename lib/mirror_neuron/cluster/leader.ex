@@ -18,14 +18,24 @@ defmodule MirrorNeuron.Cluster.Leader do
       node_name: to_string(Node.self())
     }
 
-    send(self(), :campaign)
+    Process.send_after(self(), :campaign, 500)
     {:ok, state}
   end
 
   @impl true
   def handle_info(:campaign, state) do
     current_node = to_string(Node.self())
-    state = %{state | node_name: current_node}
+
+    state =
+      if current_node != state.node_name do
+        if state.is_leader do
+          RedisStore.release_lease("cluster:leader", state.node_name)
+        end
+
+        %{state | is_leader: false, node_name: current_node}
+      else
+        state
+      end
 
     new_state =
       if state.is_leader do
@@ -106,29 +116,28 @@ defmodule MirrorNeuron.Cluster.Leader do
   defp start_job_on_cluster(job_id) do
     case RedisStore.fetch_job(job_id) do
       {:ok, job_map} ->
-        # Construct a dummy manifest and opts to re-trigger JobRunner via Horde
-        # JobRunner.init will fetch the actual state and manifest from Redis.
         manifest_ref = job_map["manifest_ref"] || %{}
+        job_path = manifest_ref["job_path"]
 
-        manifest = %{
-          graph_id: job_map["graph_id"],
-          job_name: job_map["job_name"],
-          manifest_version: manifest_ref["manifest_version"],
-          entrypoints: job_map["root_agent_ids"],
-          policies: %{
-            "placement_policy" => job_map["placement_policy"],
-            "recovery_mode" => job_map["recovery_policy"]
-          }
-        }
+        if job_path do
+          case MirrorNeuron.JobBundle.load(job_path) do
+            {:ok, bundle} ->
+              spec =
+                {MirrorNeuron.Runtime.JobRunner, {job_id, bundle.manifest, [job_bundle: bundle]}}
 
-        # In a real implementation we would fetch the bundle properly.
-        # But JobRunner expects a manifest. 
-        spec = {MirrorNeuron.Runtime.JobRunner, {job_id, manifest, []}}
+              case Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) do
+                {:ok, _pid} -> :ok
+                {:error, {:already_started, _pid}} -> :ok
+                _ -> :ok
+              end
 
-        case Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) do
-          {:ok, _pid} -> :ok
-          {:error, {:already_started, _pid}} -> :ok
-          _ -> :ok
+            {:error, reason} ->
+              Logger.warning("Leader could not load job bundle for #{job_id}: #{inspect(reason)}")
+          end
+        else
+          Logger.warning(
+            "No job_path found in manifest_ref for orphaned job #{job_id}, cannot re-assign."
+          )
         end
 
       _ ->
