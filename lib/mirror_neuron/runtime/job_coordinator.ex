@@ -310,7 +310,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp recover_agent(state, agent_id) do
     attempts = Map.get(state.agent_restart_attempts, agent_id, 0)
 
-    if attempts >= state.max_agent_restart_attempts do
+    if restart_attempts_exhausted?(state, attempts) do
       {:error,
        "agent #{agent_id} exceeded restart attempts (#{state.max_agent_restart_attempts})", state}
     else
@@ -353,6 +353,12 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
           {:error, "failed to recover agent #{agent_id}: #{inspect(reason)}", state}
       end
     end
+  end
+
+  defp restart_attempts_exhausted?(%{manifest: %{long_lived: true}}, _attempts), do: false
+
+  defp restart_attempts_exhausted?(state, attempts) do
+    attempts >= state.max_agent_restart_attempts
   end
 
   defp start_agent(state, agent_id, recovery_snapshot \\ nil) do

@@ -4,9 +4,9 @@ This is a simple long-lived MirrorNeuron workflow that keeps running until you s
 
 ## What it does
 
-1. `question_generator` emits a new random divisibility question every 1.5 seconds.
+1. `question_generator` emits a new random divisibility question every 10 seconds.
 2. `answer_agent` answers `yes` or `no` and logs the result.
-3. The generator re-schedules itself after every answer, so the job stays active until you press `Ctrl+C` or cancel the job.
+3. The generator keeps a delayed self-schedule between cycles, so the job stays active without blocking the agent process.
 
 ## How to run
 
@@ -27,8 +27,8 @@ If you want to watch the job after starting it:
 
 ```bash
 ./mirror_neuron monitor
-./mirror_neuron agent list <job_id>
-./mirror_neuron events <job_id>
+./mirror_neuron job agents <job_id>
+./mirror_neuron job events <job_id>
 ```
 
 ## Notes

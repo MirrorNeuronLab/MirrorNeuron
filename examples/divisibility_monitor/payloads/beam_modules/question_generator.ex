@@ -1,30 +1,63 @@
 defmodule MirrorNeuron.Examples.DivisibilityMonitor.QuestionGenerator do
   use MirrorNeuron.AgentTemplate
 
+  alias MirrorNeuron.Message
+  alias MirrorNeuron.Runtime
+
   @impl true
   def init(node) do
     {:ok,
      %{
        config: node.config || %{},
-       asked: 0
+       asked: 0,
+       scheduled_token: nil,
+       awaiting_answer: false
      }}
   end
 
   @impl true
-  def handle_message(message, state, _context) do
+  def handle_message(message, state, context) do
     case type(message) do
       "division_answer" ->
-        Process.sleep(interval_ms(state.config))
-        emit_next_question(state)
+        {:ok,
+         schedule_next_tick(
+           %{state | awaiting_answer: false},
+           context,
+           interval_ms(state.config)
+         ), []}
+
+      "tick" ->
+        maybe_emit_scheduled_question(message, state)
 
       _ ->
-        emit_next_question(state)
+        {:ok, schedule_next_tick(state, context, 0), []}
+    end
+  end
+
+  @impl true
+  def recover(state, context) do
+    if state.awaiting_answer do
+      {:ok, state, []}
+    else
+      {:ok, schedule_next_tick(state, context, interval_ms(state.config)), []}
     end
   end
 
   def inspect_state(state) do
-    %{asked: state.asked}
+    %{asked: state.asked, awaiting_answer: state.awaiting_answer}
   end
+
+  defp maybe_emit_scheduled_question(message, %{scheduled_token: token} = state) do
+    payload = payload(message) || %{}
+
+    if Map.get(payload, "token") == token do
+      emit_next_question(%{state | scheduled_token: nil, awaiting_answer: true})
+    else
+      {:ok, state, []}
+    end
+  end
+
+  defp maybe_emit_scheduled_question(_message, state), do: {:ok, state, []}
 
   defp emit_next_question(state) do
     next_asked = state.asked + 1
@@ -45,6 +78,31 @@ defmodule MirrorNeuron.Examples.DivisibilityMonitor.QuestionGenerator do
        {:event, :division_question_generated, payload},
        {:emit_to, answer_node(state.config), "division_question", payload}
      ]}
+  end
+
+  defp schedule_next_tick(state, context, delay_ms) do
+    token = state.asked + 1
+
+    spawn(fn ->
+      if delay_ms > 0 do
+        Process.sleep(delay_ms)
+      end
+
+      Runtime.deliver(
+        context.job_id,
+        context.node.node_id,
+        Message.new(
+          context.job_id,
+          context.node.node_id,
+          context.node.node_id,
+          "tick",
+          %{"token" => token},
+          class: "control"
+        )
+      )
+    end)
+
+    %{state | scheduled_token: token}
   end
 
   defp answer_node(config) do

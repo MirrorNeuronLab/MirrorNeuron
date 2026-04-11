@@ -5,7 +5,7 @@ This is a long-lived, continuous MirrorNeuron workflow that monitors a Slack cha
 ## What it does
 
 1. **`ingress` (Router)**: Starts the workflow by passing the initial target channel to the sensor.
-2. **`slack_sensor` (Module)**: Continually loops (polling every 3 seconds) using the `:httpc` Erlang built-in to poll the `conversations.history` Slack API. It automatically resolves channel names (like `#claw`) to their internal Slack IDs and emits `slack_message` events when it receives new messages.
+2. **`slack_sensor` (Module)**: Schedules its own polling cycle from inside the agent and polls the `conversations.history` Slack API every 3 seconds using the `:httpc` Erlang built-in. It automatically resolves channel names (like `#claw`) to their internal Slack IDs and emits `slack_message` events when it receives new messages.
 3. **`money_detector` (Module)**: Subscribes to the slack messages and runs a regex (`~r/\$\d+/`) to look for the "$" sign followed by numbers. If matched, it uses the Slack `chat.postMessage` API to post the reply: *"PLEASE NO TALK ABOUT MONEY"* back into the channel.
 
 ## How to run

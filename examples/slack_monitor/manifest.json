@@ -2,6 +2,7 @@
   "manifest_version": "1.0",
   "graph_id": "slack_money_monitor_v1",
   "job_name": "slack-money-monitor",
+  "long_lived": true,
   "entrypoints": ["ingress"],
   "initial_inputs": {
     "ingress": [

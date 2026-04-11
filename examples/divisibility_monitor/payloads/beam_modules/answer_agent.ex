@@ -43,7 +43,7 @@ defmodule MirrorNeuron.Examples.DivisibilityMonitor.AnswerAgent do
         {:ok, next_state,
          [
            {:event, :division_answered, response},
-           {:emit_to, generator_node(state.config), "division_answer", response}
+           {:emit_to, "question_generator", "division_answer", response}
          ]}
 
       _ ->
@@ -58,9 +58,5 @@ defmodule MirrorNeuron.Examples.DivisibilityMonitor.AnswerAgent do
       yes: state.yes,
       no: state.no
     }
-  end
-
-  defp generator_node(config) do
-    Map.get(config, "generator_node", "question_generator")
   end
 end

@@ -20,7 +20,7 @@
       "config": {
         "module": "MirrorNeuron.Examples.DivisibilityMonitor.QuestionGenerator",
         "module_source": "beam_modules/question_generator.ex",
-        "interval_ms": 1500,
+        "interval_ms": 10000,
         "min_x": 10,
         "max_x": 500,
         "min_y": 2,
@@ -35,8 +35,7 @@
       "role": "answer_sink",
       "config": {
         "module": "MirrorNeuron.Examples.DivisibilityMonitor.AnswerAgent",
-        "module_source": "beam_modules/answer_agent.ex",
-        "generator_node": "question_generator"
+        "module_source": "beam_modules/answer_agent.ex"
       }
     }
   ],

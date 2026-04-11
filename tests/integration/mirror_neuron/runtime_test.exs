@@ -128,6 +128,55 @@ defmodule MirrorNeuron.RuntimeTest do
     end
   end
 
+  defmodule CrashTwiceCounter do
+    @key __MODULE__
+
+    def init do
+      :persistent_term.put(@key, :atomics.new(1, []))
+      :atomics.put(:persistent_term.get(@key), 1, 0)
+      :ok
+    end
+
+    def next_invocation do
+      atomics = :persistent_term.get(@key)
+      :atomics.add_get(atomics, 1, 1)
+    end
+  end
+
+  defmodule CrashTwiceRunner do
+    def run(_payload, _config, _opts) do
+      case CrashTwiceCounter.next_invocation() do
+        invocation when invocation <= 2 ->
+          Process.sleep(10_000)
+
+          {:ok,
+           %{
+             "sandbox_name" => "crash-twice",
+             "exit_code" => 0,
+             "stdout" => "{}",
+             "stderr" => "",
+             "logs" => ""
+           }}
+
+        invocation ->
+          {:ok,
+           %{
+             "sandbox_name" => "crash-twice",
+             "exit_code" => 0,
+             "stdout" =>
+               Jason.encode!(%{
+                 "complete_job" => %{
+                   "recovered" => true,
+                   "invocation" => invocation
+                 }
+               }),
+             "stderr" => "",
+             "logs" => ""
+           }}
+      end
+    end
+  end
+
   defmodule DelayedCompleteRunner do
     def run(_payload, _config, _opts) do
       Process.sleep(1_000)
@@ -647,6 +696,85 @@ defmodule MirrorNeuron.RuntimeTest do
     assert Enum.any?(events, &(&1["type"] == "agent_recovered"))
 
     GenServer.stop(counter_pid)
+    RedisStore.delete_job(job_id)
+  end
+
+  test "long-lived jobs do not fail when recovery attempts exceed the normal cap" do
+    :ok = CrashTwiceCounter.init()
+
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "long_lived_agent_recovery_test",
+      "long_lived" => true,
+      "entrypoints" => ["root"],
+      "initial_inputs" => %{"root" => [%{"work" => "keep recovering"}]},
+      "nodes" => [
+        %{
+          "node_id" => "root",
+          "agent_type" => "router",
+          "role" => "root_coordinator",
+          "config" => %{"emit_type" => "do_work"}
+        },
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "config" => %{
+            "runner_module" => CrashTwiceRunner,
+            "output_message_type" => nil
+          }
+        }
+      ],
+      "edges" => [
+        %{"from_node" => "root", "to_node" => "worker", "message_type" => "do_work"}
+      ],
+      "policies" => %{
+        "recovery_mode" => "local_restart",
+        "max_agent_restart_attempts" => 1
+      }
+    }
+
+    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+
+    for _ <- 1..2 do
+      wait_until(
+        fn ->
+          case MirrorNeuron.inspect_agents(job_id) do
+            {:ok, agents} ->
+              worker = Enum.find(agents, &(&1["agent_id"] == "worker"))
+              not is_nil(worker) and is_map(worker["inflight_message"])
+
+            _ ->
+              false
+          end
+        end,
+        2_000
+      )
+
+      wait_until(
+        fn ->
+          match?(
+            [{_pid, _}],
+            Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:agent, job_id, "worker"})
+          )
+        end,
+        2_000
+      )
+
+      [{pid, _}] =
+        Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:agent, job_id, "worker"})
+
+      Process.exit(pid, :kill)
+    end
+
+    assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 12_000)
+    assert job["status"] == "completed"
+    assert get_in(job, ["result", "output", "recovered"]) == true
+    assert get_in(job, ["result", "output", "invocation"]) == 3
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+    assert Enum.count(events, &(&1["type"] == "agent_recovery_started")) >= 2
+    assert Enum.count(events, &(&1["type"] == "agent_recovered")) >= 2
+
     RedisStore.delete_job(job_id)
   end
 

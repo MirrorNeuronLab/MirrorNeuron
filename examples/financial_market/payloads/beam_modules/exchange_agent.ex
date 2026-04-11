@@ -1,6 +1,9 @@
 defmodule MirrorNeuron.Examples.FinancialMarket.ExchangeAgent do
   use MirrorNeuron.AgentTemplate
 
+  alias MirrorNeuron.Message
+  alias MirrorNeuron.Runtime
+
   @impl true
   def init(node) do
     config = node.config || %{}
@@ -9,6 +12,8 @@ defmodule MirrorNeuron.Examples.FinancialMarket.ExchangeAgent do
      %{
        config: config,
        tick: 0,
+       scheduled_tick: nil,
+       schedule_seq: 0,
        bids: [],
        asks: [],
        last_price: Map.get(config, "initial_price", 100.0) |> to_float(),
@@ -23,13 +28,10 @@ defmodule MirrorNeuron.Examples.FinancialMarket.ExchangeAgent do
   defp to_float(_), do: 0.0
 
   @impl true
-  def handle_message(message, state, _context) do
+  def handle_message(message, state, context) do
     case type(message) do
       "simulation_start" ->
-        {:ok, state,
-         [
-           {:emit_to, "exchange", "market_tick", %{"tick" => 1}, [class: "command"]}
-         ]}
+        {:ok, schedule_tick(state, context, 1), []}
 
       "place_order" ->
         payload = payload(message)
@@ -58,76 +60,113 @@ defmodule MirrorNeuron.Examples.FinancialMarket.ExchangeAgent do
         {:ok, state, []}
 
       "market_tick" ->
-        tick = payload(message)["tick"]
-
-        delay = Map.get(state.config, "tick_delay_ms", 0)
-
-        if delay > 0 do
-          Process.sleep(delay)
-        end
-
-        {new_bids, new_asks, new_trades, new_price} =
-          match_orders(state.bids, state.asks, state.last_price, [])
-
-        state = %{
-          state
-          | bids: new_bids,
-            asks: new_asks,
-            last_price: new_price,
-            price_history: [new_price | state.price_history],
-            trades: new_trades ++ state.trades
-        }
-
-        market_data = %{
-          "tick" => tick,
-          "last_price" => new_price,
-          "bid_depth" => Enum.sum(Enum.map(new_bids, fn {_, q, _} -> q end)),
-          "ask_depth" => Enum.sum(Enum.map(new_asks, fn {_, q, _} -> q end))
-        }
-
-        trade_actions =
-          Enum.flat_map(new_trades, fn t ->
-            [
-              {:emit_to, t["buyer"], "trade_executed", t, []},
-              {:emit_to, t["seller"], "trade_executed", t, []}
-            ]
-          end)
-
-        actions =
-          trade_actions ++
-            [
-              {:emit, "market_data", market_data, [class: "event"]}
-            ]
-
-        if tick < state.duration_seconds do
-          actions =
-            actions ++
-              [
-                {:emit_to, "exchange", "market_tick", %{"tick" => tick + 1}, [class: "command"]}
-              ]
-
-          {:ok, %{state | tick: tick}, actions}
-        else
-          summary = %{
-            "agent_id" => "exchange",
-            "role" => "exchange",
-            "final_price" => new_price,
-            "price_history" => Enum.reverse(state.price_history),
-            "total_trades" => length(state.trades)
-          }
-
-          actions =
-            actions ++
-              [
-                {:emit_to, "collector", "exchange_summary", summary, [class: "event"]}
-              ]
-
-          {:ok, %{state | tick: tick}, actions}
-        end
+        process_scheduled_tick(message, state, context)
 
       _ ->
         {:ok, state, []}
     end
+  end
+
+  @impl true
+  def recover(state, context) do
+    if state.tick < state.duration_seconds do
+      {:ok, schedule_tick(state, context, state.tick + 1), []}
+    else
+      {:ok, state, []}
+    end
+  end
+
+  defp process_scheduled_tick(
+         message,
+         %{scheduled_tick: %{tick: tick, token: token}} = state,
+         context
+       ) do
+    incoming = payload(message) || %{}
+
+    if Map.get(incoming, "tick") == tick and Map.get(incoming, "token") == token do
+      state = %{state | scheduled_tick: nil}
+
+      {new_bids, new_asks, new_trades, new_price} =
+        match_orders(state.bids, state.asks, state.last_price, [])
+
+      state = %{
+        state
+        | bids: new_bids,
+          asks: new_asks,
+          last_price: new_price,
+          price_history: [new_price | state.price_history],
+          trades: new_trades ++ state.trades
+      }
+
+      market_data = %{
+        "tick" => tick,
+        "last_price" => new_price,
+        "bid_depth" => Enum.sum(Enum.map(new_bids, fn {_, q, _} -> q end)),
+        "ask_depth" => Enum.sum(Enum.map(new_asks, fn {_, q, _} -> q end))
+      }
+
+      trade_actions =
+        Enum.flat_map(new_trades, fn t ->
+          [
+            {:emit_to, t["buyer"], "trade_executed", t, []},
+            {:emit_to, t["seller"], "trade_executed", t, []}
+          ]
+        end)
+
+      actions =
+        trade_actions ++
+          [
+            {:emit, "market_data", market_data, [class: "event"]}
+          ]
+
+      if tick < state.duration_seconds do
+        {:ok, schedule_tick(%{state | tick: tick}, context, tick + 1), actions}
+      else
+        summary = %{
+          "agent_id" => "exchange",
+          "role" => "exchange",
+          "final_price" => new_price,
+          "price_history" => Enum.reverse(state.price_history),
+          "total_trades" => length(state.trades)
+        }
+
+        {:ok, %{state | tick: tick},
+         actions ++
+           [
+             {:emit_to, "collector", "exchange_summary", summary, [class: "event"]}
+           ]}
+      end
+    else
+      {:ok, state, []}
+    end
+  end
+
+  defp process_scheduled_tick(_message, state, _context), do: {:ok, state, []}
+
+  defp schedule_tick(state, context, tick) do
+    token = state.schedule_seq + 1
+    delay_ms = Map.get(state.config, "tick_delay_ms", 0)
+
+    spawn(fn ->
+      if delay_ms > 0 do
+        Process.sleep(delay_ms)
+      end
+
+      Runtime.deliver(
+        context.job_id,
+        context.node.node_id,
+        Message.new(
+          context.job_id,
+          context.node.node_id,
+          context.node.node_id,
+          "market_tick",
+          %{"tick" => tick, "token" => token},
+          class: "control"
+        )
+      )
+    end)
+
+    %{state | scheduled_tick: %{tick: tick, token: token}, schedule_seq: token}
   end
 
   def match_orders(
