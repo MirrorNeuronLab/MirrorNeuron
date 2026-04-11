@@ -448,6 +448,14 @@ defmodule MirrorNeuron.CLI.UI do
     bar_line("Results", collected, expected_results)
   end
 
+  defp result_line(%{long_lived: true}) do
+    [
+      status_line("Results", "∞", :yellow),
+      "  ",
+      Data.tag("long-lived", :yellow)
+    ]
+  end
+
   defp result_line(%{collected: collected}) do
     [
       status_line("Results", "#{collected} seen", :cyan),

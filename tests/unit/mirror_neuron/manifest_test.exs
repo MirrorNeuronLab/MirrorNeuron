@@ -127,8 +127,43 @@ defmodule MirrorNeuron.ManifestTest do
 
     assert {:ok, normalized} = Manifest.load(manifest)
     assert normalized.graph_id == "simple"
+    assert normalized.long_lived == false
     assert normalized.entrypoints == ["router"]
     assert Enum.find(normalized.nodes, &(&1.node_id == "router")).type == "generic"
+  end
+
+  test "accepts explicit long_lived manifests" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "long-lived",
+      "long_lived" => true,
+      "entrypoints" => ["streamer"],
+      "nodes" => [
+        %{"node_id" => "streamer", "agent_type" => "module", "type" => "stream", "role" => "root"}
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, normalized} = Manifest.load(manifest)
+    assert normalized.long_lived == true
+  end
+
+  test "rejects non-boolean long_lived values" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "invalid-long-lived",
+      "long_lived" => "yes",
+      "entrypoints" => ["streamer"],
+      "nodes" => [
+        %{"node_id" => "streamer", "agent_type" => "module", "type" => "stream", "role" => "root"}
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:error, errors} = Manifest.load(manifest)
+    assert Enum.any?(errors, &String.contains?(&1, "long_lived must be a boolean"))
   end
 
   test "accepts supported template types" do

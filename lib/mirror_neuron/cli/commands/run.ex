@@ -145,6 +145,7 @@ defmodule MirrorNeuron.CLI.Commands.Run do
       leases_waiting: max(lease_requested - lease_acquired, 0),
       collected: collected,
       total_events: total_events,
+      long_lived: open_ended_manifest?(manifest),
       expected_results: expected_results,
       last_event: last_notable_event(events)
     }
@@ -179,6 +180,10 @@ defmodule MirrorNeuron.CLI.Commands.Run do
   end
 
   defp open_ended_manifest?(manifest) do
+    manifest.long_lived or inferred_open_ended_manifest?(manifest)
+  end
+
+  defp inferred_open_ended_manifest?(manifest) do
     has_explicit_completion? =
       Enum.any?(manifest.nodes, fn node ->
         config = Map.get(node, :config, %{})

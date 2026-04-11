@@ -2,6 +2,7 @@
   "manifest_version": "1.0",
   "graph_id": "divisibility_monitor_v1",
   "job_name": "divisibility-monitor",
+  "long_lived": true,
   "entrypoints": ["question_generator"],
   "initial_inputs": {
     "question_generator": [

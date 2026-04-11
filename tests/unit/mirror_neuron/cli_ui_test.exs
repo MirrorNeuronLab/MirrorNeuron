@@ -85,6 +85,7 @@ defmodule MirrorNeuron.CLI.UITest do
             %{"status" => "running"},
             %{
               collected: 0,
+              long_lived: true,
               expected_results: nil,
               sandbox_done: 0,
               sandbox_total: 0,
@@ -100,8 +101,8 @@ defmodule MirrorNeuron.CLI.UITest do
       end)
 
     assert output =~ "Results:"
-    assert output =~ "0 seen"
-    assert output =~ "open-ended"
+    assert output =~ "∞"
+    assert output =~ "long-lived"
     assert output =~ "division_answered(answer_agent)"
   end
 
