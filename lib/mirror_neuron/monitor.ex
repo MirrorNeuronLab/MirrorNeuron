@@ -1,19 +1,22 @@
 defmodule MirrorNeuron.Monitor do
   alias MirrorNeuron.Persistence.RedisStore
 
+  @default_live_window_ms 10_000
   @terminal_statuses ["completed", "failed", "cancelled"]
 
   def list_jobs(opts \\ []) do
     limit = Keyword.get(opts, :limit)
     include_terminal = Keyword.get(opts, :include_terminal, true)
+    live_only = Keyword.get(opts, :live_only, false)
 
     with {:ok, jobs} <- RedisStore.list_jobs() do
       jobs =
         jobs
+        |> Enum.map(&summarize_job/1)
         |> maybe_filter_terminal(include_terminal)
+        |> maybe_filter_live(live_only)
         |> Enum.sort_by(&sort_key/1, :desc)
         |> maybe_limit(limit)
-        |> Enum.map(&summarize_job/1)
 
       {:ok, jobs}
     end
@@ -65,6 +68,7 @@ defmodule MirrorNeuron.Monitor do
       "graph_id" => Map.get(job, "graph_id"),
       "job_name" => Map.get(job, "job_name"),
       "status" => Map.get(job, "status"),
+      "live?" => job_live?(job, agents),
       "submitted_at" => Map.get(job, "submitted_at"),
       "updated_at" => Map.get(job, "updated_at"),
       "placement_policy" => Map.get(job, "placement_policy"),
@@ -117,6 +121,8 @@ defmodule MirrorNeuron.Monitor do
       "processed_messages" => processed_messages,
       "mailbox_depth" => mailbox_depth,
       "paused?" => paused?,
+      "last_heartbeat_at" => Map.get(agent, "last_heartbeat_at"),
+      "live?" => agent_live?(agent),
       "status" => agent_status(agent_type, paused?, current_state, last_error, mailbox_depth),
       "running?" => running_agent?(agent_type, current_state, last_error),
       "last_error" => last_error,
@@ -195,6 +201,12 @@ defmodule MirrorNeuron.Monitor do
     Enum.reject(jobs, &(Map.get(&1, "status") in @terminal_statuses))
   end
 
+  defp maybe_filter_live(jobs, true) do
+    Enum.filter(jobs, &Map.get(&1, "live?", false))
+  end
+
+  defp maybe_filter_live(jobs, false), do: jobs
+
   defp maybe_limit(jobs, nil), do: jobs
   defp maybe_limit(jobs, limit) when is_integer(limit) and limit > 0, do: Enum.take(jobs, limit)
   defp maybe_limit(jobs, _limit), do: jobs
@@ -214,6 +226,36 @@ defmodule MirrorNeuron.Monitor do
       "#{type}(#{agent})"
     else
       type
+    end
+  end
+
+  defp job_live?(job, agents) do
+    cond do
+      Map.get(job, "status") in @terminal_statuses ->
+        false
+
+      Enum.any?(agents, &Map.get(&1, "live?", false)) ->
+        true
+
+      true ->
+        recent_timestamp?(Map.get(job, "updated_at"), @default_live_window_ms)
+    end
+  end
+
+  defp agent_live?(agent) do
+    heartbeat = Map.get(agent, "last_heartbeat_at")
+    interval_ms = get_in(agent, ["metadata", "heartbeat_interval_ms"]) || 2_000
+    live_window_ms = max(interval_ms * 3, @default_live_window_ms)
+    recent_timestamp?(heartbeat, live_window_ms)
+  end
+
+  defp recent_timestamp?(nil, _window_ms), do: false
+
+  defp recent_timestamp?(timestamp, window_ms) do
+    with {:ok, dt, _offset} <- DateTime.from_iso8601(timestamp) do
+      abs(DateTime.diff(DateTime.utc_now(), dt, :millisecond)) <= window_ms
+    else
+      _ -> false
     end
   end
 end

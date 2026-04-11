@@ -76,6 +76,35 @@ defmodule MirrorNeuron.CLI.UITest do
     assert output =~ "2/4 free q=1"
   end
 
+  test "renders open-ended results for long-lived jobs" do
+    output =
+      capture_io(fn ->
+        UI.puts(
+          UI.progress_panel(
+            "job-stream",
+            %{"status" => "running"},
+            %{
+              collected: 0,
+              expected_results: nil,
+              sandbox_done: 0,
+              sandbox_total: 0,
+              leases_running: 0,
+              leases_waiting: 0,
+              total_events: 8,
+              last_event: %{"type" => "division_answered", "agent_id" => "answer_agent"}
+            },
+            System.monotonic_time(:millisecond) - 1_200,
+            1
+          )
+        )
+      end)
+
+    assert output =~ "Results:"
+    assert output =~ "0 seen"
+    assert output =~ "open-ended"
+    assert output =~ "division_answered(answer_agent)"
+  end
+
   test "renders an agents table with placement details" do
     output =
       capture_io(fn ->
@@ -96,5 +125,22 @@ defmodule MirrorNeuron.CLI.UITest do
     assert output =~ "prime_worker_0001"
     assert output =~ "executor"
     assert output =~ "mn1@192.168.4.29"
+  end
+
+  test "renders updated command names and a separate flags section" do
+    output =
+      capture_io(fn ->
+        UI.puts(UI.usage_screen())
+      end)
+
+    assert output =~ "mirror_neuron job list [--all]"
+    assert output =~ "mirror_neuron job agents <job_id>"
+    assert output =~ "mirror_neuron job events <job_id>"
+    assert output =~ "mirror_neuron job pause <job_id>"
+    assert output =~ "mirror_neuron job cancel <job_id>"
+    assert output =~ "mirror_neuron node list"
+    assert output =~ "Flags"
+    assert output =~ "--all"
+    refute output =~ "mirror_neuron [-v] inspect job <job_id>"
   end
 end

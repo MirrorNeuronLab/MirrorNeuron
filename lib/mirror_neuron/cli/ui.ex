@@ -121,9 +121,9 @@ defmodule MirrorNeuron.CLI.UI do
     lines = [
       status_line("Job", job_id),
       "\n",
-      "Use `mirror_neuron inspect job ",
+      "Use `mirror_neuron job inspect ",
       job_id,
-      "` or `mirror_neuron events ",
+      "` or `mirror_neuron job events ",
       job_id,
       "` to watch it."
     ]
@@ -252,7 +252,7 @@ defmodule MirrorNeuron.CLI.UI do
         status_line("Elapsed", elapsed, :yellow)
       ],
       "\n",
-      bar_line("Results", metrics.collected, metrics.expected_results),
+      result_line(metrics),
       "\n",
       bar_line("Sandboxes", metrics.sandbox_done, metrics.sandbox_total),
       "\n",
@@ -285,21 +285,36 @@ defmodule MirrorNeuron.CLI.UI do
       "mirror_neuron validate <job-folder>",
       "mirror_neuron run <job-folder> [--json] [--timeout <ms>] [--no-await]",
       "mirror_neuron monitor [--json] [--running-only] [--limit <n>]",
-      "mirror_neuron inspect job <job_id>",
-      "mirror_neuron inspect agents <job_id>",
-      "mirror_neuron inspect nodes",
-      "mirror_neuron events <job_id>",
+      "mirror_neuron job list [--all]",
+      "mirror_neuron job inspect <job_id>",
+      "mirror_neuron job agents <job_id>",
+      "mirror_neuron job events <job_id>",
+      "mirror_neuron job pause <job_id>",
+      "mirror_neuron job resume <job_id>",
+      "mirror_neuron job cancel <job_id>",
+      "mirror_neuron job send <job_id> <agent_id> <message.json>",
+      "mirror_neuron node list",
       "mirror_neuron bundle reload <bundle_id>",
-      "mirror_neuron bundle check <bundle_id>",
-      "mirror_neuron pause <job_id>",
-      "mirror_neuron resume <job_id>",
-      "mirror_neuron cancel <job_id>",
-      "mirror_neuron send <job_id> <agent_id> <message.json>"
+      "mirror_neuron bundle check <bundle_id>"
     ]
 
-    body =
+    body = [
       commands
-      |> Enum.map(&["  ", Data.tag("$", :green), " ", &1, "\n"])
+      |> Enum.map(&["  ", Data.tag("$", :green), " ", &1, "\n"]),
+      "\n",
+      box(
+        "Flags",
+        [
+          "- `-v`, `--verbose`: show warnings in addition to errors\n",
+          "- `--json`: emit machine-readable JSON where supported\n",
+          "- `--no-await`: submit a job and return immediately\n",
+          "- `--timeout <ms>`: override wait timeout for blocking run commands\n",
+          "- `--all`: show terminal jobs in `job list`"
+        ],
+        border_tag: :yellow,
+        title_tag: :yellow
+      )
+    ]
 
     box("Commands", body, border_tag: :cyan)
   end
@@ -426,6 +441,19 @@ defmodule MirrorNeuron.CLI.UI do
     bar = "[" <> String.duplicate("#", filled) <> String.duplicate(".", empty) <> "]"
 
     [status_line(label, "#{done}/#{total}", :cyan), "  ", Data.tag(bar, :green)]
+  end
+
+  defp result_line(%{collected: collected, expected_results: expected_results})
+       when is_integer(expected_results) and expected_results > 0 do
+    bar_line("Results", collected, expected_results)
+  end
+
+  defp result_line(%{collected: collected}) do
+    [
+      status_line("Results", "#{collected} seen", :cyan),
+      "  ",
+      Data.tag("open-ended", :yellow)
+    ]
   end
 
   defp lease_line(metrics) do

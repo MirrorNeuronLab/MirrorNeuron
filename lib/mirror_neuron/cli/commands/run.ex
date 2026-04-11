@@ -162,11 +162,38 @@ defmodule MirrorNeuron.CLI.Commands.Run do
 
   defp expected_results(manifest, sandbox_total) do
     manifest.nodes
-    |> Enum.find_value(sandbox_total, fn node ->
+    |> Enum.find_value(default_expected_results(manifest, sandbox_total), fn node ->
       if AgentRegistry.canonical_type(node.agent_type) == "aggregator" do
-        Map.get(node.config, "complete_after")
+        Map.get(node.config, "complete_after") ||
+          if(Map.get(node.config, "complete_on_message"), do: 1, else: nil)
       end
     end)
+  end
+
+  defp default_expected_results(manifest, sandbox_total) do
+    if open_ended_manifest?(manifest) do
+      nil
+    else
+      sandbox_total
+    end
+  end
+
+  defp open_ended_manifest?(manifest) do
+    has_explicit_completion? =
+      Enum.any?(manifest.nodes, fn node ->
+        config = Map.get(node, :config, %{})
+
+        Map.get(config, "complete_on_message", false) or
+          Map.get(config, "complete_job", false) or
+          match?(value when is_integer(value) and value > 0, Map.get(config, "complete_after"))
+      end)
+
+    has_module_nodes? =
+      Enum.any?(manifest.nodes, fn node ->
+        AgentRegistry.canonical_type(node.agent_type) == "module"
+      end)
+
+    has_module_nodes? and not has_explicit_completion?
   end
 
   defp last_notable_event(events) do
@@ -194,7 +221,7 @@ defmodule MirrorNeuron.CLI.Commands.Run do
 
       line =
         "#{spinner} job=#{job_id} status=#{status} elapsed=#{elapsed} " <>
-          "events=#{metrics.total_events} collected=#{metrics.collected}/#{metrics.expected_results} " <>
+          "events=#{metrics.total_events} results=#{format_result_progress(metrics)} " <>
           "leases=running:#{metrics.leases_running} waiting:#{metrics.leases_waiting} " <>
           "sandboxes=#{metrics.sandbox_done}/#{metrics.sandbox_total} last=#{last_event}"
 
@@ -216,6 +243,13 @@ defmodule MirrorNeuron.CLI.Commands.Run do
     seconds = rem(total_seconds, 60)
     :io_lib.format("~2..0B:~2..0B", [minutes, seconds]) |> IO.iodata_to_binary()
   end
+
+  defp format_result_progress(%{collected: collected, expected_results: expected_results})
+       when is_integer(expected_results) and expected_results > 0 do
+    "#{collected}/#{expected_results}"
+  end
+
+  defp format_result_progress(%{collected: collected}), do: "#{collected} (open-ended)"
 
   defp format_event(nil), do: "waiting"
 

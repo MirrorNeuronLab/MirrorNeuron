@@ -88,7 +88,9 @@ defmodule MirrorNeuron.Cluster.Leader do
     # When the node is leader, sweep jobs that are running but have no valid lease.
     case RedisStore.list_jobs() do
       {:ok, jobs} ->
-        for job <- jobs, job["status"] in ["pending", "running", "paused"] do
+        for job <- jobs,
+            job["status"] in ["pending", "running", "paused"],
+            recoverable_on_cluster?(job) do
           check_job_lease(job["job_id"])
         end
 
@@ -141,5 +143,9 @@ defmodule MirrorNeuron.Cluster.Leader do
       _ ->
         :ok
     end
+  end
+
+  defp recoverable_on_cluster?(job) do
+    Map.get(job, "recovery_policy", "local_restart") == "cluster_recover"
   end
 end

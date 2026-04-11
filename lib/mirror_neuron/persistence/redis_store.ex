@@ -1,4 +1,6 @@
 defmodule MirrorNeuron.Persistence.RedisStore do
+  alias MirrorNeuron.Config
+
   @jobs_set "jobs"
 
   def persist_job(job_id, job_map) do
@@ -208,11 +210,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   defp one_shot_command(args) do
-    redis_url =
-      System.get_env(
-        "MIRROR_NEURON_REDIS_URL",
-        Application.get_env(:mirror_neuron, :redis_url, "redis://127.0.0.1:6379/0")
-      )
+    redis_url = Config.string("MIRROR_NEURON_REDIS_URL", :redis_url)
 
     with {:ok, conn} <- Redix.start_link(redis_url),
          result <- safe_command(conn, args) do
@@ -249,11 +247,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   defp channel(part1, part2), do: Enum.join([namespace(), "channel", part1, part2], ":")
 
   defp namespace,
-    do:
-      System.get_env(
-        "MIRROR_NEURON_REDIS_NAMESPACE",
-        Application.get_env(:mirror_neuron, :redis_namespace, "mirror_neuron")
-      )
+    do: Config.string("MIRROR_NEURON_REDIS_NAMESPACE", :redis_namespace)
 
   defp format_reason(reason) when is_binary(reason), do: reason
   defp format_reason(reason), do: inspect(reason)

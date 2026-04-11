@@ -128,6 +128,21 @@ defmodule MirrorNeuron.RuntimeTest do
     end
   end
 
+  defmodule DelayedCompleteRunner do
+    def run(_payload, _config, _opts) do
+      Process.sleep(1_000)
+
+      {:ok,
+       %{
+         "sandbox_name" => "delayed-complete",
+         "exit_code" => 0,
+         "stdout" => Jason.encode!(%{"complete_job" => %{"done" => true}}),
+         "stderr" => "",
+         "logs" => ""
+       }}
+    end
+  end
+
   setup do
     Application.ensure_all_started(:mirror_neuron)
 
@@ -245,6 +260,101 @@ defmodule MirrorNeuron.RuntimeTest do
     assert {:ok, "resumed"} = MirrorNeuron.resume(job_id)
     assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 2_000)
     assert job["status"] == "completed"
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "can pause and cancel a single-run executor job before it completes" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "cancel_once_test",
+      "entrypoints" => ["root"],
+      "initial_inputs" => %{"root" => [%{"work" => "cancel me"}]},
+      "nodes" => [
+        %{
+          "node_id" => "root",
+          "agent_type" => "router",
+          "role" => "root_coordinator",
+          "config" => %{"emit_type" => "do_work"}
+        },
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "config" => %{
+            "runner_module" => DelayedCompleteRunner,
+            "output_message_type" => nil
+          }
+        }
+      ],
+      "edges" => [
+        %{"from_node" => "root", "to_node" => "worker", "message_type" => "do_work"}
+      ],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    wait_until(fn -> running_status?(job_id) end, 2_000)
+
+    assert {:ok, "paused"} = MirrorNeuron.pause(job_id)
+
+    wait_until(
+      fn ->
+        match?({:ok, %{"status" => "paused"}}, MirrorNeuron.inspect_job(job_id))
+      end,
+      2_000
+    )
+
+    assert {:ok, "cancelled"} = MirrorNeuron.cancel(job_id)
+    assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 2_000)
+    assert job["status"] == "cancelled"
+    assert get_in(job, ["result", "reason"]) == "cancelled by operator"
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "can cancel a long-lived job and it disappears from the live list" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "cancel_long_lived_test",
+      "nodes" => [
+        %{
+          "node_id" => "root",
+          "agent_type" => "router",
+          "role" => "root_coordinator",
+          "config" => %{"emit_type" => "manual_result"}
+        },
+        %{
+          "node_id" => "sink",
+          "agent_type" => "aggregator",
+          "config" => %{"complete_after" => 10}
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    wait_until(fn -> running_status?(job_id) end, 2_000)
+
+    wait_until(
+      fn ->
+        {:ok, jobs} = MirrorNeuron.list_jobs(live_only: true, include_terminal: true)
+        Enum.any?(jobs, &(&1["job_id"] == job_id))
+      end,
+      2_000
+    )
+
+    assert {:ok, "cancelled"} = MirrorNeuron.cancel(job_id)
+    assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 2_000)
+    assert job["status"] == "cancelled"
+
+    wait_until(
+      fn ->
+        {:ok, jobs} = MirrorNeuron.list_jobs(live_only: true, include_terminal: true)
+        Enum.all?(jobs, &(&1["job_id"] != job_id))
+      end,
+      2_000
+    )
 
     RedisStore.delete_job(job_id)
   end

@@ -124,8 +124,9 @@ For details:
 ```bash
 ./mirror_neuron validate <job-folder>
 ./mirror_neuron run <job-folder>
-./mirror_neuron inspect nodes
-./mirror_neuron inspect job <job_id>
+./mirror_neuron node list
+./mirror_neuron job inspect <job_id>
+./mirror_neuron job list [--live]
 ./mirror_neuron events <job_id>
 ./mirror_neuron monitor
 ```

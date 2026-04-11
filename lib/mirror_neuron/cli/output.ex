@@ -125,18 +125,26 @@ defmodule MirrorNeuron.CLI.Output do
       mirror_neuron validate <job-folder>
       mirror_neuron run <job-folder> [--json] [--timeout <ms>] [--no-await]
       mirror_neuron monitor [--json] [--running-only] [--limit <n>]
-      mirror_neuron inspect job <job_id>
-      mirror_neuron inspect agents <job_id>
-      mirror_neuron inspect nodes
-      mirror_neuron events <job_id>
+      mirror_neuron job list [--all]
+      mirror_neuron job inspect <job_id>
+      mirror_neuron job agents <job_id>
+      mirror_neuron job events <job_id>
+      mirror_neuron job pause <job_id>
+      mirror_neuron job resume <job_id>
+      mirror_neuron job cancel <job_id>
+      mirror_neuron job send <job_id> <agent_id> <message.json>
+      mirror_neuron node list
       mirror_neuron bundle check <bundle_id>
       mirror_neuron bundle reload <bundle_id>
       mirror_neuron node add <node_name>
       mirror_neuron node remove <node_name>
-      mirror_neuron pause <job_id>
-      mirror_neuron resume <job_id>
-      mirror_neuron cancel <job_id>
-      mirror_neuron send <job_id> <agent_id> <message.json>
+
+      Flags:
+        -v, --verbose   Show warnings in addition to errors
+        --json          Emit machine-readable JSON where supported
+        --no-await      Submit a job and return immediately
+        --timeout <ms>  Override wait timeout for blocking run commands
+        --all           Show terminal jobs in `job list` (default is live jobs only)
       """)
     end
   end

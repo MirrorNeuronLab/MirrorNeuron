@@ -1,17 +1,15 @@
 defmodule MirrorNeuron.Redis do
   use Supervisor
 
+  alias MirrorNeuron.Config
+
   def start_link(_arg) do
     Supervisor.start_link(__MODULE__, :ok, name: __MODULE__)
   end
 
   @impl true
   def init(:ok) do
-    redis_url =
-      System.get_env(
-        "MIRROR_NEURON_REDIS_URL",
-        Application.get_env(:mirror_neuron, :redis_url, "redis://127.0.0.1:6379/0")
-      )
+    redis_url = Config.string("MIRROR_NEURON_REDIS_URL", :redis_url)
 
     children = [
       %{
@@ -24,21 +22,27 @@ defmodule MirrorNeuron.Redis do
   end
 
   def reconnect do
-    case Supervisor.terminate_child(__MODULE__, :redix) do
-      :ok ->
-        restart_child()
+    case Process.whereis(__MODULE__) do
+      nil ->
+        {:error, :not_running}
 
-      {:error, :not_found} ->
-        restart_child()
+      _pid ->
+        case Supervisor.terminate_child(__MODULE__, :redix) do
+          :ok ->
+            restart_child()
 
-      {:error, :restarting} ->
-        :ok
+          {:error, :not_found} ->
+            restart_child()
 
-      {:error, :not_started} ->
-        restart_child()
+          {:error, :restarting} ->
+            :ok
 
-      other ->
-        other
+          {:error, :not_started} ->
+            restart_child()
+
+          other ->
+            other
+        end
     end
   end
 

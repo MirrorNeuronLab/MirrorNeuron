@@ -1,0 +1,53 @@
+{
+  "manifest_version": "1.0",
+  "graph_id": "divisibility_monitor_v1",
+  "job_name": "divisibility-monitor",
+  "entrypoints": ["question_generator"],
+  "initial_inputs": {
+    "question_generator": [
+      {
+        "tick": 0
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "node_id": "question_generator",
+      "agent_type": "module",
+      "type": "stream",
+      "role": "question_source",
+      "config": {
+        "module": "MirrorNeuron.Examples.DivisibilityMonitor.QuestionGenerator",
+        "module_source": "beam_modules/question_generator.ex",
+        "interval_ms": 1500,
+        "min_x": 10,
+        "max_x": 500,
+        "min_y": 2,
+        "max_y": 25,
+        "answer_node": "answer_agent"
+      }
+    },
+    {
+      "node_id": "answer_agent",
+      "agent_type": "module",
+      "type": "stream",
+      "role": "answer_sink",
+      "config": {
+        "module": "MirrorNeuron.Examples.DivisibilityMonitor.AnswerAgent",
+        "module_source": "beam_modules/answer_agent.ex",
+        "generator_node": "question_generator"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "edge_id": "generator_to_answer",
+      "from_node": "question_generator",
+      "to_node": "answer_agent",
+      "message_type": "division_question"
+    }
+  ],
+  "policies": {
+    "recovery_mode": "local_restart"
+  }
+}

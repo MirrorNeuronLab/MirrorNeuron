@@ -1,4 +1,5 @@
 defmodule MirrorNeuron.Sandbox.OpenShell do
+  alias MirrorNeuron.Config
   alias MirrorNeuron.Message
   alias MirrorNeuron.Sandbox.JobSandbox
 
@@ -234,7 +235,7 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
 
     temp_config =
       Path.join(
-        System.get_env("MIRROR_NEURON_TEMP_DIR") || "/temp/mirror_neuron",
+        Config.string("MIRROR_NEURON_TEMP_DIR", :temp_dir),
         "mirror_neuron_ssh_#{System.unique_integer([:positive])}"
       )
 
@@ -325,7 +326,7 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
 
     base_dir =
       Path.join(
-        System.get_env("MIRROR_NEURON_TEMP_DIR") || "/temp/mirror_neuron",
+        Config.string("MIRROR_NEURON_TEMP_DIR", :temp_dir),
         "mirror_neuron_#{sandbox_name}_#{System.unique_integer([:positive])}"
       )
 
@@ -573,7 +574,7 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
   end
 
   defp sandbox_cli(config) do
-    Map.get(config, "sandbox_cli", System.get_env("MIRROR_NEURON_OPENSHELL_BIN", "openshell"))
+    Map.get(config, "sandbox_cli", Config.string("MIRROR_NEURON_OPENSHELL_BIN", :openshell_bin))
   end
 
   defp sanitize_path_segment(value) do

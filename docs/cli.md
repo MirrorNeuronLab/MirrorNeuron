@@ -24,9 +24,10 @@ mirror_neuron cluster reload --node-id <id>
 mirror_neuron validate <job-folder>
 mirror_neuron run <job-folder> [--json] [--timeout <ms>] [--no-await]
 mirror_neuron monitor [--json] [--running-only] [--limit <n>]
-mirror_neuron inspect job <job_id>
-mirror_neuron inspect agents <job_id>
-mirror_neuron inspect nodes
+mirror_neuron job list [--live]
+mirror_neuron job inspect <job_id>
+mirror_neuron agent list <job_id>
+mirror_neuron node list
 mirror_neuron events <job_id>
 mirror_neuron bundle reload <bundle_id>
 mirror_neuron bundle check <bundle_id>
@@ -104,19 +105,19 @@ Timeout:
 Job:
 
 ```bash
-./mirror_neuron inspect job <job_id>
+./mirror_neuron job inspect <job_id>
 ```
 
 Agents:
 
 ```bash
-./mirror_neuron inspect agents <job_id>
+./mirror_neuron agent list <job_id>
 ```
 
 Nodes:
 
 ```bash
-./mirror_neuron inspect nodes
+./mirror_neuron node list
 ```
 
 ### `events`

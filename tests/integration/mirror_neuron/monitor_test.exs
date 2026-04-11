@@ -129,4 +129,57 @@ defmodule MirrorNeuron.MonitorTest do
 
     RedisStore.delete_job(job_id)
   end
+
+  test "lists only live jobs when requested" do
+    live_job_id = "monitor-live-#{System.unique_integer([:positive])}"
+    stale_job_id = "monitor-stale-#{System.unique_integer([:positive])}"
+
+    RedisStore.persist_job(live_job_id, %{
+      "job_id" => live_job_id,
+      "graph_id" => "live_demo",
+      "status" => "running",
+      "submitted_at" => "2026-03-28T00:00:00Z",
+      "updated_at" =>
+        DateTime.utc_now() |> DateTime.truncate(:millisecond) |> DateTime.to_iso8601()
+    })
+
+    RedisStore.persist_agent(live_job_id, "question_generator", %{
+      "agent_id" => "question_generator",
+      "agent_type" => "module",
+      "assigned_node" => "mn1@192.168.4.29",
+      "processed_messages" => 3,
+      "mailbox_depth" => 0,
+      "current_state" => %{},
+      "last_heartbeat_at" =>
+        DateTime.utc_now() |> DateTime.truncate(:millisecond) |> DateTime.to_iso8601(),
+      "metadata" => %{"paused" => false, "heartbeat_interval_ms" => 2000}
+    })
+
+    RedisStore.persist_job(stale_job_id, %{
+      "job_id" => stale_job_id,
+      "graph_id" => "stale_demo",
+      "status" => "running",
+      "submitted_at" => "2026-03-28T00:00:00Z",
+      "updated_at" => "2026-03-28T00:00:05Z"
+    })
+
+    RedisStore.persist_agent(stale_job_id, "question_generator", %{
+      "agent_id" => "question_generator",
+      "agent_type" => "module",
+      "assigned_node" => "mn1@192.168.4.29",
+      "processed_messages" => 3,
+      "mailbox_depth" => 0,
+      "current_state" => %{},
+      "last_heartbeat_at" => "2026-03-28T00:00:05Z",
+      "metadata" => %{"paused" => false, "heartbeat_interval_ms" => 2000}
+    })
+
+    assert {:ok, jobs} = Monitor.list_jobs(live_only: true)
+
+    assert Enum.any?(jobs, &(&1["job_id"] == live_job_id and &1["live?"]))
+    refute Enum.any?(jobs, &(&1["job_id"] == stale_job_id))
+
+    RedisStore.delete_job(live_job_id)
+    RedisStore.delete_job(stale_job_id)
+  end
 end

@@ -73,26 +73,32 @@ defmodule MirrorNeuron do
   def cluster_overview(opts \\ []), do: Monitor.cluster_overview(opts)
 
   def pause(job_id) do
-    if control_node?(),
-      do: Control.call(__MODULE__, :pause, [job_id]),
-      else: Runtime.pause_job(job_id)
+    if control_node?() do
+      call_control_or_runtime(job_id, :pause, [job_id])
+    else
+      Runtime.pause_job(job_id)
+    end
   end
 
   def resume(job_id) do
-    if control_node?(),
-      do: Control.call(__MODULE__, :resume, [job_id]),
-      else: Runtime.resume_job(job_id)
+    if control_node?() do
+      call_control_or_runtime(job_id, :resume, [job_id])
+    else
+      Runtime.resume_job(job_id)
+    end
   end
 
   def cancel(job_id) do
-    if control_node?(),
-      do: Control.call(__MODULE__, :cancel, [job_id]),
-      else: Runtime.cancel_job(job_id)
+    if control_node?() do
+      call_control_or_runtime(job_id, :cancel, [job_id])
+    else
+      Runtime.cancel_job(job_id)
+    end
   end
 
   def send_message(job_id, agent_id, message) do
     if control_node?() do
-      Control.call(__MODULE__, :send_message, [job_id, agent_id, message])
+      call_control_or_runtime(job_id, :send_message, [job_id, agent_id, message])
     else
       Runtime.send_message(job_id, agent_id, message)
     end
@@ -100,5 +106,39 @@ defmodule MirrorNeuron do
 
   defp control_node? do
     MirrorNeuron.Application.node_role() == "control"
+  end
+
+  defp call_control_or_runtime(job_id, function, args) do
+    case Control.call(__MODULE__, function, args) do
+      {:error, "no runtime nodes available in the connected cluster"} ->
+        call_runtime_by_job(job_id, function, args)
+
+      other ->
+        other
+    end
+  end
+
+  defp call_runtime_by_job(job_id, function, args) do
+    with {:ok, agents} <- RedisStore.list_agents(job_id) do
+      agents
+      |> Enum.map(& &1["assigned_node"])
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+      |> Enum.reduce_while(
+        {:error, "job #{job_id} is not running in the connected cluster"},
+        fn node_name, _acc ->
+          node = String.to_atom(node_name)
+          _ = Node.connect(node)
+
+          case :rpc.call(node, __MODULE__, function, args, 15_000) do
+            {:badrpc, _reason} ->
+              {:cont, {:error, "job #{job_id} is not running in the connected cluster"}}
+
+            reply ->
+              {:halt, reply}
+          end
+        end
+      )
+    end
   end
 end

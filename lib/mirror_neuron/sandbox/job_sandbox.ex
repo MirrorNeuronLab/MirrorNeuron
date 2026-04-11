@@ -1,4 +1,5 @@
 defmodule MirrorNeuron.Sandbox.JobSandbox do
+  alias MirrorNeuron.Config
   use GenServer
   require Logger
 
@@ -187,7 +188,7 @@ defmodule MirrorNeuron.Sandbox.JobSandbox do
   defp ssh_host(sandbox_name), do: "openshell-#{sandbox_name}"
 
   defp sandbox_cli(config) do
-    Map.get(config, "sandbox_cli", System.get_env("MIRROR_NEURON_OPENSHELL_BIN", "openshell"))
+    Map.get(config, "sandbox_cli", Config.string("MIRROR_NEURON_OPENSHELL_BIN", :openshell_bin))
   end
 
   defp build_shared_sandbox_name(job_id, config) do

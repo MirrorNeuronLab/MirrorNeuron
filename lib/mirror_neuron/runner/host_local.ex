@@ -1,5 +1,6 @@
 defmodule MirrorNeuron.Runner.HostLocal do
   alias MirrorNeuron.Message
+  alias MirrorNeuron.Config
 
   @result_start "__MIRROR_NEURON_RESULT_START__"
   @result_end "__MIRROR_NEURON_RESULT_END__"
@@ -9,7 +10,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
 
     base_dir =
       Path.join(
-        System.get_env("MIRROR_NEURON_TEMP_DIR") || "/temp/mirror_neuron",
+        Config.string("MIRROR_NEURON_TEMP_DIR", :temp_dir),
         "mirror_neuron_host_local_#{runner_name}_#{System.unique_integer([:positive])}"
       )
 

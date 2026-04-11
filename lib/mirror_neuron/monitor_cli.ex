@@ -1,6 +1,7 @@
 defmodule MirrorNeuron.MonitorCLI do
   require Logger
 
+  alias MirrorNeuron.Config
   alias MirrorNeuron.CLI.UI
   alias MirrorNeuron.Monitor
 
@@ -37,7 +38,7 @@ defmodule MirrorNeuron.MonitorCLI do
       seed_ip = Keyword.get(opts, :seed_ip, self_ip)
       redis_host = Keyword.get(opts, :redis_host, box1_ip)
       redis_port = Keyword.get(opts, :redis_port, 6379)
-      cookie = Keyword.get(opts, :cookie, System.get_env("MIRROR_NEURON_COOKIE", "mirrorneuron"))
+      cookie = Keyword.get(opts, :cookie, Config.string("MIRROR_NEURON_COOKIE", :cookie))
       cli_port = find_free_port(Keyword.get(opts, :cli_port, 4374))
       seed_node = monitor_seed_node(seed_ip, box1_ip, box2_ip)
 

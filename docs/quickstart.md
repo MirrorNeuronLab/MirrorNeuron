@@ -36,7 +36,7 @@ If you need machine-readable output:
 ## Inspect the cluster or local runtime
 
 ```bash
-./mirror_neuron inspect nodes
+./mirror_neuron node list
 ```
 
 On a single machine this usually shows one node.

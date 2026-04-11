@@ -56,7 +56,34 @@ Bundle-scoped OpenShell policy example:
 
 The `policy` path is resolved relative to the bundle `payloads/` directory, so a bundle can carry its own OpenShell network allowlist. For example, [api-egress.yaml](../examples/openshell_worker_demo/payloads/policies/api-egress.yaml) allows selected API hosts and a fixed IP.
 
-## 3. Prime sweep scale benchmark
+## 3. Divisibility monitor
+
+Path:
+
+- [examples/divisibility_monitor](../examples/divisibility_monitor)
+
+Purpose:
+
+- demonstrates a long-lived job that keeps running until manually stopped
+- uses two BEAM module agents without OpenShell
+- shows agent-to-agent looping with explicit messages
+- keeps terminal progress in open-ended mode instead of a fake finite count
+- uses `local_restart` recovery so old local demo runs are not auto-resumed
+
+Run:
+
+```bash
+./mirror_neuron validate examples/divisibility_monitor
+./mirror_neuron run examples/divisibility_monitor --no-await
+```
+
+Watch it:
+
+```bash
+./mirror_neuron monitor
+```
+
+## 4. Prime sweep scale benchmark
 
 Path:
 
@@ -91,7 +118,7 @@ bash examples/prime_sweep_scale/run_scale_test.sh \
   --self-ip 192.168.4.29
 ```
 
-## 4. LLM codegen and review loop
+## 5. LLM codegen and review loop
 
 Path:
 
@@ -118,7 +145,7 @@ bash scripts/test_cluster_llm_codegen_e2e.sh \
   --box2-ip 192.168.4.35
 ```
 
-## 5. Streaming peak detection demo
+## 6. Streaming peak detection demo
 
 Path:
 
@@ -152,7 +179,7 @@ bash scripts/test_cluster_streaming_e2e.sh \
   --box2-ip 192.168.4.35
 ```
 
-## 6. Shared MPE crowd visualization
+## 7. Shared MPE crowd visualization
 
 Path:
 
@@ -184,7 +211,7 @@ Open the generated HTML automatically:
 bash examples/mpe_simple_push_visualization/run_simple_push_e2e.sh --open
 ```
 
-## 7. Ecosystem simulation
+## 8. Ecosystem simulation
 
 Path:
 
@@ -227,16 +254,18 @@ Use this order:
 
 1. `research_flow`
 2. `openshell_worker_demo`
-3. `prime_sweep_scale`
-4. `streaming_peak_demo`
-5. `mpe_simple_push_visualization`
-6. `llm_codegen_review`
-7. `ecosystem_simulation`
+3. `divisibility_monitor`
+4. `prime_sweep_scale`
+5. `streaming_peak_demo`
+6. `mpe_simple_push_visualization`
+7. `llm_codegen_review`
+8. `ecosystem_simulation`
 
 That progression moves from:
 
 - local routing
 - local sandbox execution
+- long-lived module-based message loops
 - scale and cluster placement
 - runtime streaming and incremental consumption
 - visual post-processing over one shared MPE crowd world
