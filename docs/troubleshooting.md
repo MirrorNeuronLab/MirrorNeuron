@@ -9,7 +9,7 @@ This guide collects the most common operational failures seen during local and t
 Symptoms:
 
 - runtime tests fail immediately
-- `mirror_neuron run ...` hangs or errors
+- `mn run ...` hangs or errors
 
 Check:
 
@@ -133,7 +133,7 @@ Check:
 
 ```bash
 bash scripts/cluster_cli.sh --box1-ip 192.168.4.29 --box2-ip 192.168.4.35 --self-ip 192.168.4.29 -- inspect nodes
-./mirror_neuron monitor --box1-ip 192.168.4.29 --box2-ip 192.168.4.35 --self-ip 192.168.4.29
+./mn monitor --box1-ip 192.168.4.29 --box2-ip 192.168.4.35 --self-ip 192.168.4.29
 ```
 
 ## Monitor issues
@@ -151,7 +151,7 @@ Options:
 
 Use the checked-in wrapper:
 
-- `./mirror_neuron monitor`
+- `./mn monitor`
 
 It starts the app in a cleaner mode than raw `mix run`.
 
@@ -204,10 +204,10 @@ If the workflow itself is tiny but runtime is slow, look first at:
 ## Good diagnostic commands
 
 ```bash
-./mirror_neuron inspect nodes
-./mirror_neuron events <job_id>
-./mirror_neuron inspect agents <job_id>
-./mirror_neuron monitor
+./mn inspect nodes
+./mn events <job_id>
+./mn inspect agents <job_id>
+./mn monitor
 openshell status
 openshell sandbox list
 epmd -names

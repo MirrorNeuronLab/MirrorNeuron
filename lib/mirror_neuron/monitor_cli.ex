@@ -32,7 +32,7 @@ defmodule MirrorNeuron.MonitorCLI do
     if box1_ip || box2_ip || self_ip do
       if Enum.any?([box1_ip, box2_ip, self_ip], &is_nil/1) do
         raise ArgumentError,
-              "cluster mode requires --box1-ip, --box2-ip, and --self-ip for `mirror_neuron monitor`"
+              "cluster mode requires --box1-ip, --box2-ip, and --self-ip for `mn monitor`"
       end
 
       seed_ip = Keyword.get(opts, :seed_ip, self_ip)
@@ -389,9 +389,9 @@ defmodule MirrorNeuron.MonitorCLI do
       UI.box(
         "Usage",
         [
-          "mirror_neuron monitor [--running-only] [--limit 20] [--refresh-ms 2000]\n",
-          "mirror_neuron monitor --json\n",
-          "mirror_neuron monitor --box1-ip 192.168.4.29 --box2-ip 192.168.4.35 --self-ip 192.168.4.29\n\n",
+          "mn monitor [--running-only] [--limit 20] [--refresh-ms 2000]\n",
+          "mn monitor --json\n",
+          "mn monitor --box1-ip 192.168.4.29 --box2-ip 192.168.4.35 --self-ip 192.168.4.29\n\n",
           "Cluster flags are optional. When present, the monitor creates a temporary control node."
         ],
         border_tag: :cyan

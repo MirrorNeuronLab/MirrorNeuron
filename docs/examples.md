@@ -20,8 +20,8 @@ Purpose:
 Run:
 
 ```bash
-./mirror_neuron validate research_flow
-./mirror_neuron run research_flow
+./mn validate research_flow
+./mn run research_flow
 ```
 
 ## 2. OpenShell worker demo
@@ -40,8 +40,8 @@ Purpose:
 Run:
 
 ```bash
-./mirror_neuron validate openshell_worker_demo
-./mirror_neuron run openshell_worker_demo --json
+./mn validate openshell_worker_demo
+./mn run openshell_worker_demo --json
 ```
 
 Bundle-scoped OpenShell policy example:
@@ -76,14 +76,14 @@ Purpose:
 Run:
 
 ```bash
-./mirror_neuron validate divisibility_monitor
-./mirror_neuron run divisibility_monitor --no-await
+./mn validate divisibility_monitor
+./mn run divisibility_monitor --no-await
 ```
 
 Watch it:
 
 ```bash
-./mirror_neuron monitor
+./mn monitor
 ```
 
 ## 4. Prime sweep scale benchmark

@@ -111,34 +111,34 @@ defmodule MirrorNeuron.CLI.Output do
       UI.puts(UI.usage_screen())
     else
       IO.puts("""
-      mirror_neuron standalone-start
-      mirror_neuron cluster start --node-id <id> --bind <ip:port> [--data-dir <dir>] [--join <seeds>]
-      mirror_neuron cluster join --node-id <id> --bind <ip:port> --seeds <seeds>
-      mirror_neuron cluster discover --seeds <seeds>
-      mirror_neuron cluster status
-      mirror_neuron cluster nodes
-      mirror_neuron cluster leave --node-id <id>
-      mirror_neuron cluster rebalance
-      mirror_neuron cluster elect-leader
-      mirror_neuron cluster health
-      mirror_neuron cluster reload --node-id <id>
-      mirror_neuron validate <job-folder>
-      mirror_neuron run <job-folder> [--json] [--timeout <ms>] [--no-await]
-      mirror_neuron monitor [--json] [--running-only] [--limit <n>]
-      mirror_neuron job list [--all]
-      mirror_neuron job inspect <job_id>
-      mirror_neuron job agents <job_id>
-      mirror_neuron job events <job_id>
-      mirror_neuron job pause <job_id>
-      mirror_neuron job resume <job_id>
-      mirror_neuron job cancel <job_id>
-      mirror_neuron job cleanup
-      mirror_neuron job send <job_id> <agent_id> <message.json>
-      mirror_neuron node list
-      mirror_neuron bundle check <bundle_id>
-      mirror_neuron bundle reload <bundle_id>
-      mirror_neuron node add <node_name>
-      mirror_neuron node remove <node_name>
+      mn standalone-start
+      mn cluster start --node-id <id> --bind <ip:port> [--data-dir <dir>] [--join <seeds>]
+      mn cluster join --node-id <id> --bind <ip:port> --seeds <seeds>
+      mn cluster discover --seeds <seeds>
+      mn cluster status
+      mn cluster nodes
+      mn cluster leave --node-id <id>
+      mn cluster rebalance
+      mn cluster elect-leader
+      mn cluster health
+      mn cluster reload --node-id <id>
+      mn validate <job-folder>
+      mn run <job-folder> [--json] [--timeout <ms>] [--no-await]
+      mn monitor [--json] [--running-only] [--limit <n>]
+      mn job list [--all]
+      mn job inspect <job_id>
+      mn job agents <job_id>
+      mn job events <job_id>
+      mn job pause <job_id>
+      mn job resume <job_id>
+      mn job cancel <job_id>
+      mn job cleanup
+      mn job send <job_id> <agent_id> <message.json>
+      mn node list
+      mn bundle check <bundle_id>
+      mn bundle reload <bundle_id>
+      mn node add <node_name>
+      mn node remove <node_name>
 
       Flags:
         -v, --verbose   Show warnings in addition to errors

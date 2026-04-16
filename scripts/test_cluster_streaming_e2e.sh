@@ -137,11 +137,11 @@ if [ -z "$BOX1_IP" ] || [ -z "$BOX2_IP" ]; then
 fi
 
 local_runtime_pids() {
-  pgrep -f 'mirror_neuron.*server' || true
+  pgrep -f 'mn.*server' || true
 }
 
 remote_runtime_pids() {
-  ssh "$BOX2_IP" "$REMOTE_PATH_PREFIX pgrep -f 'mirror_neuron.*server' || true"
+  ssh "$BOX2_IP" "$REMOTE_PATH_PREFIX pgrep -f 'mn.*server' || true"
 }
 
 stop_runtime_local() {
@@ -284,7 +284,7 @@ import subprocess
 log_path = os.environ["MIRROR_NEURON_LOG_PATH"]
 with open(log_path, "ab", buffering=0) as log_file:
     proc = subprocess.Popen(
-        ["./mirror_neuron", "server"],
+        ["./mn", "server"],
         stdin=subprocess.DEVNULL,
         stdout=log_file,
         stderr=subprocess.STDOUT,
@@ -320,7 +320,7 @@ import subprocess
 log_path = os.environ[\"MIRROR_NEURON_LOG_PATH\"]
 with open(log_path, \"ab\", buffering=0) as log_file:
     proc = subprocess.Popen(
-        [\"./mirror_neuron\", \"server\"],
+        [\"./mn\", \"server\"],
         stdin=subprocess.DEVNULL,
         stdout=log_file,
         stderr=subprocess.STDOUT,

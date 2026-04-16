@@ -514,13 +514,13 @@ This event channel is written today but not yet consumed by the terminal monitor
 
 Built escript:
 
-- [mirror_neuron](../mirror_neuron)
+- [mirror_neuron](../mn)
 
 ### Monitor subcommand
 
 Use:
 
-- `./mirror_neuron monitor`
+- `./mn monitor`
 
 It currently uses:
 

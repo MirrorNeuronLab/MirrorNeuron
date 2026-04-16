@@ -72,8 +72,8 @@ if [ -z "$BOX1_IP" ] || [ -z "$BOX2_IP" ]; then
   exit 1
 fi
 
-local_runtime_pids() { pgrep -f 'mirror_neuron.*server' || true; }
-remote_runtime_pids() { ssh "$BOX2_IP" "$REMOTE_PATH_PREFIX pgrep -f 'mirror_neuron.*server' || true"; }
+local_runtime_pids() { pgrep -f 'mn.*server' || true; }
+remote_runtime_pids() { ssh "$BOX2_IP" "$REMOTE_PATH_PREFIX pgrep -f 'mn.*server' || true"; }
 
 stop_runtime_local() {
   local pids
@@ -129,14 +129,14 @@ start_local_runtime() {
     export MIRROR_NEURON_COOKIE="$COOKIE"
     export MIRROR_NEURON_CLUSTER_NODES="mn1@$BOX1_IP,mn2@$BOX2_IP"
     export MIRROR_NEURON_REDIS_URL="redis://$BOX1_IP:6379/0"
-    ./mirror_neuron server >"$LOCAL_LOG" 2>&1 &
+    ./mn server >"$LOCAL_LOG" 2>&1 &
     echo $!
   )
 }
 
 start_remote_runtime() {
   echo "Starting box 2 runtime..."
-  ssh "$BOX2_IP" "cd \"$REMOTE_ROOT\" && $REMOTE_PATH_PREFIX export ERL_AFLAGS='-kernel inet_dist_listen_min $DIST_PORT inet_dist_listen_max $DIST_PORT'; export MIRROR_NEURON_NODE_NAME='mn2@$BOX2_IP'; export MIRROR_NEURON_NODE_ROLE='runtime'; export MIRROR_NEURON_COOKIE='$COOKIE'; export MIRROR_NEURON_CLUSTER_NODES='mn1@$BOX1_IP,mn2@$BOX2_IP'; export MIRROR_NEURON_REDIS_URL='redis://$BOX1_IP:6379/0'; nohup ./mirror_neuron server >'$REMOTE_LOG' 2>&1 </dev/null & echo \$!"
+  ssh "$BOX2_IP" "cd \"$REMOTE_ROOT\" && $REMOTE_PATH_PREFIX export ERL_AFLAGS='-kernel inet_dist_listen_min $DIST_PORT inet_dist_listen_max $DIST_PORT'; export MIRROR_NEURON_NODE_NAME='mn2@$BOX2_IP'; export MIRROR_NEURON_NODE_ROLE='runtime'; export MIRROR_NEURON_COOKIE='$COOKIE'; export MIRROR_NEURON_CLUSTER_NODES='mn1@$BOX1_IP,mn2@$BOX2_IP'; export MIRROR_NEURON_REDIS_URL='redis://$BOX1_IP:6379/0'; nohup ./mn server >'$REMOTE_LOG' 2>&1 </dev/null & echo \$!"
 }
 
 cluster_inspect_nodes() {

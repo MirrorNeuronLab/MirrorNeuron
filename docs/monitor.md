@@ -4,7 +4,7 @@ MirrorNeuron includes a terminal monitor designed to be the CLI equivalent of a 
 
 Tool:
 
-- `./mirror_neuron monitor`
+- `./mn monitor`
 
 ## What it shows
 
@@ -29,7 +29,7 @@ At the job detail level:
 
 ```bash
 cd MirrorNeuron
-./mirror_neuron monitor
+./mn monitor
 ```
 
 Controls:
@@ -43,7 +43,7 @@ Controls:
 ## JSON mode
 
 ```bash
-./mirror_neuron monitor --json
+./mn monitor --json
 ```
 
 This uses the monitor API from [monitor.ex](../lib/mirror_neuron/monitor.ex).
@@ -51,7 +51,7 @@ This uses the monitor API from [monitor.ex](../lib/mirror_neuron/monitor.ex).
 ## Cluster usage
 
 ```bash
-./mirror_neuron monitor \
+./mn monitor \
   --box1-ip 192.168.4.29 \
   --box2-ip 192.168.4.35 \
   --self-ip 192.168.4.29
@@ -108,7 +108,7 @@ Use `mirror_neuron` when you want to:
 - inspect one job directly
 - send control commands
 
-Use `mirror_neuron monitor` when you want to:
+Use `mn monitor` when you want to:
 
 - see the whole platform
 - identify active jobs quickly

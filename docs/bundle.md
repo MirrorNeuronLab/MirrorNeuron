@@ -162,10 +162,10 @@ You can validate and run a job bundle using the MirrorNeuron CLI:
 
 ```bash
 # Validate the bundle structure and manifest constraints
-./mirror_neuron validate path/to/my_job_bundle
+./mn validate path/to/my_job_bundle
 
 # Execute the bundle in the cluster
-./mirror_neuron run path/to/my_job_bundle
+./mn run path/to/my_job_bundle
 ```
 
 Via the API (HTTP POST to `/api/v1/jobs`), the exact same `manifest.json` shape is accepted, with the payloads assumed to either already exist locally or omitted in pure-router workflows.

@@ -154,7 +154,7 @@ bash mirrorneuron-blueprints/ecosystem_simulation/run_simulation_e2e.sh \
   --tick-seconds 5
 ```
 
-The local runner rebuilds `./mirror_neuron`, generates the bundle, validates it, runs the simulation, and writes a `result.json` next to the generated manifest.
+The local runner rebuilds `./mn`, generates the bundle, validates it, runs the simulation, and writes a `result.json` next to the generated manifest.
 
 Important:
 
@@ -205,14 +205,14 @@ Terminal 1:
 
 ```bash
 cd MirrorNeuron
-./mirror_neuron server
+./mn server
 ```
 
 Terminal 2:
 
 ```bash
 python3 mirrorneuron-blueprints/ecosystem_simulation/generate_bundle.py --animals 800 --regions 8
-./mirror_neuron run mirrorneuron-blueprints/ecosystem_simulation/generated/ecosystem_simulation_800_animals_8_regions_300s --json --no-await
+./mn run mirrorneuron-blueprints/ecosystem_simulation/generated/ecosystem_simulation_800_animals_8_regions_300s --json --no-await
 ```
 
 Terminal 3:

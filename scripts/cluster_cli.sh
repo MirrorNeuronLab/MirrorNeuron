@@ -93,7 +93,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ "$#" -eq 0 ]; then
-  echo "missing mirror_neuron command after --" >&2
+  echo "missing mn command after --" >&2
   usage >&2
   exit 1
 fi
@@ -149,4 +149,4 @@ export MIRROR_NEURON_API_PORT="$(find_free_port 4010)"
 >&2 echo "  cli dist port: $CLI_PORT"
 >&2 echo "  cli api port: $MIRROR_NEURON_API_PORT"
 
-exec "$ROOT_DIR/mirror_neuron" "$@"
+exec "$ROOT_DIR/mn" "$@"

@@ -245,4 +245,4 @@ fi
 ensure_epmd
 handle_existing_runtime
 
-exec "$ROOT_DIR/mirror_neuron" server
+exec "$ROOT_DIR/mn" server

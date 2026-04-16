@@ -134,14 +134,14 @@ defmodule MirrorNeuron.CLI.UITest do
         UI.puts(UI.usage_screen())
       end)
 
-    assert output =~ "mirror_neuron job list [--all]"
-    assert output =~ "mirror_neuron job agents <job_id>"
-    assert output =~ "mirror_neuron job events <job_id>"
-    assert output =~ "mirror_neuron job pause <job_id>"
-    assert output =~ "mirror_neuron job cancel <job_id>"
-    assert output =~ "mirror_neuron node list"
+    assert output =~ "mn job list [--all]"
+    assert output =~ "mn job agents <job_id>"
+    assert output =~ "mn job events <job_id>"
+    assert output =~ "mn job pause <job_id>"
+    assert output =~ "mn job cancel <job_id>"
+    assert output =~ "mn node list"
     assert output =~ "Flags"
     assert output =~ "--all"
-    refute output =~ "mirror_neuron [-v] inspect job <job_id>"
+    refute output =~ "mn [-v] inspect job <job_id>"
   end
 end

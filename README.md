@@ -19,7 +19,7 @@ MirrorNeuron is not trying to be a general-purpose batch scheduler. It is design
 - bounded execution capacity through executor leases and pools
 - shared OpenShell sandbox reuse per job per runtime node
 - terminal-first tooling with:
-  - `mirror_neuron`
+  - `mn`
 - example bundles for:
   - local workflows
   - shell and Python execution
@@ -37,7 +37,7 @@ All example workflows, including the `research_flow` and `ecosystem_simulation`,
 
 ## Installation
 
-You can install MirrorNeuron using the one-line install script on macOS, Linux, or WSL. This script clones the repository, builds the executable, and sets up `mn` and `mirror_neuron` aliases in your `~/.local/bin` directory.
+You can install MirrorNeuron using the one-line install script on macOS, Linux, or WSL. This script clones the repository, builds the executable, and sets up the `mn` alias in your `~/.local/bin` directory.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MirrorNeuronLab/MirrorNeuron/main/install.sh | bash
@@ -53,9 +53,9 @@ mix deps.get
 mix test
 mix escript.build
 
-./mirror_neuron validate /path/to/mirrorneuron-blueprints/research_flow
-./mirror_neuron run /path/to/mirrorneuron-blueprints/research_flow
-./mirror_neuron monitor
+./mn validate /path/to/mirrorneuron-blueprints/research_flow
+./mn run /path/to/mirrorneuron-blueprints/research_flow
+./mn monitor
 ```
 
 For full setup instructions:
@@ -127,13 +127,13 @@ job-folder/
 ## Main commands
 
 ```bash
-./mirror_neuron validate <job-folder>
-./mirror_neuron run <job-folder>
-./mirror_neuron node list
-./mirror_neuron job inspect <job_id>
-./mirror_neuron job list [--live]
-./mirror_neuron events <job_id>
-./mirror_neuron monitor
+./mn validate <job-folder>
+./mn run <job-folder>
+./mn node list
+./mn job inspect <job_id>
+./mn job list [--live]
+./mn events <job_id>
+./mn monitor
 ```
 
 For full command reference:

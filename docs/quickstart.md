@@ -6,7 +6,7 @@ This guide gets MirrorNeuron running quickly on one machine.
 
 ```bash
 cd MirrorNeuron
-./mirror_neuron validate mirrorneuron-blueprints/research_flow
+./mn validate mirrorneuron-blueprints/research_flow
 ```
 
 What this does:
@@ -18,7 +18,7 @@ What this does:
 ## Run a simple workflow
 
 ```bash
-./mirror_neuron run mirrorneuron-blueprints/research_flow
+./mn run mirrorneuron-blueprints/research_flow
 ```
 
 Expected behavior:
@@ -30,13 +30,13 @@ Expected behavior:
 If you need machine-readable output:
 
 ```bash
-./mirror_neuron run mirrorneuron-blueprints/research_flow --json
+./mn run mirrorneuron-blueprints/research_flow --json
 ```
 
 ## Inspect the cluster or local runtime
 
 ```bash
-./mirror_neuron node list
+./mn node list
 ```
 
 On a single machine this usually shows one node.
@@ -44,7 +44,7 @@ On a single machine this usually shows one node.
 ## Use the terminal monitor
 
 ```bash
-./mirror_neuron monitor
+./mn monitor
 ```
 
 This opens a terminal dashboard where you can:
@@ -57,8 +57,8 @@ This opens a terminal dashboard where you can:
 ## Run the OpenShell demo
 
 ```bash
-./mirror_neuron validate mirrorneuron-blueprints/openshell_worker_demo
-./mirror_neuron run mirrorneuron-blueprints/openshell_worker_demo --json
+./mn validate mirrorneuron-blueprints/openshell_worker_demo
+./mn run mirrorneuron-blueprints/openshell_worker_demo --json
 ```
 
 This bundle uses:

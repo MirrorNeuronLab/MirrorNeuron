@@ -2,47 +2,47 @@
 
 MirrorNeuron currently ships two terminal tools:
 
-- [mirror_neuron](../mirror_neuron)
-- `./mirror_neuron monitor`
+- [mirror_neuron](../mn)
+- `./mn monitor`
 
 ## `mirror_neuron`
 
 ### Main commands
 
 ```bash
-mirror_neuron standalone-start
-mirror_neuron cluster start --node-id <id> --bind <ip:port> [--data-dir <dir>] [--join <seeds>]
-mirror_neuron cluster join --node-id <id> --bind <ip:port> --seeds <seeds>
-mirror_neuron cluster discover --seeds <seeds>
-mirror_neuron cluster status
-mirror_neuron cluster nodes
-mirror_neuron cluster leave --node-id <id>
-mirror_neuron cluster rebalance
-mirror_neuron cluster elect-leader
-mirror_neuron cluster health
-mirror_neuron cluster reload --node-id <id>
-mirror_neuron validate <job-folder>
-mirror_neuron run <job-folder> [--json] [--timeout <ms>] [--no-await]
-mirror_neuron monitor [--json] [--running-only] [--limit <n>]
-mirror_neuron job list [--live]
-mirror_neuron job inspect <job_id>
-mirror_neuron agent list <job_id>
-mirror_neuron node list
-mirror_neuron events <job_id>
-mirror_neuron bundle reload <bundle_id>
-mirror_neuron bundle check <bundle_id>
-mirror_neuron node add <node_name>
-mirror_neuron node remove <node_name>
-mirror_neuron pause <job_id>
-mirror_neuron resume <job_id>
-mirror_neuron cancel <job_id>
-mirror_neuron send <job_id> <agent_id> <message.json>
+mn standalone-start
+mn cluster start --node-id <id> --bind <ip:port> [--data-dir <dir>] [--join <seeds>]
+mn cluster join --node-id <id> --bind <ip:port> --seeds <seeds>
+mn cluster discover --seeds <seeds>
+mn cluster status
+mn cluster nodes
+mn cluster leave --node-id <id>
+mn cluster rebalance
+mn cluster elect-leader
+mn cluster health
+mn cluster reload --node-id <id>
+mn validate <job-folder>
+mn run <job-folder> [--json] [--timeout <ms>] [--no-await]
+mn monitor [--json] [--running-only] [--limit <n>]
+mn job list [--live]
+mn job inspect <job_id>
+mn agent list <job_id>
+mn node list
+mn events <job_id>
+mn bundle reload <bundle_id>
+mn bundle check <bundle_id>
+mn node add <node_name>
+mn node remove <node_name>
+mn pause <job_id>
+mn resume <job_id>
+mn cancel <job_id>
+mn send <job_id> <agent_id> <message.json>
 ```
 
 ### `standalone-start`
 
 ```bash
-./mirror_neuron standalone-start
+./mn standalone-start
 ```
 
 Starts an isolated, standalone runtime server instance.
@@ -50,9 +50,9 @@ Starts an isolated, standalone runtime server instance.
 ### `cluster`
 
 ```bash
-./mirror_neuron cluster start --node-id my-node --bind 127.0.0.1:4000
-./mirror_neuron cluster join --node-id my-node-2 --bind 127.0.0.1:4001 --seeds my-node@127.0.0.1
-./mirror_neuron cluster nodes --join my-node@127.0.0.1
+./mn cluster start --node-id my-node --bind 127.0.0.1:4000
+./mn cluster join --node-id my-node-2 --bind 127.0.0.1:4001 --seeds my-node@127.0.0.1
+./mn cluster nodes --join my-node@127.0.0.1
 ```
 
 Use the `cluster` command to start, discover, inspect, and manage the peer-to-peer distribution and membership lifecycle.
@@ -60,7 +60,7 @@ Use the `cluster` command to start, discover, inspect, and manage the peer-to-pe
 ### `validate`
 
 ```bash
-./mirror_neuron validate mirrorneuron-blueprints/research_flow
+./mn validate mirrorneuron-blueprints/research_flow
 ```
 
 Use it to verify:
@@ -72,7 +72,7 @@ Use it to verify:
 ### `run`
 
 ```bash
-./mirror_neuron run mirrorneuron-blueprints/research_flow
+./mn run mirrorneuron-blueprints/research_flow
 ```
 
 Interactive mode shows:
@@ -85,19 +85,19 @@ Interactive mode shows:
 Script mode:
 
 ```bash
-./mirror_neuron run mirrorneuron-blueprints/research_flow --json
+./mn run mirrorneuron-blueprints/research_flow --json
 ```
 
 Detached mode:
 
 ```bash
-./mirror_neuron run mirrorneuron-blueprints/research_flow --no-await
+./mn run mirrorneuron-blueprints/research_flow --no-await
 ```
 
 Timeout:
 
 ```bash
-./mirror_neuron run mirrorneuron-blueprints/research_flow --timeout 10000
+./mn run mirrorneuron-blueprints/research_flow --timeout 10000
 ```
 
 ### `inspect`
@@ -105,25 +105,25 @@ Timeout:
 Job:
 
 ```bash
-./mirror_neuron job inspect <job_id>
+./mn job inspect <job_id>
 ```
 
 Agents:
 
 ```bash
-./mirror_neuron agent list <job_id>
+./mn agent list <job_id>
 ```
 
 Nodes:
 
 ```bash
-./mirror_neuron node list
+./mn node list
 ```
 
 ### `events`
 
 ```bash
-./mirror_neuron events <job_id>
+./mn events <job_id>
 ```
 
 Useful for:
@@ -135,15 +135,15 @@ Useful for:
 ### `pause`, `resume`, `cancel`
 
 ```bash
-./mirror_neuron pause <job_id>
-./mirror_neuron resume <job_id>
-./mirror_neuron cancel <job_id>
+./mn pause <job_id>
+./mn resume <job_id>
+./mn cancel <job_id>
 ```
 
 ### `send`
 
 ```bash
-./mirror_neuron send <job_id> <agent_id> '{"type":"manual_result","payload":{"ok":true}}'
+./mn send <job_id> <agent_id> '{"type":"manual_result","payload":{"ok":true}}'
 ```
 
 Useful for:
@@ -152,12 +152,12 @@ Useful for:
 - sensor-style workflows
 - operator intervention
 
-## `mirror_neuron monitor`
+## `mn monitor`
 
 ### Start the monitor
 
 ```bash
-./mirror_neuron monitor
+./mn monitor
 ```
 
 It shows:
@@ -176,7 +176,7 @@ Open a job by:
 ### JSON mode
 
 ```bash
-./mirror_neuron monitor --json
+./mn monitor --json
 ```
 
 This is useful for:
@@ -188,13 +188,13 @@ This is useful for:
 ### Running-only filter
 
 ```bash
-./mirror_neuron monitor --running-only
+./mn monitor --running-only
 ```
 
 ### Cluster mode
 
 ```bash
-./mirror_neuron monitor \
+./mn monitor \
   --box1-ip 192.168.4.29 \
   --box2-ip 192.168.4.35 \
   --self-ip 192.168.4.29

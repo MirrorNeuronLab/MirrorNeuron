@@ -93,11 +93,11 @@ mix escript.build
 
 This builds the main CLI entry:
 
-- [mirror_neuron](../mirror_neuron)
+- [mirror_neuron](../mn)
 
 Monitoring is now a subcommand:
 
-- `./mirror_neuron monitor`
+- `./mn monitor`
 
 ## 6. Recommended local environment
 
@@ -118,9 +118,9 @@ export GEMINI_API_KEY="..."
 ## 7. Smoke test
 
 ```bash
-./mirror_neuron validate mirrorneuron-blueprints/research_flow
-./mirror_neuron run mirrorneuron-blueprints/research_flow
-./mirror_neuron monitor --json | head -n 20
+./mn validate mirrorneuron-blueprints/research_flow
+./mn run mirrorneuron-blueprints/research_flow
+./mn monitor --json | head -n 20
 ```
 
 ## Cluster-specific prerequisites

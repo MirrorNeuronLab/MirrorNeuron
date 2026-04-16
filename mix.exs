@@ -8,7 +8,7 @@ defmodule MirrorNeuron.MixProject do
       elixir: "~> 1.16",
       start_permanent: Mix.env() == :prod,
       test_paths: ["tests"],
-      escript: [main_module: MirrorNeuron.CLI],
+      escript: [main_module: MirrorNeuron.CLI, name: "mn"],
       deps: deps()
     ]
   end
