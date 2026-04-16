@@ -35,6 +35,16 @@ MirrorNeuron is not trying to be a general-purpose batch scheduler. It is design
 All example workflows, including the `research_flow` and `ecosystem_simulation`, have been moved to a separate repository: [MirrorNeuron Blueprints](https://github.com/MirrorNeuronLab/mirrorneuron-blueprints).
 
 
+## Installation
+
+You can install MirrorNeuron using the one-line install script on macOS, Linux, or WSL. This script clones the repository, builds the executable, and sets up `mn` and `mirror_neuron` aliases in your `~/.local/bin` directory.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/homerquan/MirrorNeuron/main/install.sh | bash
+```
+
+*Note: You must have Erlang and Elixir installed on your system before running the script. If you do not have them installed, the script will provide instructions for your operating system.*
+
 ## Quickstart
 
 ```bash

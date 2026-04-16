@@ -1,8 +1,20 @@
 # Installation
 
-This guide covers the default local setup used for MirrorNeuron development and testing.
+This guide covers setting up MirrorNeuron for development, testing, and production use.
 
-## Requirements
+## Automated Installation (macOS, Linux, WSL)
+
+You can quickly install MirrorNeuron using our automated script. This will download the latest version, build it, and configure `mn` as a system-wide command.
+
+**Prerequisites:** You must have `git` and `mix` (Elixir) installed.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/homerquan/MirrorNeuron/main/install.sh | bash
+```
+
+If you prefer to install it manually or want to learn about the required dependencies, follow the manual steps below.
+
+## Manual Setup
 
 MirrorNeuron currently expects:
 
