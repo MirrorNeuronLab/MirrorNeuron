@@ -89,9 +89,8 @@ defmodule MirrorNeuron.Cluster.Leader do
     case RedisStore.list_jobs() do
       {:ok, jobs} ->
         for job <- jobs,
-            job["status"] in ["pending", "running", "paused"],
-            recoverable_on_cluster?(job) do
-          check_job_lease(job["job_id"])
+            job["status"] in ["pending", "running", "paused"] do
+          check_job_lease(job)
         end
 
       _ ->
@@ -99,18 +98,57 @@ defmodule MirrorNeuron.Cluster.Leader do
     end
   end
 
-  defp check_job_lease(job_id) do
+  defp check_job_lease(job) do
+    job_id = job["job_id"]
     lease_name = "job:#{job_id}"
 
     case RedisStore.get_lease(lease_name) do
       {:ok, nil} ->
-        Logger.info("Job #{job_id} has no active lease. Leader is re-assigning...")
-        # Start the job on the cluster (Horde will distribute it)
-        start_job_on_cluster(job_id)
+        if safe_to_sweep?(job) do
+          if recoverable_on_cluster?(job) do
+            Logger.info("Job #{job_id} has no active lease. Leader is re-assigning...")
+            # Start the job on the cluster (Horde will distribute it)
+            start_job_on_cluster(job_id)
+          else
+            Logger.info(
+              "Job #{job_id} has no active lease and is not cluster-recoverable. Marking as failed."
+            )
+
+            fail_orphaned_job(job_id)
+          end
+        end
 
       _ ->
         :ok
     end
+  end
+
+  defp safe_to_sweep?(job) do
+    # Prevent sweeping a job that was *just* submitted and hasn't acquired a lease yet.
+    # If the job is older than 15 seconds, it should definitely have a lease if it's active.
+    case DateTime.from_iso8601(job["updated_at"] || job["submitted_at"] || "") do
+      {:ok, dt, _offset} ->
+        diff = DateTime.diff(DateTime.utc_now(), dt, :millisecond)
+        diff > 15_000
+
+      _ ->
+        true
+    end
+  end
+
+  defp fail_orphaned_job(job_id) do
+    now = MirrorNeuron.Runtime.timestamp()
+
+    RedisStore.persist_terminal_job(job_id, %{
+      "status" => "failed",
+      "error" => "Node running the job died and job is not configured for cluster recovery."
+    })
+
+    MirrorNeuron.Runtime.EventBus.publish(job_id, %{
+      type: :job_failed,
+      reason: "Node running the job died and job is not configured for cluster recovery.",
+      timestamp: now
+    })
   end
 
   defp start_job_on_cluster(job_id) do
