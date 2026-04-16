@@ -89,7 +89,7 @@ You want to see:
 Small prime test:
 
 ```bash
-bash examples/prime_sweep_scale/run_scale_test.sh \
+bash mirrorneuron-blueprints/prime_sweep_scale/run_scale_test.sh \
   --workers 4 \
   --start 1000003 \
   --box1-ip 192.168.4.29 \

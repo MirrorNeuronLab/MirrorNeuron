@@ -28,6 +28,12 @@ MirrorNeuron is not trying to be a general-purpose batch scheduler. It is design
   - shared PettingZoo MPE crowd visualization
   - LLM codegen/review loops
   - large-scale ecosystem simulation
+  - See [MirrorNeuron Blueprints](https://github.com/MirrorNeuron/mirrorneuron-blueprints)
+
+## Blueprints and Examples
+
+All example workflows, including the `research_flow` and `ecosystem_simulation`, have been moved to a separate repository: [MirrorNeuron Blueprints](https://github.com/MirrorNeuron/mirrorneuron-blueprints).
+
 
 ## Quickstart
 
@@ -37,8 +43,8 @@ mix deps.get
 mix test
 mix escript.build
 
-./mirror_neuron validate examples/research_flow
-./mirror_neuron run examples/research_flow
+./mirror_neuron validate /path/to/mirrorneuron-blueprints/research_flow
+./mirror_neuron run /path/to/mirrorneuron-blueprints/research_flow
 ./mirror_neuron monitor
 ```
 
@@ -105,19 +111,8 @@ job-folder/
   - `type` selects the behavioral template and defaults to `generic`
 - `payloads/` contains code and files needed by worker execution
 
-## Included examples
 
-- [examples/research_flow](examples/research_flow)
-- [examples/openshell_worker_demo](examples/openshell_worker_demo)
-- [examples/prime_sweep_scale](examples/prime_sweep_scale)
-- [examples/streaming_peak_demo](examples/streaming_peak_demo)
-- [examples/llm_codegen_review](examples/llm_codegen_review)
-- [examples/mpe_simple_push_visualization](examples/mpe_simple_push_visualization)
-- [examples/ecosystem_simulation](examples/ecosystem_simulation)
-
-For details:
-
-- [Examples Guide](docs/examples.md)
+- [MirrorNeuron Blueprints](https://github.com/MirrorNeuron/mirrorneuron-blueprints) (External repository with examples)
 
 ## Main commands
 

@@ -6,7 +6,7 @@ This guide gets MirrorNeuron running quickly on one machine.
 
 ```bash
 cd MirrorNeuron
-./mirror_neuron validate examples/research_flow
+./mirror_neuron validate mirrorneuron-blueprints/research_flow
 ```
 
 What this does:
@@ -18,7 +18,7 @@ What this does:
 ## Run a simple workflow
 
 ```bash
-./mirror_neuron run examples/research_flow
+./mirror_neuron run mirrorneuron-blueprints/research_flow
 ```
 
 Expected behavior:
@@ -30,7 +30,7 @@ Expected behavior:
 If you need machine-readable output:
 
 ```bash
-./mirror_neuron run examples/research_flow --json
+./mirror_neuron run mirrorneuron-blueprints/research_flow --json
 ```
 
 ## Inspect the cluster or local runtime
@@ -57,8 +57,8 @@ This opens a terminal dashboard where you can:
 ## Run the OpenShell demo
 
 ```bash
-./mirror_neuron validate examples/openshell_worker_demo
-./mirror_neuron run examples/openshell_worker_demo --json
+./mirror_neuron validate mirrorneuron-blueprints/openshell_worker_demo
+./mirror_neuron run mirrorneuron-blueprints/openshell_worker_demo --json
 ```
 
 This bundle uses:
@@ -66,12 +66,12 @@ This bundle uses:
 - shell code
 - Python code
 - an aggregator sink
-- a bundle-scoped OpenShell policy file at [examples/openshell_worker_demo/payloads/policies/api-egress.yaml](../examples/openshell_worker_demo/payloads/policies/api-egress.yaml)
+- a bundle-scoped OpenShell policy file at [mirrorneuron-blueprints/openshell_worker_demo/payloads/policies/api-egress.yaml](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/openshell_worker_demo/payloads/policies/api-egress.yaml)
 
 ## Run the LLM codegen/review example
 
 ```bash
-bash examples/llm_codegen_review/run_llm_e2e.sh
+bash mirrorneuron-blueprints/llm_codegen_review/run_llm_e2e.sh
 ```
 
 This example performs:

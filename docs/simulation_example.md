@@ -4,7 +4,7 @@ This example is a large-scale, BEAM-native ecosystem simulation designed to stre
 
 Path:
 
-- [examples/ecosystem_simulation](../examples/ecosystem_simulation)
+- [mirrorneuron-blueprints/ecosystem_simulation](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation)
 
 ## What it simulates
 
@@ -141,13 +141,13 @@ The core flow is:
 
 ```bash
 cd MirrorNeuron
-bash examples/ecosystem_simulation/run_simulation_e2e.sh
+bash mirrorneuron-blueprints/ecosystem_simulation/run_simulation_e2e.sh
 ```
 
 Smaller smoke test:
 
 ```bash
-bash examples/ecosystem_simulation/run_simulation_e2e.sh \
+bash mirrorneuron-blueprints/ecosystem_simulation/run_simulation_e2e.sh \
   --animals 120 \
   --regions 4 \
   --duration-seconds 60 \
@@ -165,7 +165,7 @@ Important:
 For a more watchable run, use:
 
 ```bash
-bash examples/ecosystem_simulation/run_simulation_e2e.sh \
+bash mirrorneuron-blueprints/ecosystem_simulation/run_simulation_e2e.sh \
   --animals 800 \
   --regions 8 \
   --duration-seconds 300 \
@@ -179,7 +179,7 @@ When `--watch` is enabled, the runner applies a small real wall-clock delay per 
 
 There is also a terminal-only watcher for this example:
 
-- [watch_ascii.exs](../examples/ecosystem_simulation/watch_ascii.exs)
+- [watch_ascii.exs](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation/watch_ascii.exs)
 
 It renders:
 
@@ -211,20 +211,20 @@ cd MirrorNeuron
 Terminal 2:
 
 ```bash
-python3 examples/ecosystem_simulation/generate_bundle.py --animals 800 --regions 8
-./mirror_neuron run examples/ecosystem_simulation/generated/ecosystem_simulation_800_animals_8_regions_300s --json --no-await
+python3 mirrorneuron-blueprints/ecosystem_simulation/generate_bundle.py --animals 800 --regions 8
+./mirror_neuron run mirrorneuron-blueprints/ecosystem_simulation/generated/ecosystem_simulation_800_animals_8_regions_300s --json --no-await
 ```
 
 Terminal 3:
 
 ```bash
-mix run examples/ecosystem_simulation/watch_ascii.exs -- <job_id>
+mix run mirrorneuron-blueprints/ecosystem_simulation/watch_ascii.exs -- <job_id>
 ```
 
 You can also inspect a completed run once:
 
 ```bash
-mix run examples/ecosystem_simulation/watch_ascii.exs -- <job_id> --once --no-clear
+mix run mirrorneuron-blueprints/ecosystem_simulation/watch_ascii.exs -- <job_id> --once --no-clear
 ```
 
 ### Reading the dashboard
@@ -282,7 +282,7 @@ bash scripts/test_cluster_ecosystem_sim_e2e.sh \
 Then in another terminal on box 1:
 
 ```bash
-mix run examples/ecosystem_simulation/watch_ascii.exs -- <job_id> --box1-ip 192.168.4.29
+mix run mirrorneuron-blueprints/ecosystem_simulation/watch_ascii.exs -- <job_id> --box1-ip 192.168.4.29
 ```
 
 ## Output
@@ -319,12 +319,12 @@ That makes it useful both as:
 
 ## Files
 
-- [generate_bundle.py](../examples/ecosystem_simulation/generate_bundle.py)
-- [run_simulation_e2e.sh](../examples/ecosystem_simulation/run_simulation_e2e.sh)
-- [summarize_result.py](../examples/ecosystem_simulation/summarize_result.py)
-- [watch_ascii.exs](../examples/ecosystem_simulation/watch_ascii.exs)
-- [world_agent.ex](../examples/ecosystem_simulation/payloads/beam_modules/world_agent.ex)
-- [region_agent.ex](../examples/ecosystem_simulation/payloads/beam_modules/region_agent.ex)
-- [leaderboard_agent.ex](../examples/ecosystem_simulation/payloads/beam_modules/leaderboard_agent.ex)
-- [core.ex](../examples/ecosystem_simulation/payloads/beam_modules/core.ex)
+- [generate_bundle.py](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation/generate_bundle.py)
+- [run_simulation_e2e.sh](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation/run_simulation_e2e.sh)
+- [summarize_result.py](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation/summarize_result.py)
+- [watch_ascii.exs](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation/watch_ascii.exs)
+- [world_agent.ex](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation/payloads/beam_modules/world_agent.ex)
+- [region_agent.ex](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation/payloads/beam_modules/region_agent.ex)
+- [leaderboard_agent.ex](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation/payloads/beam_modules/leaderboard_agent.ex)
+- [core.ex](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation/payloads/beam_modules/core.ex)
 - [test_cluster_ecosystem_sim_e2e.sh](../scripts/test_cluster_ecosystem_sim_e2e.sh)

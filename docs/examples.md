@@ -1,12 +1,15 @@
 # Examples Guide
 
+**Note:** All examples have been moved to the [MirrorNeuron Blueprints](https://github.com/MirrorNeuron/mirrorneuron-blueprints) repository. Before running these examples, ensure you have set `MIRROR_NEURON_HOME` pointing to your MirrorNeuron installation path and run them from the blueprints repository.
+
+
 MirrorNeuron currently includes several examples that cover different parts of the runtime.
 
 ## 1. Research flow
 
 Path:
 
-- [examples/research_flow](../examples/research_flow)
+- [mirrorneuron-blueprints/research_flow](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/research_flow)
 
 Purpose:
 
@@ -17,15 +20,15 @@ Purpose:
 Run:
 
 ```bash
-./mirror_neuron validate examples/research_flow
-./mirror_neuron run examples/research_flow
+./mirror_neuron validate research_flow
+./mirror_neuron run research_flow
 ```
 
 ## 2. OpenShell worker demo
 
 Path:
 
-- [examples/openshell_worker_demo](../examples/openshell_worker_demo)
+- [mirrorneuron-blueprints/openshell_worker_demo](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/openshell_worker_demo)
 
 Purpose:
 
@@ -37,8 +40,8 @@ Purpose:
 Run:
 
 ```bash
-./mirror_neuron validate examples/openshell_worker_demo
-./mirror_neuron run examples/openshell_worker_demo --json
+./mirror_neuron validate openshell_worker_demo
+./mirror_neuron run openshell_worker_demo --json
 ```
 
 Bundle-scoped OpenShell policy example:
@@ -54,13 +57,13 @@ Bundle-scoped OpenShell policy example:
 }
 ```
 
-The `policy` path is resolved relative to the bundle `payloads/` directory, so a bundle can carry its own OpenShell network allowlist. For example, [api-egress.yaml](../examples/openshell_worker_demo/payloads/policies/api-egress.yaml) allows selected API hosts and a fixed IP.
+The `policy` path is resolved relative to the bundle `payloads/` directory, so a bundle can carry its own OpenShell network allowlist. For example, [api-egress.yaml](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/openshell_worker_demo/payloads/policies/api-egress.yaml) allows selected API hosts and a fixed IP.
 
 ## 3. Divisibility monitor
 
 Path:
 
-- [examples/divisibility_monitor](../examples/divisibility_monitor)
+- [mirrorneuron-blueprints/divisibility_monitor](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/divisibility_monitor)
 
 Purpose:
 
@@ -73,8 +76,8 @@ Purpose:
 Run:
 
 ```bash
-./mirror_neuron validate examples/divisibility_monitor
-./mirror_neuron run examples/divisibility_monitor --no-await
+./mirror_neuron validate divisibility_monitor
+./mirror_neuron run divisibility_monitor --no-await
 ```
 
 Watch it:
@@ -87,7 +90,7 @@ Watch it:
 
 Path:
 
-- [examples/prime_sweep_scale](../examples/prime_sweep_scale)
+- [mirrorneuron-blueprints/prime_sweep_scale](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/prime_sweep_scale)
 
 Purpose:
 
@@ -97,20 +100,20 @@ Purpose:
 
 Key files:
 
-- [generate_bundle.py](../examples/prime_sweep_scale/generate_bundle.py)
-- [run_scale_test.sh](../examples/prime_sweep_scale/run_scale_test.sh)
-- [summarize_result.py](../examples/prime_sweep_scale/summarize_result.py)
+- [generate_bundle.py](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/prime_sweep_scale/generate_bundle.py)
+- [run_scale_test.sh](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/prime_sweep_scale/run_scale_test.sh)
+- [summarize_result.py](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/prime_sweep_scale/summarize_result.py)
 
 Run locally:
 
 ```bash
-bash examples/prime_sweep_scale/run_scale_test.sh --start 1000003 --end 1001202
+bash prime_sweep_scale/run_scale_test.sh --start 1000003 --end 1001202
 ```
 
 Run on cluster:
 
 ```bash
-bash examples/prime_sweep_scale/run_scale_test.sh \
+bash prime_sweep_scale/run_scale_test.sh \
   --workers 4 \
   --start 1000003 \
   --box1-ip 192.168.4.29 \
@@ -122,7 +125,7 @@ bash examples/prime_sweep_scale/run_scale_test.sh \
 
 Path:
 
-- [examples/llm_codegen_review](../examples/llm_codegen_review)
+- [mirrorneuron-blueprints/llm_codegen_review](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/llm_codegen_review)
 
 Purpose:
 
@@ -134,7 +137,7 @@ Purpose:
 Local:
 
 ```bash
-bash examples/llm_codegen_review/run_llm_e2e.sh
+bash llm_codegen_review/run_llm_e2e.sh
 ```
 
 Cluster:
@@ -149,7 +152,7 @@ bash scripts/test_cluster_llm_codegen_e2e.sh \
 
 Path:
 
-- [examples/streaming_peak_demo](../examples/streaming_peak_demo)
+- [mirrorneuron-blueprints/streaming_peak_demo](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/streaming_peak_demo)
 
 Purpose:
 
@@ -160,15 +163,15 @@ Purpose:
 
 Key files:
 
-- [generate_bundle.py](../examples/streaming_peak_demo/generate_bundle.py)
-- [run_streaming_e2e.sh](../examples/streaming_peak_demo/run_streaming_e2e.sh)
-- [summarize_result.py](../examples/streaming_peak_demo/summarize_result.py)
+- [generate_bundle.py](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/streaming_peak_demo/generate_bundle.py)
+- [run_streaming_e2e.sh](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/streaming_peak_demo/run_streaming_e2e.sh)
+- [summarize_result.py](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/streaming_peak_demo/summarize_result.py)
 - [test_cluster_streaming_e2e.sh](../scripts/test_cluster_streaming_e2e.sh)
 
 Run locally:
 
 ```bash
-bash examples/streaming_peak_demo/run_streaming_e2e.sh
+bash streaming_peak_demo/run_streaming_e2e.sh
 ```
 
 Run on cluster:
@@ -183,7 +186,7 @@ bash scripts/test_cluster_streaming_e2e.sh \
 
 Path:
 
-- [examples/mpe_simple_push_visualization](../examples/mpe_simple_push_visualization)
+- [mirrorneuron-blueprints/mpe_simple_push_visualization](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/mpe_simple_push_visualization)
 
 Purpose:
 
@@ -194,28 +197,28 @@ Purpose:
 
 Key files:
 
-- [generate_bundle.py](../examples/mpe_simple_push_visualization/generate_bundle.py)
-- [run_simple_push_e2e.sh](../examples/mpe_simple_push_visualization/run_simple_push_e2e.sh)
-- [summarize_result.py](../examples/mpe_simple_push_visualization/summarize_result.py)
+- [generate_bundle.py](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/mpe_simple_push_visualization/generate_bundle.py)
+- [run_simple_push_e2e.sh](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/mpe_simple_push_visualization/run_simple_push_e2e.sh)
+- [summarize_result.py](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/mpe_simple_push_visualization/summarize_result.py)
 - [Shared MPE Crowd Example](mpe_simple_push_example.md)
 
 Run locally:
 
 ```bash
-bash examples/mpe_simple_push_visualization/run_simple_push_e2e.sh
+bash mpe_simple_push_visualization/run_simple_push_e2e.sh
 ```
 
 Open the generated HTML automatically:
 
 ```bash
-bash examples/mpe_simple_push_visualization/run_simple_push_e2e.sh --open
+bash mpe_simple_push_visualization/run_simple_push_e2e.sh --open
 ```
 
 ## 8. Ecosystem simulation
 
 Path:
 
-- [examples/ecosystem_simulation](../examples/ecosystem_simulation)
+- [mirrorneuron-blueprints/ecosystem_simulation](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation)
 
 Purpose:
 
@@ -228,16 +231,16 @@ Purpose:
 
 Key files:
 
-- [generate_bundle.py](../examples/ecosystem_simulation/generate_bundle.py)
-- [run_simulation_e2e.sh](../examples/ecosystem_simulation/run_simulation_e2e.sh)
-- [summarize_result.py](../examples/ecosystem_simulation/summarize_result.py)
-- [watch_ascii.exs](../examples/ecosystem_simulation/watch_ascii.exs)
+- [generate_bundle.py](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation/generate_bundle.py)
+- [run_simulation_e2e.sh](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation/run_simulation_e2e.sh)
+- [summarize_result.py](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation/summarize_result.py)
+- [watch_ascii.exs](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation/watch_ascii.exs)
 - [Simulation Example Guide](simulation_example.md)
 
 Run locally:
 
 ```bash
-bash examples/ecosystem_simulation/run_simulation_e2e.sh
+bash ecosystem_simulation/run_simulation_e2e.sh
 ```
 
 Run on cluster:

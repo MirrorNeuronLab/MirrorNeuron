@@ -60,7 +60,7 @@ Use the `cluster` command to start, discover, inspect, and manage the peer-to-pe
 ### `validate`
 
 ```bash
-./mirror_neuron validate examples/research_flow
+./mirror_neuron validate mirrorneuron-blueprints/research_flow
 ```
 
 Use it to verify:
@@ -72,7 +72,7 @@ Use it to verify:
 ### `run`
 
 ```bash
-./mirror_neuron run examples/research_flow
+./mirror_neuron run mirrorneuron-blueprints/research_flow
 ```
 
 Interactive mode shows:
@@ -85,19 +85,19 @@ Interactive mode shows:
 Script mode:
 
 ```bash
-./mirror_neuron run examples/research_flow --json
+./mirror_neuron run mirrorneuron-blueprints/research_flow --json
 ```
 
 Detached mode:
 
 ```bash
-./mirror_neuron run examples/research_flow --no-await
+./mirror_neuron run mirrorneuron-blueprints/research_flow --no-await
 ```
 
 Timeout:
 
 ```bash
-./mirror_neuron run examples/research_flow --timeout 10000
+./mirror_neuron run mirrorneuron-blueprints/research_flow --timeout 10000
 ```
 
 ### `inspect`

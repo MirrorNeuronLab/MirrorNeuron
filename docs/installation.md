@@ -106,8 +106,8 @@ export GEMINI_API_KEY="..."
 ## 7. Smoke test
 
 ```bash
-./mirror_neuron validate examples/research_flow
-./mirror_neuron run examples/research_flow
+./mirror_neuron validate mirrorneuron-blueprints/research_flow
+./mirror_neuron run mirrorneuron-blueprints/research_flow
 ./mirror_neuron monitor --json | head -n 20
 ```
 
