@@ -28,11 +28,11 @@ MirrorNeuron is not trying to be a general-purpose batch scheduler. It is design
   - shared PettingZoo MPE crowd visualization
   - LLM codegen/review loops
   - large-scale ecosystem simulation
-  - See [MirrorNeuron Blueprints](https://github.com/MirrorNeuron/mirrorneuron-blueprints)
+  - See [MirrorNeuron Blueprints](https://github.com/MirrorNeuronLab/mirrorneuron-blueprints)
 
 ## Blueprints and Examples
 
-All example workflows, including the `research_flow` and `ecosystem_simulation`, have been moved to a separate repository: [MirrorNeuron Blueprints](https://github.com/MirrorNeuron/mirrorneuron-blueprints).
+All example workflows, including the `research_flow` and `ecosystem_simulation`, have been moved to a separate repository: [MirrorNeuron Blueprints](https://github.com/MirrorNeuronLab/mirrorneuron-blueprints).
 
 
 ## Quickstart
@@ -112,7 +112,7 @@ job-folder/
 - `payloads/` contains code and files needed by worker execution
 
 
-- [MirrorNeuron Blueprints](https://github.com/MirrorNeuron/mirrorneuron-blueprints) (External repository with examples)
+- [MirrorNeuron Blueprints](https://github.com/MirrorNeuronLab/mirrorneuron-blueprints) (External repository with examples)
 
 ## Main commands
 

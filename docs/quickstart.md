@@ -66,7 +66,7 @@ This bundle uses:
 - shell code
 - Python code
 - an aggregator sink
-- a bundle-scoped OpenShell policy file at [mirrorneuron-blueprints/openshell_worker_demo/payloads/policies/api-egress.yaml](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/openshell_worker_demo/payloads/policies/api-egress.yaml)
+- a bundle-scoped OpenShell policy file at [mirrorneuron-blueprints/openshell_worker_demo/payloads/policies/api-egress.yaml](https://github.com/MirrorNeuronLab/mirrorneuron-blueprints/tree/main/openshell_worker_demo/payloads/policies/api-egress.yaml)
 
 ## Run the LLM codegen/review example
 

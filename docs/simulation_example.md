@@ -4,7 +4,7 @@ This example is a large-scale, BEAM-native ecosystem simulation designed to stre
 
 Path:
 
-- [mirrorneuron-blueprints/ecosystem_simulation](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation)
+- [mirrorneuron-blueprints/ecosystem_simulation](https://github.com/MirrorNeuronLab/mirrorneuron-blueprints/tree/main/ecosystem_simulation)
 
 ## What it simulates
 
@@ -179,7 +179,7 @@ When `--watch` is enabled, the runner applies a small real wall-clock delay per 
 
 There is also a terminal-only watcher for this example:
 
-- [watch_ascii.exs](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation/watch_ascii.exs)
+- [watch_ascii.exs](https://github.com/MirrorNeuronLab/mirrorneuron-blueprints/tree/main/ecosystem_simulation/watch_ascii.exs)
 
 It renders:
 
@@ -319,12 +319,12 @@ That makes it useful both as:
 
 ## Files
 
-- [generate_bundle.py](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation/generate_bundle.py)
-- [run_simulation_e2e.sh](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation/run_simulation_e2e.sh)
-- [summarize_result.py](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation/summarize_result.py)
-- [watch_ascii.exs](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation/watch_ascii.exs)
-- [world_agent.ex](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation/payloads/beam_modules/world_agent.ex)
-- [region_agent.ex](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation/payloads/beam_modules/region_agent.ex)
-- [leaderboard_agent.ex](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation/payloads/beam_modules/leaderboard_agent.ex)
-- [core.ex](https://github.com/MirrorNeuron/mirrorneuron-blueprints/tree/main/ecosystem_simulation/payloads/beam_modules/core.ex)
+- [generate_bundle.py](https://github.com/MirrorNeuronLab/mirrorneuron-blueprints/tree/main/ecosystem_simulation/generate_bundle.py)
+- [run_simulation_e2e.sh](https://github.com/MirrorNeuronLab/mirrorneuron-blueprints/tree/main/ecosystem_simulation/run_simulation_e2e.sh)
+- [summarize_result.py](https://github.com/MirrorNeuronLab/mirrorneuron-blueprints/tree/main/ecosystem_simulation/summarize_result.py)
+- [watch_ascii.exs](https://github.com/MirrorNeuronLab/mirrorneuron-blueprints/tree/main/ecosystem_simulation/watch_ascii.exs)
+- [world_agent.ex](https://github.com/MirrorNeuronLab/mirrorneuron-blueprints/tree/main/ecosystem_simulation/payloads/beam_modules/world_agent.ex)
+- [region_agent.ex](https://github.com/MirrorNeuronLab/mirrorneuron-blueprints/tree/main/ecosystem_simulation/payloads/beam_modules/region_agent.ex)
+- [leaderboard_agent.ex](https://github.com/MirrorNeuronLab/mirrorneuron-blueprints/tree/main/ecosystem_simulation/payloads/beam_modules/leaderboard_agent.ex)
+- [core.ex](https://github.com/MirrorNeuronLab/mirrorneuron-blueprints/tree/main/ecosystem_simulation/payloads/beam_modules/core.ex)
 - [test_cluster_ecosystem_sim_e2e.sh](../scripts/test_cluster_ecosystem_sim_e2e.sh)
