@@ -82,6 +82,10 @@ Interactive mode shows:
 - live progress panel
 - final summary
 
+> 💡 **Important Architecture Note:**  
+> When you use `mn run`, your CLI is acting as a *client* submitting a job to the cluster. The job itself runs in the background. If you press `Ctrl+C` or press `q` then `Enter` in the interactive monitor, your terminal safely detaches, but the job **keeps running**. 
+> To actually stop a job, you must use `mn cancel <job_id>`.
+
 Script mode:
 
 ```bash
@@ -138,7 +142,19 @@ Useful for:
 ./mn pause <job_id>
 ./mn resume <job_id>
 ./mn cancel <job_id>
+./mn cancel # Interactive safe cancel flow
 ```
+
+When you type `./mn cancel` with no `job_id`, the system will show all actively running jobs and let you choose which to safely cancel.
+
+### `job cleanup`
+
+```bash
+./mn job cleanup
+./mn job cleanup --all
+```
+
+Clears out jobs that are already in a terminal state (completed, failed, or cancelled) from the Redis datastore. Use `--all` to clear out all jobs (including ones that are actively running) and start fresh.
 
 ### `send`
 

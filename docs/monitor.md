@@ -38,7 +38,10 @@ Controls:
 - type a full job id to open it directly
 - `r` to refresh
 - `b` to go back
-- `q` to quit
+- `q` to detach
+
+> 💡 **Important:**  
+> Pressing `q` or `Ctrl+C` only detaches your terminal session. It does **not** stop the running jobs. To cancel a job, use `mn cancel <job_id>`.
 
 ## JSON mode
 
@@ -102,7 +105,7 @@ Typical agent statuses:
 
 ## When to use the monitor vs the main CLI
 
-Use `mirror_neuron` when you want to:
+Use `mn` when you want to:
 
 - submit jobs
 - inspect one job directly
