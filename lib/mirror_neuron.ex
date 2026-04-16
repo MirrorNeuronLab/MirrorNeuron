@@ -96,6 +96,14 @@ defmodule MirrorNeuron do
     end
   end
 
+  def cleanup_jobs do
+    if control_node?() do
+      Control.call(__MODULE__, :cleanup_jobs, [])
+    else
+      Runtime.cleanup_jobs()
+    end
+  end
+
   def send_message(job_id, agent_id, message) do
     if control_node?() do
       call_control_or_runtime(job_id, :send_message, [job_id, agent_id, message])

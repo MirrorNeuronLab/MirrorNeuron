@@ -102,6 +102,7 @@ defmodule MirrorNeuron.CLI do
   defp dispatch(["job", "pause", job_id]), do: Control.pause(job_id)
   defp dispatch(["job", "resume", job_id]), do: Control.resume(job_id)
   defp dispatch(["job", "cancel", job_id]), do: Control.cancel(job_id)
+  defp dispatch(["job", "cleanup"]), do: Control.cleanup_jobs()
 
   defp dispatch(["job", "send", job_id, agent_id, message_json]),
     do: Control.send_message(job_id, agent_id, message_json)

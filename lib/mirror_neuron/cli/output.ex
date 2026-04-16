@@ -132,6 +132,7 @@ defmodule MirrorNeuron.CLI.Output do
       mirror_neuron job pause <job_id>
       mirror_neuron job resume <job_id>
       mirror_neuron job cancel <job_id>
+      mirror_neuron job cleanup
       mirror_neuron job send <job_id> <agent_id> <message.json>
       mirror_neuron node list
       mirror_neuron bundle check <bundle_id>

@@ -26,6 +26,25 @@ defmodule MirrorNeuron.Runtime do
   def resume_job(job_id), do: call_job(job_id, :resume)
   def cancel_job(job_id), do: call_job(job_id, :cancel)
 
+  def cleanup_jobs do
+    case MirrorNeuron.Persistence.RedisStore.list_jobs() do
+      {:ok, jobs} ->
+        deleted =
+          jobs
+          |> Enum.filter(&(&1["status"] in ["completed", "failed", "cancelled"]))
+          |> Enum.map(& &1["job_id"])
+          |> Enum.map(fn job_id ->
+            MirrorNeuron.Persistence.RedisStore.delete_job(job_id)
+            job_id
+          end)
+
+        {:ok, %{deleted_count: length(deleted), deleted_jobs: deleted}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   def send_message(job_id, agent_id, message) when is_map(message) do
     call_job(job_id, {:send_message, agent_id, message})
   end
