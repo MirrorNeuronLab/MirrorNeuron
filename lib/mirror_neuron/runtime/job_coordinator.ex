@@ -361,7 +361,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     attempts >= state.max_agent_restart_attempts
   end
 
-  defp start_agent(state, agent_id, recovery_snapshot \\ nil) do
+  defp start_agent(state, agent_id, recovery_snapshot \\ nil, retry_count \\ 0) do
     node = Map.fetch!(state.nodes_by_id, agent_id)
 
     spec =
@@ -370,7 +370,14 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         Map.get(state.inbound_edges_by_node, agent_id, []), self(), agent_runtime_context(state),
         recovery_snapshot}}
 
-    Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.AgentSupervisor, spec)
+    case Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.AgentSupervisor, spec) do
+      {:error, {:already_started, _pid}} when retry_count < 10 ->
+        Process.sleep(100)
+        start_agent(state, agent_id, recovery_snapshot, retry_count + 1)
+
+      other ->
+        other
+    end
   end
 
   defp wait_for_agent_ready(state, agent_id, timeout_ms) do

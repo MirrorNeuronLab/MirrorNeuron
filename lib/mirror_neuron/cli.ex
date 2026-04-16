@@ -101,8 +101,9 @@ defmodule MirrorNeuron.CLI do
   defp dispatch(["job", "events", job_id]), do: Inspect.events(job_id)
   defp dispatch(["job", "pause", job_id]), do: Control.pause(job_id)
   defp dispatch(["job", "resume", job_id]), do: Control.resume(job_id)
+  defp dispatch(["job", "cancel"]), do: Control.interactive_cancel()
   defp dispatch(["job", "cancel", job_id]), do: Control.cancel(job_id)
-  defp dispatch(["job", "cleanup"]), do: Control.cleanup_jobs()
+  defp dispatch(["job", "cleanup" | rest]), do: Control.cleanup_jobs(rest)
 
   defp dispatch(["job", "send", job_id, agent_id, message_json]),
     do: Control.send_message(job_id, agent_id, message_json)
@@ -121,6 +122,7 @@ defmodule MirrorNeuron.CLI do
   defp dispatch(["node", "remove", node_name]), do: Control.remove_node(node_name)
   defp dispatch(["pause", job_id]), do: Control.pause(job_id)
   defp dispatch(["resume", job_id]), do: Control.resume(job_id)
+  defp dispatch(["cancel"]), do: Control.interactive_cancel()
   defp dispatch(["cancel", job_id]), do: Control.cancel(job_id)
 
   defp dispatch(["send", job_id, agent_id, message_json]),

@@ -96,11 +96,11 @@ defmodule MirrorNeuron do
     end
   end
 
-  def cleanup_jobs do
+  def cleanup_jobs(opts \\ []) do
     if control_node?() do
-      Control.call(__MODULE__, :cleanup_jobs, [])
+      Control.call(__MODULE__, :cleanup_jobs, [opts])
     else
-      Runtime.cleanup_jobs()
+      Runtime.cleanup_jobs(opts)
     end
   end
 

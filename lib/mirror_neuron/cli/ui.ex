@@ -292,7 +292,7 @@ defmodule MirrorNeuron.CLI.UI do
       "mn job pause <job_id>",
       "mn job resume <job_id>",
       "mn job cancel <job_id>",
-      "mn job cleanup",
+      "mn job cleanup [--all]",
       "mn job send <job_id> <agent_id> <message.json>",
       "mn node list",
       "mn bundle reload <bundle_id>",
