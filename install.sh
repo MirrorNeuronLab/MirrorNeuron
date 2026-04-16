@@ -5,7 +5,7 @@ set -e
 # MirrorNeuron Installation Script
 # Supported OS: macOS, Linux, WSL
 
-REPO_URL="https://github.com/homerquan/MirrorNeuron.git"
+REPO_URL="https://github.com/MirrorNeuronLab/MirrorNeuron.git"
 INSTALL_DIR="${HOME}/.mirror_neuron"
 BIN_DIR="${HOME}/.local/bin"
 
