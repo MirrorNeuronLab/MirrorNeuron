@@ -107,7 +107,7 @@ defmodule MirrorNeuron.MonitorCLI do
         UI.puts(UI.banner(:inspect, "Platform monitor"))
         UI.puts(render_overview(overview))
 
-        case prompt("monitor> [number=open, r=refresh, q=quit] ") do
+        case prompt("monitor> [number=open, r=refresh, q=detach] ") do
           "q" ->
             :ok
 
@@ -158,7 +158,7 @@ defmodule MirrorNeuron.MonitorCLI do
         UI.puts(UI.banner(:inspect, "Job #{job_id}"))
         UI.puts(render_job_details(details))
 
-        case prompt("job> [b=back, r=refresh, q=quit] ") do
+        case prompt("job> [b=back, r=refresh, q=detach] ") do
           "q" -> :ok
           "b" -> dashboard_loop(opts)
           "r" -> job_loop(job_id, opts)
@@ -187,7 +187,8 @@ defmodule MirrorNeuron.MonitorCLI do
         [
           "Enter a job number to open details.\n",
           "Use job id directly if you already know it.\n",
-          "Pass `--running-only` to focus on live work."
+          "Pass `--running-only` to focus on live work.\n",
+          "Press 'q' or Ctrl+C to detach this view (jobs keep running in the background)."
         ],
         border_tag: :yellow,
         title_tag: :yellow

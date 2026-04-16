@@ -84,7 +84,23 @@ defmodule MirrorNeuron.CLI.Commands.Run do
       tick: 0
     })
 
-    loop_progress(job_id, manifest, timeout, started_at, 0)
+    parent = self()
+    reader_pid = spawn(fn -> loop_read_q(parent) end)
+
+    result = loop_progress(job_id, manifest, timeout, started_at, 0)
+
+    if Process.alive?(reader_pid), do: Process.exit(reader_pid, :kill)
+
+    result
+  end
+
+  defp loop_read_q(parent) do
+    case IO.gets("") do
+      "q\n" -> send(parent, :quit_requested)
+      "Q\n" -> send(parent, :quit_requested)
+      :eof -> :ok
+      _ -> loop_read_q(parent)
+    end
   end
 
   defp loop_progress(job_id, manifest, timeout, started_at, tick) do
@@ -102,12 +118,19 @@ defmodule MirrorNeuron.CLI.Commands.Run do
       _ ->
         elapsed = System.monotonic_time(:millisecond) - started_at
 
-        if timeout != :infinity and elapsed > timeout do
-          clear_progress_line()
-          {:error, "timed out waiting for job #{job_id}"}
-        else
-          Process.sleep(200)
-          loop_progress(job_id, manifest, timeout, started_at, tick + 1)
+        receive do
+          :quit_requested ->
+            clear_progress_line()
+            Output.print_detached_run(job_id, json: false)
+            {:ok, job}
+        after
+          200 ->
+            if timeout != :infinity and elapsed > timeout do
+              clear_progress_line()
+              {:error, "timed out waiting for job #{job_id}"}
+            else
+              loop_progress(job_id, manifest, timeout, started_at, tick + 1)
+            end
         end
     end
   end

@@ -111,7 +111,16 @@ defmodule MirrorNeuron.CLI.UI do
       "\n",
       status_line("Placement", Map.get(manifest.policies, "placement_policy", "local")),
       "\n",
-      status_line("Recovery", Map.get(manifest.policies, "recovery_mode", "local_restart"))
+      status_line("Recovery", Map.get(manifest.policies, "recovery_mode", "local_restart")),
+      "\n\n",
+      Data.tag("💡 Job launched successfully.", :yellow),
+      "\n",
+      Data.tag("   Press Ctrl+C to safely detach your terminal. The job will keep", :light_black),
+      "\n",
+      Data.tag("   running in the background (if submitted to a cluster/server).", :light_black),
+      "\n",
+      Data.tag("   To completely stop the execution, use: ", :light_black),
+      Data.tag("mn cancel #{job_id}", :cyan)
     ]
 
     box("Job Submitted", lines, border_tag: :yellow, title_tag: :yellow)
