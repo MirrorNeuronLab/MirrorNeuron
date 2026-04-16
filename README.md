@@ -45,6 +45,15 @@ curl -fsSL https://raw.githubusercontent.com/MirrorNeuronLab/MirrorNeuron/main/i
 
 *Note: You must have Erlang and Elixir installed on your system before running the script. If you do not have them installed, the script will provide instructions for your operating system.*
 
+### Uninstallation
+
+To uninstall MirrorNeuron, simply remove the cloned repository and the generated executable:
+
+```bash
+rm -rf ~/.local/share/MirrorNeuron
+rm ~/.local/bin/mn
+```
+
 ## Quickstart
 
 ```bash

@@ -12,6 +12,15 @@ You can quickly install MirrorNeuron using our automated script. This will downl
 curl -fsSL https://raw.githubusercontent.com/MirrorNeuronLab/MirrorNeuron/main/install.sh | bash
 ```
 
+### Uninstallation
+
+To uninstall MirrorNeuron if installed via the automated script, remove the cloned repository and the generated executable:
+
+```bash
+rm -rf ~/.local/share/MirrorNeuron
+rm ~/.local/bin/mn
+```
+
 If you prefer to install it manually or want to learn about the required dependencies, follow the manual steps below.
 
 ## Manual Setup
