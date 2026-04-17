@@ -36,7 +36,7 @@ defmodule MirrorNeuron.API.Router do
   # Upload and Validate Bundle
   post "/api/v1/bundles/upload" do
     case conn.body_params["bundle"] do
-      %Plug.Upload{path: tmp_path, filename: filename} ->
+      %Plug.Upload{path: tmp_path, filename: _filename} ->
         # Create a unique directory for extraction
         bundle_id = Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
         target_dir = Path.join(System.tmp_dir!(), "mn_bundle_#{bundle_id}")
@@ -167,8 +167,8 @@ defmodule MirrorNeuron.API.Router do
   # Stop/Cancel Job
   post "/api/v1/jobs/:job_id/cancel" do
     case MirrorNeuron.cancel(job_id) do
-      {:ok, status} ->
-        send_json(conn, 200, %{status: status, job_id: job_id})
+      {:ok, _status} ->
+        send_json(conn, 200, %{status: "cancelled", job_id: job_id})
 
       :ok ->
         send_json(conn, 200, %{status: "cancelled", job_id: job_id})
@@ -287,7 +287,13 @@ defmodule MirrorNeuron.API.Router do
          String.contains?(reason_str, "is not running in the connected cluster") do
       send_error(conn, 404, reason)
     else
-      send_error(conn, 500, reason)
+      if String.contains?(reason_str, "is already in a terminal state") or
+           String.contains?(reason_str, "is not running") or
+           String.contains?(reason_str, "is not paused") do
+        send_error(conn, 400, reason)
+      else
+        send_error(conn, 500, reason)
+      end
     end
   end
 
