@@ -355,7 +355,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     end
   end
 
-  defp restart_attempts_exhausted?(%{manifest: %{long_lived: true}}, _attempts), do: false
+  defp restart_attempts_exhausted?(%{manifest: %{daemon: true}}, _attempts), do: false
 
   defp restart_attempts_exhausted?(state, attempts) do
     attempts >= state.max_agent_restart_attempts

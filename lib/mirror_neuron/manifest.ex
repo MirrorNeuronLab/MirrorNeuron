@@ -3,7 +3,7 @@ defmodule MirrorNeuron.Manifest do
     :manifest_version,
     :graph_id,
     :job_name,
-    :long_lived,
+    :daemon,
     :metadata,
     :nodes,
     :edges,
@@ -41,7 +41,7 @@ defmodule MirrorNeuron.Manifest do
       manifest_version: Map.get(raw, "manifest_version"),
       graph_id: Map.get(raw, "graph_id"),
       job_name: Map.get(raw, "job_name") || Map.get(raw, "graph_id"),
-      long_lived: normalize_long_lived(Map.get(raw, "long_lived", false)),
+      daemon: normalize_daemon(Map.get(raw, "daemon", false)),
       metadata: Map.get(raw, "metadata", %{}),
       nodes: Enum.map(Map.get(raw, "nodes", []), &normalize_node/1),
       edges: Enum.map(Map.get(raw, "edges", []), &normalize_edge/1),
@@ -64,7 +64,7 @@ defmodule MirrorNeuron.Manifest do
       |> validate_nodes(manifest)
       |> validate_edges(manifest)
       |> validate_entrypoints(manifest)
-      |> validate_long_lived(manifest)
+      |> validate_daemon(manifest)
       |> validate_policies(manifest)
 
     case errors do
@@ -177,11 +177,11 @@ defmodule MirrorNeuron.Manifest do
     )
   end
 
-  defp validate_long_lived(errors, manifest) do
+  defp validate_daemon(errors, manifest) do
     maybe_add_error(
       errors,
-      not is_boolean(manifest.long_lived),
-      "long_lived must be a boolean"
+      not is_boolean(manifest.daemon),
+      "daemon must be a boolean"
     )
   end
 
@@ -242,8 +242,8 @@ defmodule MirrorNeuron.Manifest do
 
   defp normalize_reload(_), do: %{mode: "manual", interval_seconds: 60}
 
-  defp normalize_long_lived(value) when is_boolean(value), do: value
-  defp normalize_long_lived(value), do: value
+  defp normalize_daemon(value) when is_boolean(value), do: value
+  defp normalize_daemon(value), do: value
 
   defp maybe_add_error(errors, true, message), do: [message | errors]
   defp maybe_add_error(errors, false, _message), do: errors

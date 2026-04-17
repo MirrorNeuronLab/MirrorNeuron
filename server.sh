@@ -65,21 +65,21 @@ setup_env() {
 
     # Install sibling python packages or from github if not available locally
     if [ -d "../mn-python-sdk" ]; then
-        "$VENV_DIR/bin/pip" install ../mn-python-sdk
+        "$VENV_DIR/bin/pip" install -e ../mn-python-sdk
     else
         echo "=> Sibling mn-python-sdk not found. Downloading from GitHub..."
         "$VENV_DIR/bin/pip" install git+https://github.com/MirrorNeuronLab/mn-python-sdk.git || echo "=> Failed to install mn-python-sdk from github"
     fi
 
     if [ -d "../mn-cli" ]; then
-        "$VENV_DIR/bin/pip" install ../mn-cli
+        "$VENV_DIR/bin/pip" install -e ../mn-cli
     else
         echo "=> Sibling mn-cli not found. Downloading from GitHub..."
         "$VENV_DIR/bin/pip" install git+https://github.com/MirrorNeuronLab/mn-cli.git || echo "=> Failed to install mn-cli from github"
     fi
 
     if [ -d "../mn-api" ]; then
-        "$VENV_DIR/bin/pip" install ../mn-api
+        "$VENV_DIR/bin/pip" install -e ../mn-api
     else
         echo "=> Sibling mn-api not found. Downloading from GitHub..."
         "$VENV_DIR/bin/pip" install git+https://github.com/MirrorNeuronLab/mn-api.git || echo "=> Failed to install mn-api from github"

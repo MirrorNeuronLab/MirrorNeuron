@@ -127,16 +127,16 @@ defmodule MirrorNeuron.ManifestTest do
 
     assert {:ok, normalized} = Manifest.load(manifest)
     assert normalized.graph_id == "simple"
-    assert normalized.long_lived == false
+    assert normalized.daemon == false
     assert normalized.entrypoints == ["router"]
     assert Enum.find(normalized.nodes, &(&1.node_id == "router")).type == "generic"
   end
 
-  test "accepts explicit long_lived manifests" do
+  test "accepts explicit daemon manifests" do
     manifest = %{
       "manifest_version" => "1.0",
       "graph_id" => "long-lived",
-      "long_lived" => true,
+      "daemon" => true,
       "entrypoints" => ["streamer"],
       "nodes" => [
         %{"node_id" => "streamer", "agent_type" => "module", "type" => "stream", "role" => "root"}
@@ -146,14 +146,14 @@ defmodule MirrorNeuron.ManifestTest do
     }
 
     assert {:ok, normalized} = Manifest.load(manifest)
-    assert normalized.long_lived == true
+    assert normalized.daemon == true
   end
 
-  test "rejects non-boolean long_lived values" do
+  test "rejects non-boolean daemon values" do
     manifest = %{
       "manifest_version" => "1.0",
       "graph_id" => "invalid-long-lived",
-      "long_lived" => "yes",
+      "daemon" => "yes",
       "entrypoints" => ["streamer"],
       "nodes" => [
         %{"node_id" => "streamer", "agent_type" => "module", "type" => "stream", "role" => "root"}
@@ -163,7 +163,7 @@ defmodule MirrorNeuron.ManifestTest do
     }
 
     assert {:error, errors} = Manifest.load(manifest)
-    assert Enum.any?(errors, &String.contains?(&1, "long_lived must be a boolean"))
+    assert Enum.any?(errors, &String.contains?(&1, "daemon must be a boolean"))
   end
 
   test "accepts supported template types" do

@@ -85,7 +85,7 @@ defmodule MirrorNeuron.CLI.UITest do
             %{"status" => "running"},
             %{
               collected: 0,
-              long_lived: true,
+              daemon: true,
               expected_results: nil,
               sandbox_done: 0,
               sandbox_total: 0,

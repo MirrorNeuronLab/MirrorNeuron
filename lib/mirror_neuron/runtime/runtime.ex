@@ -162,7 +162,7 @@ defmodule MirrorNeuron.Runtime do
       "job_id" => job_id,
       "graph_id" => manifest.graph_id,
       "job_name" => manifest.job_name,
-      "long_lived" => manifest.long_lived,
+      "daemon" => manifest.daemon,
       "status" => "pending",
       "submitted_at" => timestamp(),
       "updated_at" => timestamp(),

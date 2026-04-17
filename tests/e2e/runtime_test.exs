@@ -364,7 +364,7 @@ defmodule MirrorNeuron.RuntimeTest do
   test "can cancel a long-lived job and it disappears from the live list" do
     manifest = %{
       "manifest_version" => "1.0",
-      "graph_id" => "cancel_long_lived_test",
+      "graph_id" => "cancel_daemon_test",
       "nodes" => [
         %{
           "node_id" => "root",
@@ -704,8 +704,8 @@ defmodule MirrorNeuron.RuntimeTest do
 
     manifest = %{
       "manifest_version" => "1.0",
-      "graph_id" => "long_lived_agent_recovery_test",
-      "long_lived" => true,
+      "graph_id" => "daemon_agent_recovery_test",
+      "daemon" => true,
       "entrypoints" => ["root"],
       "initial_inputs" => %{"root" => [%{"work" => "keep recovering"}]},
       "nodes" => [
