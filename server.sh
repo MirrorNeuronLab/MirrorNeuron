@@ -1,24 +1,18 @@
 #!/usr/bin/env bash
-set -e
 
-# MirrorNeuron Server Management Script
-
-# Get current directory
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$DIR"
 
 PID_DIR="${DIR}/.pids"
+LOG_DIR="${DIR}/.logs"
 BEAM_PID_FILE="${PID_DIR}/beam.pid"
 API_PID_FILE="${PID_DIR}/api.pid"
-LOG_DIR="${DIR}/.logs"
 BEAM_LOG="${LOG_DIR}/beam.log"
 API_LOG="${LOG_DIR}/api.log"
-
-mkdir -p "$PID_DIR"
-mkdir -p "$LOG_DIR"
+VENV_DIR="${HOME}/.local/share/mn_venv"
 
 print_ascii_art() {
-    cat << "EOF"
+    cat << "ASCIIEOF"
   __  __ _                     _   _                     
  |  \/  (_)_ __ _ __ ___  _ __| \ | | ___ _   _ _ __ ___  _ __ 
  | |\/| | | '__| '__/ _ \| '__|  \| |/ _ \ | | | '__/ _ \| '_ \ 
@@ -28,120 +22,42 @@ print_ascii_art() {
 ===================================================================
                   MirrorNeuron Server Manager                      
 ===================================================================
-EOF
-}
-
-print_help() {
-    print_ascii_art
-    echo "Usage: $0 [COMMAND]"
-    echo ""
-    echo "Commands:"
-    echo "  start     Start the MirrorNeuron services in detached mode"
-    echo "  stop      Stop the running MirrorNeuron services"
-    echo "  restart   Stop and then start the services"
-    echo "  status    Check the status of the services"
-    echo "  setup     Run only the setup (install deps, CLI, PATH)"
-    echo "  --help    Show this help message"
-    echo ""
-}
-
-setup_env() {
-    echo "=> Checking dependencies and environment..."
-    
-    # 1. Download and install Elixir dependencies from Hex/GitHub
-    echo "=> Fetching Elixir dependencies..."
-    mix deps.get
-    mix compile
-
-    # 2. Setup Python environment and install Python dependencies
-    VENV_DIR="${HOME}/.local/share/mn_venv"
-    if [ ! -d "$VENV_DIR" ]; then
-        echo "=> Creating Python virtual environment in $VENV_DIR..."
-        python3 -m venv "$VENV_DIR"
-    fi
-
-    echo "=> Installing Python packages (SDK, CLI, API)..."
-    "$VENV_DIR/bin/pip" install --upgrade pip
-
-    # Install sibling python packages or from github if not available locally
-    if [ -d "../mn-python-sdk" ]; then
-        "$VENV_DIR/bin/pip" install -e ../mn-python-sdk
-    else
-        echo "=> Sibling mn-python-sdk not found. Downloading from GitHub..."
-        "$VENV_DIR/bin/pip" install git+https://github.com/MirrorNeuronLab/mn-python-sdk.git || echo "=> Failed to install mn-python-sdk from github"
-    fi
-
-    if [ -d "../mn-cli" ]; then
-        "$VENV_DIR/bin/pip" install -e ../mn-cli
-    else
-        echo "=> Sibling mn-cli not found. Downloading from GitHub..."
-        "$VENV_DIR/bin/pip" install git+https://github.com/MirrorNeuronLab/mn-cli.git || echo "=> Failed to install mn-cli from github"
-    fi
-
-    if [ -d "../mn-api" ]; then
-        "$VENV_DIR/bin/pip" install -e ../mn-api
-    else
-        echo "=> Sibling mn-api not found. Downloading from GitHub..."
-        "$VENV_DIR/bin/pip" install git+https://github.com/MirrorNeuronLab/mn-api.git || echo "=> Failed to install mn-api from github"
-    fi
-
-    # 3. Add 'mn' to PATH
-    BIN_DIR="${HOME}/.local/bin"
-    echo "=> Setting up mn CLI in $BIN_DIR..."
-    mkdir -p "$BIN_DIR"
-    rm -f "$BIN_DIR/mn"
-    rm -f "$BIN_DIR/mn-api"
-
-    if [ -f "$VENV_DIR/bin/mn" ]; then
-        ln -s "$VENV_DIR/bin/mn" "$BIN_DIR/mn"
-    fi
-    if [ -f "$VENV_DIR/bin/mn-api" ]; then
-        ln -s "$VENV_DIR/bin/mn-api" "$BIN_DIR/mn-api"
-    fi
-
-    # Add to PATH permanently for current user
-    SHELL_RC="$HOME/.bashrc"
-    if [[ "$SHELL" == *"zsh"* ]]; then
-        SHELL_RC="$HOME/.zshrc"
-    fi
-
-    if ! grep -q "$BIN_DIR" "$SHELL_RC" 2>/dev/null; then
-        echo "export PATH=\"\$PATH:$BIN_DIR\"" >> "$SHELL_RC"
-        echo "=> Added $BIN_DIR to $SHELL_RC"
-    fi
-
-    # Add to current session PATH
-    export PATH="$PATH:$BIN_DIR"
-    echo "=> Environment setup complete."
+ASCIIEOF
 }
 
 check_status() {
-    local service=$1
-    local pid_file=$2
-    
+    local pid_file=$1
     if [ -f "$pid_file" ]; then
         local pid=$(cat "$pid_file")
         if kill -0 "$pid" 2>/dev/null; then
             return 0 # Running
         else
-            return 1 # Not running but PID file exists (stale)
+            return 1 # Stale
         fi
-    else
-        return 2 # Not running
+    fi
+    return 2 # Not running
+}
+
+kill_tree() {
+    local parent=$1
+    if kill -0 "$parent" 2>/dev/null; then
+        local children=$(pgrep -P "$parent" 2>/dev/null || true)
+        for child in $children; do
+            kill_tree "$child"
+        done
+        kill -15 "$parent" 2>/dev/null || true
     fi
 }
 
 start_services() {
     print_ascii_art
-    
-    # Check if already running
-    if check_status "BEAM" "$BEAM_PID_FILE" || check_status "API" "$API_PID_FILE"; then
+    if check_status "$BEAM_PID_FILE" || check_status "$API_PID_FILE"; then
         echo "=> Error: MirrorNeuron is already running."
         echo "=> Use '$0 status' to check, or '$0 stop' to stop."
         exit 1
     fi
 
-    setup_env
+    mkdir -p "$PID_DIR" "$LOG_DIR"
 
     echo "==========================================="
     echo "Starting Services in Detached Mode..."
@@ -156,15 +72,15 @@ start_services() {
     echo "=> Waiting for Elixir to boot..."
     sleep 3
 
-    VENV_DIR="${HOME}/.local/share/mn_venv"
-    if [ -f "$VENV_DIR/bin/mn-api" ]; then
+    API_BIN="${VENV_DIR}/bin/mn-api"
+    if [ -x "$API_BIN" ]; then
         echo "=> Starting mn-api (REST on port 4001)..."
-        nohup "$VENV_DIR/bin/mn-api" > "$API_LOG" 2>&1 &
+        nohup "$API_BIN" > "$API_LOG" 2>&1 &
         API_PID=$!
         echo $API_PID > "$API_PID_FILE"
         echo "   [Started] REST API (PID: $API_PID)"
     else
-        echo "=> Warning: mn-api not found, skipping."
+        echo "=> Warning: mn-api not found, skipping. Did you run setup.sh?"
     fi
 
     echo ""
@@ -182,25 +98,21 @@ start_services() {
 stop_services() {
     echo "=> Stopping MirrorNeuron Services..."
     
-    if [ -f "$API_PID_FILE" ]; then
-        API_PID=$(cat "$API_PID_FILE")
-        if kill -0 "$API_PID" 2>/dev/null; then
-            echo "   Stopping REST API (PID: $API_PID)..."
-            kill "$API_PID"
-            sleep 1
+    for pid_file in "$API_PID_FILE" "$BEAM_PID_FILE"; do
+        if [ -f "$pid_file" ]; then
+            local pid=$(cat "$pid_file")
+            if kill -0 "$pid" 2>/dev/null; then
+                if [ "$pid_file" == "$API_PID_FILE" ]; then
+                    echo "   Stopping REST API (PID: $pid)..."
+                else
+                    echo "   Stopping Core Service (PID: $pid)..."
+                fi
+                kill_tree "$pid"
+                sleep 1
+            fi
+            rm -f "$pid_file"
         fi
-        rm -f "$API_PID_FILE"
-    fi
-
-    if [ -f "$BEAM_PID_FILE" ]; then
-        BEAM_PID=$(cat "$BEAM_PID_FILE")
-        if kill -0 "$BEAM_PID" 2>/dev/null; then
-            echo "   Stopping Core Service (PID: $BEAM_PID)..."
-            kill "$BEAM_PID"
-            sleep 1
-        fi
-        rm -f "$BEAM_PID_FILE"
-    fi
+    done
     
     echo "=> All services stopped."
 }
@@ -209,18 +121,22 @@ status_services() {
     print_ascii_art
     echo "Service Status:"
     
-    if check_status "BEAM" "$BEAM_PID_FILE"; then
+    check_status "$BEAM_PID_FILE"
+    local beam_stat=$?
+    if [ $beam_stat -eq 0 ]; then
         echo "  [OK] Core Service is running (PID: $(cat "$BEAM_PID_FILE"))"
-    elif [ $? -eq 1 ]; then
+    elif [ $beam_stat -eq 1 ]; then
         echo "  [!!] Core Service PID file exists but process is dead."
         rm -f "$BEAM_PID_FILE"
     else
         echo "  [--] Core Service is not running."
     fi
 
-    if check_status "API" "$API_PID_FILE"; then
+    check_status "$API_PID_FILE"
+    local api_stat=$?
+    if [ $api_stat -eq 0 ]; then
         echo "  [OK] REST API is running (PID: $(cat "$API_PID_FILE"))"
-    elif [ $? -eq 1 ]; then
+    elif [ $api_stat -eq 1 ]; then
         echo "  [!!] REST API PID file exists but process is dead."
         rm -f "$API_PID_FILE"
     else
@@ -229,29 +145,12 @@ status_services() {
 }
 
 case "$1" in
-    start)
-        start_services
-        ;;
-    stop)
-        stop_services
-        ;;
-    restart)
-        stop_services
-        sleep 2
-        start_services
-        ;;
-    status)
-        status_services
-        ;;
-    setup)
-        setup_env
-        ;;
-    --help|-h|"")
-        print_help
-        ;;
+    start) start_services ;;
+    stop) stop_services ;;
+    restart) stop_services; sleep 2; start_services ;;
+    status) status_services ;;
     *)
-        echo "Unknown command: $1"
-        print_help
+        echo "Usage: $0 {start|stop|restart|status}"
         exit 1
         ;;
 esac

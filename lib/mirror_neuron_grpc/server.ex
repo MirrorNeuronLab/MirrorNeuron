@@ -5,7 +5,9 @@ defmodule MirrorNeuron.Grpc.JobServer do
     SubmitJobResponse,
     GetJobResponse,
     ListJobsResponse,
-    CancelJobResponse
+    CancelJobResponse,
+    PauseJobResponse,
+    ResumeJobResponse
   }
 
   def submit_job(request, _stream) do
@@ -41,9 +43,9 @@ defmodule MirrorNeuron.Grpc.JobServer do
   def get_job(request, _stream) do
     job_id = request.job_id
 
-    case MirrorNeuron.inspect_job(job_id) do
-      {:ok, job_map} ->
-        %GetJobResponse{job_json: Jason.encode!(job_map)}
+    case MirrorNeuron.job_details(job_id) do
+      {:ok, details_map} ->
+        %GetJobResponse{job_json: Jason.encode!(details_map)}
 
       _ ->
         %GetJobResponse{job_json: "{}"}
@@ -64,8 +66,38 @@ defmodule MirrorNeuron.Grpc.JobServer do
 
   def cancel_job(request, _stream) do
     job_id = request.job_id
-    MirrorNeuron.cancel(job_id)
-    %CancelJobResponse{job_id: job_id, status: "cancelled"}
+    case MirrorNeuron.cancel(job_id) do
+      {:error, reason} ->
+        raise GRPC.RPCError, status: GRPC.Status.internal(), message: reason
+      {:ok, status} ->
+        %CancelJobResponse{job_id: job_id, status: status}
+      _ ->
+        %CancelJobResponse{job_id: job_id, status: "cancelled"}
+    end
+  end
+
+  def pause_job(request, _stream) do
+    job_id = request.job_id
+    case MirrorNeuron.pause(job_id) do
+      {:error, reason} ->
+        raise GRPC.RPCError, status: GRPC.Status.internal(), message: reason
+      {:ok, status} ->
+        %PauseJobResponse{job_id: job_id, status: status}
+      _ ->
+        %PauseJobResponse{job_id: job_id, status: "paused"}
+    end
+  end
+
+  def resume_job(request, _stream) do
+    job_id = request.job_id
+    case MirrorNeuron.resume(job_id) do
+      {:error, reason} ->
+        raise GRPC.RPCError, status: GRPC.Status.internal(), message: reason
+      {:ok, status} ->
+        %ResumeJobResponse{job_id: job_id, status: status}
+      _ ->
+        %ResumeJobResponse{job_id: job_id, status: "running"}
+    end
   end
 end
 
