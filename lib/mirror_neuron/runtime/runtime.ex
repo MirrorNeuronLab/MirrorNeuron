@@ -12,9 +12,13 @@ defmodule MirrorNeuron.Runtime do
       :ok ->
         spec = {JobRunner, {job_id, manifest, opts}}
 
-        with {:ok, pid} <-
-               Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) do
-          {:ok, job_id, pid}
+        case Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) do
+          {:ok, pid} ->
+            {:ok, job_id, pid}
+
+          {:error, reason} ->
+            persist_startup_failure(job_id, manifest, bundle, reason)
+            {:error, "failed to start job runner: #{inspect(reason)}"}
         end
 
       {:error, reason} ->
@@ -124,6 +128,34 @@ defmodule MirrorNeuron.Runtime do
 
   def timestamp,
     do: DateTime.utc_now() |> DateTime.truncate(:millisecond) |> DateTime.to_iso8601()
+
+  defp persist_startup_failure(job_id, manifest, bundle, reason) do
+    updates = %{
+      "status" => "failed",
+      "result" => %{
+        "agent_id" => "job_runner",
+        "error" => "failed to start job runner process",
+        "reason" => inspect(reason)
+      }
+    }
+
+    defaults = %{
+      "graph_id" => manifest.graph_id,
+      "job_name" => manifest.job_name,
+      "root_agent_ids" => manifest.entrypoints,
+      "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
+      "recovery_policy" => Map.get(manifest.policies, "recovery_mode", "local_restart"),
+      "manifest_ref" => %{
+        "graph_id" => manifest.graph_id,
+        "manifest_version" => manifest.manifest_version,
+        "manifest_path" => bundle && bundle.manifest_path,
+        "job_path" => bundle && bundle.root_path
+      },
+      "submitted_at" => timestamp()
+    }
+
+    RedisStore.persist_terminal_job(job_id, updates, defaults)
+  end
 
   defp persist_initial_job(job_id, manifest, bundle) do
     job_map = %{

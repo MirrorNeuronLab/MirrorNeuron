@@ -139,8 +139,12 @@ defmodule MirrorNeuron do
       {:ok, _job} ->
         {:error, "job is already in a terminal state"}
 
-      _ ->
-        {:error, original_error}
+      {:error, reason} ->
+        if String.contains?(reason, "was not found") do
+          {:error, reason}
+        else
+          {:error, original_error}
+        end
     end
   end
 
