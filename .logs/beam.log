@@ -1,0 +1,7 @@
+    warning: unused alias Config
+    │
+  4 │   alias MirrorNeuron.Config
+    │   ~
+    │
+    └─ lib/mirror_neuron/application.ex:4:3
+

@@ -8,9 +8,34 @@ defmodule MirrorNeuron.Grpc.JobServer do
     CancelJobResponse
   }
 
-  def submit_job(_request, _stream) do
-    job_id = "job_#{System.unique_integer([:positive])}"
-    %SubmitJobResponse{job_id: job_id, status: "pending"}
+  def submit_job(request, _stream) do
+    bundle_id = "bundle_#{System.unique_integer([:positive])}"
+    tmp_dir = Path.join(System.tmp_dir!(), bundle_id)
+    File.mkdir_p!(tmp_dir)
+
+    File.write!(Path.join(tmp_dir, "manifest.json"), request.manifest_json)
+
+    payloads_dir = Path.join(tmp_dir, "payloads")
+    File.mkdir_p!(payloads_dir)
+
+    if request.payloads do
+      Enum.each(request.payloads, fn {path, content} ->
+        full_path = Path.join(payloads_dir, path)
+        File.mkdir_p!(Path.dirname(full_path))
+        File.write!(full_path, content)
+      end)
+    end
+
+    case MirrorNeuron.run_manifest(tmp_dir, await: false) do
+      {:ok, job_id} ->
+        %SubmitJobResponse{job_id: job_id, status: "pending"}
+
+      {:ok, job_id, _job} ->
+        %SubmitJobResponse{job_id: job_id, status: "pending"}
+
+      {:error, reason} ->
+        raise GRPC.RPCError, status: :invalid_argument, message: inspect(reason)
+    end
   end
 
   def get_job(request, _stream) do
