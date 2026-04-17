@@ -171,7 +171,8 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       bundle_root: state.runtime_context[:bundle_root],
       manifest_path: state.runtime_context[:manifest_path],
       payloads_path: state.runtime_context[:payloads_path],
-      template_type: Map.get(state.node, :type, "generic")
+      template_type: Map.get(state.node, :type, "generic"),
+      invocation: state.processed_messages + 1
     }
 
     send(

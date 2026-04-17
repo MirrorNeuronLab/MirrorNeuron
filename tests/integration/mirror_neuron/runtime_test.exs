@@ -750,6 +750,9 @@ defmodule MirrorNeuron.RuntimeTest do
         2_000
       )
 
+      # Give the runner a tiny bit of time to execute next_invocation
+      Process.sleep(200)
+
       wait_until(
         fn ->
           match?(

@@ -188,11 +188,15 @@ defmodule MirrorNeuron.Builtins.Executor do
     config = state.config
     runner = resolve_runner(config)
 
+    # We pass the overall invocation counter (to salt sandbox directories securely between distinct payloads or retries)
+    invocation = Map.get(context, :invocation, 1)
+
     case runner.run(
            payload,
            config,
            message: message,
            attempt: attempt,
+           invocation: invocation,
            job_id: context.job_id,
            agent_id: context.node.node_id,
            agent_type: Map.get(context.node, :agent_type),

@@ -508,6 +508,7 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
     job_id = Keyword.get(opts, :job_id, "job")
     agent_id = Keyword.get(opts, :agent_id, "agent")
     attempt = Keyword.get(opts, :attempt, 1)
+    invocation = Keyword.get(opts, :invocation, 1)
 
     sanitized_base =
       [prefix, job_id, agent_id]
@@ -517,13 +518,13 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
       |> String.trim("-")
 
     digest =
-      [prefix, job_id, agent_id]
+      [prefix, job_id, agent_id, to_string(invocation)]
       |> Enum.join("|")
       |> then(&:crypto.hash(:sha256, &1))
       |> Base.encode16(case: :lower)
       |> String.slice(0, 10)
 
-    suffix = "#{digest}-a#{attempt}"
+    suffix = "#{digest}-i#{invocation}-a#{attempt}"
     base_limit = max(63 - String.length(suffix) - 1, 0)
 
     sanitized_base
@@ -539,12 +540,13 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
     root = Map.get(config, "sandbox_upload_path", "/sandbox/job")
     agent = sanitize_path_segment(Keyword.get(opts, :agent_id, "agent"))
     attempt = Keyword.get(opts, :attempt, 1)
+    invocation = Keyword.get(opts, :invocation, 1)
     unique = Integer.to_string(System.unique_integer([:positive]))
 
     if persistent_workspace?(config) do
       Path.join([root, "agents", agent])
     else
-      Path.join([root, "runs", agent, "a#{attempt}-#{unique}"])
+      Path.join([root, "runs", agent, "i#{invocation}-a#{attempt}-#{unique}"])
     end
   end
 
