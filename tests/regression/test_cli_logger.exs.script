@@ -1,0 +1,13 @@
+defmodule Test do
+  def run do
+    :logger.set_primary_config(:level, :warning)
+    :logger.set_handler_config(:default, :level, :warning)
+    Logger.configure(level: :warning)
+    Logger.configure_backend(:default, level: :warning)
+
+    require Logger
+    Logger.info("Info level")
+    Logger.warning("Warning level")
+  end
+end
+Test.run()

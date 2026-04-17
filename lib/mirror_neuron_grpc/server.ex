@@ -1,0 +1,93 @@
+defmodule MirrorNeuron.Grpc.JobServer do
+  use GRPC.Server, service: Mirrorneuron.Job.V1.JobService.Service
+
+  alias Mirrorneuron.Job.V1.{
+    SubmitJobResponse,
+    GetJobResponse,
+    ListJobsResponse,
+    CancelJobResponse
+  }
+
+  def submit_job(_request, _stream) do
+    job_id = "job_#{System.unique_integer([:positive])}"
+    %SubmitJobResponse{job_id: job_id, status: "pending"}
+  end
+
+  def get_job(request, _stream) do
+    job_id = request.job_id
+
+    case MirrorNeuron.inspect_job(job_id) do
+      {:ok, job_map} ->
+        %GetJobResponse{job_json: Jason.encode!(job_map)}
+
+      _ ->
+        %GetJobResponse{job_json: "{}"}
+    end
+  end
+
+  def list_jobs(request, _stream) do
+    limit = if request.limit > 0, do: request.limit, else: 100
+
+    case MirrorNeuron.Monitor.list_jobs(limit: limit, include_terminal: request.include_terminal) do
+      {:ok, jobs} ->
+        %ListJobsResponse{jobs_json: Jason.encode!(%{data: jobs})}
+
+      _ ->
+        %ListJobsResponse{jobs_json: "{\"data\": []}"}
+    end
+  end
+
+  def cancel_job(request, _stream) do
+    job_id = request.job_id
+    MirrorNeuron.cancel(job_id)
+    %CancelJobResponse{job_id: job_id, status: "cancelled"}
+  end
+end
+
+defmodule MirrorNeuron.Grpc.ClusterServer do
+  use GRPC.Server, service: Mirrorneuron.Cluster.V1.ClusterService.Service
+
+  alias Mirrorneuron.Cluster.V1.GetSystemSummaryResponse
+
+  def get_system_summary(_request, _stream) do
+    case MirrorNeuron.Monitor.cluster_overview() do
+      {:ok, overview} ->
+        %GetSystemSummaryResponse{summary_json: Jason.encode!(overview)}
+
+      _ ->
+        %GetSystemSummaryResponse{summary_json: "{}"}
+    end
+  end
+end
+
+defmodule MirrorNeuron.Grpc.ObservabilityServer do
+  use GRPC.Server, service: Mirrorneuron.Observability.V1.ObservabilityService.Service
+
+  alias Mirrorneuron.Observability.V1.EventResponse
+
+  def stream_events(request, stream) do
+    job_id = request.job_id
+
+    case MirrorNeuron.events(job_id) do
+      {:ok, events} ->
+        Enum.each(events, fn ev ->
+          GRPC.Server.send_reply(stream, %EventResponse{event_json: Jason.encode!(ev)})
+        end)
+
+      _ ->
+        :ok
+    end
+
+    stream
+  end
+end
+
+defmodule MirrorNeuron.Grpc.Endpoint do
+  use GRPC.Endpoint
+
+  intercept(GRPC.Server.Interceptors.Logger)
+
+  run(MirrorNeuron.Grpc.JobServer)
+  run(MirrorNeuron.Grpc.ClusterServer)
+  run(MirrorNeuron.Grpc.ObservabilityServer)
+end

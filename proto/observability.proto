@@ -1,0 +1,14 @@
+syntax = "proto3";
+package mirrorneuron.observability.v1;
+
+service ObservabilityService {
+  rpc StreamEvents (StreamEventsRequest) returns (stream EventResponse);
+}
+
+message StreamEventsRequest {
+  string job_id = 1;
+}
+
+message EventResponse {
+  string event_json = 1;
+}

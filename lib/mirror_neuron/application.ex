@@ -25,15 +25,16 @@ defmodule MirrorNeuron.Application do
 
     role = node_role()
 
-    api_port = Config.integer("MIRROR_NEURON_API_PORT", :api_port)
-    api_enabled? = Config.boolean("MIRROR_NEURON_API_ENABLED", :api_enabled)
+    grpc_port = String.to_integer(System.get_env("MIRROR_NEURON_GRPC_PORT", "50051"))
 
     common_children =
       [
         {Registry, keys: :duplicate, name: MirrorNeuron.Runtime.EventRegistry},
         {Cluster.Supervisor, [topologies, [name: MirrorNeuron.ClusterSupervisor]]},
-        MirrorNeuron.Redis
-      ] ++ maybe_api_child(api_enabled?, api_port)
+        MirrorNeuron.Redis,
+        {GRPC.Server.Supervisor,
+         endpoint: MirrorNeuron.Grpc.Endpoint, port: grpc_port, start_server: true}
+      ]
 
     children =
       case role do
@@ -62,29 +63,5 @@ defmodule MirrorNeuron.Application do
 
   def node_role do
     System.get_env("MIRROR_NEURON_NODE_ROLE", "runtime")
-  end
-
-  defp maybe_api_child(true, api_port) do
-    if api_port == 0 or port_available?(api_port) do
-      [{Bandit, plug: MirrorNeuron.API.Router, port: api_port}]
-    else
-      []
-    end
-  end
-
-  defp maybe_api_child(false, _api_port), do: []
-
-  defp port_available?(port) do
-    case :gen_tcp.listen(port, [:binary, packet: :raw, active: false, reuseaddr: true]) do
-      {:ok, socket} ->
-        :gen_tcp.close(socket)
-        true
-
-      {:error, :eaddrinuse} ->
-        false
-
-      {:error, _reason} ->
-        false
-    end
   end
 end

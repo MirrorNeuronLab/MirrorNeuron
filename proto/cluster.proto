@@ -1,0 +1,12 @@
+syntax = "proto3";
+package mirrorneuron.cluster.v1;
+
+service ClusterService {
+  rpc GetSystemSummary (GetSystemSummaryRequest) returns (GetSystemSummaryResponse);
+}
+
+message GetSystemSummaryRequest {}
+
+message GetSystemSummaryResponse {
+  string summary_json = 1;
+}

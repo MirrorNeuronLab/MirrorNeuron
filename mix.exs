@@ -8,7 +8,6 @@ defmodule MirrorNeuron.MixProject do
       elixir: "~> 1.16",
       start_permanent: Mix.env() == :prod,
       test_paths: ["tests"],
-      escript: [main_module: MirrorNeuron.CLI, name: "mn"],
       deps: deps()
     ]
   end
@@ -26,9 +25,8 @@ defmodule MirrorNeuron.MixProject do
       {:libcluster, "~> 3.5"},
       {:horde, "~> 0.10.0"},
       {:redix, "~> 1.5"},
-      {:owl, "~> 0.13"},
-      {:bandit, "~> 1.5"},
-      {:plug, "~> 1.16"}
+      {:grpc, "~> 0.9.0"},
+      {:protobuf, "~> 0.16.0"}
     ]
   end
 end

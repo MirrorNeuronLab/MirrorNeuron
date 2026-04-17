@@ -1,0 +1,34 @@
+defmodule TestLiveCancel do
+  use Plug.Test
+
+  def run do
+    # 1. Start application
+    Application.ensure_all_started(:mirror_neuron)
+
+    # 2. Start a real job
+    manifest = %{
+      "graph" => %{"name" => "test_live_cancel"},
+      "agents" => [
+        %{"id" => "a1", "model" => "mock", "system_prompt" => "sleep well"}
+      ]
+    }
+    
+    {:ok, job_id} = MirrorNeuron.run_manifest(manifest, placement: "local")
+    
+    # Give it a tiny bit to start
+    Process.sleep(100)
+
+    # 3. Call cancel via API
+    conn = conn(:post, "/api/v1/jobs/#{job_id}/cancel")
+    conn = MirrorNeuron.API.Router.call(conn, MirrorNeuron.API.Router.init([]))
+    
+    IO.inspect(conn.status, label: "API Cancel Status")
+    IO.inspect(conn.resp_body, label: "API Cancel Body")
+    
+    # 4. Verify in DB
+    {:ok, job} = MirrorNeuron.Persistence.RedisStore.fetch_job(job_id)
+    IO.inspect(job["status"], label: "Job Status in DB")
+  end
+end
+
+TestLiveCancel.run()

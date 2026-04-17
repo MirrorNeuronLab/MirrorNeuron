@@ -1,0 +1,10 @@
+defmodule Test do
+  def run do
+    :logger.set_primary_config(:level, :warning)
+    Logger.configure(level: :warning)
+    IO.inspect(:logger.get_primary_config())
+    Application.ensure_all_started(:mirror_neuron)
+    IO.inspect(:logger.get_primary_config())
+  end
+end
+Test.run()
