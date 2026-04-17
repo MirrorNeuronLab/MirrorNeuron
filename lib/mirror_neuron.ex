@@ -89,10 +89,58 @@ defmodule MirrorNeuron do
   end
 
   def cancel(job_id) do
-    if control_node?() do
-      call_control_or_runtime(job_id, :cancel, [job_id])
-    else
-      Runtime.cancel_job(job_id)
+    result =
+      if control_node?() do
+        call_control_or_runtime(job_id, :cancel, [job_id])
+      else
+        Runtime.cancel_job(job_id)
+      end
+
+    case result do
+      {:error, "job " <> _ = reason} ->
+        force_cancel_orphaned_job(job_id, reason)
+
+      other ->
+        other
+    end
+  end
+
+  defp force_cancel_orphaned_job(job_id, original_error) do
+    case RedisStore.fetch_job(job_id) do
+      {:ok, %{"status" => status} = job} when status in ["pending", "running", "paused"] ->
+        require Logger
+        Logger.info("Job #{job_id} process not found, forcefully cancelling via Redis.")
+
+        updates = %{
+          "status" => "cancelled",
+          "result" => %{"reason" => "forced cancellation of orphaned job"}
+        }
+
+        defaults = %{
+          "graph_id" => job["graph_id"] || "unknown",
+          "job_name" => job["job_name"] || "unknown",
+          "root_agent_ids" => job["root_agent_ids"] || [],
+          "placement_policy" => job["placement_policy"] || "local",
+          "recovery_policy" => job["recovery_policy"] || "local_restart",
+          "manifest_ref" => job["manifest_ref"] || %{},
+          "submitted_at" => job["submitted_at"] || Runtime.timestamp()
+        }
+
+        RedisStore.persist_terminal_job(job_id, updates, defaults)
+
+        MirrorNeuron.Runtime.EventBus.publish(job_id, %{
+          type: :job_cancelled,
+          reason: "forced cancellation",
+          timestamp: Runtime.timestamp()
+        })
+
+        {:ok, "force cancelled"}
+
+      {:ok, _job} ->
+        {:error, "job is already in a terminal state"}
+
+      _ ->
+        {:error, original_error}
     end
   end
 
