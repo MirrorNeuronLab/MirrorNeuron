@@ -10,6 +10,9 @@ MirrorNeuron currently ships two terminal tools:
 ### Main commands
 
 ```bash
+mn start
+mn stop
+mn join <ip>
 mn standalone-start
 mn cluster start --node-id <id> --bind <ip:port> [--data-dir <dir>] [--join <seeds>]
 mn cluster join --node-id <id> --bind <ip:port> --seeds <seeds>
@@ -38,6 +41,23 @@ mn resume <job_id>
 mn cancel <job_id>
 mn send <job_id> <agent_id> <message.json>
 ```
+
+### `start` & `stop`
+
+```bash
+mn start
+mn stop
+```
+
+Starts or stops the MirrorNeuron Core and REST API services as background processes. This manages the `beam.pid` and `api.pid` files automatically.
+
+### `join`
+
+```bash
+mn join <ip>
+```
+
+Starts the MirrorNeuron services and connects to an existing cluster by setting the `MIRROR_NEURON_CLUSTER_NODES` environment variable to the provided IP address.
 
 ### `standalone-start`
 
