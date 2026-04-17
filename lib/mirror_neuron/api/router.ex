@@ -99,7 +99,9 @@ defmodule MirrorNeuron.API.Router do
         send_error(conn, 400, "Empty JSON payload")
 
       manifest ->
-        case MirrorNeuron.run_manifest(manifest) do
+        input = if manifest["_bundle_path"], do: manifest["_bundle_path"], else: manifest
+
+        case MirrorNeuron.run_manifest(input) do
           {:ok, job_id} ->
             send_json(conn, 201, %{id: job_id, status: "pending"})
 
@@ -137,6 +139,9 @@ defmodule MirrorNeuron.API.Router do
   # Pause Job
   post "/api/v1/jobs/:job_id/pause" do
     case MirrorNeuron.pause(job_id) do
+      {:ok, status} ->
+        send_json(conn, 200, %{status: status, job_id: job_id})
+
       :ok ->
         send_json(conn, 200, %{status: "paused", job_id: job_id})
 
@@ -148,6 +153,9 @@ defmodule MirrorNeuron.API.Router do
   # Resume Job
   post "/api/v1/jobs/:job_id/resume" do
     case MirrorNeuron.resume(job_id) do
+      {:ok, status} ->
+        send_json(conn, 200, %{status: status, job_id: job_id})
+
       :ok ->
         send_json(conn, 200, %{status: "resumed", job_id: job_id})
 
