@@ -5,7 +5,8 @@ defmodule MirrorNeuron.API.Router do
   plug(:match)
 
   plug(Plug.Parsers,
-    parsers: [:json],
+    parsers: [:json, :multipart],
+    length: 50_000_000,
     pass: ["application/json"],
     json_decoder: Jason
   )
@@ -29,6 +30,62 @@ defmodule MirrorNeuron.API.Router do
 
       {:error, reason} ->
         send_error(conn, 500, reason)
+    end
+  end
+
+  # Upload and Validate Bundle
+  post "/api/v1/bundles/upload" do
+    case conn.body_params["bundle"] do
+      %Plug.Upload{path: tmp_path, filename: filename} ->
+        # Create a unique directory for extraction
+        bundle_id = Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
+        target_dir = Path.join(System.tmp_dir!(), "mn_bundle_#{bundle_id}")
+        File.mkdir_p!(target_dir)
+
+        # Unzip
+        case :zip.extract(to_charlist(tmp_path), cwd: to_charlist(target_dir)) do
+          {:ok, _} ->
+            # Let's check if there is a root folder inside the zip
+            # If manifest.json is directly inside or inside a subfolder
+            manifest_path = Path.join(target_dir, "manifest.json")
+
+            real_target_dir =
+              if File.exists?(manifest_path) do
+                target_dir
+              else
+                # Try to find a subfolder
+                case File.ls!(target_dir) do
+                  [subfolder] ->
+                    subpath = Path.join(target_dir, subfolder)
+
+                    if File.dir?(subpath) and File.exists?(Path.join(subpath, "manifest.json")) do
+                      subpath
+                    else
+                      target_dir
+                    end
+
+                  _ ->
+                    target_dir
+                end
+              end
+
+            # Validate using JobBundle
+            case MirrorNeuron.JobBundle.load(real_target_dir) do
+              {:ok, bundle} ->
+                send_json(conn, 200, %{bundle_path: real_target_dir, manifest: bundle.manifest})
+
+              {:error, reason} ->
+                File.rm_rf!(target_dir)
+                send_error(conn, 400, "Invalid bundle: #{inspect(reason)}")
+            end
+
+          {:error, reason} ->
+            File.rm_rf!(target_dir)
+            send_error(conn, 400, "Failed to unzip: #{inspect(reason)}")
+        end
+
+      _ ->
+        send_error(conn, 400, "Missing 'bundle' file upload")
     end
   end
 
@@ -77,14 +134,59 @@ defmodule MirrorNeuron.API.Router do
     end
   end
 
+  # Pause Job
+  post "/api/v1/jobs/:job_id/pause" do
+    case MirrorNeuron.pause(job_id) do
+      :ok ->
+        send_json(conn, 200, %{status: "paused", job_id: job_id})
+
+      {:error, reason} ->
+        handle_job_error(conn, reason)
+    end
+  end
+
+  # Resume Job
+  post "/api/v1/jobs/:job_id/resume" do
+    case MirrorNeuron.resume(job_id) do
+      :ok ->
+        send_json(conn, 200, %{status: "resumed", job_id: job_id})
+
+      {:error, reason} ->
+        handle_job_error(conn, reason)
+    end
+  end
+
   # Stop/Cancel Job
   post "/api/v1/jobs/:job_id/cancel" do
     case MirrorNeuron.cancel(job_id) do
+      {:ok, status} ->
+        send_json(conn, 200, %{status: status, job_id: job_id})
+
       :ok ->
         send_json(conn, 200, %{status: "cancelled", job_id: job_id})
 
       {:error, reason} ->
         handle_job_error(conn, reason)
+    end
+  end
+
+  # Cleanup Jobs
+  post "/api/v1/jobs/cleanup" do
+    conn = fetch_query_params(conn)
+
+    opts =
+      if Map.get(conn.query_params, "all") in ["true", "1"] do
+        [all: true]
+      else
+        []
+      end
+
+    case MirrorNeuron.cleanup_jobs(opts) do
+      {:ok, result} ->
+        send_json(conn, 200, result)
+
+      {:error, reason} ->
+        send_error(conn, 500, reason)
     end
   end
 

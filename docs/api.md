@@ -29,6 +29,7 @@ By default, the API binds to port `4000`. You can change this using the `MIRROR_
 | GET    | `/api/v1/jobs`                    | Lists all jobs (supports pagination/filtering)          |
 | GET    | `/api/v1/jobs/:job_id`            | Returns detailed state of a running/completed job       |
 | POST   | `/api/v1/jobs/:job_id/cancel`     | Cancels a running job                                   |
+| POST   | `/api/v1/jobs/cleanup`            | Clears finished/cancelled jobs from the datastore       |
 | GET    | `/api/v1/jobs/:job_id/events`     | Returns raw event history for a job                     |
 | POST   | `/api/v1/bundles/:bundle_id/reload` | Manually reload a registered job bundle                 |
 
@@ -166,7 +167,23 @@ curl -X POST http://localhost:4000/api/v1/jobs/prime_sweep_40_workers-.../cancel
 }
 ```
 
-#### 7. Job Events
+#### 7. Cleanup Jobs
+
+Clears finished, failed, and cancelled jobs from the datastore. Add `?all=true` to forcibly clear all jobs including currently running ones.
+
+```bash
+curl -X POST http://localhost:4000/api/v1/jobs/cleanup
+```
+
+**Response (200 OK):**
+```json
+{
+  "deleted_count": 2,
+  "deleted_jobs": ["job_1", "job_2"]
+}
+```
+
+#### 8. Job Events
 
 ```bash
 curl -s http://localhost:4000/api/v1/jobs/prime_sweep_40_workers-.../events
@@ -186,7 +203,7 @@ curl -s http://localhost:4000/api/v1/jobs/prime_sweep_40_workers-.../events
 }
 ```
 
-#### 8. Reload Bundle
+#### 9. Reload Bundle
 
 Forces a re-scan and reload of a registered bundle, computing its fingerprint and updating it in memory if any changes occurred.
 
