@@ -97,7 +97,6 @@ You want `Status: Connected`.
 cd MirrorNeuron
 mix deps.get
 mix test
-mix escript.build
 ```
 
 This builds the main CLI entry:

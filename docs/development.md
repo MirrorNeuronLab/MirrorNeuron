@@ -21,7 +21,6 @@ Important files and directories:
 mix deps.get
 mix format
 mix test
-mix escript.build
 ```
 
 ## Runtime design expectations

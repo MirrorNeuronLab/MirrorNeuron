@@ -123,16 +123,15 @@ Typical local loop:
 mix deps.get
 mix format
 mix test
-mix escript.build
 ```
 
 Useful CLI checks:
 
 ```bash
-./mirror_neuron validate examples/research_flow
-./mirror_neuron run examples/research_flow
-./mirror_neuron inspect nodes
-./mirror_neuron monitor
+mn validate examples/research_flow
+mn run examples/research_flow
+mn inspect nodes
+mn monitor
 ```
 
 When Redis-backed tests or runtime flows are needed:
@@ -194,7 +193,6 @@ mix test
 If the change affects the executable or command surface, also run:
 
 ```bash
-mix escript.build
 ```
 
 ## Docs Expectations

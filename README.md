@@ -60,7 +60,6 @@ rm ~/.local/bin/mn
 cd MirrorNeuron
 mix deps.get
 mix test
-mix escript.build
 
 ./mn validate /path/to/mirrorneuron-blueprints/research_flow
 ./mn run /path/to/mirrorneuron-blueprints/research_flow

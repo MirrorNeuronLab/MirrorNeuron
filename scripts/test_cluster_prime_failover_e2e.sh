@@ -278,7 +278,6 @@ ensure_remote_gateway() {
 
 build_local() {
   echo "Building box 1 runtime..."
-  (cd "$ROOT_DIR" && mix escript.build >/dev/null)
 }
 
 sync_remote_repo() {
@@ -298,7 +297,6 @@ sync_remote_repo() {
 
 build_remote() {
   echo "Building box 2 runtime..."
-  ssh "$BOX2_IP" "$REMOTE_PATH_PREFIX cd \"$REMOTE_ROOT\" && mix escript.build >/dev/null"
 }
 
 start_local_runtime() {
@@ -324,7 +322,7 @@ import subprocess
 log_path = os.environ["MIRROR_NEURON_LOG_PATH"]
 with open(log_path, "ab", buffering=0) as log_file:
     proc = subprocess.Popen(
-        ["./mn", "server"],
+        ["mix", "run", "--no-halt"],
         stdin=subprocess.DEVNULL,
         stdout=log_file,
         stderr=subprocess.STDOUT,
@@ -361,7 +359,7 @@ import subprocess
 log_path = os.environ[\"MIRROR_NEURON_LOG_PATH\"]
 with open(log_path, \"ab\", buffering=0) as log_file:
     proc = subprocess.Popen(
-        [\"./mn\", \"server\"],
+        [\"mix\", \"run\", \"--no-halt\"],
         stdin=subprocess.DEVNULL,
         stdout=log_file,
         stderr=subprocess.STDOUT,

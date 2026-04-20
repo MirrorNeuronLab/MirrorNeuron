@@ -111,12 +111,10 @@ sync_remote_repo() {
 
 build_local() {
   echo "Building box 1 runtime..."
-  (cd "$ROOT_DIR" && mix escript.build >/dev/null)
 }
 
 build_remote() {
   echo "Building box 2 runtime..."
-  ssh "$BOX2_IP" "cd \"$REMOTE_ROOT\" && $REMOTE_PATH_PREFIX mix escript.build >/dev/null"
 }
 
 start_local_runtime() {
@@ -129,14 +127,14 @@ start_local_runtime() {
     export MIRROR_NEURON_COOKIE="$COOKIE"
     export MIRROR_NEURON_CLUSTER_NODES="mn1@$BOX1_IP,mn2@$BOX2_IP"
     export MIRROR_NEURON_REDIS_URL="redis://$BOX1_IP:6379/0"
-    ./mn server >"$LOCAL_LOG" 2>&1 &
+    mix run --no-halt >"$LOCAL_LOG" 2>&1 &
     echo $!
   )
 }
 
 start_remote_runtime() {
   echo "Starting box 2 runtime..."
-  ssh "$BOX2_IP" "cd \"$REMOTE_ROOT\" && $REMOTE_PATH_PREFIX export ERL_AFLAGS='-kernel inet_dist_listen_min $DIST_PORT inet_dist_listen_max $DIST_PORT'; export MIRROR_NEURON_NODE_NAME='mn2@$BOX2_IP'; export MIRROR_NEURON_NODE_ROLE='runtime'; export MIRROR_NEURON_COOKIE='$COOKIE'; export MIRROR_NEURON_CLUSTER_NODES='mn1@$BOX1_IP,mn2@$BOX2_IP'; export MIRROR_NEURON_REDIS_URL='redis://$BOX1_IP:6379/0'; nohup ./mn server >'$REMOTE_LOG' 2>&1 </dev/null & echo \$!"
+  ssh "$BOX2_IP" "cd \"$REMOTE_ROOT\" && $REMOTE_PATH_PREFIX export ERL_AFLAGS='-kernel inet_dist_listen_min $DIST_PORT inet_dist_listen_max $DIST_PORT'; export MIRROR_NEURON_NODE_NAME='mn2@$BOX2_IP'; export MIRROR_NEURON_NODE_ROLE='runtime'; export MIRROR_NEURON_COOKIE='$COOKIE'; export MIRROR_NEURON_CLUSTER_NODES='mn1@$BOX1_IP,mn2@$BOX2_IP'; export MIRROR_NEURON_REDIS_URL='redis://$BOX1_IP:6379/0'; nohup mix run --no-halt >'$REMOTE_LOG' 2>&1 </dev/null & echo \$!"
 }
 
 cluster_inspect_nodes() {
