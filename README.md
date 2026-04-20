@@ -1,203 +1,84 @@
 # MirrorNeuron
 
-Last edited: 2026-04-05
+**The simple durable runtime for AI workflows.**
 
-MirrorNeuron is an Elixir/BEAM runtime for orchestrating multi-agent workflows with bounded sandbox execution.
+MirrorNeuron is the simplest way to run durable AI workflows. Run your first AI workflow in minutes, then build multi-agent workflows in your preferred language with normal code—without Airflow DAG sprawl or Temporal cluster complexity.
 
-It is built around a simple runtime split:
+Think of it as the "Ollama for durable workflows": powerful enough for production, but dead simple to adopt and run.
 
-- BEAM handles orchestration, supervision, message routing, clustering, and persistence
-- OpenShell handles isolated execution for `executor` nodes
+---
 
-MirrorNeuron is not trying to be a general-purpose batch scheduler. It is designed for event-driven, message-oriented workflows where logical agents collaborate and only the heavy execution path leaves BEAM.
+## 🚀 The MirrorNeuron Ecosystem
 
-## Highlights
+This repository (`MirrorNeuron`) contains **only the core Elixir/BEAM runtime and gRPC server**. It handles orchestration, supervision, message routing, clustering, and persistence.
 
-- small built-in primitive set: `router`, `executor`, `aggregator`, `sensor`
-- Redis-backed job state, agent snapshots, and event history
-- BEAM cluster support with `libcluster` and `Horde`
-- bounded execution capacity through executor leases and pools
-- shared OpenShell sandbox reuse per job per runtime node
-- terminal-first tooling with:
-  - `mn`
-- example bundles for:
-  - local workflows
-  - shell and Python execution
-  - large fan-out scale tests
-  - streaming telemetry and anomaly detection
-  - shared PettingZoo MPE crowd visualization
-  - LLM codegen/review loops
-  - large-scale ecosystem simulation
-  - See [MirrorNeuron Blueprints](https://github.com/MirrorNeuronLab/mirrorneuron-blueprints)
+All interfaces, SDKs, deployments, and examples have been extracted into their own dedicated repositories:
 
-## Blueprints and Examples
+| Component | Description |
+|-----------|-------------|
+| 🧠 **[MirrorNeuron (This Repo)](https://github.com/MirrorNeuronLab/MirrorNeuron)** | The core runtime. Event-driven, message-oriented orchestrator built on Erlang/OTP. |
+| 🔌 **[mn-api](https://github.com/MirrorNeuronLab/mn-api)** | The RESTful HTTP Gateway. Allows external microservices to interact with the cluster via HTTP instead of gRPC. |
+| 💻 **[mn-cli](https://github.com/MirrorNeuronLab/mn-cli)** | The official Command Line Interface (`mn`). Built with Typer and Rich for elegant job lifecycle management. |
+| 🌐 **[mn-web-ui](https://github.com/MirrorNeuronLab/mn-web-ui)** | A modern Web Dashboard built with React Flow to visualize jobs, agents, and real-time logs. |
+| 🐍 **[mn-python-sdk](https://github.com/MirrorNeuronLab/mn-python-sdk)** | Python SDK for writing agents, executors, and interacting with the runtime. |
+| 🟦 **[mn-ts-sdk](https://github.com/MirrorNeuronLab/mn-ts-sdk)** | TypeScript SDK for writing agents and interacting with the runtime natively in Node/TypeScript. |
+| 📦 **[mn-deploy](https://github.com/MirrorNeuronLab/mn-deploy)** | Deployment scripts, installation wrappers, and system configuration for standing up MirrorNeuron clusters. |
+| 🧪 **[mn-system-tests](https://github.com/MirrorNeuronLab/mn-system-tests)** | End-to-end integration and scale testing suites across the entire ecosystem. |
+| 🏗️ **[mn-blueprints](https://github.com/MirrorNeuronLab/mirrorneuron-blueprints)** | Reusable workflow examples: research loops, marketing automation, finance risk monitoring, and edge workflows. |
 
-All example workflows, including the `research_flow` and `ecosystem_simulation`, have been moved to a separate repository: [MirrorNeuron Blueprints](https://github.com/MirrorNeuronLab/mirrorneuron-blueprints).
+---
 
+## ✨ Why MirrorNeuron?
 
-## Installation
+- **Simplicity First:** Get the reliability of durable execution without the massive infrastructure tax.
+- **Language Agnostic Execution:** BEAM handles orchestration, but your heavy execution path (Python, TS, Shell) runs in isolated `executor` nodes via OpenShell.
+- **Small Primitive Set:** Built around four simple primitives: `router`, `executor`, `aggregator`, `sensor`.
+- **Bounded Capacity:** Shared OpenShell sandbox reuse per job per runtime node, controlled by executor leases and pools.
+- **Clustered out of the box:** BEAM cluster support with `libcluster` and `Horde`, persisting to Redis.
 
-You can install MirrorNeuron using the one-line install script on macOS, Linux, or WSL. This script clones the repository, builds the executable, and sets up the `mn` alias in your `~/.local/bin` directory.
+## ⚡ Quickstart
+
+You can install the entire MirrorNeuron ecosystem using the one-line install script on macOS, Linux, or WSL.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MirrorNeuronLab/MirrorNeuron/main/install.sh | bash
 ```
 
-*Note: You must have Erlang and Elixir installed on your system before running the script. If you do not have them installed, the script will provide instructions for your operating system.*
+*Note: You must have Erlang and Elixir installed on your system. If missing, the script will guide you.*
 
-### Uninstallation
-
-To uninstall MirrorNeuron, simply remove the cloned repository and the generated executable:
+Then, clone some blueprints and run your first workflow:
 
 ```bash
-rm -rf ~/.local/share/MirrorNeuron
-rm ~/.local/bin/mn
+git clone https://github.com/MirrorNeuronLab/mirrorneuron-blueprints.git
+cd mirrorneuron-blueprints
+
+mn validate research_flow
+mn run research_flow
+mn monitor
 ```
 
-## Quickstart
+## 📖 Documentation
 
-```bash
-cd MirrorNeuron
-mix deps.get
-mix test
+If you are developing the core runtime, these docs live right here:
 
-./mn validate /path/to/mirrorneuron-blueprints/research_flow
-./mn run /path/to/mirrorneuron-blueprints/research_flow
-./mn monitor
-```
+1. [Runtime Architecture](docs/runtime-architecture.md)
+2. [Reliability Guide](docs/reliability.md)
+3. [API Reference (gRPC)](docs/api.md)
+4. [Development Guide](docs/development.md)
 
-For full setup instructions:
+*For SDK, CLI, or API documentation, please see their respective repositories.*
 
-- [Installation](docs/installation.md)
-- [Quickstart](docs/quickstart.md)
+## 🧠 Core Architecture
 
-## Documentation
+MirrorNeuron is not trying to be a general-purpose batch scheduler. It distinguishes between:
 
-Main documentation index:
+- **Logical workers:** Cheap BEAM processes that hold workflow state.
+- **Execution leases:** Scarce sandbox capacity used by `executor` nodes.
 
-- [docs/index.md](docs/index.md)
+This separation is why the runtime scales better than "launch one sandbox for every worker immediately." Domain-specific agent logic belongs in job bundles or user SDKs, not in the runtime kernel.
 
-Recommended reading order:
+## 🤝 Contributing
 
-1. [Installation](docs/installation.md)
-2. [Quickstart](docs/quickstart.md)
-3. [Examples Guide](docs/examples.md)
-4. [CLI Guide](docs/cli.md)
-5. [Monitor Guide](docs/monitor.md)
-6. [Runtime Architecture](docs/runtime-architecture.md)
-7. [Reliability Guide](docs/reliability.md)
-8. [API Reference](docs/api.md)
-9. [Troubleshooting](docs/troubleshooting.md)
-10. [Development Guide](docs/development.md)
-11. [Simulation Example](docs/simulation_example.md)
-12. [Shared MPE Crowd Example](docs/mpe_simple_push_example.md)
-
-## Core ideas
-
-### Runtime primitives
-
-MirrorNeuron keeps the built-in runtime small:
-
-- `router`
-- `executor`
-- `aggregator`
-- `sensor`
-
-This keeps the core generic and reusable. Domain-specific agent logic belongs in job bundles or user extensions, not in the runtime kernel.
-
-### Logical workers vs execution leases
-
-MirrorNeuron distinguishes:
-
-- logical workers: cheap BEAM processes that hold workflow state
-- execution leases: scarce sandbox capacity used by `executor` nodes
-
-This is the key reason the runtime scales better than “launch one sandbox for every worker immediately.”
-
-### Message-driven workflows
-
-Workflows are defined as graph bundles:
-
-```text
-job-folder/
-  manifest.json
-  payloads/
-```
-
-- `manifest.json` defines nodes, edges, entrypoints, and policies
-  - `agent_type` selects the runtime primitive
-  - `type` selects the behavioral template and defaults to `generic`
-- `payloads/` contains code and files needed by worker execution
-
-
-- [MirrorNeuron Blueprints](https://github.com/MirrorNeuronLab/mirrorneuron-blueprints) (External repository with examples)
-
-## Main commands
-
-```bash
-./mn validate <job-folder>
-./mn run <job-folder>
-./mn node list
-./mn job inspect <job_id>
-./mn job list [--live]
-./mn events <job_id>
-./mn monitor
-```
-
-For full command reference:
-
-- [CLI Guide](docs/cli.md)
-
-## Cluster and monitoring
-
-MirrorNeuron supports two-box dev-mode clustering and clustered example harnesses.
-
-Key docs:
-
-- [Cluster Guide](docs/cluster.md)
-- [Monitor Guide](docs/monitor.md)
-- [Reliability Guide](docs/reliability.md)
-
-## Public API surface
-
-The current public inspection and control APIs are documented here:
-
-- [API Reference](docs/api.md)
-
-These APIs are intended to support:
-
-- terminal monitoring
-- future dashboards
-- operational scripts
-- external integrations
-
-## Current scope
-
-MirrorNeuron already supports:
-
-- local execution
-- clustered execution
-- Redis-backed persistence
-- OpenShell-backed executor isolation
-- terminal monitoring
-
-It is still evolving in areas like:
-
-- stronger HA and failover
-- richer deferred/sensor semantics
-- broader artifact-store integration
-- more advanced scheduling and recovery policies
-
-For the current reliability model and known limits:
-
-- [Reliability Guide](docs/reliability.md)
-
-## Contributing
-
-If you are working on the runtime itself, start here:
-
-- [Development Guide](docs/development.md)
-
-## License
+We welcome contributions! If you are working on the core runtime, please see our [Development Guide](docs/development.md). 
 
 MirrorNeuron is available under the [MIT License](LICENSE).
