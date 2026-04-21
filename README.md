@@ -10,7 +10,7 @@ Today’s AI systems are powerful, but often lack **determinism, observability, 
 - easy to adopt by small teams or even individuals
 
 Think of it as:
-> **Temporal for AI workflows — but as easy to adopt as OpenClaw.**
+> **Temporal for muti agents AI workflows — but as easy to adopt as OpenClaw.**
 
 
 ## Community
