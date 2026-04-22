@@ -153,6 +153,26 @@ defmodule Mirrorneuron.Job.V1.ResumeJobResponse do
   field :status, 2, type: :string
 end
 
+defmodule Mirrorneuron.Job.V1.ClearJobsRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.ClearJobsRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+end
+
+defmodule Mirrorneuron.Job.V1.ClearJobsResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.ClearJobsResponse",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field :cleared_count, 1, type: :int32, json_name: "clearedCount"
+end
+
 defmodule Mirrorneuron.Job.V1.JobService.Service do
   @moduledoc false
 
@@ -165,10 +185,12 @@ defmodule Mirrorneuron.Job.V1.JobService.Service do
   rpc :ListJobs, Mirrorneuron.Job.V1.ListJobsRequest, Mirrorneuron.Job.V1.ListJobsResponse
 
   rpc :CancelJob, Mirrorneuron.Job.V1.CancelJobRequest, Mirrorneuron.Job.V1.CancelJobResponse
-  
+
   rpc :PauseJob, Mirrorneuron.Job.V1.PauseJobRequest, Mirrorneuron.Job.V1.PauseJobResponse
 
   rpc :ResumeJob, Mirrorneuron.Job.V1.ResumeJobRequest, Mirrorneuron.Job.V1.ResumeJobResponse
+
+  rpc :ClearJobs, Mirrorneuron.Job.V1.ClearJobsRequest, Mirrorneuron.Job.V1.ClearJobsResponse
 end
 
 defmodule Mirrorneuron.Job.V1.JobService.Stub do

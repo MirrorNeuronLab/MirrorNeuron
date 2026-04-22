@@ -8,7 +8,8 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     protobuf-compiler \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    python3 \
+    && rm -rf /var/lib/apt/lists/*&& rm -rf /var/lib/apt/lists/* rm -rf /var/lib/apt/lists/*
 
 # Install hex and rebar
 RUN mix local.rebar --force && mix local.hex --force

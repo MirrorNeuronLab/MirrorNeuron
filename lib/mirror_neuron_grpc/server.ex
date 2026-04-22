@@ -7,7 +7,8 @@ defmodule MirrorNeuron.Grpc.JobServer do
     ListJobsResponse,
     CancelJobResponse,
     PauseJobResponse,
-    ResumeJobResponse
+    ResumeJobResponse,
+    ClearJobsResponse
   }
 
   def submit_job(request, _stream) do
@@ -97,6 +98,15 @@ defmodule MirrorNeuron.Grpc.JobServer do
         %ResumeJobResponse{job_id: job_id, status: status}
       _ ->
         %ResumeJobResponse{job_id: job_id, status: "running"}
+    end
+  end
+
+  def clear_jobs(_request, _stream) do
+    case MirrorNeuron.Monitor.clear_jobs() do
+      {:ok, count} ->
+        %ClearJobsResponse{cleared_count: count}
+      {:error, reason} ->
+        raise GRPC.RPCError, status: GRPC.Status.internal(), message: reason
     end
   end
 end

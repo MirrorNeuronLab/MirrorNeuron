@@ -53,6 +53,21 @@ defmodule MirrorNeuron.Monitor do
     end
   end
 
+  def clear_jobs() do
+    with {:ok, all_jobs} <- list_jobs(include_terminal: true) do
+      to_delete =
+        Enum.reject(all_jobs, fn job -> 
+          job["status"] in ["running", "pending", "scheduled", "validated", "paused"]
+        end)
+      
+      Enum.each(to_delete, fn job ->
+        RedisStore.delete_job(job["job_id"])
+      end)
+      
+      {:ok, length(to_delete)}
+    end
+  end
+
   defp summarize_job(job) do
     details =
       case job_details_without_job(Map.get(job, "job_id")) do

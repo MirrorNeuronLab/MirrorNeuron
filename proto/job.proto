@@ -8,6 +8,7 @@ service JobService {
   rpc CancelJob (CancelJobRequest) returns (CancelJobResponse);
   rpc PauseJob (PauseJobRequest) returns (PauseJobResponse);
   rpc ResumeJob (ResumeJobRequest) returns (ResumeJobResponse);
+  rpc ClearJobs (ClearJobsRequest) returns (ClearJobsResponse);
 }
 
 message SubmitJobRequest {
@@ -62,4 +63,11 @@ message ResumeJobRequest {
 message ResumeJobResponse {
   string job_id = 1;
   string status = 2;
+}
+
+message ClearJobsRequest {
+}
+
+message ClearJobsResponse {
+  int32 cleared_count = 1;
 }
