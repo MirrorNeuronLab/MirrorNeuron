@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y \
     protobuf-compiler \
     curl \
     python3 \
-    && rm -rf /var/lib/apt/lists/*&& rm -rf /var/lib/apt/lists/* rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
 # Install hex and rebar
 RUN mix local.rebar --force && mix local.hex --force
