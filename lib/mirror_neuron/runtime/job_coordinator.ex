@@ -329,7 +329,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
       case start_agent(state, agent_id, recovery_snapshot) do
         {:ok, _pid} ->
-          wait_result = wait_for_agent_ready(state, agent_id, 5_000)
+          wait_result = wait_for_agent_ready(state, agent_id, 30_000)
 
           case wait_result do
             :ok ->

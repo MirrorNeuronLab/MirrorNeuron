@@ -197,6 +197,7 @@ defmodule MirrorNeuron.Builtins.Executor do
            message: message,
            attempt: attempt,
            invocation: invocation,
+           coordinator_node: node(context.coordinator),
            job_id: context.job_id,
            agent_id: context.node.node_id,
            agent_type: Map.get(context.node, :agent_type),

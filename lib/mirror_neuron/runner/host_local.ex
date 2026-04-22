@@ -212,6 +212,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
 
   defp copy_uploads(base_dir, config, opts) do
     payloads_path = Keyword.get(opts, :payloads_path)
+    coordinator_node = Keyword.get(opts, :coordinator_node, Node.self())
 
     entries =
       case Map.get(config, "upload_paths") do
@@ -242,27 +243,65 @@ defmodule MirrorNeuron.Runner.HostLocal do
       source = resolve_upload_source(entry["source"], payloads_path)
       target = Path.join(base_dir, entry["target"])
 
-      cond do
-        File.dir?(source) ->
-          File.mkdir_p!(Path.dirname(target))
+      is_local = coordinator_node == Node.self()
 
+      cond do
+        is_local and File.dir?(source) ->
+          File.mkdir_p!(Path.dirname(target))
           case File.cp_r(source, target) do
             {:ok, _files} -> {:cont, :ok}
             {:error, reason, _file} -> {:halt, {:error, inspect(reason)}}
           end
 
-        File.exists?(source) ->
+        is_local and File.exists?(source) ->
           File.mkdir_p!(Path.dirname(target))
-
           case File.cp(source, target) do
             :ok -> {:cont, :ok}
             {:error, reason} -> {:halt, {:error, inspect(reason)}}
           end
+          
+        not is_local ->
+          # Remote fetch
+          is_dir = :rpc.call(coordinator_node, File, :dir?, [source], 30_000)
+          
+          if is_dir == true do
+            files = :rpc.call(coordinator_node, __MODULE__, :list_all_files, [source], 30_000)
+            Enum.each(files, fn rel_path ->
+              content = :rpc.call(coordinator_node, File, :read!, [Path.join(source, rel_path)], 30_000)
+              file_target = Path.join(target, rel_path)
+              File.mkdir_p!(Path.dirname(file_target))
+              File.write!(file_target, content)
+            end)
+            {:cont, :ok}
+          else
+            is_file = :rpc.call(coordinator_node, File, :exists?, [source], 30_000)
+            if is_file == true do
+              content = :rpc.call(coordinator_node, File, :read!, [source], 30_000)
+              File.mkdir_p!(Path.dirname(target))
+              File.write!(target, content)
+              {:cont, :ok}
+            else
+              {:halt, {:error, "upload source does not exist remotely on #{coordinator_node}: #{source}"}}
+            end
+          end
 
         true ->
-          {:halt, {:error, "upload source does not exist: #{source}"}}
+          {:halt, {:error, "upload source does not exist locally: #{source}"}}
       end
     end)
+  end
+
+  @doc false
+  def list_all_files(dir) do
+    if File.dir?(dir) do
+      dir
+      |> Path.join("**/*")
+      |> Path.wildcard()
+      |> Enum.reject(&File.dir?/1)
+      |> Enum.map(&Path.relative_to(&1, dir))
+    else
+      []
+    end
   end
 
   defp resolve_upload_source(source, nil), do: Path.expand(source)

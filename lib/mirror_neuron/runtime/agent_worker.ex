@@ -8,7 +8,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.Naming
 
-  @default_heartbeat_interval_ms 2_000
+  @default_heartbeat_interval_ms 30_000
 
   def child_spec(
         {job_id, node, outbound_edges, inbound_edges, coordinator, runtime_context,

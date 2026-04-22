@@ -1,7 +1,7 @@
 defmodule MirrorNeuron.Monitor do
   alias MirrorNeuron.Persistence.RedisStore
 
-  @default_live_window_ms 10_000
+  @default_live_window_ms 300_000
   @terminal_statuses ["completed", "failed", "cancelled"]
 
   def list_jobs(opts \\ []) do

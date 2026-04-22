@@ -114,7 +114,7 @@ end
 defmodule MirrorNeuron.Grpc.ClusterServer do
   use GRPC.Server, service: Mirrorneuron.Cluster.V1.ClusterService.Service
 
-  alias Mirrorneuron.Cluster.V1.GetSystemSummaryResponse
+  alias Mirrorneuron.Cluster.V1.{GetSystemSummaryResponse, RemoveNodeResponse}
 
   def get_system_summary(_request, _stream) do
     case MirrorNeuron.Monitor.cluster_overview() do
@@ -123,6 +123,16 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
 
       _ ->
         %GetSystemSummaryResponse{summary_json: "{}"}
+    end
+  end
+
+  def remove_node(request, _stream) do
+    case MirrorNeuron.remove_node(request.node_name) do
+      {:ok, %{status: status}} ->
+        %RemoveNodeResponse{node_name: request.node_name, status: status}
+
+      {:error, reason} ->
+        raise GRPC.RPCError, status: GRPC.Status.internal(), message: reason
     end
   end
 end

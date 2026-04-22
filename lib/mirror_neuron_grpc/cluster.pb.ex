@@ -18,6 +18,29 @@ defmodule Mirrorneuron.Cluster.V1.GetSystemSummaryResponse do
   field :summary_json, 1, type: :string, json_name: "summaryJson"
 end
 
+defmodule Mirrorneuron.Cluster.V1.RemoveNodeRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.RemoveNodeRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field :node_name, 1, type: :string, json_name: "nodeName"
+end
+
+defmodule Mirrorneuron.Cluster.V1.RemoveNodeResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.RemoveNodeResponse",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field :node_name, 1, type: :string, json_name: "nodeName"
+  field :status, 2, type: :string
+end
+
 defmodule Mirrorneuron.Cluster.V1.ClusterService.Service do
   @moduledoc false
 
@@ -28,6 +51,10 @@ defmodule Mirrorneuron.Cluster.V1.ClusterService.Service do
   rpc :GetSystemSummary,
       Mirrorneuron.Cluster.V1.GetSystemSummaryRequest,
       Mirrorneuron.Cluster.V1.GetSystemSummaryResponse
+
+  rpc :RemoveNode,
+      Mirrorneuron.Cluster.V1.RemoveNodeRequest,
+      Mirrorneuron.Cluster.V1.RemoveNodeResponse
 end
 
 defmodule Mirrorneuron.Cluster.V1.ClusterService.Stub do
