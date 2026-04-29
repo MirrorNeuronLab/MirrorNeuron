@@ -15,7 +15,8 @@ defmodule MirrorNeuron do
     if control_node?() do
       Control.call(__MODULE__, :run_manifest, [input, opts])
     else
-      with {:ok, bundle} <- JobBundle.load(input),
+      with :ok <- maybe_accept_new_job(opts),
+           {:ok, bundle} <- JobBundle.load(input),
            {:ok, job_id, _pid} <-
              Runtime.start_job(bundle.manifest, Keyword.put(opts, :job_bundle, bundle)) do
         if Keyword.get(opts, :await, false) do
@@ -71,6 +72,9 @@ defmodule MirrorNeuron do
   def list_jobs(opts \\ []), do: Monitor.list_jobs(opts)
   def job_details(job_id, opts \\ []), do: Monitor.job_details(job_id, opts)
   def cluster_overview(opts \\ []), do: Monitor.cluster_overview(opts)
+  def metrics, do: Monitor.metrics()
+  def dead_letters(job_id), do: Monitor.dead_letters(job_id)
+  def replay_dead_letter(job_id, index), do: Monitor.replay_dead_letter(job_id, index)
 
   def pause(job_id) do
     if control_node?() do
@@ -164,8 +168,24 @@ defmodule MirrorNeuron do
     end
   end
 
+  def pressure(job_id) do
+    if control_node?() do
+      call_control_or_runtime(job_id, :pressure, [job_id])
+    else
+      Runtime.pressure(job_id)
+    end
+  end
+
   defp control_node? do
     MirrorNeuron.Application.node_role() == "control"
+  end
+
+  defp maybe_accept_new_job(opts) do
+    if Keyword.get(opts, :resource_admission, true) do
+      MirrorNeuron.ResourceAdmission.check()
+    else
+      :ok
+    end
   end
 
   defp call_control_or_runtime(job_id, function, args) do

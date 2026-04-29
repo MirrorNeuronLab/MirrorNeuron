@@ -16,9 +16,13 @@ defmodule MirrorNeuron.RedisTest do
       {:error, {:already_started, _pid}} -> :ok
     end
 
-    assert_eventually(fn ->
-      match?({:ok, "PONG"}, Redix.command(MirrorNeuron.Redis.Connection, ["PING"]))
-    end)
+    assert_eventually(fn -> ping?() end)
+  end
+
+  defp ping? do
+    match?({:ok, "PONG"}, Redix.command(MirrorNeuron.Redis.Connection, ["PING"]))
+  catch
+    :exit, _reason -> false
   end
 
   defp assert_eventually(fun, attempts \\ 20)

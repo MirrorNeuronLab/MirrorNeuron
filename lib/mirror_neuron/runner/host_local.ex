@@ -152,7 +152,16 @@ defmodule MirrorNeuron.Runner.HostLocal do
       |> Map.merge(extra_env(config))
       |> Enum.map(fn {key, value} -> {key, value} end)
 
-    {["bash", "-lc", wrapper], env, workdir}
+    if byte_size(actual_command) > max_command_length() do
+      {:error, "command exceeds MIRROR_NEURON_MAX_COMMAND_LENGTH"}
+    else
+      {["bash", "-lc", wrapper], env, workdir}
+    end
+  end
+
+  defp max_command_length do
+    System.get_env("MIRROR_NEURON_MAX_COMMAND_LENGTH", "32768")
+    |> String.to_integer()
   end
 
   defp run_command([command | args], env, workdir) do
@@ -177,7 +186,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
             |> String.trim()
 
           {:ok,
-           %{
+           sanitize_result(%{
              "sandbox_name" => runner_name,
              "remote_dir" => workdir,
              "exit_code" => parsed["exit_code"],
@@ -188,14 +197,14 @@ defmodule MirrorNeuron.Runner.HostLocal do
              "raw_output" => output,
              "runner" => "host_local",
              "node_name" => to_string(Node.self())
-           }}
+           })}
         else
           {:error, error} -> {:error, Exception.message(error)}
         end
 
       _ ->
         {:ok,
-         %{
+         sanitize_result(%{
            "sandbox_name" => runner_name,
            "remote_dir" => workdir,
            "exit_code" => runner_exit_code,
@@ -206,7 +215,37 @@ defmodule MirrorNeuron.Runner.HostLocal do
            "raw_output" => output,
            "runner" => "host_local",
            "node_name" => to_string(Node.self())
-         }}
+         })}
+    end
+  end
+
+  defp sanitize_result(result) do
+    Enum.into(result, %{}, fn
+      {key, value} when is_binary(value) ->
+        {key, value |> redact_secrets() |> truncate_artifact()}
+
+      entry ->
+        entry
+    end)
+  end
+
+  defp redact_secrets(text) do
+    System.get_env()
+    |> Enum.filter(fn {key, value} ->
+      value != "" and String.match?(key, ~r/(TOKEN|SECRET|KEY|COOKIE|PASSWORD)/i)
+    end)
+    |> Enum.reduce(text, fn {_key, value}, acc -> String.replace(acc, value, "[REDACTED]") end)
+  end
+
+  defp truncate_artifact(text) do
+    max_bytes =
+      System.get_env("MIRROR_NEURON_MAX_ARTIFACT_BYTES", "1048576")
+      |> String.to_integer()
+
+    if byte_size(text) > max_bytes do
+      binary_part(text, 0, max_bytes) <> "\n[truncated by MIRROR_NEURON_MAX_ARTIFACT_BYTES]"
+    else
+      text
     end
   end
 
@@ -240,55 +279,70 @@ defmodule MirrorNeuron.Runner.HostLocal do
       end
 
     Enum.reduce_while(entries, :ok, fn entry, :ok ->
-      source = resolve_upload_source(entry["source"], payloads_path)
-      target = Path.join(base_dir, entry["target"])
-
-      is_local = coordinator_node == Node.self()
-
-      cond do
-        is_local and File.dir?(source) ->
-          File.mkdir_p!(Path.dirname(target))
-          case File.cp_r(source, target) do
-            {:ok, _files} -> {:cont, :ok}
-            {:error, reason, _file} -> {:halt, {:error, inspect(reason)}}
-          end
-
-        is_local and File.exists?(source) ->
-          File.mkdir_p!(Path.dirname(target))
-          case File.cp(source, target) do
-            :ok -> {:cont, :ok}
-            {:error, reason} -> {:halt, {:error, inspect(reason)}}
-          end
-          
-        not is_local ->
-          # Remote fetch
-          is_dir = :rpc.call(coordinator_node, File, :dir?, [source], 30_000)
-          
-          if is_dir == true do
-            files = :rpc.call(coordinator_node, __MODULE__, :list_all_files, [source], 30_000)
-            Enum.each(files, fn rel_path ->
-              content = :rpc.call(coordinator_node, File, :read!, [Path.join(source, rel_path)], 30_000)
-              file_target = Path.join(target, rel_path)
-              File.mkdir_p!(Path.dirname(file_target))
-              File.write!(file_target, content)
-            end)
-            {:cont, :ok}
-          else
-            is_file = :rpc.call(coordinator_node, File, :exists?, [source], 30_000)
-            if is_file == true do
-              content = :rpc.call(coordinator_node, File, :read!, [source], 30_000)
-              File.mkdir_p!(Path.dirname(target))
-              File.write!(target, content)
-              {:cont, :ok}
-            else
-              {:halt, {:error, "upload source does not exist remotely on #{coordinator_node}: #{source}"}}
-            end
-          end
-
-        true ->
-          {:halt, {:error, "upload source does not exist locally: #{source}"}}
+      with {:ok, source} <- resolve_upload_source(entry["source"], payloads_path),
+           {:ok, target} <- resolve_upload_target(base_dir, entry["target"]) do
+        copy_upload_entry(source, target, coordinator_node)
+      else
+        {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
+  end
+
+  defp copy_upload_entry(source, target, coordinator_node) do
+    is_local = coordinator_node == Node.self()
+
+    cond do
+      is_local and File.dir?(source) ->
+        File.mkdir_p!(Path.dirname(target))
+
+        case File.cp_r(source, target) do
+          {:ok, _files} -> {:cont, :ok}
+          {:error, reason, _file} -> {:halt, {:error, inspect(reason)}}
+        end
+
+      is_local and File.exists?(source) ->
+        File.mkdir_p!(Path.dirname(target))
+
+        case File.cp(source, target) do
+          :ok -> {:cont, :ok}
+          {:error, reason} -> {:halt, {:error, inspect(reason)}}
+        end
+
+      not is_local ->
+        copy_remote_upload(source, target, coordinator_node)
+
+      true ->
+        {:halt, {:error, "upload source does not exist locally: #{source}"}}
+    end
+  end
+
+  defp copy_remote_upload(source, target, coordinator_node) do
+    is_dir = :rpc.call(coordinator_node, File, :dir?, [source], 30_000)
+
+    if is_dir == true do
+      files = :rpc.call(coordinator_node, __MODULE__, :list_all_files, [source], 30_000)
+
+      Enum.each(files, fn rel_path ->
+        content = :rpc.call(coordinator_node, File, :read!, [Path.join(source, rel_path)], 30_000)
+        file_target = Path.join(target, rel_path)
+        File.mkdir_p!(Path.dirname(file_target))
+        File.write!(file_target, content)
+      end)
+
+      {:cont, :ok}
+    else
+      is_file = :rpc.call(coordinator_node, File, :exists?, [source], 30_000)
+
+      if is_file == true do
+        content = :rpc.call(coordinator_node, File, :read!, [source], 30_000)
+        File.mkdir_p!(Path.dirname(target))
+        File.write!(target, content)
+        {:cont, :ok}
+      else
+        {:halt,
+         {:error, "upload source does not exist remotely on #{coordinator_node}: #{source}"}}
+      end
+    end
   end
 
   @doc false
@@ -304,15 +358,36 @@ defmodule MirrorNeuron.Runner.HostLocal do
     end
   end
 
-  defp resolve_upload_source(source, nil), do: Path.expand(source)
+  defp resolve_upload_source(source, nil), do: {:ok, Path.expand(source)}
 
   defp resolve_upload_source(source, payloads_path) do
-    if Path.type(source) == :absolute do
-      source
+    payloads_root = Path.expand(payloads_path)
+
+    resolved =
+      if Path.type(source) == :absolute do
+        Path.expand(source)
+      else
+        Path.expand(source, payloads_root)
+      end
+
+    if inside_path?(resolved, payloads_root) do
+      {:ok, resolved}
     else
-      Path.expand(source, payloads_path)
+      {:error, "upload source must stay inside blueprint payloads: #{source}"}
     end
   end
+
+  defp resolve_upload_target(base_dir, target) do
+    resolved = Path.expand(target, base_dir)
+
+    if inside_path?(resolved, Path.expand(base_dir)) do
+      {:ok, resolved}
+    else
+      {:error, "upload target must stay inside sandbox workspace: #{target}"}
+    end
+  end
+
+  defp inside_path?(path, root), do: path == root or String.starts_with?(path, root <> "/")
 
   defp resolve_workdir(config, base_dir) do
     default_root = Map.get(config, "sandbox_upload_path", "/sandbox/job")

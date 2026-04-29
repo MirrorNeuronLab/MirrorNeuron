@@ -54,7 +54,7 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
                  staged_dir,
                  remote_dir
                ),
-             command <- build_command(config, remote_dir, opts),
+             {:ok, command} <- build_command(config, remote_dir, opts),
              {:ok, output, ssh_exit_code} <-
                run_ssh_command(config, sandbox["sandbox_name"], sandbox["ssh_host"], command),
              {:ok, result} <-
@@ -72,34 +72,31 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
   end
 
   defp build_args(sandbox_name, staged_dir, remote_dir, config, opts) do
-    command =
-      config
-      |> build_command(remote_dir, opts)
-      |> List.wrap()
+    with {:ok, command} <- build_command(config, remote_dir, opts) do
+      args =
+        [
+          "sandbox",
+          "create",
+          "--name",
+          sandbox_name,
+          "--upload",
+          "#{staged_dir}:#{remote_dir}",
+          "--no-git-ignore"
+        ]
+        |> maybe_put_flag("--no-keep", Map.get(config, "no_keep", true))
+        |> maybe_put_flag("--no-auto-providers", Map.get(config, "no_auto_providers", true))
+        |> maybe_put_flag("--gpu", Map.get(config, "gpu", false))
+        |> maybe_put_value("--from", Map.get(config, "from"))
+        |> maybe_put_value("--remote", Map.get(config, "remote"))
+        |> maybe_put_value("--ssh-key", Map.get(config, "ssh_key"))
+        |> maybe_put_value("--policy", Map.get(config, "policy"))
+        |> maybe_put_many("--provider", Map.get(config, "providers", []))
+        |> maybe_put_tty(Map.get(config, "tty"))
+        |> Kernel.++(["--"])
+        |> Kernel.++(command)
 
-    args =
-      [
-        "sandbox",
-        "create",
-        "--name",
-        sandbox_name,
-        "--upload",
-        "#{staged_dir}:#{remote_dir}",
-        "--no-git-ignore"
-      ]
-      |> maybe_put_flag("--no-keep", Map.get(config, "no_keep", true))
-      |> maybe_put_flag("--no-auto-providers", Map.get(config, "no_auto_providers", true))
-      |> maybe_put_flag("--gpu", Map.get(config, "gpu", false))
-      |> maybe_put_value("--from", Map.get(config, "from"))
-      |> maybe_put_value("--remote", Map.get(config, "remote"))
-      |> maybe_put_value("--ssh-key", Map.get(config, "ssh_key"))
-      |> maybe_put_value("--policy", Map.get(config, "policy"))
-      |> maybe_put_many("--provider", Map.get(config, "providers", []))
-      |> maybe_put_tty(Map.get(config, "tty"))
-      |> Kernel.++(["--"])
-      |> Kernel.++(command)
-
-    {:ok, args}
+      {:ok, args}
+    end
   end
 
   defp build_command(config, remote_dir, opts) do
@@ -186,7 +183,16 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
     exit "$status"
     """
 
-    ["bash", "-lc", wrapper]
+    if byte_size(actual_command) > max_command_length() do
+      {:error, "command exceeds MIRROR_NEURON_MAX_COMMAND_LENGTH"}
+    else
+      {:ok, ["bash", "-lc", wrapper]}
+    end
+  end
+
+  defp max_command_length do
+    System.get_env("MIRROR_NEURON_MAX_COMMAND_LENGTH", "32768")
+    |> String.to_integer()
   end
 
   defp run_command(executable, args) do
@@ -277,42 +283,70 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
             |> String.trim()
 
           {:ok,
-           maybe_put_cleanup_warning(
-             %{
-               "sandbox_name" => sandbox_name,
-               "remote_dir" => remote_dir,
-               "exit_code" => parsed["exit_code"],
-               "openshell_exit_code" => openshell_exit_code,
-               "stdout" => parsed["stdout"],
-               "stderr" => parsed["stderr"],
-               "logs" => logs,
-               "raw_output" => output
-             },
-             parsed["exit_code"],
-             openshell_exit_code,
-             logs
-           )}
+           %{
+             "sandbox_name" => sandbox_name,
+             "remote_dir" => remote_dir,
+             "exit_code" => parsed["exit_code"],
+             "openshell_exit_code" => openshell_exit_code,
+             "stdout" => parsed["stdout"],
+             "stderr" => parsed["stderr"],
+             "logs" => logs,
+             "raw_output" => output
+           }
+           |> sanitize_result()
+           |> maybe_put_cleanup_warning(parsed["exit_code"], openshell_exit_code, logs)}
         else
           {:error, error} -> {:error, Exception.message(error)}
         end
 
       _ ->
         {:ok,
-         maybe_put_cleanup_warning(
-           %{
-             "sandbox_name" => sandbox_name,
-             "remote_dir" => remote_dir,
-             "exit_code" => openshell_exit_code,
-             "openshell_exit_code" => openshell_exit_code,
-             "stdout" => "",
-             "stderr" => "",
-             "logs" => String.trim(output),
-             "raw_output" => output
-           },
+         %{
+           "sandbox_name" => sandbox_name,
+           "remote_dir" => remote_dir,
+           "exit_code" => openshell_exit_code,
+           "openshell_exit_code" => openshell_exit_code,
+           "stdout" => "",
+           "stderr" => "",
+           "logs" => String.trim(output),
+           "raw_output" => output
+         }
+         |> sanitize_result()
+         |> maybe_put_cleanup_warning(
            openshell_exit_code,
            openshell_exit_code,
            String.trim(output)
          )}
+    end
+  end
+
+  defp sanitize_result(result) do
+    Enum.into(result, %{}, fn
+      {key, value} when is_binary(value) ->
+        {key, value |> redact_secrets() |> truncate_artifact()}
+
+      entry ->
+        entry
+    end)
+  end
+
+  defp redact_secrets(text) do
+    System.get_env()
+    |> Enum.filter(fn {key, value} ->
+      value != "" and String.match?(key, ~r/(TOKEN|SECRET|KEY|COOKIE|PASSWORD)/i)
+    end)
+    |> Enum.reduce(text, fn {_key, value}, acc -> String.replace(acc, value, "[REDACTED]") end)
+  end
+
+  defp truncate_artifact(text) do
+    max_bytes =
+      System.get_env("MIRROR_NEURON_MAX_ARTIFACT_BYTES", "1048576")
+      |> String.to_integer()
+
+    if byte_size(text) > max_bytes do
+      binary_part(text, 0, max_bytes) <> "\n[truncated by MIRROR_NEURON_MAX_ARTIFACT_BYTES]"
+    else
+      text
     end
   end
 
@@ -434,41 +468,68 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
       end
 
     Enum.reduce_while(entries, :ok, fn entry, :ok ->
-      source = resolve_upload_source(entry["source"], payloads_path)
-      target = Path.join(base_dir, entry["target"])
-
-      cond do
-        File.dir?(source) ->
-          File.mkdir_p!(Path.dirname(target))
-
-          case File.cp_r(source, target) do
-            {:ok, _files} -> {:cont, :ok}
-            {:error, reason, _file} -> {:halt, {:error, inspect(reason)}}
-          end
-
-        File.exists?(source) ->
-          File.mkdir_p!(Path.dirname(target))
-
-          case File.cp(source, target) do
-            :ok -> {:cont, :ok}
-            {:error, reason} -> {:halt, {:error, inspect(reason)}}
-          end
-
-        true ->
-          {:halt, {:error, "upload source does not exist: #{source}"}}
+      with {:ok, source} <- resolve_upload_source(entry["source"], payloads_path),
+           {:ok, target} <- resolve_upload_target(base_dir, entry["target"]) do
+        copy_upload_entry(source, target)
+      else
+        {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
   end
 
-  defp resolve_upload_source(source, nil), do: Path.expand(source)
+  defp copy_upload_entry(source, target) do
+    cond do
+      File.dir?(source) ->
+        File.mkdir_p!(Path.dirname(target))
 
-  defp resolve_upload_source(source, payloads_path) do
-    if Path.type(source) == :absolute do
-      source
-    else
-      Path.expand(source, payloads_path)
+        case File.cp_r(source, target) do
+          {:ok, _files} -> {:cont, :ok}
+          {:error, reason, _file} -> {:halt, {:error, inspect(reason)}}
+        end
+
+      File.exists?(source) ->
+        File.mkdir_p!(Path.dirname(target))
+
+        case File.cp(source, target) do
+          :ok -> {:cont, :ok}
+          {:error, reason} -> {:halt, {:error, inspect(reason)}}
+        end
+
+      true ->
+        {:halt, {:error, "upload source does not exist: #{source}"}}
     end
   end
+
+  defp resolve_upload_source(source, nil), do: {:ok, Path.expand(source)}
+
+  defp resolve_upload_source(source, payloads_path) do
+    payloads_root = Path.expand(payloads_path)
+
+    resolved =
+      if Path.type(source) == :absolute do
+        Path.expand(source)
+      else
+        Path.expand(source, payloads_root)
+      end
+
+    if inside_path?(resolved, payloads_root) do
+      {:ok, resolved}
+    else
+      {:error, "upload source must stay inside blueprint payloads: #{source}"}
+    end
+  end
+
+  defp resolve_upload_target(base_dir, target) do
+    resolved = Path.expand(target, base_dir)
+
+    if inside_path?(resolved, Path.expand(base_dir)) do
+      {:ok, resolved}
+    else
+      {:error, "upload target must stay inside sandbox workspace: #{target}"}
+    end
+  end
+
+  defp inside_path?(path, root), do: path == root or String.starts_with?(path, root <> "/")
 
   defp resolve_local_cli_paths(config, opts) do
     payloads_path =

@@ -5,7 +5,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   alias MirrorNeuron.Message
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
-  alias MirrorNeuron.Runtime.{AgentWorker, EventBus, Naming}
+  alias MirrorNeuron.Runtime.{AgentWorker, Backpressure, EventBus, Naming}
   alias MirrorNeuron.Sandbox.JobSandbox
 
   @default_health_check_interval_ms 2_000
@@ -41,6 +41,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       nodes_by_id: Map.new(manifest.nodes, &{&1.node_id, &1}),
       outbound_edges_by_node: Enum.group_by(manifest.edges, & &1.from_node),
       inbound_edges_by_node: Enum.group_by(manifest.edges, & &1.to_node),
+      downstream_by_node: build_downstream_index(manifest.edges),
+      pressure: %{},
       agent_restart_attempts: %{},
       max_agent_restart_attempts:
         Map.get(
@@ -141,11 +143,37 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   @impl true
   def handle_call({:send_message, agent_id, message}, _from, state) do
     envelope = build_external_message(state.job_id, agent_id, message)
+    state = refresh_pressure(state)
 
-    case Runtime.deliver(state.job_id, agent_id, envelope) do
-      :ok -> {:reply, {:ok, "delivered"}, state}
-      {:error, reason} -> {:reply, {:error, reason}, state}
+    case external_input_pressure(state, agent_id) do
+      {:retry_later, details} ->
+        EventBus.publish(state.job_id, %{
+          type: :external_input_rejected,
+          agent_id: agent_id,
+          payload: details,
+          timestamp: Runtime.timestamp()
+        })
+
+        {:reply, {:error, {:retry_later, details}}, state}
+
+      :ok ->
+        case Runtime.deliver(
+               state.job_id,
+               agent_id,
+               envelope,
+               node_backpressure_opts(state, agent_id)
+             ) do
+          :ok -> {:reply, {:ok, "delivered"}, state}
+          {:error, {:backpressure, details}} -> {:reply, {:error, {:retry_later, details}}, state}
+          {:error, reason} -> {:reply, {:error, reason}, state}
+        end
     end
+  end
+
+  @impl true
+  def handle_call(:pressure, _from, state) do
+    next_state = refresh_pressure(state)
+    {:reply, {:ok, pressure_summary(next_state)}, next_state}
   end
 
   @impl true
@@ -172,6 +200,21 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     end
 
     {:noreply, state}
+  end
+
+  def handle_info({:agent_pressure, agent_id, pressure}, state) do
+    next_state = put_in(state.pressure[agent_id], pressure)
+
+    if Backpressure.pressured?(pressure) do
+      EventBus.publish(state.job_id, %{
+        type: :backpressure_state,
+        agent_id: agent_id,
+        payload: pressure,
+        timestamp: Runtime.timestamp()
+      })
+    end
+
+    {:noreply, next_state}
   end
 
   def handle_info({:agent_completed_job, agent_id, result}, state) do
@@ -211,6 +254,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   def handle_info(:health_check, %{status: status} = state)
       when status in ["running", "paused"] do
+    state = refresh_pressure(state)
+
     case recover_missing_agents(state) do
       {:ok, next_state} ->
         schedule_health_check(next_state.health_check_interval_ms)
@@ -252,6 +297,75 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
           {:halt, {:error, "failed to start agent #{node.node_id}: #{inspect(reason)}"}}
       end
     end)
+  end
+
+  defp refresh_pressure(state) do
+    pressure =
+      Enum.reduce(state.agent_ids, state.pressure, fn agent_id, acc ->
+        case agent_pressure_snapshot(state, agent_id) do
+          nil -> acc
+          snapshot -> Map.put(acc, agent_id, snapshot)
+        end
+      end)
+
+    pressure
+    |> Enum.filter(fn {_agent_id, snapshot} -> Backpressure.pressured?(snapshot) end)
+    |> Enum.each(fn {agent_id, snapshot} ->
+      EventBus.publish(state.job_id, %{
+        type: :backpressure_state,
+        agent_id: agent_id,
+        payload: snapshot,
+        timestamp: Runtime.timestamp()
+      })
+    end)
+
+    %{state | pressure: pressure}
+  end
+
+  defp agent_pressure_snapshot(state, agent_id) do
+    with [{pid, _meta}] <-
+           Horde.Registry.lookup(
+             MirrorNeuron.DistributedRegistry,
+             {:agent, state.job_id, agent_id}
+           ) do
+      node = Map.fetch!(state.nodes_by_id, agent_id)
+      queue_depth = Backpressure.process_queue_depth(pid)
+      Backpressure.snapshot(agent_id, node, queue_depth, [], Map.get(state.pressure, agent_id))
+    else
+      _ -> nil
+    end
+  end
+
+  defp external_input_pressure(state, agent_id) do
+    impacted_agents = [agent_id | Map.get(state.downstream_by_node, agent_id, [])]
+
+    state.pressure
+    |> Map.take(impacted_agents)
+    |> Enum.find(fn {_id, snapshot} -> Backpressure.pressured?(snapshot) end)
+    |> case do
+      nil ->
+        :ok
+
+      {pressured_agent_id, snapshot} ->
+        {:retry_later,
+         Backpressure.retry_later_reason(snapshot, %{
+           "target_agent_id" => agent_id,
+           "pressured_agent_id" => pressured_agent_id,
+           "affected_agents" => impacted_agents,
+           "accepted" => false
+         })}
+    end
+  end
+
+  defp pressure_summary(state) do
+    %{
+      "job_id" => state.job_id,
+      "pressured" =>
+        state.pressure
+        |> Enum.filter(fn {_id, snapshot} -> Backpressure.pressured?(snapshot) end)
+        |> Enum.map(fn {id, snapshot} -> Map.put(snapshot, "agent_id", id) end),
+      "agents" => state.pressure
+    }
   end
 
   defp seed_entrypoints(state) do
@@ -412,6 +526,26 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     Process.send_after(self(), :health_check, interval_ms)
   end
 
+  defp build_downstream_index(edges) do
+    direct = Enum.group_by(edges, & &1.from_node, & &1.to_node)
+
+    direct
+    |> Map.keys()
+    |> Enum.into(%{}, fn node_id ->
+      {node_id, downstream_closure(node_id, direct, MapSet.new())}
+    end)
+  end
+
+  defp downstream_closure(node_id, direct, visited) do
+    direct
+    |> Map.get(node_id, [])
+    |> Enum.reject(&MapSet.member?(visited, &1))
+    |> Enum.flat_map(fn child ->
+      [child | downstream_closure(child, direct, MapSet.put(visited, child))]
+    end)
+    |> Enum.uniq()
+  end
+
   defp do_wait_for_agents_ready(state, started_at, timeout_ms) do
     missing_agents =
       Enum.reject(state.agent_ids, fn agent_id ->
@@ -521,8 +655,19 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       placement_policy: Map.get(state.manifest.policies, "placement_policy", "local"),
       recovery_policy: Map.get(state.manifest.policies, "recovery_mode", "local_restart"),
       submitted_at: state.submitted_at,
-      manifest_version: state.manifest.manifest_version
+      manifest_version: state.manifest.manifest_version,
+      backpressure_by_agent:
+        Map.new(state.manifest.nodes, fn node ->
+          {node.node_id, Backpressure.config(node) |> Map.to_list()}
+        end)
     }
+  end
+
+  defp node_backpressure_opts(state, agent_id) do
+    state.nodes_by_id
+    |> Map.get(agent_id, %{})
+    |> Backpressure.config()
+    |> Map.to_list()
   end
 
   defp unique_id do

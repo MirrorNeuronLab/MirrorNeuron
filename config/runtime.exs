@@ -6,6 +6,14 @@ config :mirror_neuron,
   cookie: System.get_env("MIRROR_NEURON_COOKIE", "mirrorneuron"),
   openshell_bin: System.get_env("MIRROR_NEURON_OPENSHELL_BIN", "openshell"),
   temp_dir: System.get_env("MIRROR_NEURON_TEMP_DIR", "/tmp/mirror_neuron"),
+  resource_admission_enabled:
+    System.get_env("MIRROR_NEURON_RESOURCE_ADMISSION_ENABLED", "true") not in [
+      "0",
+      "false",
+      "FALSE",
+      "False",
+      ""
+    ],
   api_port: String.to_integer(System.get_env("MIRROR_NEURON_API_PORT", "4000")),
   api_enabled:
     System.get_env("MIRROR_NEURON_API_ENABLED", "true") not in [

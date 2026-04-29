@@ -1,0 +1,77 @@
+defmodule MirrorNeuron.ResourceAdmissionTest do
+  use ExUnit.Case, async: false
+
+  import ExUnit.CaptureLog
+
+  alias MirrorNeuron.ResourceAdmission
+
+  setup do
+    keys = [
+      "MIRROR_NEURON_RESOURCE_ADMISSION_ENABLED",
+      "MIRROR_NEURON_MAX_CPU_LOAD_RATIO",
+      "MIRROR_NEURON_MAX_MEMORY_USED_RATIO",
+      "MIRROR_NEURON_MAX_GPU_UTILIZATION_RATIO",
+      "MIRROR_NEURON_MAX_GPU_MEMORY_USED_RATIO"
+    ]
+
+    previous = Map.new(keys, &{&1, System.get_env(&1)})
+
+    on_exit(fn ->
+      Enum.each(previous, fn
+        {key, nil} -> System.delete_env(key)
+        {key, value} -> System.put_env(key, value)
+      end)
+    end)
+
+    :ok
+  end
+
+  test "accepts jobs when resource pressure is below thresholds" do
+    snapshot = %{
+      cpu: %{load_ratio: 0.2},
+      memory: %{used_ratio: 0.4},
+      gpu: [%{utilization_ratio: 0.5, memory_used_ratio: 0.6}]
+    }
+
+    assert :ok = ResourceAdmission.check(snapshot)
+  end
+
+  test "rejects jobs and logs a warning when resources are overloaded" do
+    snapshot = %{
+      cpu: %{load_ratio: 2.0},
+      memory: %{used_ratio: 0.99},
+      gpu: [%{utilization_ratio: 0.99, memory_used_ratio: 0.99}]
+    }
+
+    log =
+      capture_log(fn ->
+        assert {:error, "resource_overloaded:" <> reason} = ResourceAdmission.check(snapshot)
+        assert reason =~ "cpu"
+        assert reason =~ "memory"
+        assert reason =~ "gpu_0"
+      end)
+
+    assert log =~ "not accepting a new job"
+    assert log =~ "resources are overloaded"
+  end
+
+  test "can disable resource admission with MIRROR_NEURON_RESOURCE_ADMISSION_ENABLED" do
+    System.put_env("MIRROR_NEURON_RESOURCE_ADMISSION_ENABLED", "false")
+
+    snapshot = %{cpu: %{load_ratio: 99.0}, memory: %{used_ratio: 0.99}}
+
+    assert :ok = ResourceAdmission.check(snapshot)
+  end
+
+  test "run_manifest rejects before loading work when local resource pressure is high" do
+    System.put_env("MIRROR_NEURON_MAX_MEMORY_USED_RATIO", "0.000001")
+
+    log =
+      capture_log(fn ->
+        assert {:error, "resource_overloaded:" <> _reason} =
+                 MirrorNeuron.run_manifest("not a manifest")
+      end)
+
+    assert log =~ "not accepting a new job"
+  end
+end

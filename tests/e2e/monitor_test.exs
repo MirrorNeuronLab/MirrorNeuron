@@ -6,6 +6,13 @@ defmodule MirrorNeuron.MonitorTest do
 
   setup do
     Application.ensure_all_started(:mirror_neuron)
+    old_namespace = Application.get_env(:mirror_neuron, :redis_namespace)
+    namespace = "mirror_neuron_test_#{System.unique_integer([:positive])}"
+    Application.put_env(:mirror_neuron, :redis_namespace, namespace)
+
+    on_exit(fn ->
+      Application.put_env(:mirror_neuron, :redis_namespace, old_namespace)
+    end)
 
     case Redix.command(MirrorNeuron.Redis.Connection, ["PING"]) do
       {:ok, "PONG"} -> :ok
@@ -181,5 +188,61 @@ defmodule MirrorNeuron.MonitorTest do
 
     RedisStore.delete_job(live_job_id)
     RedisStore.delete_job(stale_job_id)
+  end
+
+  test "basic list summaries do not read agent or event details" do
+    job_id = "monitor-basic-#{System.unique_integer([:positive])}"
+
+    RedisStore.persist_job(job_id, %{
+      "job_id" => job_id,
+      "graph_id" => "basic_demo",
+      "status" => "completed",
+      "submitted_at" => "2026-03-28T00:00:00Z",
+      "updated_at" => "2026-03-28T00:00:05Z"
+    })
+
+    RedisStore.persist_agent(job_id, "worker", %{
+      "agent_id" => "worker",
+      "agent_type" => "executor",
+      "assigned_node" => "mn1@127.0.0.1",
+      "current_state" => %{"last_result" => %{"sandbox_name" => "expensive-detail"}},
+      "metadata" => %{}
+    })
+
+    assert {:ok, [summary]} = Monitor.list_jobs(summary: :basic)
+    assert summary["job_id"] == job_id
+    assert summary["graph_id"] == "basic_demo"
+    assert summary["nodes"] == []
+    assert summary["sandbox_names"] == []
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "clear_jobs removes terminal jobs and preserves running jobs" do
+    running_id = "monitor-running-#{System.unique_integer([:positive])}"
+    failed_id = "monitor-failed-#{System.unique_integer([:positive])}"
+
+    RedisStore.persist_job(running_id, %{
+      "job_id" => running_id,
+      "graph_id" => "clear_demo",
+      "status" => "running",
+      "submitted_at" => "2026-03-28T00:00:00Z",
+      "updated_at" => "2026-03-28T00:00:05Z"
+    })
+
+    RedisStore.persist_job(failed_id, %{
+      "job_id" => failed_id,
+      "graph_id" => "clear_demo",
+      "status" => "failed",
+      "submitted_at" => "2026-03-28T00:00:00Z",
+      "updated_at" => "2026-03-28T00:00:05Z"
+    })
+
+    assert {:ok, 1} = Monitor.clear_jobs()
+    assert {:ok, jobs} = Monitor.list_jobs(summary: :basic)
+    assert Enum.any?(jobs, &(&1["job_id"] == running_id))
+    refute Enum.any?(jobs, &(&1["job_id"] == failed_id))
+
+    RedisStore.delete_job(running_id)
   end
 end

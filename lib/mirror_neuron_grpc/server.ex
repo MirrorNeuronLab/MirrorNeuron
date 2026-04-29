@@ -36,6 +36,9 @@ defmodule MirrorNeuron.Grpc.JobServer do
       {:ok, job_id, _job} ->
         %SubmitJobResponse{job_id: job_id, status: "pending"}
 
+      {:error, "resource_overloaded:" <> _ = reason} ->
+        raise GRPC.RPCError, status: GRPC.Status.resource_exhausted(), message: reason
+
       {:error, reason} ->
         raise GRPC.RPCError, status: :invalid_argument, message: inspect(reason)
     end
@@ -71,11 +74,14 @@ defmodule MirrorNeuron.Grpc.JobServer do
 
   def cancel_job(request, _stream) do
     job_id = request.job_id
+
     case MirrorNeuron.cancel(job_id) do
       {:error, reason} ->
         raise GRPC.RPCError, status: GRPC.Status.internal(), message: reason
+
       {:ok, status} ->
         %CancelJobResponse{job_id: job_id, status: status}
+
       _ ->
         %CancelJobResponse{job_id: job_id, status: "cancelled"}
     end
@@ -83,11 +89,14 @@ defmodule MirrorNeuron.Grpc.JobServer do
 
   def pause_job(request, _stream) do
     job_id = request.job_id
+
     case MirrorNeuron.pause(job_id) do
       {:error, reason} ->
         raise GRPC.RPCError, status: GRPC.Status.internal(), message: reason
+
       {:ok, status} ->
         %PauseJobResponse{job_id: job_id, status: status}
+
       _ ->
         %PauseJobResponse{job_id: job_id, status: "paused"}
     end
@@ -95,11 +104,14 @@ defmodule MirrorNeuron.Grpc.JobServer do
 
   def resume_job(request, _stream) do
     job_id = request.job_id
+
     case MirrorNeuron.resume(job_id) do
       {:error, reason} ->
         raise GRPC.RPCError, status: GRPC.Status.internal(), message: reason
+
       {:ok, status} ->
         %ResumeJobResponse{job_id: job_id, status: status}
+
       _ ->
         %ResumeJobResponse{job_id: job_id, status: "running"}
     end
@@ -109,6 +121,7 @@ defmodule MirrorNeuron.Grpc.JobServer do
     case MirrorNeuron.Monitor.clear_jobs() do
       {:ok, count} ->
         %ClearJobsResponse{cleared_count: count}
+
       {:error, reason} ->
         raise GRPC.RPCError, status: GRPC.Status.internal(), message: reason
     end

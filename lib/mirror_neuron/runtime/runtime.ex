@@ -2,7 +2,7 @@ defmodule MirrorNeuron.Runtime do
   require Logger
 
   alias MirrorNeuron.Persistence.RedisStore
-  alias MirrorNeuron.Runtime.{EventBus, JobRunner}
+  alias MirrorNeuron.Runtime.{Backpressure, EventBus, JobRunner}
 
   def start_job(manifest, opts \\ []) do
     job_id = Keyword.get(opts, :job_id, generate_job_id(manifest.graph_id))
@@ -57,12 +57,14 @@ defmodule MirrorNeuron.Runtime do
     call_job(job_id, {:send_message, agent_id, message})
   end
 
+  def pressure(job_id), do: call_job(job_id, :pressure)
+
   def await_completion(job_id, timeout) do
     wait_until_terminal(job_id, timeout, System.monotonic_time(:millisecond))
   end
 
-  def deliver(job_id, agent_id, message) do
-    deliver_with_retry(job_id, agent_id, message, 50)
+  def deliver(job_id, agent_id, message, opts \\ []) do
+    deliver_with_retry(job_id, agent_id, message, 50, opts)
   end
 
   defp call_job(job_id, message) do
@@ -72,15 +74,28 @@ defmodule MirrorNeuron.Runtime do
     end
   end
 
-  defp deliver_with_retry(job_id, agent_id, message, attempts_left) do
+  defp deliver_with_retry(job_id, agent_id, message, attempts_left, opts) do
     case Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:agent, job_id, agent_id}) do
       [{pid, _}] ->
-        GenServer.cast(pid, {:deliver, message})
-        :ok
+        case preflight_delivery(pid, job_id, agent_id, opts) do
+          :ok ->
+            GenServer.cast(pid, {:deliver, message})
+            :ok
+
+          {:error, {:backpressure, details}} = error ->
+            EventBus.publish(job_id, %{
+              type: :backpressure_rejected,
+              agent_id: agent_id,
+              payload: details,
+              timestamp: timestamp()
+            })
+
+            error
+        end
 
       [] when attempts_left > 0 ->
         Process.sleep(50)
-        deliver_with_retry(job_id, agent_id, message, attempts_left - 1)
+        deliver_with_retry(job_id, agent_id, message, attempts_left - 1, opts)
 
       [] ->
         EventBus.publish(job_id, %{
@@ -91,6 +106,35 @@ defmodule MirrorNeuron.Runtime do
         })
 
         {:error, "agent #{agent_id} is not running for job #{job_id}"}
+    end
+  end
+
+  defp preflight_delivery(pid, job_id, agent_id, opts) do
+    queue_depth = Backpressure.process_queue_depth(pid)
+    pressure = Backpressure.snapshot(agent_id, %{}, queue_depth, opts)
+
+    cond do
+      Backpressure.saturated?(pressure) ->
+        {:error,
+         {:backpressure,
+          Backpressure.retry_later_reason(pressure, %{
+            "job_id" => job_id,
+            "agent_id" => agent_id,
+            "dropped" => true
+          })}}
+
+      Backpressure.pressured?(pressure) ->
+        EventBus.publish(job_id, %{
+          type: :backpressure_state,
+          agent_id: agent_id,
+          payload: pressure,
+          timestamp: timestamp()
+        })
+
+        :ok
+
+      true ->
+        :ok
     end
   end
 

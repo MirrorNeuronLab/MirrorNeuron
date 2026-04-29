@@ -5,6 +5,8 @@ defmodule MirrorNeuron.Application do
 
   @impl true
   def start(_type, _args) do
+    Config.validate!()
+
     cluster_hosts =
       "MIRROR_NEURON_CLUSTER_NODES"
       |> System.get_env("")

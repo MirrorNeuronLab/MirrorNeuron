@@ -5,6 +5,9 @@ defmodule MirrorNeuron.BundleUpdateTest do
 
   setup do
     Application.ensure_all_started(:mirror_neuron)
+    if Process.whereis(Manager) == nil do
+      start_supervised!(Manager)
+    end
 
     tmp_dir =
       Path.join(

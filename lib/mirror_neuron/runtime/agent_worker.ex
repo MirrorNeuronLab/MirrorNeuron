@@ -6,6 +6,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   alias MirrorNeuron.Message
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
+  alias MirrorNeuron.Runtime.Backpressure
   alias MirrorNeuron.Runtime.Naming
 
   @default_heartbeat_interval_ms 30_000
@@ -76,7 +77,8 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
           processed_messages: recovered_processed_messages(recovery_snapshot),
           inflight_message: nil,
           heartbeat_interval_ms: heartbeat_interval_ms(),
-          recovered_snapshot: recovery_snapshot
+          recovered_snapshot: recovery_snapshot,
+          pressure_snapshot: nil
         }
 
         schedule_heartbeat(state.heartbeat_interval_ms)
@@ -115,20 +117,24 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   def handle_cast(:cancel, state), do: {:stop, :normal, state}
 
   def handle_cast({:deliver, message}, %{paused?: true} = state) do
-    queued =
-      :queue.in(
-        Message.normalize!(message, job_id: state.job_id, to: state.node.node_id),
-        state.pending
-      )
+    case enqueue_pending(message, state) do
+      {:ok, next_state} ->
+        {:noreply, next_state}
 
-    next_state = %{state | pending: queued, mailbox_depth: state.mailbox_depth + 1}
-    persist_snapshot(next_state)
-    {:noreply, next_state}
+      {:error, next_state} ->
+        {:noreply, next_state}
+    end
   end
 
   def handle_cast({:deliver, message}, state) do
     normalized = Message.normalize!(message, job_id: state.job_id, to: state.node.node_id)
     {:noreply, process_message(normalized, state)}
+  end
+
+  @impl true
+  def handle_call(:pressure_snapshot, _from, state) do
+    snapshot = pressure_snapshot(state)
+    {:reply, snapshot, %{state | pressure_snapshot: snapshot}}
   end
 
   @impl true
@@ -213,11 +219,15 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       end)
 
     Enum.each(matching_edges, fn edge ->
-      Runtime.deliver(
-        state.job_id,
-        edge.to_node,
-        build_message(state, incoming, edge.to_node, message_type, payload, opts)
-      )
+      result =
+        Runtime.deliver(
+          state.job_id,
+          edge.to_node,
+          build_message(state, incoming, edge.to_node, message_type, payload, opts),
+          target_backpressure_opts(state, edge.to_node)
+        )
+
+      maybe_report_delivery_pressure(result, edge.to_node, message_type, state)
     end)
   end
 
@@ -226,16 +236,30 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   end
 
   defp execute_action({:emit_to, to_node, message_type, payload, opts}, incoming, state) do
-    Runtime.deliver(
-      state.job_id,
-      to_node,
-      build_message(state, incoming, to_node, message_type, payload, opts)
-    )
+    result =
+      Runtime.deliver(
+        state.job_id,
+        to_node,
+        build_message(state, incoming, to_node, message_type, payload, opts),
+        target_backpressure_opts(state, to_node)
+      )
+
+    maybe_report_delivery_pressure(result, to_node, message_type, state)
   end
 
   defp execute_action({:emit_message, message}, _incoming, state) do
     normalized = Message.normalize!(message, job_id: state.job_id, from: state.node.node_id)
-    Runtime.deliver(state.job_id, Message.to(normalized), normalized)
+    to_node = Message.to(normalized)
+
+    result =
+      Runtime.deliver(state.job_id, to_node, normalized, target_backpressure_opts(state, to_node))
+
+    maybe_report_delivery_pressure(
+      result,
+      to_node,
+      Message.type(normalized),
+      state
+    )
   end
 
   defp execute_action({:event, event_type, payload}, _incoming, state) do
@@ -255,6 +279,8 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     inspected_state = inspected_local_state(state.module, state.local_state)
     encoded_state = encoded_local_state(state.module, state.local_state)
 
+    pressure = pressure_snapshot(state)
+
     snapshot = %{
       agent_id: state.node.node_id,
       node_id: state.node.node_id,
@@ -273,7 +299,8 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
         paused: state.paused?,
         outbound_edges: Enum.map(state.outbound_edges, & &1.to_node),
         heartbeat_interval_ms: state.heartbeat_interval_ms,
-        recovery_state: encoded_state
+        recovery_state: encoded_state,
+        backpressure: pressure
       }
     }
 
@@ -288,6 +315,90 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     end
 
     send(state.coordinator, {:agent_checkpoint, state.node.node_id, snapshot})
+    send(state.coordinator, {:agent_pressure, state.node.node_id, pressure})
+  end
+
+  defp enqueue_pending(message, state) do
+    normalized = Message.normalize!(message, job_id: state.job_id, to: state.node.node_id)
+    next_depth = state.mailbox_depth + 1
+    pressure = pressure_snapshot(state, next_depth)
+
+    if Backpressure.saturated?(pressure) do
+      report_local_backpressure(normalized, pressure, state)
+      persist_snapshot(%{state | pressure_snapshot: pressure})
+      {:error, %{state | pressure_snapshot: pressure}}
+    else
+      queued = :queue.in(normalized, state.pending)
+
+      next_state = %{
+        state
+        | pending: queued,
+          mailbox_depth: next_depth,
+          pressure_snapshot: pressure
+      }
+
+      persist_snapshot(next_state)
+      {:ok, next_state}
+    end
+  end
+
+  defp pressure_snapshot(state, internal_depth \\ nil) do
+    internal_depth = if is_nil(internal_depth), do: state.mailbox_depth, else: internal_depth
+    queue_depth = Backpressure.process_queue_depth(self(), internal_depth)
+
+    Backpressure.snapshot(
+      state.node.node_id,
+      state.node,
+      queue_depth,
+      [],
+      state.pressure_snapshot
+    )
+  end
+
+  defp report_local_backpressure(message, pressure, state) do
+    payload =
+      Backpressure.retry_later_reason(pressure, %{
+        "from" => Message.from(message),
+        "to" => state.node.node_id,
+        "message_type" => Message.type(message),
+        "dropped" => true
+      })
+
+    send(state.coordinator, {:agent_event, state.node.node_id, :backpressure_rejected, payload})
+  end
+
+  defp maybe_report_delivery_pressure(:ok, _to_node, _message_type, _state), do: :ok
+
+  defp maybe_report_delivery_pressure(
+         {:error, {:backpressure, details}},
+         to_node,
+         message_type,
+         state
+       ) do
+    send(state.coordinator, {
+      :agent_event,
+      state.node.node_id,
+      :backpressure_signal,
+      Map.merge(details, %{
+        "from" => state.node.node_id,
+        "to" => to_node,
+        "message_type" => message_type
+      })
+    })
+  end
+
+  defp maybe_report_delivery_pressure({:error, reason}, to_node, message_type, state) do
+    send(state.coordinator, {
+      :agent_event,
+      state.node.node_id,
+      :delivery_failed,
+      %{
+        "from" => state.node.node_id,
+        "to" => to_node,
+        "message_type" => message_type,
+        "reason" => inspect(reason)
+      }
+    })
   end
 
   defp persist_terminal_completion(state, result) do
@@ -504,5 +615,11 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       artifacts: Keyword.get(opts, :artifacts, Message.artifacts(incoming)),
       stream: Keyword.get(opts, :stream, Message.stream(incoming))
     )
+  end
+
+  defp target_backpressure_opts(state, to_node) do
+    state.runtime_context
+    |> Map.get(:backpressure_by_agent, %{})
+    |> Map.get(to_node, [])
   end
 end

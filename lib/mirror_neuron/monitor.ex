@@ -92,17 +92,26 @@ defmodule MirrorNeuron.Monitor do
   end
 
   def cluster_overview(opts \\ []) do
+    opts = Keyword.put_new(opts, :summary, :basic)
+
     with {:ok, jobs} <- list_jobs(opts) do
+      metrics =
+        case metrics() do
+          {:ok, values} -> values
+          {:error, _reason} -> %{}
+        end
+
       {:ok,
        %{
          "nodes" => MirrorNeuron.inspect_nodes(),
-         "jobs" => jobs
+         "jobs" => jobs,
+         "metrics" => metrics
        }}
     end
   end
 
   def clear_jobs() do
-    with {:ok, all_jobs} <- list_jobs(include_terminal: true) do
+    with {:ok, all_jobs} <- list_jobs(include_terminal: true, summary: :basic) do
       to_delete =
         Enum.reject(all_jobs, fn job ->
           job["status"] in ["running", "pending", "scheduled", "validated", "paused"]
@@ -113,6 +122,52 @@ defmodule MirrorNeuron.Monitor do
       end)
 
       {:ok, length(to_delete)}
+    end
+  end
+
+  def metrics do
+    with {:ok, jobs} <- RedisStore.list_jobs() do
+      details =
+        jobs
+        |> Enum.map(fn job ->
+          job_id = Map.get(job, "job_id")
+          {:ok, agents} = RedisStore.list_agents(job_id)
+          {:ok, events} = RedisStore.read_events(job_id, -100, -1)
+          {job, agents, events}
+        end)
+
+      {:ok,
+       %{
+         "jobs" => job_metrics(details),
+         "agents" => agent_metrics(details),
+         "events" => event_metrics(details),
+         "runtime" => %{
+           "generated_at" => MirrorNeuron.Runtime.timestamp(),
+           "redis_namespace" =>
+             MirrorNeuron.Config.string("MIRROR_NEURON_REDIS_NAMESPACE", :redis_namespace)
+         }
+       }}
+    end
+  end
+
+  def dead_letters(job_id) do
+    with {:ok, events} <- RedisStore.read_events(job_id) do
+      {:ok, Enum.filter(events, &(&1["type"] == "dead_letter"))}
+    end
+  end
+
+  def replay_dead_letter(job_id, index) when is_integer(index) and index >= 0 do
+    with {:ok, dead_letters} <- dead_letters(job_id),
+         {:ok, event} <- Enum.fetch(dead_letters, index),
+         agent_id when is_binary(agent_id) <- Map.get(event, "agent_id"),
+         message when is_map(message) <- Map.get(event, "message"),
+         {:ok, "delivered"} <- MirrorNeuron.send_message(job_id, agent_id, message) do
+      {:ok, %{"replayed" => true, "job_id" => job_id, "agent_id" => agent_id, "index" => index}}
+    else
+      :error -> {:error, "dead letter index #{index} was not found"}
+      nil -> {:error, "dead letter is missing agent_id or message"}
+      {:error, reason} -> {:error, reason}
+      other -> {:error, "failed to replay dead letter: #{inspect(other)}"}
     end
   end
 
@@ -189,12 +244,65 @@ defmodule MirrorNeuron.Monitor do
       "status" => agent_status(agent_type, paused?, current_state, last_error, mailbox_depth),
       "running?" => running_agent?(agent_type, current_state, last_error),
       "last_error" => last_error,
+      "backpressure" => get_in(agent, ["metadata", "backpressure"]) || %{},
       "sandbox_name" => Map.get(last_result, "sandbox_name"),
       "lease" => %{
         "lease_id" => Map.get(lease, "lease_id"),
         "pool" => Map.get(lease, "pool"),
         "slots" => Map.get(lease, "slots")
       }
+    }
+  end
+
+  defp job_metrics(details) do
+    by_status =
+      details
+      |> Enum.map(fn {job, _agents, _events} -> Map.get(job, "status", "unknown") end)
+      |> Enum.frequencies()
+
+    %{
+      "total" => length(details),
+      "by_status" => by_status
+    }
+  end
+
+  defp agent_metrics(details) do
+    agents = Enum.flat_map(details, fn {_job, agents, _events} -> agents end)
+
+    queue_depths =
+      Enum.map(agents, fn agent ->
+        get_in(agent, ["metadata", "backpressure", "queue_depth"]) ||
+          Map.get(agent, "mailbox_depth", 0)
+      end)
+
+    processed = Enum.map(agents, &Map.get(&1, "processed_messages", 0))
+
+    %{
+      "total" => length(agents),
+      "queue_depth_total" => Enum.sum(queue_depths),
+      "queue_depth_max" => Enum.max(queue_depths, fn -> 0 end),
+      "processed_messages_total" => Enum.sum(processed),
+      "pressured" =>
+        agents
+        |> Enum.map(&(get_in(&1, ["metadata", "backpressure"]) || %{}))
+        |> Enum.filter(&(&1["backpressure"] == true))
+    }
+  end
+
+  defp event_metrics(details) do
+    events = Enum.flat_map(details, fn {_job, _agents, events} -> events end)
+    by_type = events |> Enum.map(&Map.get(&1, "type", "unknown")) |> Enum.frequencies()
+
+    %{
+      "recent_window" => length(events),
+      "by_type" => by_type,
+      "dead_letters" => Map.get(by_type, "dead_letter", 0),
+      "retry_later" => Map.get(by_type, "external_input_rejected", 0),
+      "backpressure_signals" =>
+        Map.get(by_type, "backpressure_state", 0) + Map.get(by_type, "backpressure_signal", 0),
+      "sandbox_completed" => Map.get(by_type, "sandbox_job_completed", 0),
+      "lease_wait_events" => Map.get(by_type, "executor_lease_acquired", 0),
+      "redis_errors" => Map.get(by_type, "redis_error", 0)
     }
   end
 

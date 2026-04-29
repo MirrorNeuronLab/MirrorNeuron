@@ -79,6 +79,29 @@ defmodule MirrorNeuron.RuntimeTest do
     end
   end
 
+  defmodule SlowBackpressureRunner do
+    def run(payload, _config, _opts) do
+      Process.sleep(300)
+
+      {:ok,
+       %{
+         "sandbox_name" => "slow-backpressure",
+         "exit_code" => 0,
+         "stdout" =>
+           Jason.encode!(%{
+             "events" => [
+               %{
+                 "type" => "slow_event_processed",
+                 "payload" => %{"value" => Map.get(payload, "value")}
+               }
+             ]
+           }),
+         "stderr" => "",
+         "logs" => ""
+       }}
+    end
+  end
+
   defmodule CrashOnceCounter do
     use Agent
 
@@ -502,6 +525,71 @@ defmodule MirrorNeuron.RuntimeTest do
     assert Enum.any?(events, &(&1["type"] == "stream_chunk_processed"))
     assert Enum.any?(events, &(&1["type"] == "agent_message_received"))
 
+    RedisStore.delete_job(job_id)
+  end
+
+  test "live external input receives retry-later when stream agent is under backpressure" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "stream_live_backpressure_runtime_test",
+      "daemon" => true,
+      "entrypoints" => ["slow_consumer"],
+      "initial_inputs" => %{
+        "slow_consumer" => [%{"value" => "warmup"}]
+      },
+      "nodes" => [
+        %{
+          "node_id" => "slow_consumer",
+          "agent_type" => "executor",
+          "type" => "stream",
+          "role" => "root_coordinator",
+          "config" => %{
+            "runner_module" => SlowBackpressureRunner,
+            "output_message_type" => nil,
+            "backpressure" => %{
+              "max_queue_depth" => 4,
+              "high_watermark" => 2,
+              "low_watermark" => 1,
+              "retry_after_ms" => 125
+            }
+          }
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    wait_until(fn -> running_status?(job_id) end, 2_000)
+
+    results =
+      1..16
+      |> Task.async_stream(
+        fn index ->
+          MirrorNeuron.send_message(job_id, "slow_consumer", %{"value" => index})
+        end,
+        max_concurrency: 16,
+        timeout: 5_000
+      )
+      |> Enum.map(fn {:ok, result} -> result end)
+
+    assert Enum.any?(results, &match?({:error, {:retry_later, _details}}, &1))
+    assert Enum.any?(results, &match?({:ok, "delivered"}, &1))
+
+    assert {:ok, pressure} = MirrorNeuron.pressure(job_id)
+    assert is_map(pressure["agents"]["slow_consumer"])
+
+    wait_until(
+      fn ->
+        {:ok, events} = MirrorNeuron.events(job_id)
+
+        Enum.any?(events, &(&1["type"] == "external_input_rejected")) and
+          Enum.any?(events, &(&1["type"] == "backpressure_state"))
+      end,
+      2_000
+    )
+
+    assert {:ok, "cancelled"} = MirrorNeuron.cancel(job_id)
     RedisStore.delete_job(job_id)
   end
 
