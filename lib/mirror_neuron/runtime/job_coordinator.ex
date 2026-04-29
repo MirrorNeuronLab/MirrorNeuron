@@ -638,6 +638,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       placement_policy: Map.get(state.manifest.policies, "placement_policy", "local"),
       recovery_policy: Map.get(state.manifest.policies, "recovery_mode", "local_restart"),
       result: state.result,
+      topology: MirrorNeuron.Manifest.topology(state.manifest),
       manifest_ref: %{
         graph_id: state.manifest.graph_id,
         manifest_version: state.manifest.manifest_version,

@@ -224,6 +224,7 @@ defmodule MirrorNeuron.Runtime do
       "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
       "recovery_policy" => Map.get(manifest.policies, "recovery_mode", "local_restart"),
       "result" => nil,
+      "topology" => MirrorNeuron.Manifest.topology(manifest),
       "manifest_ref" => %{
         "graph_id" => manifest.graph_id,
         "manifest_version" => manifest.manifest_version,

@@ -37,6 +37,30 @@ defmodule MirrorNeuron.Manifest do
 
   def load(map) when is_map(map), do: normalize_and_validate(map)
 
+  def topology(%__MODULE__{} = manifest) do
+    %{
+      "nodes" =>
+        Enum.map(manifest.nodes, fn node ->
+          %{
+            "node_id" => node.node_id,
+            "agent_type" => node.agent_type,
+            "type" => node.type,
+            "role" => node.role
+          }
+        end),
+      "edges" =>
+        Enum.map(manifest.edges, fn edge ->
+          %{
+            "edge_id" => edge.edge_id,
+            "from_node" => edge.from_node,
+            "to_node" => edge.to_node,
+            "message_type" => edge.message_type,
+            "routing_mode" => edge.routing_mode
+          }
+        end)
+    }
+  end
+
   defp normalize_and_validate(raw) do
     manifest = %__MODULE__{
       manifest_version: Map.get(raw, "manifest_version"),
