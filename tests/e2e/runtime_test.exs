@@ -215,6 +215,21 @@ defmodule MirrorNeuron.RuntimeTest do
     end
   end
 
+  defmodule LongSleepRunner do
+    def run(_payload, _config, _opts) do
+      Process.sleep(30_000)
+
+      {:ok,
+       %{
+         "sandbox_name" => "long-sleep",
+         "exit_code" => 0,
+         "stdout" => Jason.encode!(%{"complete_job" => %{"done" => true}}),
+         "stderr" => "",
+         "logs" => ""
+       }}
+    end
+  end
+
   setup do
     Application.ensure_all_started(:mirror_neuron)
 
@@ -230,9 +245,11 @@ defmodule MirrorNeuron.RuntimeTest do
   setup do
     original_health = Application.get_env(:mirror_neuron, :job_health_check_interval_ms)
     original_heartbeat = Application.get_env(:mirror_neuron, :agent_heartbeat_interval_ms)
+    original_resource_admission_env = System.get_env("MIRROR_NEURON_RESOURCE_ADMISSION_ENABLED")
 
     Application.put_env(:mirror_neuron, :job_health_check_interval_ms, 100)
     Application.put_env(:mirror_neuron, :agent_heartbeat_interval_ms, 100)
+    System.put_env("MIRROR_NEURON_RESOURCE_ADMISSION_ENABLED", "false")
 
     on_exit(fn ->
       if original_health == nil do
@@ -245,6 +262,15 @@ defmodule MirrorNeuron.RuntimeTest do
         Application.delete_env(:mirror_neuron, :agent_heartbeat_interval_ms)
       else
         Application.put_env(:mirror_neuron, :agent_heartbeat_interval_ms, original_heartbeat)
+      end
+
+      if original_resource_admission_env == nil do
+        System.delete_env("MIRROR_NEURON_RESOURCE_ADMISSION_ENABLED")
+      else
+        System.put_env(
+          "MIRROR_NEURON_RESOURCE_ADMISSION_ENABLED",
+          original_resource_admission_env
+        )
       end
     end)
 
@@ -281,7 +307,7 @@ defmodule MirrorNeuron.RuntimeTest do
     }
 
     assert {:ok, job_id, job} = MirrorNeuron.run_manifest(manifest, await: true, timeout: 2_000)
-    assert job_id =~ "research_test-"
+    assert job_id =~ ~r/^rt-[a-f0-9]{8}$/
     assert job["status"] == "completed"
 
     assert {:ok, persisted_job} = MirrorNeuron.inspect_job(job_id)
@@ -380,6 +406,63 @@ defmodule MirrorNeuron.RuntimeTest do
     assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 2_000)
     assert job["status"] == "cancelled"
     assert get_in(job, ["result", "reason"]) == "cancelled by operator"
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "cancel terminates busy agent workers instead of waiting for queued cancel casts" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "cancel_busy_worker_test",
+      "entrypoints" => ["root"],
+      "initial_inputs" => %{"root" => [%{"work" => "cancel busy"}]},
+      "nodes" => [
+        %{
+          "node_id" => "root",
+          "agent_type" => "router",
+          "role" => "root_coordinator",
+          "config" => %{"emit_type" => "do_work"}
+        },
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "config" => %{
+            "runner_module" => LongSleepRunner,
+            "output_message_type" => nil
+          }
+        }
+      ],
+      "edges" => [
+        %{"from_node" => "root", "to_node" => "worker", "message_type" => "do_work"}
+      ],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    wait_until(fn -> running_status?(job_id) end, 2_000)
+
+    wait_until(
+      fn ->
+        case MirrorNeuron.inspect_agents(job_id) do
+          {:ok, agents} ->
+            worker = Enum.find(agents, &(&1["agent_id"] == "worker"))
+            not is_nil(worker) and is_map(worker["inflight_message"])
+
+          _ ->
+            false
+        end
+      end,
+      2_000
+    )
+
+    assert {:ok, "cancelled"} = MirrorNeuron.cancel(job_id)
+
+    wait_until(fn -> agent_unregistered?(job_id, "root") end, 2_000)
+    wait_until(fn -> agent_unregistered?(job_id, "worker") end, 2_000)
+    wait_until(fn -> job_runner_unregistered?(job_id) end, 2_000)
+
+    assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 2_000)
+    assert job["status"] == "cancelled"
 
     RedisStore.delete_job(job_id)
   end
@@ -874,6 +957,14 @@ defmodule MirrorNeuron.RuntimeTest do
       {:ok, %{"status" => "running"}} -> true
       _ -> false
     end
+  end
+
+  defp agent_unregistered?(job_id, agent_id) do
+    Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:agent, job_id, agent_id}) == []
+  end
+
+  defp job_runner_unregistered?(job_id) do
+    Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:job_runner, job_id}) == []
   end
 
   defp wait_until(fun, timeout \\ 1_000) do

@@ -144,6 +144,10 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     {:noreply, state}
   end
 
+  def handle_info({:mirror_neuron_scheduled_message, message}, state) do
+    handle_cast({:deliver, message}, state)
+  end
+
   defp drain_pending(%{paused?: true} = state), do: state
 
   defp drain_pending(state) do

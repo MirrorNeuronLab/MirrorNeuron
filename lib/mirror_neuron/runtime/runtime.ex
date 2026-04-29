@@ -4,6 +4,8 @@ defmodule MirrorNeuron.Runtime do
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime.{Backpressure, EventBus, JobRunner}
 
+  @job_hash_length 8
+
   def start_job(manifest, opts \\ []) do
     job_id = Keyword.get(opts, :job_id, generate_job_id(manifest.graph_id))
     bundle = Keyword.get(opts, :job_bundle)
@@ -161,17 +163,43 @@ defmodule MirrorNeuron.Runtime do
     end
   end
 
-  defp generate_job_id(graph_id) do
-    suffix =
-      6
-      |> :crypto.strong_rand_bytes()
-      |> Base.encode16(case: :lower)
+  @doc false
+  def generate_job_id(graph_id) do
+    prefix = graph_initials(graph_id)
 
-    "#{graph_id}-#{System.system_time(:millisecond)}-#{suffix}"
+    hash =
+      :crypto.hash(
+        :sha256,
+        "#{graph_id}:#{System.system_time(:nanosecond)}:#{random_token()}"
+      )
+      |> Base.encode16(case: :lower)
+      |> binary_part(0, @job_hash_length)
+
+    "#{prefix}-#{hash}"
   end
 
   def timestamp,
     do: DateTime.utc_now() |> DateTime.truncate(:millisecond) |> DateTime.to_iso8601()
+
+  defp graph_initials(graph_id) do
+    graph_id
+    |> to_string()
+    |> String.downcase()
+    |> String.split(~r/[^a-z0-9]+/, trim: true)
+    |> Enum.map(&String.first/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join()
+    |> case do
+      "" -> "job"
+      initials -> initials
+    end
+  end
+
+  defp random_token do
+    8
+    |> :crypto.strong_rand_bytes()
+    |> Base.encode16(case: :lower)
+  end
 
   defp persist_startup_failure(job_id, manifest, bundle, reason) do
     updates = %{

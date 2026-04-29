@@ -133,6 +133,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   @impl true
   def handle_call(:cancel, _from, state) do
     broadcast_agent_control(state, :cancel)
+    terminate_agent_workers(state)
     next_state = %{state | status: "cancelled", result: %{reason: "cancelled by operator"}}
     persist_job(next_state)
     cleanup_sandboxes(next_state)
@@ -580,6 +581,34 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
            ) do
         [{pid, _}] -> GenServer.cast(pid, command)
         [] -> :ok
+      end
+    end)
+  end
+
+  defp terminate_agent_workers(state) do
+    Enum.each(state.agent_ids, fn agent_id ->
+      case Horde.Registry.lookup(
+             MirrorNeuron.DistributedRegistry,
+             {:agent, state.job_id, agent_id}
+           ) do
+        [{pid, _}] ->
+          case Horde.DynamicSupervisor.terminate_child(MirrorNeuron.Runtime.AgentSupervisor, pid) do
+            :ok ->
+              :ok
+
+            {:error, :not_found} ->
+              :ok
+
+            {:error, reason} ->
+              Logger.warning(
+                "failed to terminate agent #{state.job_id}/#{agent_id}: #{inspect(reason)}"
+              )
+
+              if Process.alive?(pid), do: Process.exit(pid, :kill)
+          end
+
+        [] ->
+          :ok
       end
     end)
   end

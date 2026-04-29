@@ -45,7 +45,7 @@ defmodule MirrorNeuron.Runtime.JobRunner do
         :ok
     end
 
-    :timer.send_interval(3_000, :renew_lease)
+    {:ok, lease_timer} = :timer.send_interval(3_000, :renew_lease)
 
     case JobCoordinator.start_link({job_id, manifest, opts}) do
       {:ok, pid} ->
@@ -55,7 +55,8 @@ defmodule MirrorNeuron.Runtime.JobRunner do
            manifest: manifest,
            bundle: Keyword.get(opts, :job_bundle),
            coordinator: pid,
-           node_name: node_name
+           node_name: node_name,
+           lease_timer: lease_timer
          }}
 
       {:error, reason} ->
@@ -99,6 +100,7 @@ defmodule MirrorNeuron.Runtime.JobRunner do
 
   @impl true
   def terminate(_reason, state) do
+    if Map.get(state, :lease_timer), do: :timer.cancel(state.lease_timer)
     lease_name = "job:#{state.job_id}"
     _ = RedisStore.release_lease(lease_name, state.node_name)
     :ok
