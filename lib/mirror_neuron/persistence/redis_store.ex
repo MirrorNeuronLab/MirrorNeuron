@@ -1,5 +1,6 @@
 defmodule MirrorNeuron.Persistence.RedisStore do
   alias MirrorNeuron.Config
+  alias MirrorNeuron.JobId
 
   @jobs_set "jobs"
 
@@ -38,7 +39,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   def list_job_ids do
     case command(["SMEMBERS", key(@jobs_set)]) do
-      {:ok, job_ids} -> {:ok, Enum.sort(job_ids)}
+      {:ok, job_ids} -> {:ok, Enum.sort(compact_legacy_job_ids(job_ids))}
       {:error, reason} -> {:error, format_reason(reason)}
     end
   end
@@ -175,6 +176,83 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       {:ok, owner_id} -> {:ok, owner_id}
       {:error, reason} -> {:error, format_reason(reason)}
     end
+  end
+
+  defp compact_legacy_job_ids(job_ids) do
+    Enum.map(job_ids, fn job_id ->
+      if JobId.legacy?(job_id), do: compact_legacy_job_id(job_id), else: job_id
+    end)
+  end
+
+  defp compact_legacy_job_id(job_id) do
+    with {:ok, compact_id} <- JobId.compact_legacy(job_id),
+         {:ok, final_id} <- available_compact_id(compact_id, job_id),
+         :ok <- rename_job_keys(job_id, final_id) do
+      final_id
+    else
+      _ -> job_id
+    end
+  end
+
+  defp available_compact_id(compact_id, job_id) do
+    case command(["EXISTS", key("job", compact_id)]) do
+      {:ok, 0} -> {:ok, compact_id}
+      {:ok, 1} when compact_id == job_id -> {:ok, compact_id}
+      {:ok, 1} -> {:ok, "#{compact_id}-#{System.unique_integer([:positive])}"}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp rename_job_keys(job_id, compact_id) do
+    with {:ok, job} <- fetch_job(job_id),
+         {:ok, agent_ids} <- command(["SMEMBERS", key("job", job_id, "agents")]),
+         {:ok, _job} <- persist_job(compact_id, Map.put(job, "job_id", compact_id)),
+         :ok <- copy_key(key("job", job_id, "events"), key("job", compact_id, "events")),
+         :ok <- copy_key(key("job", job_id, "agents"), key("job", compact_id, "agents")),
+         :ok <- copy_agent_keys(job_id, compact_id, agent_ids) do
+      delete_legacy_job_keys(job_id, agent_ids)
+    end
+  end
+
+  defp copy_agent_keys(job_id, compact_id, agent_ids) do
+    Enum.reduce_while(agent_ids, :ok, fn agent_id, :ok ->
+      case copy_key(
+             key("job", job_id, "agent", agent_id),
+             key("job", compact_id, "agent", agent_id)
+           ) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp copy_key(source, target) do
+    case command(["DUMP", source]) do
+      {:ok, nil} ->
+        :ok
+
+      {:ok, serialized} ->
+        case command(["RESTORE", target, "0", serialized, "REPLACE"]) do
+          {:ok, "OK"} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp delete_legacy_job_keys(job_id, agent_ids) do
+    keys =
+      [
+        key("job", job_id),
+        key("job", job_id, "events"),
+        key("job", job_id, "agents")
+      ] ++ Enum.map(agent_ids, &key("job", job_id, "agent", &1))
+
+    _ = command(["DEL" | keys])
+    _ = command(["SREM", key(@jobs_set), job_id])
+    :ok
   end
 
   defp command(args), do: command(args, 1)

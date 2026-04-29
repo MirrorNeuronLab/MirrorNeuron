@@ -4,6 +4,7 @@ defmodule MirrorNeuron.Manifest do
     :graph_id,
     :job_name,
     :daemon,
+    :required_context_engine,
     :metadata,
     :nodes,
     :edges,
@@ -42,6 +43,10 @@ defmodule MirrorNeuron.Manifest do
       graph_id: Map.get(raw, "graph_id"),
       job_name: Map.get(raw, "job_name") || Map.get(raw, "graph_id"),
       daemon: normalize_daemon(Map.get(raw, "daemon", false)),
+      required_context_engine:
+        normalize_required_context_engine(
+          Map.get(raw, "requiredContextEngine", Map.get(raw, "required_context_engine", false))
+        ),
       metadata: Map.get(raw, "metadata", %{}),
       nodes: Enum.map(Map.get(raw, "nodes", []), &normalize_node/1),
       edges: Enum.map(Map.get(raw, "edges", []), &normalize_edge/1),
@@ -65,6 +70,7 @@ defmodule MirrorNeuron.Manifest do
       |> validate_edges(manifest)
       |> validate_entrypoints(manifest)
       |> validate_daemon(manifest)
+      |> validate_required_context_engine(manifest)
       |> validate_policies(manifest)
 
     case errors do
@@ -185,6 +191,14 @@ defmodule MirrorNeuron.Manifest do
     )
   end
 
+  defp validate_required_context_engine(errors, manifest) do
+    maybe_add_error(
+      errors,
+      not is_boolean(manifest.required_context_engine),
+      "requiredContextEngine must be a boolean"
+    )
+  end
+
   defp normalize_node(raw) do
     %{
       node_id: Map.get(raw, "node_id"),
@@ -244,6 +258,9 @@ defmodule MirrorNeuron.Manifest do
 
   defp normalize_daemon(value) when is_boolean(value), do: value
   defp normalize_daemon(value), do: value
+
+  defp normalize_required_context_engine(value) when is_boolean(value), do: value
+  defp normalize_required_context_engine(value), do: value
 
   defp maybe_add_error(errors, true, message), do: [message | errors]
   defp maybe_add_error(errors, false, _message), do: errors

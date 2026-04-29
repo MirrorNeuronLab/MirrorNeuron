@@ -637,7 +637,11 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
   end
 
   defp sandbox_cli(config) do
-    Map.get(config, "sandbox_cli", Config.string("MIRROR_NEURON_OPENSHELL_BIN", :openshell_bin))
+    Map.get(
+      config,
+      "sandbox_cli",
+      Config.executable("MIRROR_NEURON_OPENSHELL_BIN", :openshell_bin)
+    )
   end
 
   defp sanitize_path_segment(value) do

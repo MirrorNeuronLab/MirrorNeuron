@@ -109,6 +109,7 @@ defmodule MirrorNeuron.ManifestTest do
     manifest = %{
       "manifest_version" => "1.0",
       "graph_id" => "simple",
+      "requiredContextEngine" => true,
       "entrypoints" => ["router"],
       "nodes" => [
         %{
@@ -128,8 +129,38 @@ defmodule MirrorNeuron.ManifestTest do
     assert {:ok, normalized} = Manifest.load(manifest)
     assert normalized.graph_id == "simple"
     assert normalized.daemon == false
+    assert normalized.required_context_engine == true
     assert normalized.entrypoints == ["router"]
     assert Enum.find(normalized.nodes, &(&1.node_id == "router")).type == "generic"
+  end
+
+  test "defaults requiredContextEngine to false" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "simple",
+      "entrypoints" => ["sink"],
+      "nodes" => [%{"node_id" => "sink", "agent_type" => "aggregator"}],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, normalized} = Manifest.load(manifest)
+    assert normalized.required_context_engine == false
+  end
+
+  test "rejects non-boolean requiredContextEngine" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "simple",
+      "requiredContextEngine" => "yes",
+      "entrypoints" => ["sink"],
+      "nodes" => [%{"node_id" => "sink", "agent_type" => "aggregator"}],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:error, errors} = Manifest.load(manifest)
+    assert "requiredContextEngine must be a boolean" in errors
   end
 
   test "accepts explicit daemon manifests" do

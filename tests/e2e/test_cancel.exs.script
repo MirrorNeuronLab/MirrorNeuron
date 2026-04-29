@@ -1,6 +1,6 @@
 defmodule TestCancel do
   def run do
-    result = MirrorNeuron.cancel("drug_discovery_loop-1776388976672-1c50c86dc919")
+    result = MirrorNeuron.cancel("ddl-1c50c86d")
     IO.inspect(result, label: "Cancel Result")
   end
 end

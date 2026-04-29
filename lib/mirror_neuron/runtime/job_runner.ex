@@ -124,6 +124,7 @@ defmodule MirrorNeuron.Runtime.JobRunner do
     defaults = %{
       "graph_id" => manifest.graph_id,
       "job_name" => manifest.job_name,
+      "required_context_engine" => Map.get(manifest, :required_context_engine, false),
       "root_agent_ids" => manifest.entrypoints,
       "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
       "recovery_policy" => Map.get(manifest.policies, "recovery_mode", "local_restart"),

@@ -5,6 +5,24 @@ defmodule MirrorNeuron.Config do
 
   def string(env_name, key), do: env_or_app(env_name, key) |> to_string()
 
+  def executable(env_name, key) do
+    configured = string(env_name, key)
+
+    cond do
+      Path.type(configured) == :absolute or String.contains?(configured, "/") ->
+        configured
+
+      resolved = System.find_executable(configured) ->
+        resolved
+
+      resolved = find_in_common_user_bins(configured) ->
+        resolved
+
+      true ->
+        configured
+    end
+  end
+
   def integer(env_name, key), do: parse_integer(env_or_app(env_name, key), env_name)
 
   def boolean(env_name, key), do: parse_boolean(env_or_app(env_name, key), env_name)
@@ -33,6 +51,19 @@ defmodule MirrorNeuron.Config do
       "" -> fetch!(key)
       value -> value
     end
+  end
+
+  defp find_in_common_user_bins(executable) do
+    user_home = System.get_env("HOME") || System.user_home()
+
+    [
+      user_home && Path.join([user_home, ".local", "bin"]),
+      "/opt/homebrew/bin",
+      "/usr/local/bin"
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&Path.join(&1, executable))
+    |> Enum.find(&File.regular?/1)
   end
 
   defp parse_integer(value, _env_name) when is_integer(value), do: value

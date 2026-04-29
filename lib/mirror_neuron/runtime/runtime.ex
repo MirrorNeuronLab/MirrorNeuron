@@ -2,14 +2,26 @@ defmodule MirrorNeuron.Runtime do
   require Logger
 
   alias MirrorNeuron.Persistence.RedisStore
+  alias MirrorNeuron.ContextEnginePreflight
+  alias MirrorNeuron.JobId
   alias MirrorNeuron.Runtime.{Backpressure, EventBus, JobRunner}
-
-  @job_hash_length 8
 
   def start_job(manifest, opts \\ []) do
     job_id = Keyword.get(opts, :job_id, generate_job_id(manifest.graph_id))
     bundle = Keyword.get(opts, :job_bundle)
 
+    case ContextEnginePreflight.ensure_available(
+           Map.get(manifest, :required_context_engine, false)
+         ) do
+      :ok ->
+        start_job_after_preflight(job_id, manifest, opts, bundle)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp start_job_after_preflight(job_id, manifest, opts, bundle) do
     case persist_initial_job(job_id, manifest, bundle) do
       :ok ->
         spec = {JobRunner, {job_id, manifest, opts}}
@@ -164,42 +176,10 @@ defmodule MirrorNeuron.Runtime do
   end
 
   @doc false
-  def generate_job_id(graph_id) do
-    prefix = graph_initials(graph_id)
-
-    hash =
-      :crypto.hash(
-        :sha256,
-        "#{graph_id}:#{System.system_time(:nanosecond)}:#{random_token()}"
-      )
-      |> Base.encode16(case: :lower)
-      |> binary_part(0, @job_hash_length)
-
-    "#{prefix}-#{hash}"
-  end
+  def generate_job_id(graph_id), do: JobId.generate(graph_id)
 
   def timestamp,
     do: DateTime.utc_now() |> DateTime.truncate(:millisecond) |> DateTime.to_iso8601()
-
-  defp graph_initials(graph_id) do
-    graph_id
-    |> to_string()
-    |> String.downcase()
-    |> String.split(~r/[^a-z0-9]+/, trim: true)
-    |> Enum.map(&String.first/1)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.join()
-    |> case do
-      "" -> "job"
-      initials -> initials
-    end
-  end
-
-  defp random_token do
-    8
-    |> :crypto.strong_rand_bytes()
-    |> Base.encode16(case: :lower)
-  end
 
   defp persist_startup_failure(job_id, manifest, bundle, reason) do
     updates = %{
@@ -214,6 +194,7 @@ defmodule MirrorNeuron.Runtime do
     defaults = %{
       "graph_id" => manifest.graph_id,
       "job_name" => manifest.job_name,
+      "required_context_engine" => required_context_engine(manifest),
       "root_agent_ids" => manifest.entrypoints,
       "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
       "recovery_policy" => Map.get(manifest.policies, "recovery_mode", "local_restart"),
@@ -235,6 +216,7 @@ defmodule MirrorNeuron.Runtime do
       "graph_id" => manifest.graph_id,
       "job_name" => manifest.job_name,
       "daemon" => manifest.daemon,
+      "required_context_engine" => required_context_engine(manifest),
       "status" => "pending",
       "submitted_at" => timestamp(),
       "updated_at" => timestamp(),
@@ -258,4 +240,6 @@ defmodule MirrorNeuron.Runtime do
         {:error, reason}
     end
   end
+
+  defp required_context_engine(manifest), do: Map.get(manifest, :required_context_engine, false)
 end

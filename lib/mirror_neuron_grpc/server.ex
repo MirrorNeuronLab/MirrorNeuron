@@ -21,27 +21,61 @@ defmodule MirrorNeuron.Grpc.JobServer do
     payloads_dir = Path.join(tmp_dir, "payloads")
     File.mkdir_p!(payloads_dir)
 
-    if request.payloads do
-      Enum.each(request.payloads, fn {path, content} ->
-        full_path = Path.join(payloads_dir, path)
-        File.mkdir_p!(Path.dirname(full_path))
-        File.write!(full_path, content)
-      end)
-    end
+    with :ok <- write_payloads(payloads_dir, request.payloads),
+         result <- MirrorNeuron.run_manifest(tmp_dir, await: false) do
+      case result do
+        {:ok, job_id} ->
+          %SubmitJobResponse{job_id: job_id, status: "pending"}
 
-    case MirrorNeuron.run_manifest(tmp_dir, await: false) do
-      {:ok, job_id} ->
-        %SubmitJobResponse{job_id: job_id, status: "pending"}
+        {:ok, job_id, _job} ->
+          %SubmitJobResponse{job_id: job_id, status: "pending"}
 
-      {:ok, job_id, _job} ->
-        %SubmitJobResponse{job_id: job_id, status: "pending"}
+        {:error, "resource_overloaded:" <> _ = reason} ->
+          raise GRPC.RPCError, status: GRPC.Status.resource_exhausted(), message: reason
 
-      {:error, "resource_overloaded:" <> _ = reason} ->
-        raise GRPC.RPCError, status: GRPC.Status.resource_exhausted(), message: reason
-
+        {:error, reason} ->
+          raise GRPC.RPCError, status: :invalid_argument, message: inspect(reason)
+      end
+    else
       {:error, reason} ->
-        raise GRPC.RPCError, status: :invalid_argument, message: inspect(reason)
+        raise GRPC.RPCError, status: :invalid_argument, message: reason
     end
+  end
+
+  defp write_payloads(_payloads_dir, nil), do: :ok
+
+  defp write_payloads(payloads_dir, payloads) do
+    Enum.reduce_while(payloads, :ok, fn {path, content}, :ok ->
+      case safe_payload_path(payloads_dir, path) do
+        {:ok, full_path} ->
+          File.mkdir_p!(Path.dirname(full_path))
+          File.write!(full_path, content)
+          {:cont, :ok}
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp safe_payload_path(payloads_dir, path) when is_binary(path) do
+    payloads_root = Path.expand(payloads_dir)
+    expanded = Path.expand(path, payloads_root)
+
+    cond do
+      path == "" or Path.type(path) != :relative or ".." in Path.split(path) ->
+        {:error, "payload path must be relative and stay inside payloads/: #{inspect(path)}"}
+
+      expanded == payloads_root or not String.starts_with?(expanded, payloads_root <> "/") ->
+        {:error, "payload path must stay inside payloads/: #{inspect(path)}"}
+
+      true ->
+        {:ok, expanded}
+    end
+  end
+
+  defp safe_payload_path(_payloads_dir, path) do
+    {:error, "payload path must be a string: #{inspect(path)}"}
   end
 
   def get_job(request, _stream) do
