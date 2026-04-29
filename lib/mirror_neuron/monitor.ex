@@ -2,23 +2,71 @@ defmodule MirrorNeuron.Monitor do
   alias MirrorNeuron.Persistence.RedisStore
 
   @default_live_window_ms 300_000
+  @summary_event_window 25
   @terminal_statuses ["completed", "failed", "cancelled"]
 
   def list_jobs(opts \\ []) do
     limit = Keyword.get(opts, :limit)
     include_terminal = Keyword.get(opts, :include_terminal, true)
     live_only = Keyword.get(opts, :live_only, false)
+    summary = Keyword.get(opts, :summary, :full)
 
     with {:ok, jobs} <- RedisStore.list_jobs() do
       jobs =
-        jobs
-        |> Enum.map(&summarize_job/1)
-        |> maybe_filter_terminal(include_terminal)
-        |> maybe_filter_live(live_only)
-        |> Enum.sort_by(&sort_key/1, :desc)
-        |> maybe_limit(limit)
+        if summary == :basic do
+          jobs
+          |> maybe_filter_terminal(include_terminal)
+          |> Enum.sort_by(&sort_key/1, :desc)
+          |> maybe_limit(limit)
+          |> Enum.map(&basic_job_summary/1)
+          |> maybe_filter_live(live_only)
+        else
+          if live_only do
+            jobs
+            |> maybe_filter_terminal(include_terminal)
+            |> Enum.map(&summarize_job/1)
+            |> maybe_filter_live(true)
+            |> Enum.sort_by(&sort_key/1, :desc)
+            |> maybe_limit(limit)
+          else
+            jobs
+            |> maybe_filter_terminal(include_terminal)
+            |> Enum.sort_by(&sort_key/1, :desc)
+            |> maybe_limit(limit)
+            |> Enum.map(&summarize_job/1)
+          end
+        end
 
       {:ok, jobs}
+    end
+  end
+
+  defp basic_job_summary(job) do
+    %{
+      "job_id" => Map.get(job, "job_id"),
+      "graph_id" => Map.get(job, "graph_id"),
+      "job_name" => Map.get(job, "job_name"),
+      "status" => Map.get(job, "status"),
+      "live?" => basic_job_live?(job),
+      "submitted_at" => Map.get(job, "submitted_at"),
+      "updated_at" => Map.get(job, "updated_at"),
+      "placement_policy" => Map.get(job, "placement_policy"),
+      "recovery_policy" => Map.get(job, "recovery_policy"),
+      "executor_count" => Map.get(job, "executor_count", 0),
+      "active_executors" => Map.get(job, "active_executors", 0),
+      "nodes" => Map.get(job, "nodes", []),
+      "sandbox_names" => Map.get(job, "sandbox_names", []),
+      "last_event" => Map.get(job, "last_event")
+    }
+  end
+
+  defp basic_job_live?(job) do
+    cond do
+      Map.get(job, "status") in @terminal_statuses ->
+        false
+
+      true ->
+        recent_timestamp?(Map.get(job, "updated_at"), @default_live_window_ms)
     end
   end
 
@@ -56,14 +104,14 @@ defmodule MirrorNeuron.Monitor do
   def clear_jobs() do
     with {:ok, all_jobs} <- list_jobs(include_terminal: true) do
       to_delete =
-        Enum.reject(all_jobs, fn job -> 
+        Enum.reject(all_jobs, fn job ->
           job["status"] in ["running", "pending", "scheduled", "validated", "paused"]
         end)
-      
+
       Enum.each(to_delete, fn job ->
         RedisStore.delete_job(job["job_id"])
       end)
-      
+
       {:ok, length(to_delete)}
     end
   end
@@ -107,7 +155,7 @@ defmodule MirrorNeuron.Monitor do
 
   defp job_details_without_job(job_id) do
     with {:ok, agents} <- RedisStore.list_agents(job_id),
-         {:ok, events} <- RedisStore.read_events(job_id) do
+         {:ok, events} <- RedisStore.read_events(job_id, -@summary_event_window, -1) do
       agent_summaries = Enum.map(agents, &summarize_agent/1)
 
       {:ok,

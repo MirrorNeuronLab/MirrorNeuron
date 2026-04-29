@@ -56,7 +56,11 @@ defmodule MirrorNeuron.Grpc.JobServer do
   def list_jobs(request, _stream) do
     limit = if request.limit > 0, do: request.limit, else: 100
 
-    case MirrorNeuron.Monitor.list_jobs(limit: limit, include_terminal: request.include_terminal) do
+    case MirrorNeuron.Monitor.list_jobs(
+           limit: limit,
+           include_terminal: request.include_terminal,
+           summary: :basic
+         ) do
       {:ok, jobs} ->
         %ListJobsResponse{jobs_json: Jason.encode!(%{data: jobs})}
 

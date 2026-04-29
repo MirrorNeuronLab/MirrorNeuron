@@ -68,8 +68,8 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
-  def read_events(job_id) do
-    case command(["LRANGE", key("job", job_id, "events"), "0", "-1"]) do
+  def read_events(job_id, start \\ "0", stop \\ "-1") do
+    case command(["LRANGE", key("job", job_id, "events"), to_string(start), to_string(stop)]) do
       {:ok, items} -> {:ok, Enum.map(items, &Jason.decode!/1)}
       {:error, reason} -> {:error, format_reason(reason)}
     end
