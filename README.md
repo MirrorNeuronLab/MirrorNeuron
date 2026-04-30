@@ -1,10 +1,10 @@
 # 🧠 MirrorNeuron: On-Edge AI Infrastructure
 
-### Durable Runtime for Adaptive, Controllable AI Workflows
+### Durable runtime and control plane for adaptive AI workflows at the edge.
 
-MirrorNeuron is open-source **on-edge AI infrastructure**: a durable runtime and control plane for long-running agents, workflow graphs, and AI systems that need to run close to data, users, sensors, robots, devices, and private environments.
+MirrorNeuron is an open-source runtime for AI systems that need to run close to data, users, devices, sensors, robots, private networks, and local compute.
 
-It is designed for the next wave of AI applications: **local-first, cloud-aware, privacy-sensitive, event-driven, and adaptive**.
+It provides the missing execution layer for **long-running, stateful, observable, and adaptive AI workflows** — from a developer laptop to edge nodes, private clusters, and hybrid cloud environments.
 
 <!-- start-badges -->
 [![License](https://img.shields.io/badge/License-MIT-blue)](https://github.com/MirrorNeuronLab/MirrorNeuron/blob/main/LICENSE)
@@ -13,76 +13,24 @@ It is designed for the next wave of AI applications: **local-first, cloud-aware,
 [![On-Edge AI](https://img.shields.io/badge/On--Edge%20AI-Infrastructure-purple)](https://mirrorneuron.io)
 [![Docs](https://img.shields.io/badge/Docs-mn--docs-blue)](https://github.com/MirrorNeuronLab/mn-docs)
 [![Discord](https://img.shields.io/badge/Discord-Join-7289da)](https://discord.com/invite/XmSQqFEz)
-[![Website](https://img.shields.io/badge/Website-mirrorneuron.io-black)](https://mirrorneuron.io)
 <!-- end-badges -->
 
----
-
-## What is MirrorNeuron?
-
-MirrorNeuron is a **durable execution runtime for adaptive AI workflows**.
-
-It helps teams build AI systems that are more than prompt chains: systems that can run for long periods, coordinate multiple agents, recover from failures, observe every step, and adapt to changing conditions.
-
-> Think **Temporal for AI workflows** — but lighter, agent-native, and designed for message-driven multi-agent systems.
-
-Modern AI systems are becoming **stateful, event-driven, long-running software**. MirrorNeuron provides the runtime layer they need:
-
-- **Durability** — workflows survive crashes, retries, and restarts
-- **Control** — execution follows explicit policies, boundaries, and routing logic
-- **Observability** — messages, state transitions, and decisions can be inspected
-- **Adaptivity** — workflows respond to signals, load, failures, and new evidence
-- **Edge-readiness** — AI workflows can run close to data, devices, and private environments
-
 > [!IMPORTANT]
-> MirrorNeuron is currently **alpha software**. Interfaces may change as the ecosystem evolves. We are sharing it early to invite feedback, contributors, and real-world experimentation.
+> MirrorNeuron is in **alpha / developer preview**. The core direction is stable, but APIs, blueprints, and ecosystem components may evolve quickly. We are releasing early to invite contributors, design partners, and real-world feedback.
 
 ---
 
-## Why On-Edge AI Infrastructure?
+## The Thesis
 
-AI is moving from centralized demos into operational systems that live where work happens:
+AI is moving from cloud-only chat interfaces into real-world operational systems.
 
-- enterprise private networks
-- local edge servers
-- robotics and physical AI platforms
-- factories, labs, clinics, vehicles, and field operations
-- developer machines and private clusters
-- hybrid systems that combine local execution with cloud services
+```text
+Models are becoming available.
+Agents are becoming useful.
+Reliable on-edge execution is still missing.
+```
 
-This shift creates a new infrastructure problem.
-
-Models may be able to run locally, but **production AI still needs a runtime**: something that can coordinate agents, preserve state, recover from failures, enforce policy, expose observability, and adapt to changing conditions.
-
-### Why now?
-
-On-edge AI infrastructure matters because:
-
-| Driver | Why it matters |
-|---|---|
-| **Privacy** | Sensitive data often needs to stay inside a device, site, lab, enterprise network, or regulated environment. |
-| **Latency** | Robots, industrial systems, interactive agents, and real-time workflows cannot always wait for cloud round trips. |
-| **Bandwidth** | Sending every sensor stream, video frame, tool call, and intermediate state to the cloud is expensive and brittle. |
-| **Reliability** | Edge systems must continue operating when networks are slow, intermittent, or unavailable. |
-| **Ownership** | Teams increasingly want control over where models, agents, tools, and workflow state actually run. |
-| **Opportunity** | As inference moves closer to data, the bottleneck shifts from model access to orchestration, reliability, and control. |
-
-MirrorNeuron is built for this opportunity: an open-source runtime foundation for **edge-native AI systems**.
-
-### The infrastructure opportunity
-
-Just as cloud-native applications required orchestration layers, on-edge AI systems need orchestration for:
-
-- long-running agents
-- workflow state
-- local compute resources
-- tool execution
-- event streams
-- retries and recovery
-- observability and auditability
-- hybrid edge/cloud coordination
-
-MirrorNeuron aims to become that open, durable, and adaptive runtime layer.
+MirrorNeuron is building that missing layer: **durable, adaptive infrastructure for AI workflows that run where work actually happens**.
 
 ---
 
@@ -96,21 +44,71 @@ curl -fsSL https://mirrorneuron.io/install.sh | bash
 
 ## Launch Something Useful
 
-Run a real blueprint with one command:
+Run a real multi-agent blueprint with one command:
 
 ```bash
 mn blueprint run science_drug_discovery_deamon
 ```
 
-This is intended to demonstrate MirrorNeuron as a runtime for useful, long-running AI workflows — not just a toy prompt demo.
+This is intended to demonstrate MirrorNeuron as a runtime for useful AI workflows, not just a toy prompt demo.
 
-It showcases:
+Expected flow:
 
-- multi-agent coordination
-- durable workflow execution
-- adaptive orchestration
-- observable state and progress
-- a blueprint-oriented path from demo to repeatable workflow
+- the blueprint is resolved
+- the workflow graph is validated
+- agents begin executing
+- progress is visible through runtime events
+- intermediate state and outputs are tracked
+- the workflow can recover from interruptions or failures
+
+---
+
+## Why On-Edge AI Infrastructure?
+
+AI systems are moving closer to where data is created and decisions are made:
+
+- private enterprise environments
+- robotics and physical AI platforms
+- factories, labs, clinics, vehicles, and field operations
+- developer machines and local clusters
+- hybrid systems that combine local execution with cloud services
+
+This shift creates a new infrastructure bottleneck.
+
+Models can run locally. Tools can be called remotely. Agents can be composed. But real-world systems still need a runtime that can coordinate agents, preserve state, recover from failures, expose observability, enforce policies, and adapt to changing conditions.
+
+MirrorNeuron is built for that bottleneck.
+
+### Why now?
+
+| Driver | Why it matters |
+|---|---|
+| **Privacy** | Sensitive data often needs to stay inside a device, site, lab, enterprise network, or regulated environment. |
+| **Latency** | Robots, industrial systems, interactive agents, and real-time workflows cannot always wait for cloud round trips. |
+| **Bandwidth** | Sending every sensor stream, video frame, tool call, and intermediate state to the cloud is expensive and brittle. |
+| **Reliability** | Edge systems must continue operating when networks are slow, intermittent, or unavailable. |
+| **Ownership** | Teams increasingly want control over where models, agents, tools, and workflow state actually run. |
+| **Opportunity** | As inference moves closer to data, the bottleneck shifts from model access to orchestration, reliability, and control. |
+
+### Industry context
+
+- NVIDIA describes edge computing as useful for faster response times, lower bandwidth costs, and resilience from network failure: https://blogs.nvidia.com/blog/what-is-edge-ai/
+- McKinsey notes that a significant portion of inferencing is expected to continue shifting toward the edge to reduce latency and bandwidth demands: https://www.mckinsey.com/industries/technology-media-and-telecommunications/our-insights/the-next-big-shifts-in-ai-workloads-and-hyperscaler-strategies
+- Qualcomm highlights on-device AI as a way to use local context while improving privacy, personalization, and efficiency: https://www.qualcomm.com/news/onq/2023/12/ai-on-the-edge-generative-ai-technology-impacts-insights-and-predictions
+
+---
+
+## What MirrorNeuron Provides
+
+| Capability | Purpose |
+|---|---|
+| **Durable execution** | Preserve workflow progress across crashes, retries, and restarts. |
+| **Message-driven orchestration** | Coordinate agents, tools, sensors, and workflow nodes through explicit events. |
+| **Adaptive routing** | Respond to signals, load, failures, and changing workflow state. |
+| **Backpressure** | Prevent overloaded agents, tools, or local resources from destabilizing the system. |
+| **Observability** | Inspect workflow state, events, messages, decisions, and execution progress. |
+| **Blueprints** | Package useful AI workflows as reusable, repeatable templates. |
+| **Edge/cloud flexibility** | Run near data while still integrating with cloud services when useful. |
 
 ---
 
@@ -153,21 +151,24 @@ Workflows are treated as first-class software artifacts:
 
 ---
 
-## Adaptive Runtime Model
+## Architecture at a Glance
 
 MirrorNeuron keeps the runtime intentionally small and composable.
 
 ```text
-External signals / users / devices / tools / models
-              │
-              ▼
-      MirrorNeuron Runtime
-  ┌──────────┬───────────┬────────────┬─────────┐
-  │ router   │ executor  │ aggregator │ sensor  │
-  └──────────┴───────────┴────────────┴─────────┘
-              │
-              ▼
- Durable, observable, adaptive workflow graph
+Sensors / users / devices / tools / models
+                    │
+                    ▼
+          MirrorNeuron Runtime
+    ┌──────────┬───────────┬────────────┬─────────┐
+    │ router   │ executor  │ aggregator │ sensor  │
+    └──────────┴───────────┴────────────┴─────────┘
+                    │
+                    ▼
+      Durable workflow graph + state + events
+                    │
+                    ▼
+      Edge node / private cluster / hybrid cloud
 ```
 
 ### Runtime primitives
@@ -179,7 +180,7 @@ External signals / users / devices / tools / models
 | `aggregator` | Coordinates intermediate and final results. |
 | `sensor` | Ingests external events, signals, and triggers. |
 
-This minimal model keeps MirrorNeuron understandable while leaving room for powerful orchestration patterns.
+Minimal primitives keep MirrorNeuron understandable while enabling complex orchestration patterns.
 
 ---
 
@@ -202,41 +203,98 @@ This separation enables:
 - backpressure under load
 - scalable long-running workflows
 
-For on-edge systems, this distinction is especially important: local compute is valuable, constrained, and often shared across agents, tools, sensors, and services.
+For on-edge systems, this distinction is especially important: local compute is valuable, constrained, and often shared across agents, tools, sensors, models, and services.
 
 ---
 
-## Edge-Native by Design
+## Available Today
 
-MirrorNeuron does not assume everything runs only in the cloud or only on a device. It is designed for **hybrid AI systems**.
+MirrorNeuron is early, but already includes concrete runtime capabilities.
 
-```text
-Edge runtime + local agents + private data + cloud services when useful
-```
-
-That means MirrorNeuron can support patterns such as:
-
-- local workflow execution with cloud model calls
-- local model inference with remote observability
-- private-network agents with controlled external integrations
-- edge blueprints that coordinate sensors, tools, and executors
-- distributed workflows across developer machines, edge nodes, and clusters
-
-The goal is not to replace the cloud. The goal is to make AI workflows **portable, controllable, and durable wherever they run**.
-
----
-
-## What MirrorNeuron Provides
-
-| Capability | Purpose |
+| Capability | Status |
 |---|---|
-| **Durable execution** | Keep progress across failures, retries, and restarts. |
-| **Message-driven orchestration** | Coordinate agents and workflow nodes through explicit events. |
-| **Adaptive routing** | Respond to signals, load, failures, and changing workflow state. |
-| **Backpressure** | Prevent overloaded agents or tools from destabilizing the system. |
-| **Observability** | Inspect workflow state, events, messages, and execution progress. |
-| **Blueprints** | Package repeatable AI workflows as reusable templates. |
-| **Edge/cloud flexibility** | Run near data while still integrating with cloud services when useful. |
+| Core runtime | Available |
+| Message-driven workflow execution | Available |
+| CLI workflow launch | Available |
+| Blueprint runner | Available |
+| Local execution | Available |
+| Clustered execution | Available |
+| Persistence support | Available |
+| Terminal monitoring | Available |
+| Web UI | Ecosystem component |
+| Python SDK | Ecosystem component |
+| TypeScript SDK | Ecosystem component |
+
+Detailed setup, configuration, and operating instructions live in the documentation repository:
+
+**https://github.com/MirrorNeuronLab/mn-docs**
+
+---
+
+## Who Is MirrorNeuron For?
+
+| Audience | Why it matters |
+|---|---|
+| **AI application developers** | Build agents that survive failures and run beyond one request. |
+| **Robotics / physical AI teams** | Coordinate local workflows close to sensors, machines, and real-time signals. |
+| **Enterprise AI teams** | Keep sensitive workflows inside private or regulated environments. |
+| **Research labs** | Run long-running scientific agents with state, checkpoints, and recovery. |
+| **Platform teams** | Provide a reusable runtime layer for AI workflows across teams and products. |
+| **Open-source builders** | Contribute to an ambitious infrastructure layer for adaptive AI systems. |
+
+---
+
+## Beachhead Use Cases
+
+MirrorNeuron is especially suited for AI systems where cloud-only execution is not enough.
+
+| Use Case | Why Edge Matters |
+|---|---|
+| **Scientific research agents** | Private data, long-running workflows, repeatable experiments. |
+| **Drug discovery workflows** | Multi-step reasoning, tool calls, auditability, recovery. |
+| **Robotics / physical AI** | Low latency, local sensors, safety boundaries. |
+| **Manufacturing / industrial AI** | Private site data, unreliable networks, real-time signals. |
+| **Enterprise agents** | Data ownership, policy control, internal system integration. |
+| **Financial workflows** | Audit trails, deterministic execution, compliance-sensitive data. |
+
+---
+
+## Why Developers Care
+
+MirrorNeuron is designed to make useful AI workflows easier to build, run, and debug.
+
+- one-command install
+- reusable blueprints
+- CLI-first workflow launch
+- local development support
+- observable events and workflow state
+- Python and TypeScript SDK ecosystem
+- clear path from demo workflow to repeatable system
+
+---
+
+## Why Tech Leads Care
+
+MirrorNeuron is designed for teams that need AI workflows to behave like production software.
+
+- explicit workflow graphs
+- durable state
+- replayable execution
+- observable events
+- bounded execution capacity
+- backpressure under load
+- edge/cloud deployment flexibility
+- SDK, API, and CLI ecosystem
+
+---
+
+## Investment Thesis
+
+AI is moving from centralized demos into operational systems: robots, labs, factories, private enterprise networks, developer machines, local clusters, and edge devices.
+
+These systems need more than models. They need infrastructure for orchestration, state, recovery, observability, policy, and control.
+
+MirrorNeuron starts with durable AI workflow execution and expands toward a broader **control plane for on-edge AI systems**.
 
 ---
 
@@ -258,122 +316,38 @@ MirrorNeuron is designed to sit underneath agent frameworks, tools, SDKs, and in
 
 ## Comparison
 
-| System / Layer | Great for | Gap MirrorNeuron targets |
-|---|---|---|
-| Agent frameworks | Rapid agent prototyping | Runtime durability, recovery, observability, and edge orchestration |
-| LangGraph-style workflows | Graph-based agent logic | Production runtime guarantees and long-running execution semantics |
-| Temporal | Durable business workflows | AI-native workflow graphs, agent patterns, and edge-oriented execution |
-| Kubernetes | Deploying containers | Application-level workflow state, message routing, and agent coordination |
-| Cloud AI APIs | Accessing powerful models | Local/private execution control, adaptive orchestration, and workflow durability |
-
----
-
-## Example Use Cases
-
-### Scientific discovery agents
-
-Coordinate long-running research workflows such as literature review, hypothesis generation, simulation, ranking, validation, and report synthesis.
-
-### Robotics and physical AI
-
-Run workflows that combine planning, simulation, validation, execution, monitoring, and recovery.
-
-### Industrial and field operations
-
-Coordinate agents close to sensors, machines, devices, and local operational data.
-
-### Private enterprise AI
-
-Run agent workflows inside secure environments where data governance, auditability, and control matter.
-
-### Finance and compliance
-
-Build auditable multi-step decision pipelines where every decision, retry, and state transition can be inspected.
-
-### Developer and research automation
-
-Create persistent agents that can run, pause, resume, observe signals, and continue work across sessions.
-
----
-
-## When to Use MirrorNeuron
-
-Use MirrorNeuron when:
-
-- workflows run longer than a single request
-- agents depend on each other
-- failures are costly or hard to debug
-- workflow state must be observable or recoverable
-- sensitive data should remain local or private
-- local/edge execution matters
-- you need repeatable blueprints, not one-off scripts
-
-MirrorNeuron may be unnecessary when:
-
-- the task is a simple prompt-response interaction
-- no state, retry, observability, or recovery is needed
-- a small script is enough
-
----
-
-## Repository Role
-
-This repository contains the **core MirrorNeuron runtime**.
-
-It is responsible for:
-
-- orchestration
-- supervision
-- message routing
-- workflow execution
-- clustering foundations
-- persistence foundations
-
-Operational details, deployment guides, CLI references, SDK usage, and advanced architecture notes live in the documentation repository.
-
----
-
-## Documentation
-
-All detailed documentation has moved to:
-
-**https://github.com/MirrorNeuronLab/mn-docs**
-
-Recommended starting points:
-
-| Topic | Where to go |
-|---|---|
-| Getting started | [`mn-docs`](https://github.com/MirrorNeuronLab/mn-docs) |
-| Architecture | [`mn-docs`](https://github.com/MirrorNeuronLab/mn-docs) |
-| CLI reference | [`mn-docs`](https://github.com/MirrorNeuronLab/mn-docs) |
-| SDK usage | [`mn-docs`](https://github.com/MirrorNeuronLab/mn-docs) |
-| Deployment | [`mn-docs`](https://github.com/MirrorNeuronLab/mn-docs) |
-| Blueprints | [`mirrorneuron-blueprints`](https://github.com/MirrorNeuronLab/mirrorneuron-blueprints) and [`mn-docs`](https://github.com/MirrorNeuronLab/mn-docs) |
+| Project | Primary Focus | Strength | Gap MirrorNeuron Targets |
+|---|---|---|---|
+| **LangGraph** | Agent/workflow graphs | Easy LLM graph composition | Less focused on durable on-edge execution and resource-aware orchestration |
+| **Temporal** | Durable workflows | Production-grade reliability | Not designed specifically for adaptive AI agents or edge-native execution |
+| **Airflow** | Batch/data workflows | Mature scheduling ecosystem | Not ideal for adaptive, message-driven, long-running AI agents |
+| **Ray** | Distributed compute | Scalable parallel execution | Less opinionated around durable workflow control, replay, and agent orchestration |
+| **MirrorNeuron** | On-edge AI infrastructure | Durable, adaptive, message-driven AI runtime | Early ecosystem, actively evolving |
 
 ---
 
 ## Ecosystem
 
-MirrorNeuron is designed as a modular open-source ecosystem.
+MirrorNeuron is a modular open-source ecosystem.
 
 | Component | Description |
 |---|---|
-| [MirrorNeuron Core](https://github.com/MirrorNeuronLab/MirrorNeuron) | Core runtime and orchestration engine. |
-| [mn-docs](https://github.com/MirrorNeuronLab/mn-docs) | Documentation, guides, and architecture notes. |
-| [mn-api](https://github.com/MirrorNeuronLab/mn-api) | API gateway for HTTP integrations. |
-| [mn-cli](https://github.com/MirrorNeuronLab/mn-cli) | Command-line interface for workflow lifecycle management. |
-| [mn-web-ui](https://github.com/MirrorNeuronLab/mn-web-ui) | Web dashboard for workflow visibility and control. |
-| [mn-python-sdk](https://github.com/MirrorNeuronLab/mn-python-sdk) | Python SDK for agents and integrations. |
-| [mn-ts-sdk](https://github.com/MirrorNeuronLab/mn-ts-sdk) | TypeScript SDK for agents and integrations. |
-| [mn-deploy](https://github.com/MirrorNeuronLab/mn-deploy) | Deployment tooling. |
-| [mn-system-tests](https://github.com/MirrorNeuronLab/mn-system-tests) | End-to-end and integration testing. |
-| [mirrorneuron-blueprints](https://github.com/MirrorNeuronLab/mirrorneuron-blueprints) | Reusable workflow examples and templates. |
+| 🧠 **MirrorNeuron Core Runtime** | https://github.com/MirrorNeuronLab/MirrorNeuron |
+| 🔌 **mn-api** | REST gateway for HTTP access — https://github.com/MirrorNeuronLab/mn-api |
+| 💻 **mn-cli** | CLI for workflow and job lifecycle management — https://github.com/MirrorNeuronLab/mn-cli |
+| 🌐 **mn-web-ui** | Visual workflow dashboard — https://github.com/MirrorNeuronLab/mn-web-ui |
+| 🐍 **mn-python-sdk** | Python SDK for agents and integrations — https://github.com/MirrorNeuronLab/mn-python-sdk |
+| 🟦 **mn-ts-sdk** | TypeScript SDK — https://github.com/MirrorNeuronLab/mn-ts-sdk |
+| 📦 **mn-deploy** | Deployment tooling — https://github.com/MirrorNeuronLab/mn-deploy |
+| 🧪 **mn-system-tests** | End-to-end testing — https://github.com/MirrorNeuronLab/mn-system-tests |
+| 🏗 **mirrorneuron-blueprints** | Reusable AI workflow examples — https://github.com/MirrorNeuronLab/mirrorneuron-blueprints |
+| 📚 **mn-docs** | Documentation, architecture notes, and guides — https://github.com/MirrorNeuronLab/mn-docs |
 
 ---
 
 ## Roadmap Themes
 
-MirrorNeuron is an ambitious open-source project. The long-term goal is to become a shared runtime foundation for adaptive, on-edge AI systems.
+MirrorNeuron is an ambitious open-source infrastructure project. The long-term goal is to become a shared runtime foundation for adaptive AI systems.
 
 Current roadmap themes include:
 
@@ -389,14 +363,11 @@ Current roadmap themes include:
 
 ---
 
-## Market Context
+## Documentation
 
-For broader context on why on-edge AI infrastructure is becoming important:
+Operational details, architecture notes, setup guides, and deeper references live in the dedicated documentation repository:
 
-- [NVIDIA: What Is Edge AI and How Does It Work?](https://blogs.nvidia.com/blog/what-is-edge-ai/)
-- [NVIDIA: Cloud vs. Edge Computing](https://blogs.nvidia.com/blog/difference-between-cloud-and-edge-computing/)
-- [McKinsey: The next big shifts in AI workloads and hyperscaler strategies](https://www.mckinsey.com/industries/technology-media-and-telecommunications/our-insights/the-next-big-shifts-in-ai-workloads-and-hyperscaler-strategies)
-- [Qualcomm: Edge-first AI for privacy and bandwidth](https://www.qualcomm.com/news/onq/2025/12/qualcomm-insight-platform-edge-ai-video-saas)
+**https://github.com/MirrorNeuronLab/mn-docs**
 
 ---
 
@@ -422,7 +393,7 @@ Good places to contribute:
 - documentation
 - tests and benchmarks
 - design discussions
-- edge deployment patterns
+- edge deployment examples
 
 Start with the documentation repository:
 
