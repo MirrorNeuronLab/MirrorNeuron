@@ -678,21 +678,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
         if attempts_left > 0 and reconnectable_error?(reason) do
           _ = MirrorNeuron.Redis.reconnect()
           Process.sleep(backoff_ms)
-
-          case one_shot_command(args) do
-            {:ok, _result} = ok ->
-              ok
-
-            {:error, retry_reason} = retry_error ->
-              if reconnectable_error?(retry_reason) do
-                command(args, attempts_left - 1, next_reconnect_backoff(backoff_ms))
-              else
-                retry_error
-              end
-
-            other ->
-              other
-          end
+          command(args, attempts_left - 1, next_reconnect_backoff(backoff_ms))
         else
           error
         end
@@ -700,21 +686,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       other ->
         other
     end
-  end
-
-  defp one_shot_command(args) do
-    with {:ok, redis_url} <- redis_connection_url(),
-         {:ok, conn} <- Redix.start_link(redis_url),
-         result <- safe_command(conn, args) do
-      GenServer.stop(conn, :normal, 1_000)
-      result
-    end
-  end
-
-  defp redis_connection_url do
-    {:ok, MirrorNeuron.Redis.connection_url()}
-  rescue
-    exception -> {:error, Exception.message(exception)}
   end
 
   defp safe_command(connection, args) do

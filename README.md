@@ -227,7 +227,10 @@ MirrorNeuron is early, but already includes concrete runtime capabilities.
 
 Detailed setup, configuration, and operating instructions live in the documentation repository:
 
-**https://github.com/MirrorNeuronLab/mn-docs**
+- [Docs landing page](https://github.com/MirrorNeuronLab/mn-docs/blob/main/README.md)
+- [Quickstart](https://github.com/MirrorNeuronLab/mn-docs/blob/main/quickstart.md)
+- [Installation](https://github.com/MirrorNeuronLab/mn-docs/blob/main/installation.md)
+- [Security model](https://github.com/MirrorNeuronLab/mn-docs/blob/main/security.md)
 
 ---
 
@@ -365,7 +368,20 @@ Current roadmap themes include:
 
 ## Documentation
 
-Operational details, architecture notes, setup guides, and deeper references live in the dedicated documentation repository:
+The dedicated documentation repository is organized around fast first success, safe operation, and contributor onboarding:
+
+| Goal | Start here |
+|---|---|
+| Install and run the first workflow | [Quickstart](https://github.com/MirrorNeuronLab/mn-docs/blob/main/quickstart.md) |
+| Set up local dependencies | [Installation](https://github.com/MirrorNeuronLab/mn-docs/blob/main/installation.md) |
+| Learn the runtime model | [Runtime Architecture](https://github.com/MirrorNeuronLab/mn-docs/blob/main/runtime-architecture.md) |
+| Use the CLI | [CLI Reference](https://github.com/MirrorNeuronLab/mn-docs/blob/main/cli.md) |
+| Build or run blueprints | [Blueprints and Skills](https://github.com/MirrorNeuronLab/mn-docs/blob/main/blueprints-and-skills.md) |
+| Configure Redis failover | [Redis High Availability](https://github.com/MirrorNeuronLab/mn-docs/blob/main/redis-ha.md) |
+| Operate safely | [Security Model](https://github.com/MirrorNeuronLab/mn-docs/blob/main/security.md) |
+| Fix common failures | [Troubleshooting](https://github.com/MirrorNeuronLab/mn-docs/blob/main/troubleshooting.md) |
+
+Full docs index:
 
 **https://github.com/MirrorNeuronLab/mn-docs**
 
@@ -395,9 +411,12 @@ Good places to contribute:
 - design discussions
 - edge deployment examples
 
-Start with the documentation repository:
+Start with:
 
-**https://github.com/MirrorNeuronLab/mn-docs**
+- [Contributing guide](https://github.com/MirrorNeuronLab/mn-docs/blob/main/contributing.md)
+- [Testing guide](https://github.com/MirrorNeuronLab/mn-docs/blob/main/testing.md)
+- [Documentation style guide](https://github.com/MirrorNeuronLab/mn-docs/blob/main/documentation-style.md)
+- [Blueprints and Skills](https://github.com/MirrorNeuronLab/mn-docs/blob/main/blueprints-and-skills.md)
 
 ---
 
@@ -405,7 +424,11 @@ Start with the documentation repository:
 
 If you believe you have found a vulnerability, please do **not** disclose exploit details in a public issue.
 
-Use the repository security page or contact the maintainers through the documented community channels while the security policy evolves:
+Read the operator-facing security model before running third-party bundles, passing secrets into workers, or exposing a cluster:
+
+**https://github.com/MirrorNeuronLab/mn-docs/blob/main/security.md**
+
+Use the repository security page for vulnerability reports:
 
 **https://github.com/MirrorNeuronLab/MirrorNeuron/security**
 

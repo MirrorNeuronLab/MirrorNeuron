@@ -9,6 +9,8 @@ REDIS_PORT="${MIRROR_NEURON_REDIS_HA_TEST_REDIS_PORT:-46379}"
 SENTINEL_PORT="${MIRROR_NEURON_REDIS_HA_TEST_SENTINEL_PORT:-46380}"
 REDIS_IMAGE="${MIRROR_NEURON_REDIS_TEST_IMAGE:-redis:7}"
 SSH_OPTS="${MIRROR_NEURON_REDIS_HA_TEST_SSH_OPTS:--o BatchMode=yes -o ConnectTimeout=10}"
+REMOTE_NETWORK="${MIRROR_NEURON_REDIS_HA_TEST_REMOTE_NETWORK:-auto}"
+INITIAL_PRIMARY="${MIRROR_NEURON_REDIS_HA_TEST_INITIAL_PRIMARY:-auto}"
 
 usage() {
   cat <<EOF
@@ -21,11 +23,13 @@ options:
       --redis-port <port>   Host Redis port to expose on both boxes. Defaults to 46379.
       --sentinel-port <p>   Host Sentinel port to expose on both boxes. Defaults to 46380.
       --redis-image <img>   Docker image. Defaults to redis:7.
+      --remote-network <n>  Remote Docker network mode: auto, host, or bridge. Defaults to auto.
+      --initial-primary <p> Initial primary: auto, local, or remote. Defaults to auto.
   -h, --help                Show this help.
 
 The test starts Redis + Sentinel in Docker on both boxes, writes through MirrorNeuron,
-kills the local primary Redis, waits for Sentinel failover, then verifies a post-failover
-MirrorNeuron write/read succeeds against the remote-promoted primary.
+kills the initial primary Redis, waits for Sentinel failover, then verifies a post-failover
+MirrorNeuron write/read succeeds against the promoted replica.
 EOF
 }
 
@@ -53,6 +57,14 @@ while [ "$#" -gt 0 ]; do
       ;;
     --redis-image)
       REDIS_IMAGE="$2"
+      shift 2
+      ;;
+    --remote-network)
+      REMOTE_NETWORK="$2"
+      shift 2
+      ;;
+    --initial-primary)
+      INITIAL_PRIMARY="$2"
       shift 2
       ;;
     -h|--help)
@@ -153,6 +165,33 @@ require_bin nc
 
 ssh_remote "command -v docker >/dev/null && command -v nc >/dev/null"
 
+case "$REMOTE_NETWORK" in
+  auto|host|bridge)
+    ;;
+  *)
+    echo "--remote-network must be auto, host, or bridge" >&2
+    exit 1
+    ;;
+esac
+
+case "$INITIAL_PRIMARY" in
+  auto|local|remote)
+    ;;
+  *)
+    echo "--initial-primary must be auto, local, or remote" >&2
+    exit 1
+    ;;
+esac
+
+if [ "$REMOTE_NETWORK" = "auto" ]; then
+  remote_docker_os="$(ssh_remote "docker info --format '{{.OSType}}'")"
+  if [ "$remote_docker_os" = "linux" ]; then
+    REMOTE_NETWORK="host"
+  else
+    REMOTE_NETWORK="bridge"
+  fi
+fi
+
 ensure_port_free 127.0.0.1 "$REDIS_PORT" "local Redis"
 ensure_port_free 127.0.0.1 "$SENTINEL_PORT" "local Sentinel"
 ensure_remote_port_free "$REDIS_PORT" "Redis"
@@ -166,6 +205,7 @@ LOCAL_REDIS="$RUN_ID-local-redis"
 LOCAL_SENTINEL="$RUN_ID-local-sentinel"
 REMOTE_REDIS="$RUN_ID-remote-redis"
 REMOTE_SENTINEL="$RUN_ID-remote-sentinel"
+LOCAL_REDIS_ANNOUNCE_IP="$LOCAL_IP"
 
 cleanup() {
   docker rm -f "$LOCAL_REDIS" "$LOCAL_SENTINEL" >/dev/null 2>&1 || true
@@ -180,58 +220,151 @@ echo "  local:  $LOCAL_IP"
 echo "  remote: $REMOTE_IP via $REMOTE_HOST"
 echo "  redis:  $REDIS_PORT"
 echo "  sentinel: $SENTINEL_PORT"
+echo "  remote docker network: $REMOTE_NETWORK"
+echo "  initial primary: $INITIAL_PRIMARY"
 
-docker run -d --name "$LOCAL_REDIS" \
-  -p "0.0.0.0:${REDIS_PORT}:6379" \
-  "$REDIS_IMAGE" \
-  redis-server --port 6379 --save "" --appendonly no \
-  --replica-announce-ip "$LOCAL_IP" --replica-announce-port "$REDIS_PORT" >/dev/null
+start_local_redis() {
+  if [ "$1" = "replica" ]; then
+    docker run -d --name "$LOCAL_REDIS" \
+      -p "0.0.0.0:${REDIS_PORT}:6379" \
+      "$REDIS_IMAGE" \
+      redis-server --port 6379 --save "" --appendonly no \
+      --protected-mode no \
+      --replicaof "$REMOTE_IP" "$REDIS_PORT" \
+      --replica-announce-ip "$LOCAL_REDIS_ANNOUNCE_IP" \
+      --replica-announce-port "$REDIS_PORT" >/dev/null
+  else
+    docker run -d --name "$LOCAL_REDIS" \
+      -p "0.0.0.0:${REDIS_PORT}:6379" \
+      "$REDIS_IMAGE" \
+      redis-server --port 6379 --save "" --appendonly no \
+      --protected-mode no \
+      --replica-announce-ip "$LOCAL_REDIS_ANNOUNCE_IP" \
+      --replica-announce-port "$REDIS_PORT" >/dev/null
+  fi
+}
 
-ssh_remote "docker run -d --name '$REMOTE_REDIS' \
-  -p '0.0.0.0:${REDIS_PORT}:6379' \
-  '$REDIS_IMAGE' \
-  redis-server --port 6379 --save '' --appendonly no \
-  --replicaof '$LOCAL_IP' '$REDIS_PORT' \
-  --replica-announce-ip '$REMOTE_IP' --replica-announce-port '$REDIS_PORT'" >/dev/null
+start_remote_redis() {
+  local mode="$1"
+  local port="6379"
+  local network_args="-p '0.0.0.0:${REDIS_PORT}:6379'"
+  local replica_args=""
+
+  if [ "$REMOTE_NETWORK" = "host" ]; then
+    port="$REDIS_PORT"
+    network_args="--network host"
+  fi
+
+  if [ "$mode" = "replica" ]; then
+    replica_args="--replicaof '$LOCAL_IP' '$REDIS_PORT'"
+  fi
+
+  ssh_remote "docker run -d --name '$REMOTE_REDIS' \
+    $network_args \
+    '$REDIS_IMAGE' \
+    redis-server --port '$port' --save '' --appendonly no \
+    --protected-mode no \
+    $replica_args \
+    --replica-announce-ip '$REMOTE_IP' --replica-announce-port '$REDIS_PORT'" >/dev/null
+}
+
+start_local_redis primary
+
+if [ "$INITIAL_PRIMARY" = "auto" ]; then
+  if ssh_remote "nc -z -w 3 '$LOCAL_IP' '$REDIS_PORT' >/dev/null 2>&1"; then
+    INITIAL_PRIMARY="local"
+  else
+    echo "Remote cannot reach local Redis at $LOCAL_IP:$REDIS_PORT; using remote as initial primary."
+    INITIAL_PRIMARY="remote"
+  fi
+fi
+
+if [ "$INITIAL_PRIMARY" = "local" ]; then
+  PRIMARY_IP="$LOCAL_IP"
+  PRIMARY_REDIS="$LOCAL_REDIS"
+  start_remote_redis replica
+else
+  PRIMARY_IP="$REMOTE_IP"
+  PRIMARY_REDIS="$REMOTE_REDIS"
+  LOCAL_REDIS_ANNOUNCE_IP="host.docker.internal"
+  docker rm -f "$LOCAL_REDIS" >/dev/null 2>&1 || true
+  start_remote_redis primary
+  start_local_redis replica
+fi
 
 docker run -d --name "$LOCAL_SENTINEL" \
+  --add-host=host.docker.internal:host-gateway \
   -p "0.0.0.0:${SENTINEL_PORT}:26379" \
   "$REDIS_IMAGE" \
   sh -c "cat >/tmp/sentinel.conf <<EOF
 port 26379
 bind 0.0.0.0
 protected-mode no
+sentinel resolve-hostnames yes
+sentinel announce-hostnames yes
 sentinel announce-ip $LOCAL_IP
 sentinel announce-port $SENTINEL_PORT
-sentinel monitor $MASTER_NAME $LOCAL_IP $REDIS_PORT 1
+sentinel monitor $MASTER_NAME $PRIMARY_IP $REDIS_PORT 1
 sentinel down-after-milliseconds $MASTER_NAME 1000
 sentinel failover-timeout $MASTER_NAME 10000
 sentinel parallel-syncs $MASTER_NAME 1
 EOF
 redis-server /tmp/sentinel.conf --sentinel" >/dev/null
 
-ssh_remote "docker run -d --name '$REMOTE_SENTINEL' \
-  -p '0.0.0.0:${SENTINEL_PORT}:26379' \
-  '$REDIS_IMAGE' \
-  sh -c 'cat >/tmp/sentinel.conf <<EOF
-port 26379
+if [ "$INITIAL_PRIMARY" = "local" ]; then
+  if [ "$REMOTE_NETWORK" = "host" ]; then
+    ssh_remote "docker run -d --name '$REMOTE_SENTINEL' \
+      --network host \
+      '$REDIS_IMAGE' \
+      sh -c 'cat >/tmp/sentinel.conf <<EOF
+port $SENTINEL_PORT
 bind 0.0.0.0
 protected-mode no
 sentinel announce-ip $REMOTE_IP
 sentinel announce-port $SENTINEL_PORT
-sentinel monitor $MASTER_NAME $LOCAL_IP $REDIS_PORT 1
+sentinel monitor $MASTER_NAME $PRIMARY_IP $REDIS_PORT 1
 sentinel down-after-milliseconds $MASTER_NAME 1000
 sentinel failover-timeout $MASTER_NAME 10000
 sentinel parallel-syncs $MASTER_NAME 1
 EOF
 redis-server /tmp/sentinel.conf --sentinel'" >/dev/null
+  else
+    ssh_remote "docker run -d --name '$REMOTE_SENTINEL' \
+      -p '0.0.0.0:${SENTINEL_PORT}:26379' \
+      '$REDIS_IMAGE' \
+      sh -c 'cat >/tmp/sentinel.conf <<EOF
+port 26379
+bind 0.0.0.0
+protected-mode no
+sentinel announce-ip $REMOTE_IP
+sentinel announce-port $SENTINEL_PORT
+sentinel monitor $MASTER_NAME $PRIMARY_IP $REDIS_PORT 1
+sentinel down-after-milliseconds $MASTER_NAME 1000
+sentinel failover-timeout $MASTER_NAME 10000
+sentinel parallel-syncs $MASTER_NAME 1
+EOF
+redis-server /tmp/sentinel.conf --sentinel'" >/dev/null
+  fi
+fi
 
-echo "Waiting for remote replica to become online..."
+echo "Waiting for replica to become online..."
 for _attempt in {1..60}; do
-  online="$(
-    docker exec "$LOCAL_REDIS" redis-cli INFO replication 2>/dev/null |
-      awk '/^slave[0-9]+:/ && /state=online/ {count++} END {print count + 0}'
-  )"
+  if [ "$INITIAL_PRIMARY" = "local" ]; then
+    online="$(
+      docker exec "$PRIMARY_REDIS" redis-cli INFO replication 2>/dev/null |
+        awk '/^slave[0-9]+:/ && /state=online/ {count++} END {print count + 0}'
+    )"
+  else
+    remote_cli_port="6379"
+    if [ "$REMOTE_NETWORK" = "host" ]; then
+      remote_cli_port="$REDIS_PORT"
+    fi
+
+    online="$(
+      ssh_remote "docker exec '$PRIMARY_REDIS' redis-cli -p '$remote_cli_port' INFO replication 2>/dev/null" |
+        awk '/^slave[0-9]+:/ && /state=online/ {count++} END {print count + 0}'
+    )"
+  fi
 
   if [ "${online:-0}" -ge 1 ]; then
     break
@@ -240,13 +373,25 @@ for _attempt in {1..60}; do
   sleep 1
 done
 
-online="$(
-  docker exec "$LOCAL_REDIS" redis-cli INFO replication |
-    awk '/^slave[0-9]+:/ && /state=online/ {count++} END {print count + 0}'
-)"
+if [ "$INITIAL_PRIMARY" = "local" ]; then
+  online="$(
+    docker exec "$PRIMARY_REDIS" redis-cli INFO replication |
+      awk '/^slave[0-9]+:/ && /state=online/ {count++} END {print count + 0}'
+  )"
+else
+  remote_cli_port="6379"
+  if [ "$REMOTE_NETWORK" = "host" ]; then
+    remote_cli_port="$REDIS_PORT"
+  fi
+
+  online="$(
+    ssh_remote "docker exec '$PRIMARY_REDIS' redis-cli -p '$remote_cli_port' INFO replication" |
+      awk '/^slave[0-9]+:/ && /state=online/ {count++} END {print count + 0}'
+  )"
+fi
 
 if [ "${online:-0}" -lt 1 ]; then
-  echo "remote replica did not become online" >&2
+  echo "replica did not become online for initial $INITIAL_PRIMARY primary" >&2
   exit 1
 fi
 
@@ -259,9 +404,16 @@ for _attempt in {1..30}; do
 done
 
 export MIRROR_NEURON_REDIS_HA_MODE="sentinel"
-export MIRROR_NEURON_REDIS_SENTINELS="${LOCAL_IP}:${SENTINEL_PORT},${REMOTE_IP}:${SENTINEL_PORT}"
+if [ "$INITIAL_PRIMARY" = "remote" ]; then
+  export MIRROR_NEURON_REDIS_SENTINELS="127.0.0.1:${SENTINEL_PORT}"
+else
+  export MIRROR_NEURON_REDIS_SENTINELS="127.0.0.1:${SENTINEL_PORT},${REMOTE_IP}:${SENTINEL_PORT}"
+fi
 export MIRROR_NEURON_REDIS_SENTINEL_MASTER="$MASTER_NAME"
-export MIRROR_NEURON_REDIS_URL="redis://${LOCAL_IP}:${REDIS_PORT}/0"
+export MIRROR_NEURON_REDIS_URL="redis://${PRIMARY_IP}:${REDIS_PORT}/0"
+if [ "$INITIAL_PRIMARY" = "remote" ]; then
+  export MIRROR_NEURON_REDIS_SENTINEL_HOST_MAP="host.docker.internal=127.0.0.1"
+fi
 export MIRROR_NEURON_REDIS_DB="0"
 export MIRROR_NEURON_REDIS_NAMESPACE="redis_2box_$RUN_ID"
 export MIRROR_NEURON_REDIS_WAIT_REPLICAS="0"
@@ -269,6 +421,9 @@ export MIRROR_NEURON_REDIS_RECONNECT_ATTEMPTS="${MIRROR_NEURON_REDIS_RECONNECT_A
 export MIRROR_NEURON_GRPC_PORT="$GRPC_PORT"
 export MIRROR_NEURON_API_PORT="$API_PORT"
 export MN_TWO_BOX_LOCAL_REDIS="$LOCAL_REDIS"
+export MN_TWO_BOX_REMOTE_REDIS="$REMOTE_REDIS"
+export MN_TWO_BOX_REMOTE_HOST="$REMOTE_HOST"
+export MN_TWO_BOX_INITIAL_PRIMARY="$INITIAL_PRIMARY"
 
 cd "$ROOT_DIR"
 
@@ -286,8 +441,25 @@ job_id = "redis-two-box-" <> Integer.to_string(System.unique_integer([:positive]
 
 IO.puts("two_box_initial_write_ok=#{job_id}")
 
-{_output, 0} = System.cmd("docker", ["kill", System.fetch_env!("MN_TWO_BOX_LOCAL_REDIS")])
-Process.sleep(5_000)
+case System.fetch_env!("MN_TWO_BOX_INITIAL_PRIMARY") do
+  "remote" ->
+    {_output, 0} =
+      System.cmd("ssh", [
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        System.fetch_env!("MN_TWO_BOX_REMOTE_HOST"),
+        "docker",
+        "kill",
+        System.fetch_env!("MN_TWO_BOX_REMOTE_REDIS")
+      ])
+
+  _ ->
+    {_output, 0} = System.cmd("docker", ["kill", System.fetch_env!("MN_TWO_BOX_LOCAL_REDIS")])
+end
+
+Process.sleep(12_000)
 
 {:ok, _job} =
   RedisStore.persist_job(job_id, %{
