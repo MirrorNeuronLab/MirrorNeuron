@@ -320,6 +320,10 @@ defmodule MirrorNeuron.RuntimeTest do
     assert {:ok, events} = MirrorNeuron.events(job_id)
     assert Enum.any?(events, &(&1["type"] == "job_completed"))
 
+    wait_until(fn -> agent_unregistered?(job_id, "ingress") end, 2_000)
+    wait_until(fn -> agent_unregistered?(job_id, "router") end, 2_000)
+    wait_until(fn -> agent_unregistered?(job_id, "sink") end, 2_000)
+
     RedisStore.delete_job(job_id)
   end
 

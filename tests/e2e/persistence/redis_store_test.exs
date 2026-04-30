@@ -1,0 +1,191 @@
+defmodule MirrorNeuron.Persistence.RedisStoreTest do
+  use ExUnit.Case, async: false
+
+  alias MirrorNeuron.Persistence.RedisStore
+
+  setup do
+    Application.ensure_all_started(:mirror_neuron)
+
+    case Redix.command(MirrorNeuron.Redis.Connection, ["PING"]) do
+      {:ok, "PONG"} -> :ok
+      _ -> raise "Redis must be running for redis store tests"
+    end
+
+    old_namespace = Application.get_env(:mirror_neuron, :redis_namespace)
+    old_system_namespace = System.get_env("MIRROR_NEURON_REDIS_NAMESPACE")
+    old_event_max_count = Application.get_env(:mirror_neuron, :event_max_count)
+    old_terminal_ttl = Application.get_env(:mirror_neuron, :terminal_job_ttl_seconds)
+    old_wait_replicas = Application.get_env(:mirror_neuron, :redis_wait_replicas)
+    old_wait_timeout = Application.get_env(:mirror_neuron, :redis_wait_timeout_ms)
+
+    namespace = "mirror_neuron_test_#{System.unique_integer([:positive])}"
+    Application.put_env(:mirror_neuron, :redis_namespace, namespace)
+    System.put_env("MIRROR_NEURON_REDIS_NAMESPACE", namespace)
+    Application.put_env(:mirror_neuron, :redis_wait_replicas, 0)
+    Application.put_env(:mirror_neuron, :redis_wait_timeout_ms, 100)
+
+    on_exit(fn ->
+      cleanup_namespace(namespace)
+      restore_system_env("MIRROR_NEURON_REDIS_NAMESPACE", old_system_namespace)
+      restore_env(:redis_namespace, old_namespace)
+      restore_env(:event_max_count, old_event_max_count)
+      restore_env(:terminal_job_ttl_seconds, old_terminal_ttl)
+      restore_env(:redis_wait_replicas, old_wait_replicas)
+      restore_env(:redis_wait_timeout_ms, old_wait_timeout)
+    end)
+
+    {:ok, namespace: namespace}
+  end
+
+  test "append_event trims old events using configured retention" do
+    Application.put_env(:mirror_neuron, :event_max_count, 3)
+    job_id = "event-retention-#{System.unique_integer([:positive])}"
+
+    for seq <- 1..5 do
+      assert {:ok, _event} = RedisStore.append_event(job_id, %{"type" => "test", "seq" => seq})
+    end
+
+    assert {:ok, events} = RedisStore.read_events(job_id)
+    assert Enum.map(events, & &1["seq"]) == [3, 4, 5]
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "retention sweep deletes expired terminal jobs and stale job ids" do
+    job_id = "terminal-retention-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _job} =
+             RedisStore.persist_terminal_job(job_id, %{"status" => "completed"}, %{
+               "graph_id" => "retention_test",
+               "job_name" => "retention_test"
+             })
+
+    assert {:ok, _job} = RedisStore.fetch_job(job_id)
+
+    assert {:ok, result} = RedisStore.sweep_retention(terminal_job_ttl_seconds: 0)
+    assert result.deleted_jobs == [job_id]
+    assert result.deleted_count == 1
+    assert {:error, _reason} = RedisStore.fetch_job(job_id)
+  end
+
+  test "fenced leases reject stale job and agent writes" do
+    job_id = "fenced-job-#{System.unique_integer([:positive])}"
+    lease_name = "job:#{job_id}"
+
+    assert {:ok, lease} = RedisStore.acquire_fenced_lease(lease_name, "node-a", 5_000)
+    assert lease["epoch"] >= 1
+
+    assert {:error, {:locked, locked}} =
+             RedisStore.acquire_fenced_lease(lease_name, "node-b", 5_000)
+
+    assert locked["owner_id"] == "node-a"
+    assert locked["epoch"] == lease["epoch"]
+
+    assert {:ok, _job} =
+             RedisStore.persist_job(job_id, %{
+               "job_id" => job_id,
+               "status" => "running",
+               "lease_epoch" => lease["epoch"]
+             })
+
+    assert {:error, {:stale_lease_epoch, stale_epoch, existing_epoch}} =
+             RedisStore.persist_job(job_id, %{
+               "job_id" => job_id,
+               "status" => "running",
+               "lease_epoch" => lease["epoch"] - 1
+             })
+
+    assert stale_epoch == lease["epoch"] - 1
+    assert existing_epoch == lease["epoch"]
+
+    assert {:error, {:stale_lease_epoch, stale_agent_epoch, existing_agent_epoch}} =
+             RedisStore.persist_agent(job_id, "agent-a", %{
+               "agent_id" => "agent-a",
+               "status" => "running",
+               "metadata" => %{"lease_epoch" => lease["epoch"] - 1}
+             })
+
+    assert stale_agent_epoch == lease["epoch"] - 1
+    assert existing_agent_epoch == lease["epoch"]
+
+    assert :ok = RedisStore.release_fenced_lease(lease_name, "node-a", lease["epoch"])
+    assert {:ok, next_lease} = RedisStore.acquire_fenced_lease(lease_name, "node-b", 5_000)
+    assert next_lease["epoch"] > lease["epoch"]
+    assert :ok = RedisStore.release_fenced_lease(lease_name, "node-b", next_lease["epoch"])
+  end
+
+  test "fenced lease renewal and release enforce ownership" do
+    lease_name = "lease-test-#{System.unique_integer([:positive])}"
+
+    assert {:ok, lease} = RedisStore.acquire_fenced_lease(lease_name, "node-a", 1_000)
+    assert :ok = RedisStore.renew_fenced_lease(lease_name, "node-a", lease["epoch"], 1_000)
+
+    assert {:error, :not_owner} =
+             RedisStore.renew_fenced_lease(lease_name, "node-b", lease["epoch"], 1_000)
+
+    assert {:error, :not_owner} =
+             RedisStore.release_fenced_lease(lease_name, "node-b", lease["epoch"])
+
+    assert :ok = RedisStore.release_fenced_lease(lease_name, "node-a", lease["epoch"])
+  end
+
+  test "durable write acknowledgement reports timeout when not enough replicas are available" do
+    Application.put_env(:mirror_neuron, :redis_wait_replicas, 1)
+    Application.put_env(:mirror_neuron, :redis_wait_timeout_ms, 1)
+    job_id = "wait-timeout-#{System.unique_integer([:positive])}"
+
+    assert {:error, {:redis_replication_wait_timeout, acknowledgements, 1}} =
+             RedisStore.persist_job(job_id, %{
+               "job_id" => job_id,
+               "status" => "running"
+             })
+
+    assert is_integer(acknowledgements)
+    assert acknowledgements < 1
+  end
+
+  test "bundle archive and node state round-trip nested data" do
+    fingerprint = "bundle-#{System.unique_integer([:positive])}"
+
+    assert {:ok, archive} =
+             RedisStore.persist_bundle_archive(fingerprint, %{
+               "graph_id" => "graph",
+               "files" => [%{"path" => "payload/main.py", "data" => "print(1)"}]
+             })
+
+    assert archive["fingerprint"] == fingerprint
+    assert {:ok, fetched} = RedisStore.fetch_bundle_archive(fingerprint)
+    assert get_in(fetched, ["files", Access.at(0), "path"]) == "payload/main.py"
+
+    assert {:ok, state} =
+             RedisStore.persist_node_state("node-a@test", %{
+               status: :healthy,
+               capacities: %{default: 2},
+               flags: [:runtime]
+             })
+
+    assert state["status"] == :healthy
+    assert state["capacities"]["default"] == 2
+    assert state["flags"] == [:runtime]
+
+    assert {:ok, fetched_state} = RedisStore.fetch_node_state("node-a@test")
+    assert fetched_state["status"] == "healthy"
+    assert fetched_state["flags"] == ["runtime"]
+
+    assert {:ok, states} = RedisStore.list_node_states()
+    assert Enum.any?(states, &(&1["node"] == "node-a@test"))
+  end
+
+  defp restore_env(key, nil), do: Application.delete_env(:mirror_neuron, key)
+  defp restore_env(key, value), do: Application.put_env(:mirror_neuron, key, value)
+  defp restore_system_env(key, nil), do: System.delete_env(key)
+  defp restore_system_env(key, value), do: System.put_env(key, value)
+
+  defp cleanup_namespace(namespace) do
+    case Redix.command(MirrorNeuron.Redis.Connection, ["KEYS", "#{namespace}:*"]) do
+      {:ok, []} -> :ok
+      {:ok, keys} -> _ = Redix.command(MirrorNeuron.Redis.Connection, ["DEL" | keys])
+      _ -> :ok
+    end
+  end
+end

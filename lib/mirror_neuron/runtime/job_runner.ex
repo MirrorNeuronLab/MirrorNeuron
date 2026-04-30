@@ -8,6 +8,9 @@ defmodule MirrorNeuron.Runtime.JobRunner do
   alias MirrorNeuron.Runtime.Naming
 
   @terminal_statuses ["completed", "failed", "cancelled"]
+  @lease_duration_ms 10_000
+  @lease_renew_interval_ms 3_000
+  @max_lease_renew_failures 3
 
   def child_spec({job_id, manifest, opts}) do
     %{
@@ -30,38 +33,40 @@ defmodule MirrorNeuron.Runtime.JobRunner do
 
     lease_name = "job:#{job_id}"
     node_name = to_string(Node.self())
+    opts = put_bundle_ref(opts, manifest)
 
-    case RedisStore.acquire_lease(lease_name, node_name, 10_000) do
-      :ok ->
-        :ok
+    with {:ok, lease} <- acquire_job_lease(lease_name, node_name),
+         opts <- Keyword.put(opts, :job_lease, lease),
+         :ok <- persist_lease_owner(job_id, manifest, opts, lease),
+         {:ok, pid} <- JobCoordinator.start_link({job_id, manifest, opts}) do
+      schedule_lease_renewal()
 
-      {:error, :locked} ->
-        case RedisStore.renew_lease(lease_name, node_name, 10_000) do
-          :ok -> :ok
-          _ -> exit(:normal)
-        end
-
-      _ ->
-        :ok
-    end
-
-    {:ok, lease_timer} = :timer.send_interval(3_000, :renew_lease)
-
-    case JobCoordinator.start_link({job_id, manifest, opts}) do
-      {:ok, pid} ->
-        {:ok,
-         %{
-           job_id: job_id,
-           manifest: manifest,
-           bundle: Keyword.get(opts, :job_bundle),
-           coordinator: pid,
-           node_name: node_name,
-           lease_timer: lease_timer
-         }}
+      {:ok,
+       %{
+         job_id: job_id,
+         manifest: manifest,
+         bundle: Keyword.get(opts, :job_bundle),
+         bundle_ref: Keyword.get(opts, :bundle_ref),
+         coordinator: pid,
+         node_name: node_name,
+         lease: lease,
+         lease_failures: 0
+       }}
+    else
+      {:error, {:locked, _owner}} ->
+        {:stop, :normal}
 
       {:error, reason} ->
         Logger.warning("failed to start job coordinator for #{job_id}: #{inspect(reason)}")
-        persist_runner_failure(job_id, manifest, Keyword.get(opts, :job_bundle), reason)
+        persist_runner_failure(
+          job_id,
+          manifest,
+          Keyword.get(opts, :job_bundle),
+          Keyword.get(opts, :bundle_ref),
+          nil,
+          reason
+        )
+
         {:stop, reason}
     end
   end
@@ -70,16 +75,37 @@ defmodule MirrorNeuron.Runtime.JobRunner do
   def handle_info(:renew_lease, state) do
     lease_name = "job:#{state.job_id}"
 
-    case RedisStore.renew_lease(lease_name, state.node_name, 10_000) do
+    case RedisStore.renew_fenced_lease(
+           lease_name,
+           state.node_name,
+           state.lease["epoch"],
+           @lease_duration_ms
+         ) do
       :ok ->
-        {:noreply, state}
+        schedule_lease_renewal()
+        {:noreply, %{state | lease_failures: 0}}
 
       {:error, :not_owner} ->
         Logger.warning("Lost lease for job #{state.job_id}. Shutting down.")
         {:stop, :normal, state}
 
-      _ ->
-        {:noreply, state}
+      {:error, reason} ->
+        failures = state.lease_failures + 1
+
+        if failures >= @max_lease_renew_failures do
+          Logger.warning(
+            "failed to renew lease for job #{state.job_id} #{failures} times; shutting down: #{inspect(reason)}"
+          )
+
+          {:stop, {:shutdown, {:lease_unavailable, reason}}, %{state | lease_failures: failures}}
+        else
+          Logger.warning(
+            "failed to renew lease for job #{state.job_id}; retrying: #{inspect(reason)}"
+          )
+
+          schedule_lease_renewal()
+          {:noreply, %{state | lease_failures: failures}}
+        end
     end
   end
 
@@ -100,9 +126,8 @@ defmodule MirrorNeuron.Runtime.JobRunner do
 
   @impl true
   def terminate(_reason, state) do
-    if Map.get(state, :lease_timer), do: :timer.cancel(state.lease_timer)
     lease_name = "job:#{state.job_id}"
-    _ = RedisStore.release_lease(lease_name, state.node_name)
+    _ = RedisStore.release_fenced_lease(lease_name, state.node_name, state.lease["epoch"])
     :ok
   end
 
@@ -116,11 +141,65 @@ defmodule MirrorNeuron.Runtime.JobRunner do
           "job coordinator for #{state.job_id} exited before terminal persistence: #{inspect(reason)}"
         )
 
-        persist_runner_failure(state.job_id, state.manifest, state.bundle, reason)
+        persist_runner_failure(
+          state.job_id,
+          state.manifest,
+          state.bundle,
+          state.bundle_ref,
+          state.lease,
+          reason
+        )
     end
   end
 
-  defp persist_runner_failure(job_id, manifest, bundle, reason) do
+  defp acquire_job_lease(lease_name, node_name) do
+    case RedisStore.acquire_fenced_lease(lease_name, node_name, @lease_duration_ms) do
+      {:ok, lease} ->
+        {:ok, lease}
+
+      {:error, {:locked, owner}} ->
+        Logger.info("job lease #{lease_name} is already held by #{inspect(owner)}")
+        {:error, {:locked, owner}}
+
+      {:error, reason} ->
+        {:error, {:lease_unavailable, reason}}
+    end
+  end
+
+  defp put_bundle_ref(opts, manifest) do
+    Keyword.put_new_lazy(opts, :bundle_ref, fn ->
+      Runtime.bundle_ref(manifest, Keyword.get(opts, :job_bundle))
+    end)
+  end
+
+  defp persist_lease_owner(job_id, manifest, opts, lease) do
+    defaults = job_defaults(manifest, Keyword.get(opts, :bundle_ref), lease)
+
+    updates = %{
+      "lease" => lease,
+      "lease_epoch" => lease["epoch"],
+      "lease_owner" => lease["owner_id"],
+      "status" => current_status(job_id)
+    }
+
+    case RedisStore.persist_terminal_job(job_id, updates, defaults) do
+      {:ok, _job} -> :ok
+      {:error, reason} -> {:error, {:lease_persist_failed, reason}}
+    end
+  end
+
+  defp current_status(job_id) do
+    case RedisStore.fetch_job(job_id) do
+      {:ok, %{"status" => status}} when status in ["pending", "running", "paused"] -> status
+      _ -> "pending"
+    end
+  end
+
+  defp schedule_lease_renewal do
+    Process.send_after(self(), :renew_lease, @lease_renew_interval_ms)
+  end
+
+  defp persist_runner_failure(job_id, manifest, bundle, manifest_ref, lease, reason) do
     defaults = %{
       "graph_id" => manifest.graph_id,
       "job_name" => manifest.job_name,
@@ -128,14 +207,10 @@ defmodule MirrorNeuron.Runtime.JobRunner do
       "root_agent_ids" => manifest.entrypoints,
       "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
       "recovery_policy" => Map.get(manifest.policies, "recovery_mode", "local_restart"),
-      "manifest_ref" => %{
-        "graph_id" => manifest.graph_id,
-        "manifest_version" => manifest.manifest_version,
-        "manifest_path" => bundle && bundle.manifest_path,
-        "job_path" => bundle && bundle.root_path
-      },
+      "manifest_ref" => manifest_ref || Runtime.bundle_ref(manifest, bundle),
       "submitted_at" => Runtime.timestamp()
     }
+    |> maybe_put_lease(lease)
 
     updates = %{
       "status" => "failed",
@@ -155,5 +230,28 @@ defmodule MirrorNeuron.Runtime.JobRunner do
           "failed to persist job runner fallback state for #{job_id}: #{inspect(persist_reason)}"
         )
     end
+  end
+
+  defp job_defaults(manifest, manifest_ref, lease) do
+    %{
+      "graph_id" => manifest.graph_id,
+      "job_name" => manifest.job_name,
+      "required_context_engine" => Map.get(manifest, :required_context_engine, false),
+      "root_agent_ids" => manifest.entrypoints,
+      "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
+      "recovery_policy" => Map.get(manifest.policies, "recovery_mode", "local_restart"),
+      "manifest_ref" => manifest_ref,
+      "submitted_at" => Runtime.timestamp()
+    }
+    |> maybe_put_lease(lease)
+  end
+
+  defp maybe_put_lease(map, nil), do: map
+
+  defp maybe_put_lease(map, lease) do
+    map
+    |> Map.put("lease", lease)
+    |> Map.put("lease_epoch", lease["epoch"])
+    |> Map.put("lease_owner", lease["owner_id"])
   end
 end

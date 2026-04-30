@@ -36,6 +36,7 @@ defmodule MirrorNeuron.Application do
         {Registry, keys: :duplicate, name: MirrorNeuron.Runtime.EventRegistry},
         {Cluster.Supervisor, [topologies, [name: MirrorNeuron.ClusterSupervisor]]},
         MirrorNeuron.Redis,
+        MirrorNeuron.Persistence.Retention,
         {GRPC.Server.Supervisor,
          [endpoint: MirrorNeuron.Grpc.Endpoint, port: grpc_port, start_server: true] ++
            grpc_bind_opts}

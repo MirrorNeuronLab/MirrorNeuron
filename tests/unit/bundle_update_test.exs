@@ -1,10 +1,11 @@
 defmodule MirrorNeuron.BundleUpdateTest do
   use ExUnit.Case, async: false
 
-  alias MirrorNeuron.Bundle.{Fingerprint, Manager, Scanner}
+  alias MirrorNeuron.Bundle.Manager
 
   setup do
     Application.ensure_all_started(:mirror_neuron)
+
     if Process.whereis(Manager) == nil do
       start_supervised!(Manager)
     end
@@ -30,7 +31,10 @@ defmodule MirrorNeuron.BundleUpdateTest do
     %{dir: tmp_dir}
   end
 
-  defp create_bundle(base_dir, graph_id, reload_mode \\ "manual", interval \\ 1) do
+  defp create_bundle(base_dir, graph_id, reload_mode),
+    do: create_bundle(base_dir, graph_id, reload_mode, 1)
+
+  defp create_bundle(base_dir, graph_id, reload_mode, interval) do
     bundle_dir = Path.join(base_dir, graph_id)
     payloads_dir = Path.join(bundle_dir, "payloads")
 

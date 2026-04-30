@@ -21,7 +21,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
       with :ok <- copy_uploads(base_dir, config, opts),
            :ok <- write_runtime_files(base_dir, message, opts),
            {command, env, workdir} <- build_command(config, base_dir, opts, message),
-           {:ok, output, exit_code} <- run_command(command, env, workdir),
+           {:ok, output, exit_code} <- run_command(command, env, workdir, config),
            {:ok, result} <- extract_result(output, exit_code, runner_name, workdir) do
         if result["exit_code"] == 0 do
           {:ok, result}
@@ -96,8 +96,6 @@ defmodule MirrorNeuron.Runner.HostLocal do
     context_file = Path.join(base_dir, "mirror_neuron_context.json")
     message_file = Path.join(base_dir, "mirror_neuron_message.json")
     body_file = Path.join(base_dir, "mirror_neuron_body.bin")
-    stdout_file = Path.join(base_dir, "mirror_neuron_stdout.txt")
-    stderr_file = Path.join(base_dir, "mirror_neuron_stderr.txt")
 
     substitutions = %{
       "input_file" => input_file,
@@ -109,7 +107,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
       "agent_id" => Keyword.get(opts, :agent_id, "")
     }
 
-    actual_command =
+    configured_command =
       case Map.get(config, "command") do
         nil ->
           "python3 - <<'PY'\nprint('No command configured for host-local worker')\nPY"
@@ -120,13 +118,39 @@ defmodule MirrorNeuron.Runner.HostLocal do
         command when is_list(command) ->
           command
           |> Enum.map(&substitute(to_string(&1), substitutions))
-          |> Enum.map(&shell_escape/1)
-          |> Enum.join(" ")
       end
+
+    env =
+      runtime_env(input_file, context_file, message_file, body_file, workdir, message, opts)
+      |> Map.merge(extra_env(config))
+      |> Enum.map(fn {key, value} -> {key, value} end)
+
+    command_size = command_size(configured_command)
+
+    if command_size > max_command_length() do
+      {:error, "command exceeds MIRROR_NEURON_MAX_COMMAND_LENGTH"}
+    else
+      {normalize_command(configured_command), env, workdir}
+    end
+  end
+
+  defp max_command_length do
+    System.get_env("MIRROR_NEURON_MAX_COMMAND_LENGTH", "32768")
+    |> String.to_integer()
+  end
+
+  defp command_size(command) when is_binary(command), do: byte_size(command)
+  defp command_size(command) when is_list(command), do: command |> Enum.join("\0") |> byte_size()
+
+  defp normalize_command(command) when is_list(command), do: command
+
+  defp normalize_command(command) when is_binary(command) do
+    stdout_file = "mirror_neuron_stdout.txt"
+    stderr_file = "mirror_neuron_stderr.txt"
 
     wrapper = """
     set +e
-    #{actual_command} >#{shell_escape(stdout_file)} 2>#{shell_escape(stderr_file)}
+    #{command} >#{shell_escape(stdout_file)} 2>#{shell_escape(stderr_file)}
     status=$?
     MIRROR_NEURON_EXIT_CODE="$status" python3 - <<'PY'
     import json
@@ -147,31 +171,94 @@ defmodule MirrorNeuron.Runner.HostLocal do
     exit "$status"
     """
 
-    env =
-      runtime_env(input_file, context_file, message_file, body_file, workdir, message, opts)
-      |> Map.merge(extra_env(config))
-      |> Enum.map(fn {key, value} -> {key, value} end)
-
-    if byte_size(actual_command) > max_command_length() do
-      {:error, "command exceeds MIRROR_NEURON_MAX_COMMAND_LENGTH"}
-    else
-      {["bash", "-lc", wrapper], env, workdir}
-    end
+    ["bash", "-lc", wrapper]
   end
 
-  defp max_command_length do
-    System.get_env("MIRROR_NEURON_MAX_COMMAND_LENGTH", "32768")
-    |> String.to_integer()
-  end
+  defp run_command([command | args], env, workdir, config) do
+    executable = System.find_executable(command) || command
+    max_output_bytes = max_output_bytes(config)
+    timeout_ms = timeout_ms(config)
+    deadline = if timeout_ms, do: System.monotonic_time(:millisecond) + timeout_ms
 
-  defp run_command([command | args], env, workdir) do
-    {output, exit_code} =
-      System.cmd(command, args, cd: workdir, env: env, stderr_to_stdout: true)
+    port =
+      Port.open(
+        {:spawn_executable, String.to_charlist(executable)},
+        [
+          :binary,
+          :exit_status,
+          :stderr_to_stdout,
+          {:args, Enum.map(args, &String.to_charlist/1)},
+          {:cd, String.to_charlist(workdir)},
+          {:env,
+           Enum.map(env, fn {key, value} ->
+             {String.to_charlist(key), String.to_charlist(value)}
+           end)}
+        ]
+      )
 
-    {:ok, output, exit_code}
+    collect_port_output(port, [], 0, max_output_bytes, deadline)
   rescue
     error in ErlangError ->
       {:error, "failed to invoke #{command}: #{Exception.message(error)}"}
+  end
+
+  defp collect_port_output(port, chunks, bytes, max_output_bytes, deadline) do
+    timeout = receive_timeout(deadline)
+
+    receive do
+      {^port, {:data, data}} ->
+        {next_chunks, next_bytes} = append_output(chunks, bytes, data, max_output_bytes)
+        collect_port_output(port, next_chunks, next_bytes, max_output_bytes, deadline)
+
+      {^port, {:exit_status, exit_code}} ->
+        {:ok, chunks |> Enum.reverse() |> IO.iodata_to_binary(), exit_code}
+    after
+      timeout ->
+        Port.close(port)
+
+        {:error,
+         %{
+           "error" => "host local command timed out",
+           "timeout_ms" => max(timeout || 0, 0),
+           "stdout" => chunks |> Enum.reverse() |> IO.iodata_to_binary()
+         }}
+    end
+  end
+
+  defp append_output(chunks, bytes, data, max_output_bytes) do
+    cond do
+      bytes >= max_output_bytes ->
+        {chunks, bytes + byte_size(data)}
+
+      bytes + byte_size(data) <= max_output_bytes ->
+        {[data | chunks], bytes + byte_size(data)}
+
+      true ->
+        remaining = max(max_output_bytes - bytes, 0)
+        truncated = binary_part(data, 0, remaining) <> "\n[truncated by host local output cap]"
+        {[truncated | chunks], bytes + byte_size(data)}
+    end
+  end
+
+  defp receive_timeout(nil), do: :infinity
+
+  defp receive_timeout(deadline) do
+    max(deadline - System.monotonic_time(:millisecond), 0)
+  end
+
+  defp timeout_ms(config) do
+    case Map.get(config, "timeout_seconds") do
+      value when is_integer(value) and value > 0 -> value * 1000
+      value when is_float(value) and value > 0 -> trunc(value * 1000)
+      _ -> nil
+    end
+  end
+
+  defp max_output_bytes(config) do
+    case Map.get(config, "max_output_bytes") do
+      value when is_integer(value) and value > 0 -> value
+      _ -> System.get_env("MIRROR_NEURON_MAX_ARTIFACT_BYTES", "1048576") |> String.to_integer()
+    end
   end
 
   defp extract_result(output, runner_exit_code, runner_name, workdir) do
@@ -209,7 +296,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
            "remote_dir" => workdir,
            "exit_code" => runner_exit_code,
            "runner_exit_code" => runner_exit_code,
-           "stdout" => "",
+           "stdout" => String.trim(output),
            "stderr" => "",
            "logs" => String.trim(output),
            "raw_output" => output,

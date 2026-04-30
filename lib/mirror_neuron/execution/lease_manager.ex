@@ -2,14 +2,16 @@ defmodule MirrorNeuron.Execution.LeaseManager do
   use GenServer
 
   @default_pool "default"
+  @default_queue_timeout_ms 30_000
+  @default_max_queue_length 1_000
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, opts, name: name)
   end
 
-  def acquire(server \\ __MODULE__, pool, slots, metadata \\ %{}) do
-    GenServer.call(server, {:acquire, normalize_pool(pool), slots, metadata}, :infinity)
+  def acquire(server \\ __MODULE__, pool, slots, metadata \\ %{}, opts \\ []) do
+    GenServer.call(server, {:acquire, normalize_pool(pool), slots, metadata, opts}, :infinity)
   end
 
   def release(server \\ __MODULE__, lease_id) do
@@ -55,16 +57,33 @@ defmodule MirrorNeuron.Execution.LeaseManager do
       leases: %{},
       waiting: %{},
       monitors: %{},
-      lease_monitors: %{}
+      lease_monitors: %{},
+      queue_timeout_ms:
+        Keyword.get(opts, :queue_timeout_ms) ||
+          config_positive_integer(
+            "MIRROR_NEURON_LEASE_QUEUE_TIMEOUT_MS",
+            :lease_queue_timeout_ms,
+            @default_queue_timeout_ms
+          ),
+      max_queue_length:
+        Keyword.get(opts, :max_queue_length) ||
+          config_nonnegative_integer(
+            "MIRROR_NEURON_LEASE_MAX_QUEUE_LENGTH",
+            :lease_max_queue_length,
+            @default_max_queue_length
+          )
     }
 
     {:ok, state}
   end
 
   @impl true
-  def handle_call({:acquire, pool, slots, metadata}, from, state) do
+  def handle_call({:acquire, pool, slots, metadata, opts}, from, state) do
     with {:ok, pool_state} <- fetch_pool(state, pool),
          :ok <- validate_slots(pool_state.capacity, slots) do
+      queue_timeout_ms = queue_timeout_ms(state, opts)
+      max_queue_length = max_queue_length(state, opts)
+
       request = %{
         lease_id: lease_id(),
         pool: pool,
@@ -72,23 +91,37 @@ defmodule MirrorNeuron.Execution.LeaseManager do
         metadata: stringify_map(metadata),
         requested_at_ms: now_ms(),
         owner: elem(from, 0),
-        from: from
+        from: from,
+        queue_timeout_ms: queue_timeout_ms
       }
 
-      if capacity_available?(pool_state, slots) do
-        next_state = grant_request(request, state)
-        {:reply, {:ok, reply_for_lease(next_state.leases[request.lease_id])}, next_state}
-      else
-        monitor_ref = Process.monitor(request.owner)
+      cond do
+        capacity_available?(pool_state, slots) ->
+          next_state = grant_request(request, state)
+          {:reply, {:ok, reply_for_lease(next_state.leases[request.lease_id])}, next_state}
 
-        next_state =
-          state
-          |> put_in([:pools, pool, :waiting], :queue.in(request.lease_id, pool_state.waiting))
-          |> put_in([:waiting, request.lease_id], Map.put(request, :monitor_ref, monitor_ref))
-          |> put_in([:monitors, monitor_ref], {:waiting, request.lease_id})
-          |> put_in([:lease_monitors, request.lease_id], monitor_ref)
+        queue_full?(pool_state, max_queue_length) ->
+          {:reply,
+           {:error, {:retry_later, queue_full_reason(pool, slots, pool_state, max_queue_length)}},
+           state}
 
-        {:noreply, next_state}
+        true ->
+          monitor_ref = Process.monitor(request.owner)
+          timeout_ref = schedule_queue_timeout(request.lease_id, queue_timeout_ms)
+
+          next_state =
+            state
+            |> put_in([:pools, pool, :waiting], :queue.in(request.lease_id, pool_state.waiting))
+            |> put_in(
+              [:waiting, request.lease_id],
+              request
+              |> Map.put(:monitor_ref, monitor_ref)
+              |> Map.put(:timeout_ref, timeout_ref)
+            )
+            |> put_in([:monitors, monitor_ref], {:waiting, request.lease_id})
+            |> put_in([:lease_monitors, request.lease_id], monitor_ref)
+
+          {:noreply, next_state}
       end
     else
       {:error, reason} ->
@@ -148,6 +181,24 @@ defmodule MirrorNeuron.Execution.LeaseManager do
     end
   end
 
+  def handle_info({:queue_timeout, lease_id}, state) do
+    case Map.get(state.waiting, lease_id) do
+      nil ->
+        {:noreply, state}
+
+      request ->
+        reason = queue_timeout_reason(request)
+        GenServer.reply(request.from, {:error, {:retry_later, reason}})
+
+        next_state =
+          state
+          |> remove_waiting(lease_id)
+          |> grant_waiting()
+
+        {:noreply, next_state}
+    end
+  end
+
   defp fetch_pool(state, pool) do
     case Map.fetch(state.pools, pool) do
       {:ok, pool_state} -> {:ok, pool_state}
@@ -169,6 +220,8 @@ defmodule MirrorNeuron.Execution.LeaseManager do
     do: pool_state.in_use + slots <= pool_state.capacity
 
   defp grant_request(request, state) do
+    cancel_queue_timeout(request)
+
     monitor_ref =
       Map.get_lazy(request, :monitor_ref, fn ->
         Process.monitor(request.owner)
@@ -221,10 +274,13 @@ defmodule MirrorNeuron.Execution.LeaseManager do
 
   defp remove_waiting(state, lease_id) do
     monitor_ref = Map.get(state.lease_monitors, lease_id)
+    request = Map.get(state.waiting, lease_id)
 
     if monitor_ref do
       Process.demonitor(monitor_ref, [:flush])
     end
+
+    cancel_queue_timeout(request)
 
     state
     |> Map.put(:waiting, Map.delete(state.waiting, lease_id))
@@ -317,6 +373,67 @@ defmodule MirrorNeuron.Execution.LeaseManager do
   defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
   defp stringify_value(value), do: value
 
+  defp queue_full?(_pool_state, max_queue_length) when max_queue_length <= 0, do: false
+
+  defp queue_full?(pool_state, max_queue_length) do
+    :queue.len(pool_state.waiting) >= max_queue_length
+  end
+
+  defp queue_timeout_ms(state, opts) do
+    opts
+    |> Keyword.get(:queue_timeout_ms, state.queue_timeout_ms)
+    |> normalize_positive_integer(state.queue_timeout_ms)
+  end
+
+  defp max_queue_length(state, opts) do
+    opts
+    |> Keyword.get(:max_queue_length, state.max_queue_length)
+    |> normalize_nonnegative_integer(state.max_queue_length)
+  end
+
+  defp schedule_queue_timeout(_lease_id, timeout_ms) when timeout_ms <= 0, do: nil
+
+  defp schedule_queue_timeout(lease_id, timeout_ms) do
+    Process.send_after(self(), {:queue_timeout, lease_id}, timeout_ms)
+  end
+
+  defp cancel_queue_timeout(nil), do: :ok
+
+  defp cancel_queue_timeout(%{timeout_ref: timeout_ref, lease_id: lease_id})
+       when is_reference(timeout_ref) do
+    Process.cancel_timer(timeout_ref)
+
+    receive do
+      {:queue_timeout, ^lease_id} -> :ok
+    after
+      0 -> :ok
+    end
+  end
+
+  defp cancel_queue_timeout(_request), do: :ok
+
+  defp queue_full_reason(pool, slots, pool_state, max_queue_length) do
+    %{
+      "reason" => "executor_pool_queue_full",
+      "pool" => pool,
+      "slots" => slots,
+      "queued" => :queue.len(pool_state.waiting),
+      "max_queue_length" => max_queue_length,
+      "retry_after_ms" => 250
+    }
+  end
+
+  defp queue_timeout_reason(request) do
+    %{
+      "reason" => "executor_pool_queue_timeout",
+      "pool" => request.pool,
+      "slots" => request.slots,
+      "queue_wait_ms" => max(now_ms() - request.requested_at_ms, 0),
+      "timeout_ms" => request.queue_timeout_ms,
+      "retry_after_ms" => 250
+    }
+  end
+
   defp lease_id do
     8
     |> :crypto.strong_rand_bytes()
@@ -337,4 +454,44 @@ defmodule MirrorNeuron.Execution.LeaseManager do
         end
     end
   end
+
+  defp config_positive_integer(env_name, key, default) do
+    case System.get_env(env_name) do
+      nil -> Application.get_env(:mirror_neuron, key, default)
+      "" -> Application.get_env(:mirror_neuron, key, default)
+      value -> normalize_positive_integer(value, default)
+    end
+  end
+
+  defp config_nonnegative_integer(env_name, key, default) do
+    case System.get_env(env_name) do
+      nil -> Application.get_env(:mirror_neuron, key, default)
+      "" -> Application.get_env(:mirror_neuron, key, default)
+      value -> normalize_nonnegative_integer(value, default)
+    end
+  end
+
+  defp normalize_positive_integer(value, _default) when is_integer(value) and value > 0,
+    do: value
+
+  defp normalize_positive_integer(value, default) when is_binary(value) do
+    case Integer.parse(value) do
+      {parsed, ""} when parsed > 0 -> parsed
+      _ -> default
+    end
+  end
+
+  defp normalize_positive_integer(_value, default), do: default
+
+  defp normalize_nonnegative_integer(value, _default) when is_integer(value) and value >= 0,
+    do: value
+
+  defp normalize_nonnegative_integer(value, default) when is_binary(value) do
+    case Integer.parse(value) do
+      {parsed, ""} when parsed >= 0 -> parsed
+      _ -> default
+    end
+  end
+
+  defp normalize_nonnegative_integer(_value, default), do: default
 end

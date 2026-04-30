@@ -11,10 +11,7 @@ defmodule MirrorNeuron.RedisTest do
     assert_receive {:DOWN, ^ref, :process, ^redis_pid, _reason}
     assert MirrorNeuron.Redis.reconnect() in [{:error, :not_running}, :ok]
 
-    case MirrorNeuron.Redis.start_link(:ok) do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-    end
+    restart_redis_child()
 
     assert_eventually(fn -> ping?() end)
   end
@@ -37,4 +34,14 @@ defmodule MirrorNeuron.RedisTest do
   end
 
   defp assert_eventually(_fun, 0), do: flunk("condition was not met in time")
+
+  defp restart_redis_child do
+    case Supervisor.restart_child(MirrorNeuron.Supervisor, MirrorNeuron.Redis) do
+      {:ok, _pid} -> :ok
+      {:ok, _pid, _info} -> :ok
+      {:error, :running} -> :ok
+      {:error, :restarting} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+    end
+  end
 end

@@ -357,6 +357,7 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
 
       print(json.dumps({
           "gemini_api_key": os.environ.get("GEMINI_API_KEY"),
+          "mn_test_passthrough": os.environ.get("MN_TEST_PASSTHROUGH"),
           "worker_label": os.environ.get("WORKER_LABEL"),
       }))
       """
@@ -396,6 +397,13 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
     File.chmod!(fake_cli, 0o755)
 
     System.put_env("GEMINI_API_KEY", "test-gemini-key")
+    System.put_env("MN_TEST_PASSTHROUGH", "test-visible-value")
+
+    on_exit(fn ->
+      System.delete_env("GEMINI_API_KEY")
+      System.delete_env("MN_TEST_PASSTHROUGH")
+      File.rm_rf!(tmp_dir)
+    end)
 
     config = %{
       "sandbox_cli" => fake_cli,
@@ -405,7 +413,7 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
       "sandbox_upload_path" => remote_dir,
       "workdir" => Path.join(remote_dir, "bundle"),
       "command" => ["python3", "scripts/read_env.py"],
-      "pass_env" => ["GEMINI_API_KEY"],
+      "pass_env" => ["GEMINI_API_KEY", "MN_TEST_PASSTHROUGH"],
       "environment" => %{"WORKER_LABEL" => "sandbox-env-test"},
       "no_keep" => true,
       "no_auto_providers" => true,
@@ -424,11 +432,10 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
              )
 
     assert result["exit_code"] == 0
-    assert result["stdout"] =~ "\"gemini_api_key\": \"test-gemini-key\""
-    assert result["stdout"] =~ "\"worker_label\": \"sandbox-env-test\""
-
-    System.delete_env("GEMINI_API_KEY")
-    File.rm_rf!(tmp_dir)
+    decoded = Jason.decode!(result["stdout"])
+    assert decoded["gemini_api_key"] == "[REDACTED]"
+    assert decoded["mn_test_passthrough"] == "test-visible-value"
+    assert decoded["worker_label"] == "sandbox-env-test"
   end
 
   test "reuses one shared sandbox per job and deletes it on cleanup" do

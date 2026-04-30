@@ -8,6 +8,14 @@ BOX_INDEX=""
 COOKIE="${MIRROR_NEURON_COOKIE:-mirrorneuron}"
 REDIS_HOST=""
 REDIS_PORT="${MIRROR_NEURON_REDIS_PORT:-6379}"
+REDIS_HA_MODE="${MIRROR_NEURON_REDIS_HA_MODE:-single}"
+REDIS_SENTINELS="${MIRROR_NEURON_REDIS_SENTINELS:-}"
+REDIS_SENTINEL_PORT="${MIRROR_NEURON_REDIS_SENTINEL_PORT:-26379}"
+REDIS_SENTINEL_MASTER="${MIRROR_NEURON_REDIS_SENTINEL_MASTER:-mirror-neuron}"
+REDIS_SENTINEL_QUORUM="${MIRROR_NEURON_REDIS_SENTINEL_QUORUM:-1}"
+REDIS_HA_AUTOCONFIG="${MIRROR_NEURON_REDIS_HA_AUTOCONFIG:-1}"
+REDIS_WAIT_REPLICAS="${MIRROR_NEURON_REDIS_WAIT_REPLICAS:-0}"
+REDIS_WAIT_TIMEOUT_MS="${MIRROR_NEURON_REDIS_WAIT_TIMEOUT_MS:-100}"
 EXECUTOR_CAPACITY="${MIRROR_NEURON_EXECUTOR_MAX_CONCURRENCY:-2}"
 DIST_PORT="${MIRROR_NEURON_DIST_PORT:-4370}"
 START_OPENSHELL="1"
@@ -29,6 +37,13 @@ options:
       --box <1|2>                Which box this machine is
       --redis-host <host>        Redis host, defaults to box1 IP
       --redis-port <port>        Redis port, defaults to 6379
+      --redis-ha-mode <mode>     Redis mode: single or sentinel
+      --redis-sentinels <list>   Sentinel peers, defaults to both boxes on 26379
+      --sentinel-port <port>     Local Sentinel port, defaults to 26379
+      --sentinel-master <name>   Sentinel master name, defaults to mirror-neuron
+      --sentinel-quorum <n>      Sentinel quorum, defaults to 1 for dev clusters
+      --redis-wait-replicas <n>  WAIT acknowledgements for durable writes
+      --skip-redis-ha            Do not auto-configure local Redis/Sentinel
       --cookie <cookie>          Erlang cookie, defaults to mirrorneuron
       --executor-capacity <n>    Local executor lease capacity, defaults to 2
       --dist-port <port>         Erlang distribution port, defaults to 4370
@@ -69,6 +84,34 @@ while [ "$#" -gt 0 ]; do
     --redis-port)
       REDIS_PORT="$2"
       shift 2
+      ;;
+    --redis-ha-mode)
+      REDIS_HA_MODE="$2"
+      shift 2
+      ;;
+    --redis-sentinels)
+      REDIS_SENTINELS="$2"
+      shift 2
+      ;;
+    --sentinel-port)
+      REDIS_SENTINEL_PORT="$2"
+      shift 2
+      ;;
+    --sentinel-master)
+      REDIS_SENTINEL_MASTER="$2"
+      shift 2
+      ;;
+    --sentinel-quorum)
+      REDIS_SENTINEL_QUORUM="$2"
+      shift 2
+      ;;
+    --redis-wait-replicas)
+      REDIS_WAIT_REPLICAS="$2"
+      shift 2
+      ;;
+    --skip-redis-ha)
+      REDIS_HA_AUTOCONFIG="0"
+      shift
       ;;
     --cookie)
       COOKIE="$2"
@@ -119,6 +162,10 @@ if [ -z "$REDIS_HOST" ]; then
   REDIS_HOST="$BOX1_IP"
 fi
 
+if [ -z "$REDIS_SENTINELS" ]; then
+  REDIS_SENTINELS="${BOX1_IP}:${REDIS_SENTINEL_PORT},${BOX2_IP}:${REDIS_SENTINEL_PORT}"
+fi
+
 if [ "$BOX_INDEX" = "1" ]; then
   SELF_NAME="mn1"
   SELF_IP="$BOX1_IP"
@@ -132,6 +179,13 @@ export MIRROR_NEURON_NODE_ROLE="runtime"
 export MIRROR_NEURON_COOKIE="$COOKIE"
 export MIRROR_NEURON_CLUSTER_NODES="mn1@${BOX1_IP},mn2@${BOX2_IP}"
 export MIRROR_NEURON_REDIS_URL="redis://${REDIS_HOST}:${REDIS_PORT}/0"
+export MIRROR_NEURON_REDIS_HA_MODE="$REDIS_HA_MODE"
+export MIRROR_NEURON_REDIS_SENTINELS="$REDIS_SENTINELS"
+export MIRROR_NEURON_REDIS_SENTINEL_MASTER="$REDIS_SENTINEL_MASTER"
+export MIRROR_NEURON_REDIS_SENTINEL_PORT="$REDIS_SENTINEL_PORT"
+export MIRROR_NEURON_REDIS_DB="${MIRROR_NEURON_REDIS_DB:-0}"
+export MIRROR_NEURON_REDIS_WAIT_REPLICAS="$REDIS_WAIT_REPLICAS"
+export MIRROR_NEURON_REDIS_WAIT_TIMEOUT_MS="$REDIS_WAIT_TIMEOUT_MS"
 export MIRROR_NEURON_EXECUTOR_MAX_CONCURRENCY="$EXECUTOR_CAPACITY"
 export MIRROR_NEURON_DIST_PORT="$DIST_PORT"
 
@@ -143,6 +197,11 @@ echo "Starting MirrorNeuron cluster node"
 echo "  node: $MIRROR_NEURON_NODE_NAME"
 echo "  cluster: $MIRROR_NEURON_CLUSTER_NODES"
 echo "  redis: $MIRROR_NEURON_REDIS_URL"
+echo "  redis ha: $MIRROR_NEURON_REDIS_HA_MODE"
+if [ "$MIRROR_NEURON_REDIS_HA_MODE" = "sentinel" ]; then
+  echo "  sentinels: $MIRROR_NEURON_REDIS_SENTINELS"
+  echo "  sentinel master: $MIRROR_NEURON_REDIS_SENTINEL_MASTER"
+fi
 echo "  executor capacity: $MIRROR_NEURON_EXECUTOR_MAX_CONCURRENCY"
 echo "  dist port: $MIRROR_NEURON_DIST_PORT"
 
@@ -244,5 +303,15 @@ fi
 
 ensure_epmd
 handle_existing_runtime
+
+if [ "$MIRROR_NEURON_REDIS_HA_MODE" = "sentinel" ] && [ "$REDIS_HA_AUTOCONFIG" = "1" ]; then
+  bash "$ROOT_DIR/scripts/redis_ha.sh" join \
+    --self-host "$SELF_IP" \
+    --redis-port "$REDIS_PORT" \
+    --sentinel-port "$REDIS_SENTINEL_PORT" \
+    --sentinels "$REDIS_SENTINELS" \
+    --master-name "$REDIS_SENTINEL_MASTER" \
+    --quorum "$REDIS_SENTINEL_QUORUM"
+fi
 
 exec "$ROOT_DIR/mn" server

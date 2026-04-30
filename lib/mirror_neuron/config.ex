@@ -37,10 +37,12 @@ defmodule MirrorNeuron.Config do
     validate_mirror_neuron_env!()
     validate_port!("MIRROR_NEURON_GRPC_PORT", System.get_env("MIRROR_NEURON_GRPC_PORT", "50051"))
     validate_port!("MIRROR_NEURON_API_PORT", string("MIRROR_NEURON_API_PORT", :api_port))
-    validate_redis_url!()
+    validate_redis_config!()
     validate_queue_limits!()
     validate_sandbox_limits!()
     validate_resource_admission!()
+    validate_retention!()
+    validate_runtime_efficiency!()
     validate_production_secrets!()
     :ok
   end
@@ -113,6 +115,28 @@ defmodule MirrorNeuron.Config do
     end
   end
 
+  defp validate_redis_config! do
+    case redis_ha_mode() do
+      "single" ->
+        validate_redis_url!()
+
+      "sentinel" ->
+        validate_redis_sentinel!()
+
+      other ->
+        raise ArgumentError,
+              "MIRROR_NEURON_REDIS_HA_MODE must be one of single or sentinel, got #{inspect(other)}"
+    end
+
+    validate_redis_wait!()
+  end
+
+  defp redis_ha_mode do
+    "MIRROR_NEURON_REDIS_HA_MODE"
+    |> string(:redis_ha_mode)
+    |> String.downcase()
+  end
+
   defp validate_redis_url! do
     url = string("MIRROR_NEURON_REDIS_URL", :redis_url)
     uri = URI.parse(url)
@@ -120,6 +144,43 @@ defmodule MirrorNeuron.Config do
     unless uri.scheme in ["redis", "rediss"] and is_binary(uri.host) do
       raise ArgumentError, "MIRROR_NEURON_REDIS_URL must be a valid redis:// or rediss:// URL"
     end
+  end
+
+  defp validate_redis_sentinel! do
+    sentinels = string("MIRROR_NEURON_REDIS_SENTINELS", :redis_sentinels)
+
+    if MirrorNeuron.Redis.Sentinel.parse_sentinels(sentinels) == [] do
+      raise ArgumentError,
+            "MIRROR_NEURON_REDIS_SENTINELS must contain at least one host:port when MIRROR_NEURON_REDIS_HA_MODE=sentinel"
+    end
+
+    if String.trim(string("MIRROR_NEURON_REDIS_SENTINEL_MASTER", :redis_sentinel_master)) == "" do
+      raise ArgumentError, "MIRROR_NEURON_REDIS_SENTINEL_MASTER must not be empty"
+    end
+
+    db = integer("MIRROR_NEURON_REDIS_DB", :redis_db)
+
+    if db < 0 do
+      raise ArgumentError, "MIRROR_NEURON_REDIS_DB must be greater than or equal to 0"
+    end
+  end
+
+  defp validate_redis_wait! do
+    wait_replicas = integer("MIRROR_NEURON_REDIS_WAIT_REPLICAS", :redis_wait_replicas)
+    wait_timeout_ms = integer("MIRROR_NEURON_REDIS_WAIT_TIMEOUT_MS", :redis_wait_timeout_ms)
+
+    if wait_replicas < 0 do
+      raise ArgumentError, "MIRROR_NEURON_REDIS_WAIT_REPLICAS must be greater than or equal to 0"
+    end
+
+    if wait_timeout_ms < 0 do
+      raise ArgumentError,
+            "MIRROR_NEURON_REDIS_WAIT_TIMEOUT_MS must be greater than or equal to 0"
+    end
+
+    optional_positive_int!("MIRROR_NEURON_REDIS_RECONNECT_ATTEMPTS")
+    optional_positive_int!("MIRROR_NEURON_REDIS_RECONNECT_BACKOFF_MS")
+    optional_positive_int!("MIRROR_NEURON_REDIS_RECONNECT_MAX_BACKOFF_MS")
   end
 
   defp validate_queue_limits! do
@@ -162,6 +223,21 @@ defmodule MirrorNeuron.Config do
     optional_ratio!("MIRROR_NEURON_MAX_GPU_UTILIZATION_RATIO")
     optional_ratio!("MIRROR_NEURON_MAX_GPU_MEMORY_USED_RATIO")
     boolean("MIRROR_NEURON_RESOURCE_ADMISSION_ENABLED", :resource_admission_enabled)
+  end
+
+  defp validate_retention! do
+    optional_nonnegative_int!("MIRROR_NEURON_TERMINAL_JOB_TTL_SECONDS")
+    optional_nonnegative_int!("MIRROR_NEURON_EVENT_TTL_SECONDS")
+    optional_nonnegative_int!("MIRROR_NEURON_EVENT_MAX_COUNT")
+    optional_nonnegative_int!("MIRROR_NEURON_AGENT_SNAPSHOT_TTL_SECONDS")
+    optional_nonnegative_int!("MIRROR_NEURON_RETENTION_GC_INTERVAL_MS")
+  end
+
+  defp validate_runtime_efficiency! do
+    optional_positive_int!("MIRROR_NEURON_AGENT_PENDING_DRAIN_BATCH_SIZE")
+    optional_positive_int!("MIRROR_NEURON_AGENT_SNAPSHOT_PENDING_LIMIT")
+    optional_positive_int!("MIRROR_NEURON_LEASE_QUEUE_TIMEOUT_MS")
+    optional_nonnegative_int!("MIRROR_NEURON_LEASE_MAX_QUEUE_LENGTH")
   end
 
   defp optional_positive_int!(env_name) do

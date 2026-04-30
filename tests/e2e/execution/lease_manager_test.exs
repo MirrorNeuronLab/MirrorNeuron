@@ -59,6 +59,60 @@ defmodule MirrorNeuron.Execution.LeaseManagerTest do
              LeaseManager.acquire(manager, "default", 3, %{})
   end
 
+  test "queued requests return retry-later after their queue timeout" do
+    manager =
+      start_supervised!(
+        {LeaseManager, name: unique_name(), capacities: %{"default" => 1}, queue_timeout_ms: 50}
+      )
+
+    assert {:ok, first} = LeaseManager.acquire(manager, "default", 1, %{agent_id: "worker-1"})
+
+    assert {:error, {:retry_later, details}} =
+             LeaseManager.acquire(manager, "default", 1, %{agent_id: "worker-2"})
+
+    assert details["reason"] == "executor_pool_queue_timeout"
+    assert details["pool"] == "default"
+    assert details["timeout_ms"] == 50
+
+    assert %{"default" => %{"queued" => 0, "in_use" => 1}} =
+             stringify_stats(LeaseManager.stats(manager))
+
+    LeaseManager.release(manager, first["lease_id"])
+  end
+
+  test "queue limit rejects excess requests without parking callers" do
+    manager =
+      start_supervised!(
+        {LeaseManager,
+         name: unique_name(),
+         capacities: %{"default" => 1},
+         queue_timeout_ms: 1_000,
+         max_queue_length: 1}
+      )
+
+    assert {:ok, first} = LeaseManager.acquire(manager, "default", 1, %{agent_id: "worker-1"})
+
+    parent = self()
+
+    waiting_task =
+      Task.async(fn ->
+        send(parent, :waiting_started)
+        LeaseManager.acquire(manager, "default", 1, %{agent_id: "worker-2"})
+      end)
+
+    assert_receive :waiting_started
+    Process.sleep(20)
+
+    assert {:error, {:retry_later, details}} =
+             LeaseManager.acquire(manager, "default", 1, %{agent_id: "worker-3"})
+
+    assert details["reason"] == "executor_pool_queue_full"
+    assert details["max_queue_length"] == 1
+
+    LeaseManager.release(manager, first["lease_id"])
+    assert {:ok, _second} = Task.await(waiting_task, 1_000)
+  end
+
   defp stringify_stats(stats) do
     Enum.into(stats, %{}, fn {pool, values} -> {to_string(pool), stringify_map(values)} end)
   end

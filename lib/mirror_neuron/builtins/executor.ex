@@ -41,6 +41,7 @@ defmodule MirrorNeuron.Builtins.Executor do
     pool = configured_pool(state.config)
     pool_slots = configured_pool_slots(state.config)
     lease_manager = configured_lease_manager(state.config)
+    lease_opts = configured_lease_opts(state.config)
 
     maybe_sleep_startup_delay(state)
 
@@ -50,9 +51,20 @@ defmodule MirrorNeuron.Builtins.Executor do
     })
 
     with {:ok, lease} <-
-           LeaseManager.acquire(lease_manager, pool, pool_slots, lease_metadata(context)) do
+           LeaseManager.acquire(
+             lease_manager,
+             pool,
+             pool_slots,
+             lease_metadata(context),
+             lease_opts
+           ) do
       run_under_lease(payload, state, context, normalized_message, lease, lease_manager)
     else
+      {:error, {:retry_later, details}} ->
+        report_event(context, :executor_lease_rejected, details)
+
+        {:error, details, %{state | runs: state.runs + 1, last_error: inspect(details)}}
+
       {:error, reason} ->
         {:error, %{"error" => reason},
          %{state | runs: state.runs + 1, last_error: inspect(reason)}}
@@ -408,6 +420,14 @@ defmodule MirrorNeuron.Builtins.Executor do
     Map.get(config, "lease_manager") || Map.get(config, :lease_manager) || LeaseManager
   end
 
+  defp configured_lease_opts(config) do
+    []
+    |> maybe_put_int(:queue_timeout_ms, Map.get(config, "lease_queue_timeout_ms"))
+    |> maybe_put_int(:queue_timeout_ms, Map.get(config, :lease_queue_timeout_ms))
+    |> maybe_put_int(:max_queue_length, Map.get(config, "lease_max_queue_length"))
+    |> maybe_put_int(:max_queue_length, Map.get(config, :lease_max_queue_length))
+  end
+
   defp resolve_runner(config) do
     case Map.get(config, "runner_module") || Map.get(config, :runner_module) do
       nil ->
@@ -435,4 +455,19 @@ defmodule MirrorNeuron.Builtins.Executor do
   defp report_event(context, event_type, payload) do
     send(context.coordinator, {:agent_event, context.node.node_id, event_type, payload})
   end
+
+  defp maybe_put_int(opts, _key, nil), do: opts
+
+  defp maybe_put_int(opts, key, value) when is_integer(value) and value >= 0 do
+    Keyword.put(opts, key, value)
+  end
+
+  defp maybe_put_int(opts, key, value) when is_binary(value) do
+    case Integer.parse(value) do
+      {parsed, ""} when parsed >= 0 -> Keyword.put(opts, key, parsed)
+      _ -> opts
+    end
+  end
+
+  defp maybe_put_int(opts, _key, _value), do: opts
 end

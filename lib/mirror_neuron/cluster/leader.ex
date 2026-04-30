@@ -6,16 +6,27 @@ defmodule MirrorNeuron.Cluster.Leader do
 
   @lease_duration_ms 10_000
   @refresh_interval_ms 3_000
+  @sweep_interval_ms 5_000
+  @node_down_sweep_delay_ms 11_000
 
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
+  end
+
+  def sweep_now(server \\ __MODULE__) do
+    GenServer.call(server, :sweep_now, 15_000)
+  end
+
+  def node_down(node, server \\ __MODULE__) do
+    GenServer.cast(server, {:node_down, to_string(node)})
   end
 
   @impl true
   def init(:ok) do
     state = %{
       is_leader: false,
-      node_name: to_string(Node.self())
+      node_name: to_string(Node.self()),
+      sweep_ref: nil
     }
 
     Process.send_after(self(), :campaign, 500)
@@ -67,13 +78,44 @@ defmodule MirrorNeuron.Cluster.Leader do
     {:noreply, new_state}
   end
 
+  def handle_info(:sweep_orphaned_jobs, %{is_leader: true} = state) do
+    _ = sweep_orphaned_jobs()
+    {:noreply, schedule_sweep(state)}
+  end
+
+  def handle_info(:sweep_orphaned_jobs, state), do: {:noreply, %{state | sweep_ref: nil}}
+
+  def handle_info({:sweep_orphaned_jobs, node_name}, %{is_leader: true} = state) do
+    _ = sweep_orphaned_jobs(node_name)
+    {:noreply, state}
+  end
+
+  def handle_info({:sweep_orphaned_jobs, _node_name}, state), do: {:noreply, state}
+
+  @impl true
+  def handle_call(:sweep_now, _from, state) do
+    result =
+      if state.is_leader, do: sweep_orphaned_jobs(), else: %{checked: 0, recovered: 0, failed: 0}
+
+    {:reply, {:ok, result}, state}
+  end
+
+  @impl true
+  def handle_cast({:node_down, node_name}, state) do
+    if state.is_leader do
+      Process.send_after(self(), {:sweep_orphaned_jobs, node_name}, @node_down_sweep_delay_ms)
+    end
+
+    {:noreply, state}
+  end
+
   defp handle_became_leader(state) do
     if not state.is_leader do
       Logger.notice("Node #{state.node_name} became cluster leader")
     end
 
-    sweep_orphaned_jobs()
-    %{state | is_leader: true}
+    _ = sweep_orphaned_jobs()
+    state |> Map.put(:is_leader, true) |> schedule_sweep()
   end
 
   defp handle_lost_leadership(state) do
@@ -81,20 +123,23 @@ defmodule MirrorNeuron.Cluster.Leader do
       Logger.notice("Node #{state.node_name} lost cluster leadership")
     end
 
-    %{state | is_leader: false}
+    cancel_sweep(state)
+    %{state | is_leader: false, sweep_ref: nil}
   end
 
-  defp sweep_orphaned_jobs do
+  defp sweep_orphaned_jobs(owner_node \\ nil) do
     # When the node is leader, sweep jobs that are running but have no valid lease.
     case RedisStore.list_jobs() do
       {:ok, jobs} ->
-        for job <- jobs,
-            job["status"] in ["pending", "running", "paused"] do
-          check_job_lease(job)
-        end
+        jobs
+        |> Enum.filter(fn job -> job["status"] in ["pending", "running", "paused"] end)
+        |> Enum.filter(fn job -> is_nil(owner_node) or job["lease_owner"] == owner_node end)
+        |> Enum.reduce(%{checked: 0, recovered: 0, failed: 0}, fn job, acc ->
+          update_sweep_counts(acc, check_job_lease(job))
+        end)
 
       _ ->
-        :ok
+        %{checked: 0, recovered: 0, failed: 0}
     end
   end
 
@@ -108,18 +153,24 @@ defmodule MirrorNeuron.Cluster.Leader do
           if recoverable_on_cluster?(job) do
             Logger.info("Job #{job_id} has no active lease. Leader is re-assigning...")
             # Start the job on the cluster (Horde will distribute it)
-            start_job_on_cluster(job_id)
+            case start_job_on_cluster(job_id) do
+              :ok -> :recovered
+              _ -> :checked
+            end
           else
             Logger.info(
               "Job #{job_id} has no active lease and is not cluster-recoverable. Marking as failed."
             )
 
             fail_orphaned_job(job_id)
+            :failed
           end
+        else
+          :checked
         end
 
       _ ->
-        :ok
+        :checked
     end
   end
 
@@ -154,36 +205,86 @@ defmodule MirrorNeuron.Cluster.Leader do
   defp start_job_on_cluster(job_id) do
     case RedisStore.fetch_job(job_id) do
       {:ok, job_map} ->
-        manifest_ref = job_map["manifest_ref"] || %{}
-        job_path = manifest_ref["job_path"]
+        case load_recovery_bundle(job_map) do
+          {:ok, bundle} ->
+            spec =
+              {MirrorNeuron.Runtime.JobRunner, {job_id, bundle.manifest, [job_bundle: bundle]}}
 
-        if job_path do
-          case MirrorNeuron.JobBundle.load(job_path) do
-            {:ok, bundle} ->
-              spec =
-                {MirrorNeuron.Runtime.JobRunner, {job_id, bundle.manifest, [job_bundle: bundle]}}
+            case Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) do
+              {:ok, _pid} ->
+                MirrorNeuron.Runtime.EventBus.publish(job_id, %{
+                  type: :job_relocated,
+                  reason: "lost job lease",
+                  timestamp: MirrorNeuron.Runtime.timestamp()
+                })
 
-              case Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) do
-                {:ok, _pid} -> :ok
-                {:error, {:already_started, _pid}} -> :ok
-                _ -> :ok
-              end
+                :ok
 
-            {:error, reason} ->
-              Logger.warning("Leader could not load job bundle for #{job_id}: #{inspect(reason)}")
-          end
-        else
-          Logger.warning(
-            "No job_path found in manifest_ref for orphaned job #{job_id}, cannot re-assign."
-          )
+              {:error, {:already_started, _pid}} ->
+                :ok
+
+              {:error, reason} ->
+                Logger.warning("Leader could not restart job #{job_id}: #{inspect(reason)}")
+                {:error, reason}
+            end
+
+          {:error, reason} ->
+            Logger.warning(
+              "Leader could not load recovery bundle for #{job_id}: #{inspect(reason)}"
+            )
+
+            {:error, reason}
         end
 
       _ ->
-        :ok
+        {:error, :missing_job}
     end
   end
 
   defp recoverable_on_cluster?(job) do
     Map.get(job, "recovery_policy", "local_restart") == "cluster_recover"
   end
+
+  defp load_recovery_bundle(job_map) do
+    manifest_ref = job_map["manifest_ref"] || %{}
+    fingerprint = manifest_ref["bundle_fingerprint"]
+    job_path = manifest_ref["job_path"]
+
+    cond do
+      is_binary(fingerprint) and fingerprint != "" ->
+        case MirrorNeuron.Bundle.Archive.load(fingerprint) do
+          {:ok, bundle} -> {:ok, bundle}
+          {:error, _reason} when is_binary(job_path) -> MirrorNeuron.JobBundle.load(job_path)
+          {:error, reason} -> {:error, reason}
+        end
+
+      is_binary(job_path) ->
+        MirrorNeuron.JobBundle.load(job_path)
+
+      true ->
+        {:error, :missing_bundle_reference}
+    end
+  end
+
+  defp update_sweep_counts(acc, :recovered) do
+    acc |> Map.update!(:checked, &(&1 + 1)) |> Map.update!(:recovered, &(&1 + 1))
+  end
+
+  defp update_sweep_counts(acc, :failed) do
+    acc |> Map.update!(:checked, &(&1 + 1)) |> Map.update!(:failed, &(&1 + 1))
+  end
+
+  defp update_sweep_counts(acc, _other), do: Map.update!(acc, :checked, &(&1 + 1))
+
+  defp schedule_sweep(state) do
+    cancel_sweep(state)
+    %{state | sweep_ref: Process.send_after(self(), :sweep_orphaned_jobs, @sweep_interval_ms)}
+  end
+
+  defp cancel_sweep(%{sweep_ref: ref}) when is_reference(ref) do
+    Process.cancel_timer(ref)
+    :ok
+  end
+
+  defp cancel_sweep(_state), do: :ok
 end

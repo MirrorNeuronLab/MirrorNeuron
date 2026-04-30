@@ -1,6 +1,7 @@
 defmodule MirrorNeuron.Runtime do
   require Logger
 
+  alias MirrorNeuron.Bundle.Archive
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.ContextEnginePreflight
   alias MirrorNeuron.JobId
@@ -22,7 +23,10 @@ defmodule MirrorNeuron.Runtime do
   end
 
   defp start_job_after_preflight(job_id, manifest, opts, bundle) do
-    case persist_initial_job(job_id, manifest, bundle) do
+    manifest_ref = bundle_ref(manifest, bundle)
+    opts = Keyword.put(opts, :bundle_ref, manifest_ref)
+
+    case persist_initial_job(job_id, manifest, manifest_ref) do
       :ok ->
         spec = {JobRunner, {job_id, manifest, opts}}
 
@@ -31,7 +35,7 @@ defmodule MirrorNeuron.Runtime do
             {:ok, job_id, pid}
 
           {:error, reason} ->
-            persist_startup_failure(job_id, manifest, bundle, reason)
+            persist_startup_failure(job_id, manifest, manifest_ref, reason)
             {:error, "failed to start job runner: #{inspect(reason)}"}
         end
 
@@ -178,10 +182,32 @@ defmodule MirrorNeuron.Runtime do
   @doc false
   def generate_job_id(graph_id), do: JobId.generate(graph_id)
 
+  @doc false
+  def bundle_ref(manifest, bundle) do
+    base_ref = %{
+      "graph_id" => manifest.graph_id,
+      "manifest_version" => manifest.manifest_version,
+      "manifest_path" => bundle && bundle.manifest_path,
+      "job_path" => bundle && bundle.root_path
+    }
+
+    case Archive.store(bundle) do
+      {:ok, archive_ref} ->
+        base_ref
+        |> Map.put("bundle_fingerprint", archive_ref.fingerprint)
+        |> Map.put("bundle_storage", archive_ref.storage)
+        |> Map.put("bundle_bytes", archive_ref.total_bytes)
+        |> Map.put("cache_path", Archive.cache_path(archive_ref.fingerprint))
+
+      {:error, _reason} ->
+        base_ref
+    end
+  end
+
   def timestamp,
     do: DateTime.utc_now() |> DateTime.truncate(:millisecond) |> DateTime.to_iso8601()
 
-  defp persist_startup_failure(job_id, manifest, bundle, reason) do
+  defp persist_startup_failure(job_id, manifest, manifest_ref, reason) do
     updates = %{
       "status" => "failed",
       "result" => %{
@@ -198,19 +224,14 @@ defmodule MirrorNeuron.Runtime do
       "root_agent_ids" => manifest.entrypoints,
       "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
       "recovery_policy" => Map.get(manifest.policies, "recovery_mode", "local_restart"),
-      "manifest_ref" => %{
-        "graph_id" => manifest.graph_id,
-        "manifest_version" => manifest.manifest_version,
-        "manifest_path" => bundle && bundle.manifest_path,
-        "job_path" => bundle && bundle.root_path
-      },
+      "manifest_ref" => manifest_ref,
       "submitted_at" => timestamp()
     }
 
     RedisStore.persist_terminal_job(job_id, updates, defaults)
   end
 
-  defp persist_initial_job(job_id, manifest, bundle) do
+  defp persist_initial_job(job_id, manifest, manifest_ref) do
     job_map = %{
       "job_id" => job_id,
       "graph_id" => manifest.graph_id,
@@ -225,12 +246,7 @@ defmodule MirrorNeuron.Runtime do
       "recovery_policy" => Map.get(manifest.policies, "recovery_mode", "local_restart"),
       "result" => nil,
       "topology" => MirrorNeuron.Manifest.topology(manifest),
-      "manifest_ref" => %{
-        "graph_id" => manifest.graph_id,
-        "manifest_version" => manifest.manifest_version,
-        "manifest_path" => bundle && bundle.manifest_path,
-        "job_path" => bundle && bundle.root_path
-      }
+      "manifest_ref" => manifest_ref
     }
 
     case RedisStore.persist_job(job_id, job_map) do

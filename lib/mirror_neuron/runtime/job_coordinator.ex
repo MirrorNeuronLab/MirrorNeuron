@@ -94,15 +94,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       {:noreply, next_state}
     else
       {:error, reason} ->
-        failed_state = %{state | status: "failed", result: %{error: reason}}
-        persist_job(failed_state)
-        cleanup_sandboxes(failed_state)
-
-        EventBus.publish(state.job_id, %{
-          type: :job_failed,
-          reason: reason,
-          timestamp: Runtime.timestamp()
-        })
+        failed_state =
+          finalize_job(state, "failed", %{error: reason}, :job_failed, %{reason: reason})
 
         {:stop, {:shutdown, reason}, failed_state}
     end
@@ -133,11 +126,16 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   @impl true
   def handle_call(:cancel, _from, state) do
     broadcast_agent_control(state, :cancel)
-    terminate_agent_workers(state)
-    next_state = %{state | status: "cancelled", result: %{reason: "cancelled by operator"}}
-    persist_job(next_state)
-    cleanup_sandboxes(next_state)
-    EventBus.publish(state.job_id, %{type: :job_cancelled, timestamp: Runtime.timestamp()})
+
+    next_state =
+      finalize_job(
+        state,
+        "cancelled",
+        %{reason: "cancelled by operator"},
+        :job_cancelled,
+        %{}
+      )
+
     {:stop, :normal, {:ok, "cancelled"}, next_state}
   end
 
@@ -204,9 +202,10 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   def handle_info({:agent_pressure, agent_id, pressure}, state) do
+    previous = Map.get(state.pressure, agent_id)
     next_state = put_in(state.pressure[agent_id], pressure)
 
-    if Backpressure.pressured?(pressure) do
+    if pressure_event_changed?(previous, pressure) do
       EventBus.publish(state.job_id, %{
         type: :backpressure_state,
         agent_id: agent_id,
@@ -219,36 +218,27 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   def handle_info({:agent_completed_job, agent_id, result}, state) do
-    next_state = %{state | status: "completed", result: %{agent_id: agent_id, output: result}}
-    persist_job(next_state)
-    cleanup_sandboxes(next_state)
-
-    EventBus.publish(state.job_id, %{
-      type: :job_completed,
-      agent_id: agent_id,
-      result: result,
-      timestamp: Runtime.timestamp()
-    })
+    next_state =
+      finalize_job(
+        state,
+        "completed",
+        %{agent_id: agent_id, output: result},
+        :job_completed,
+        %{agent_id: agent_id, result: result}
+      )
 
     {:stop, :normal, next_state}
   end
 
   def handle_info({:agent_failed, agent_id, reason}, state) do
-    next_state = %{
-      state
-      | status: "failed",
-        result: %{agent_id: agent_id, error: inspect(reason)}
-    }
-
-    persist_job(next_state)
-    cleanup_sandboxes(next_state)
-
-    EventBus.publish(state.job_id, %{
-      type: :job_failed,
-      agent_id: agent_id,
-      reason: inspect(reason),
-      timestamp: Runtime.timestamp()
-    })
+    next_state =
+      finalize_job(
+        state,
+        "failed",
+        %{agent_id: agent_id, error: inspect(reason)},
+        :job_failed,
+        %{agent_id: agent_id, reason: inspect(reason)}
+      )
 
     {:stop, {:shutdown, reason}, next_state}
   end
@@ -263,21 +253,14 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         {:noreply, next_state}
 
       {:error, reason, next_state} ->
-        failed_state = %{
-          next_state
-          | status: "failed",
-            result: %{agent_id: "job_coordinator", error: reason}
-        }
-
-        persist_job(failed_state)
-        cleanup_sandboxes(failed_state)
-
-        EventBus.publish(state.job_id, %{
-          type: :job_failed,
-          agent_id: "job_coordinator",
-          reason: reason,
-          timestamp: Runtime.timestamp()
-        })
+        failed_state =
+          finalize_job(
+            next_state,
+            "failed",
+            %{agent_id: "job_coordinator", error: reason},
+            :job_failed,
+            %{agent_id: "job_coordinator", reason: reason}
+          )
 
         {:stop, {:shutdown, reason}, failed_state}
     end
@@ -310,7 +293,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       end)
 
     pressure
-    |> Enum.filter(fn {_agent_id, snapshot} -> Backpressure.pressured?(snapshot) end)
+    |> Enum.filter(fn {agent_id, snapshot} ->
+      pressure_event_changed?(Map.get(state.pressure, agent_id), snapshot)
+    end)
     |> Enum.each(fn {agent_id, snapshot} ->
       EventBus.publish(state.job_id, %{
         type: :backpressure_state,
@@ -321,6 +306,16 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     end)
 
     %{state | pressure: pressure}
+  end
+
+  defp pressure_event_changed?(previous, pressure) when is_map(previous) and is_map(pressure) do
+    Backpressure.pressured?(pressure) and
+      (Map.get(previous, "status") != Map.get(pressure, "status") or
+         Map.get(previous, "queue_depth") != Map.get(pressure, "queue_depth"))
+  end
+
+  defp pressure_event_changed?(_previous, pressure) do
+    Backpressure.pressured?(pressure)
   end
 
   defp agent_pressure_snapshot(state, agent_id) do
@@ -613,6 +608,22 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     end)
   end
 
+  defp finalize_job(state, status, result, event_type, event_fields) do
+    terminate_agent_workers(state)
+
+    next_state = %{state | status: status, result: result}
+    persist_job(next_state)
+    cleanup_sandboxes(next_state)
+
+    event =
+      event_fields
+      |> Map.put(:type, event_type)
+      |> Map.put(:timestamp, Runtime.timestamp())
+
+    EventBus.publish(state.job_id, event)
+    next_state
+  end
+
   defp build_external_message(job_id, agent_id, message) do
     Message.normalize!(
       message,
@@ -626,6 +637,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp persist_job(state) do
+    lease = Keyword.get(state.opts, :job_lease)
+
     job_map = %{
       job_id: state.job_id,
       graph_id: state.manifest.graph_id,
@@ -639,13 +652,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       recovery_policy: Map.get(state.manifest.policies, "recovery_mode", "local_restart"),
       result: state.result,
       topology: MirrorNeuron.Manifest.topology(state.manifest),
-      manifest_ref: %{
-        graph_id: state.manifest.graph_id,
-        manifest_version: state.manifest.manifest_version,
-        manifest_path: state.bundle && state.bundle.manifest_path,
-        job_path: state.bundle && state.bundle.root_path
-      }
+      manifest_ref: manifest_ref(state)
     }
+    |> maybe_put_lease(lease)
 
     case RedisStore.persist_job(state.job_id, job_map) do
       {:ok, _job} ->
@@ -676,10 +685,13 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp agent_runtime_context(state) do
+    lease = Keyword.get(state.opts, :job_lease)
+
     %{
       bundle_root: state.bundle && state.bundle.root_path,
       manifest_path: state.bundle && state.bundle.manifest_path,
       payloads_path: state.bundle && state.bundle.payloads_path,
+      manifest_ref: manifest_ref(state),
       graph_id: state.manifest.graph_id,
       job_name: state.manifest.job_name,
       required_context_engine: Map.get(state.manifest, :required_context_engine, false),
@@ -688,11 +700,32 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       recovery_policy: Map.get(state.manifest.policies, "recovery_mode", "local_restart"),
       submitted_at: state.submitted_at,
       manifest_version: state.manifest.manifest_version,
+      lease_epoch: lease && lease["epoch"],
+      lease_owner: lease && lease["owner_id"],
       backpressure_by_agent:
         Map.new(state.manifest.nodes, fn node ->
           {node.node_id, Backpressure.config(node) |> Map.to_list()}
         end)
     }
+  end
+
+  defp manifest_ref(state) do
+    Keyword.get(state.opts, :bundle_ref) ||
+      %{
+        graph_id: state.manifest.graph_id,
+        manifest_version: state.manifest.manifest_version,
+        manifest_path: state.bundle && state.bundle.manifest_path,
+        job_path: state.bundle && state.bundle.root_path
+      }
+  end
+
+  defp maybe_put_lease(map, nil), do: map
+
+  defp maybe_put_lease(map, lease) do
+    map
+    |> Map.put(:lease, lease)
+    |> Map.put(:lease_epoch, lease["epoch"])
+    |> Map.put(:lease_owner, lease["owner_id"])
   end
 
   defp node_backpressure_opts(state, agent_id) do

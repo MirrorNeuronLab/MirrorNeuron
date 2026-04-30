@@ -10,6 +10,8 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   alias MirrorNeuron.Runtime.Naming
 
   @default_heartbeat_interval_ms 30_000
+  @default_pending_drain_batch_size 25
+  @default_snapshot_pending_limit 100
 
   def child_spec(
         {job_id, node, outbound_edges, inbound_edges, coordinator, runtime_context,
@@ -144,6 +146,10 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     {:noreply, state}
   end
 
+  def handle_info(:drain_pending, state) do
+    {:noreply, drain_pending(state)}
+  end
+
   def handle_info({:mirror_neuron_scheduled_message, message}, state) do
     handle_cast({:deliver, message}, state)
   end
@@ -151,16 +157,30 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   defp drain_pending(%{paused?: true} = state), do: state
 
   defp drain_pending(state) do
+    drain_pending(state, pending_drain_batch_size())
+  end
+
+  defp drain_pending(state, 0) do
+    if :queue.is_empty(state.pending) do
+      persist_snapshot(state)
+    else
+      Process.send_after(self(), :drain_pending, 0)
+    end
+
+    state
+  end
+
+  defp drain_pending(state, remaining_count) do
     case :queue.out(state.pending) do
-      {{:value, message}, remaining} ->
+      {{:value, message}, remaining_queue} ->
         drained_state =
           state
-          |> Map.put(:pending, remaining)
+          |> Map.put(:pending, remaining_queue)
           |> Map.put(:mailbox_depth, max(state.mailbox_depth - 1, 0))
 
         drained_state = process_message(message, drained_state)
 
-        drain_pending(drained_state)
+        drain_pending(drained_state, remaining_count - 1)
 
       {:empty, _queue} ->
         persist_snapshot(state)
@@ -296,7 +316,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       processed_messages: state.processed_messages,
       assigned_node: to_string(Node.self()),
       inflight_message: state.inflight_message,
-      pending_messages: :queue.to_list(state.pending),
+      pending_messages: pending_messages_for_snapshot(state),
       last_heartbeat_at: Runtime.timestamp(),
       parent_job_id: state.job_id,
       metadata: %{
@@ -304,7 +324,11 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
         outbound_edges: Enum.map(state.outbound_edges, & &1.to_node),
         heartbeat_interval_ms: state.heartbeat_interval_ms,
         recovery_state: encoded_state,
-        backpressure: pressure
+        backpressure: pressure,
+        pending_messages_truncated: pending_messages_truncated?(state),
+        pending_message_count: state.mailbox_depth,
+        lease_epoch: state.runtime_context[:lease_epoch],
+        lease_owner: state.runtime_context[:lease_owner]
       }
     }
 
@@ -430,14 +454,10 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       "root_agent_ids" => state.runtime_context[:entrypoints] || [],
       "placement_policy" => state.runtime_context[:placement_policy] || "local",
       "recovery_policy" => state.runtime_context[:recovery_policy] || "local_restart",
-      "manifest_ref" => %{
-        "graph_id" => state.runtime_context[:graph_id],
-        "manifest_version" => state.runtime_context[:manifest_version],
-        "manifest_path" => state.runtime_context[:manifest_path],
-        "job_path" => state.runtime_context[:bundle_root]
-      },
+      "manifest_ref" => manifest_ref(state),
       "submitted_at" => state.runtime_context[:submitted_at] || Runtime.timestamp()
     }
+    |> maybe_put_lease(state)
 
     case RedisStore.persist_terminal_job(state.job_id, updates, defaults) do
       {:ok, _job} ->
@@ -447,6 +467,32 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
         Logger.warning(
           "failed to persist terminal job state for #{state.job_id}/#{state.node.node_id}: #{inspect(reason)}"
         )
+    end
+  end
+
+  defp manifest_ref(state) do
+    state.runtime_context[:manifest_ref] ||
+      %{
+        "graph_id" => state.runtime_context[:graph_id],
+        "manifest_version" => state.runtime_context[:manifest_version],
+        "manifest_path" => state.runtime_context[:manifest_path],
+        "job_path" => state.runtime_context[:bundle_root]
+      }
+  end
+
+  defp maybe_put_lease(map, state) do
+    case state.runtime_context[:lease_epoch] do
+      nil ->
+        map
+
+      epoch ->
+        map
+        |> Map.put("lease_epoch", epoch)
+        |> Map.put("lease_owner", state.runtime_context[:lease_owner])
+        |> Map.put("lease", %{
+          "epoch" => epoch,
+          "owner_id" => state.runtime_context[:lease_owner]
+        })
     end
   end
 
@@ -546,8 +592,39 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     )
   end
 
+  defp pending_drain_batch_size do
+    config_integer(
+      "MIRROR_NEURON_AGENT_PENDING_DRAIN_BATCH_SIZE",
+      :agent_pending_drain_batch_size,
+      @default_pending_drain_batch_size
+    )
+    |> max(1)
+  end
+
   defp schedule_heartbeat(interval_ms) do
     Process.send_after(self(), :heartbeat, interval_ms)
+  end
+
+  defp pending_messages_for_snapshot(state) do
+    state.pending
+    |> :queue.to_list()
+    |> Enum.take(snapshot_pending_limit(state))
+  end
+
+  defp pending_messages_truncated?(state) do
+    state.mailbox_depth > snapshot_pending_limit(state)
+  end
+
+  defp snapshot_pending_limit(state) do
+    configured =
+      config_integer(
+        "MIRROR_NEURON_AGENT_SNAPSHOT_PENDING_LIMIT",
+        :agent_snapshot_pending_limit,
+        @default_snapshot_pending_limit
+      )
+      |> max(1)
+
+    max(configured, Backpressure.config(state.node).max_queue_depth)
   end
 
   defp encode_local_state(local_state) do
@@ -625,5 +702,21 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     state.runtime_context
     |> Map.get(:backpressure_by_agent, %{})
     |> Map.get(to_node, [])
+  end
+
+  defp config_integer(env_name, key, default) do
+    case System.get_env(env_name) do
+      nil ->
+        Application.get_env(:mirror_neuron, key, default)
+
+      "" ->
+        Application.get_env(:mirror_neuron, key, default)
+
+      value ->
+        case Integer.parse(value) do
+          {parsed, ""} -> parsed
+          _ -> default
+        end
+    end
   end
 end

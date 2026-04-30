@@ -53,4 +53,47 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
 
     File.rm_rf!(tmp_dir)
   end
+
+  test "times out long-running commands" do
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "mirror_neuron_host_local_timeout_test_#{System.unique_integer([:positive])}"
+      )
+
+    bundle_dir = Path.join(tmp_dir, "job_bundle")
+    payloads_dir = Path.join(bundle_dir, "payloads")
+    upload_dir = Path.join(payloads_dir, "bundle")
+
+    File.mkdir_p!(Path.join(upload_dir, "scripts"))
+
+    File.write!(
+      Path.join(upload_dir, "scripts/sleep.py"),
+      """
+      import time
+      time.sleep(2)
+      print("late")
+      """
+    )
+
+    config = %{
+      "upload_path" => "bundle",
+      "upload_as" => "bundle",
+      "workdir" => "/sandbox/job/bundle",
+      "command" => ["python3", "scripts/sleep.py"],
+      "timeout_seconds" => 0.1
+    }
+
+    assert {:error, %{"error" => "host local command timed out"}} =
+             HostLocal.run(
+               %{},
+               config,
+               job_id: "job-timeout",
+               agent_id: "agent-timeout",
+               bundle_root: bundle_dir,
+               payloads_path: payloads_dir
+             )
+
+    File.rm_rf!(tmp_dir)
+  end
 end
