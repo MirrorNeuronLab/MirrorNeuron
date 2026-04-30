@@ -340,7 +340,6 @@ MirrorNeuron is a modular open-source ecosystem.
 | 💻 **mn-cli** | CLI for workflow and job lifecycle management — https://github.com/MirrorNeuronLab/mn-cli |
 | 🌐 **mn-web-ui** | Visual workflow dashboard — https://github.com/MirrorNeuronLab/mn-web-ui |
 | 🐍 **mn-python-sdk** | Python SDK for agents and integrations — https://github.com/MirrorNeuronLab/mn-python-sdk |
-| 🟦 **mn-ts-sdk** | TypeScript SDK — https://github.com/MirrorNeuronLab/mn-ts-sdk |
 | 📦 **mn-deploy** | Deployment tooling — https://github.com/MirrorNeuronLab/mn-deploy |
 | 🧪 **mn-system-tests** | End-to-end testing — https://github.com/MirrorNeuronLab/mn-system-tests |
 | 🏗 **mirrorneuron-blueprints** | Reusable AI workflow examples — https://github.com/MirrorNeuronLab/mirrorneuron-blueprints |
