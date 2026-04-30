@@ -1,7 +1,9 @@
 import Config
 
+redis_host = System.get_env("MIRROR_NEURON_REDIS_HOST", "localhost")
+
 config :mirror_neuron,
-  redis_url: System.get_env("MIRROR_NEURON_REDIS_URL", "redis://127.0.0.1:6379/0"),
+  redis_url: System.get_env("MIRROR_NEURON_REDIS_URL", "redis://#{redis_host}:6379/0"),
   redis_namespace: System.get_env("MIRROR_NEURON_REDIS_NAMESPACE", "mirror_neuron"),
   cookie: System.get_env("MIRROR_NEURON_COOKIE", "mirrorneuron"),
   openshell_bin: System.get_env("MIRROR_NEURON_OPENSHELL_BIN", "openshell"),
