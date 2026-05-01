@@ -142,13 +142,6 @@ defmodule MirrorNeuron.Runtime do
           })}}
 
       Backpressure.pressured?(pressure) ->
-        EventBus.publish(job_id, %{
-          type: :backpressure_state,
-          agent_id: agent_id,
-          payload: pressure,
-          timestamp: timestamp()
-        })
-
         :ok
 
       true ->

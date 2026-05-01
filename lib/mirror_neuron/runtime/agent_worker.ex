@@ -342,7 +342,6 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
         )
     end
 
-    send(state.coordinator, {:agent_checkpoint, state.node.node_id, snapshot})
     send(state.coordinator, {:agent_pressure, state.node.node_id, pressure})
   end
 
@@ -448,16 +447,17 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   end
 
   defp persist_terminal_job(state, updates) do
-    defaults = %{
-      "graph_id" => state.runtime_context[:graph_id],
-      "job_name" => state.runtime_context[:job_name],
-      "root_agent_ids" => state.runtime_context[:entrypoints] || [],
-      "placement_policy" => state.runtime_context[:placement_policy] || "local",
-      "recovery_policy" => state.runtime_context[:recovery_policy] || "local_restart",
-      "manifest_ref" => manifest_ref(state),
-      "submitted_at" => state.runtime_context[:submitted_at] || Runtime.timestamp()
-    }
-    |> maybe_put_lease(state)
+    defaults =
+      %{
+        "graph_id" => state.runtime_context[:graph_id],
+        "job_name" => state.runtime_context[:job_name],
+        "root_agent_ids" => state.runtime_context[:entrypoints] || [],
+        "placement_policy" => state.runtime_context[:placement_policy] || "local",
+        "recovery_policy" => state.runtime_context[:recovery_policy] || "local_restart",
+        "manifest_ref" => manifest_ref(state),
+        "submitted_at" => state.runtime_context[:submitted_at] || Runtime.timestamp()
+      }
+      |> maybe_put_lease(state)
 
     case RedisStore.persist_terminal_job(state.job_id, updates, defaults) do
       {:ok, _job} ->

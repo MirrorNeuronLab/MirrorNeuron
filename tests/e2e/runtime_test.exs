@@ -230,6 +230,28 @@ defmodule MirrorNeuron.RuntimeTest do
     end
   end
 
+  defmodule ExplicitCheckpointAgent do
+    use MirrorNeuron.AgentTemplate
+
+    @impl true
+    def init(_node), do: {:ok, %{messages: 0}}
+
+    @impl true
+    def handle_message(_message, state, _context) do
+      next_state = %{state | messages: state.messages + 1}
+
+      {:ok, next_state,
+       [
+         {:checkpoint,
+          %{
+            "agent_id" => "checkpoint_agent",
+            "processed_messages" => next_state.messages,
+            "metadata" => %{"explicit_checkpoint" => true}
+          }}
+       ]}
+    end
+  end
+
   setup do
     Application.ensure_all_started(:mirror_neuron)
 
@@ -806,6 +828,61 @@ defmodule MirrorNeuron.RuntimeTest do
     RedisStore.delete_job(job_id)
   end
 
+  test "internal snapshots do not emit duplicate checkpoint messages" do
+    job_id = "checkpoint_perf_test-#{System.unique_integer([:positive])}"
+    parent = self()
+
+    coordinator =
+      spawn(fn ->
+        checkpoint_proxy(parent, job_id)
+      end)
+
+    node = %{
+      node_id: "checkpoint_agent",
+      agent_type: "module",
+      role: "root",
+      config: %{"module" => ExplicitCheckpointAgent}
+    }
+
+    runtime_context = %{
+      graph_id: "checkpoint_perf_test",
+      job_name: "checkpoint_perf_test",
+      entrypoints: ["checkpoint_agent"],
+      placement_policy: "local",
+      recovery_policy: "local_restart",
+      submitted_at:
+        DateTime.utc_now() |> DateTime.truncate(:millisecond) |> DateTime.to_iso8601(),
+      manifest_version: "1.0"
+    }
+
+    assert {:ok, pid} =
+             AgentWorker.start_link({job_id, node, [], [], coordinator, runtime_context})
+
+    assert {:ok, %{"processed_messages" => 0, "agent_id" => "checkpoint_agent"}} =
+             RedisStore.fetch_agent(job_id, "checkpoint_agent")
+
+    refute_receive {:checkpoint_persisted, _snapshot}, 200
+
+    message =
+      Message.new(job_id, "external", "checkpoint_agent", "checkpoint", %{"value" => "save"},
+        correlation_id: "checkpoint-correlation"
+      )
+
+    GenServer.cast(pid, {:deliver, message})
+
+    assert_receive {:checkpoint_persisted, %{"metadata" => %{"explicit_checkpoint" => true}}},
+                   1_000
+
+    assert {:ok, %{"metadata" => %{"explicit_checkpoint" => true}}} =
+             RedisStore.fetch_agent(job_id, "checkpoint_agent")
+
+    refute_receive {:checkpoint_persisted, _snapshot}, 200
+
+    GenServer.stop(pid)
+    Process.exit(coordinator, :kill)
+    RedisStore.delete_job(job_id)
+  end
+
   test "restarts a missing agent and replays its inflight message" do
     {:ok, counter_pid} = start_supervised(CrashOnceCounter)
 
@@ -969,6 +1046,18 @@ defmodule MirrorNeuron.RuntimeTest do
 
   defp job_runner_unregistered?(job_id) do
     Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:job_runner, job_id}) == []
+  end
+
+  defp checkpoint_proxy(parent, job_id) do
+    receive do
+      {:agent_checkpoint, agent_id, snapshot} ->
+        _ = RedisStore.persist_agent(job_id, agent_id, snapshot)
+        send(parent, {:checkpoint_persisted, snapshot})
+        checkpoint_proxy(parent, job_id)
+
+      _message ->
+        checkpoint_proxy(parent, job_id)
+    end
   end
 
   defp wait_until(fun, timeout \\ 1_000) do

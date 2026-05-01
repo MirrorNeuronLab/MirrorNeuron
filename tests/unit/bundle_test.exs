@@ -1,7 +1,8 @@
 defmodule MirrorNeuron.BundleTest do
   use ExUnit.Case, async: false
 
-  alias MirrorNeuron.Bundle.{Fingerprint, Manager, Scanner}
+  alias MirrorNeuron.Bundle.{Archive, Fingerprint, Manager, Scanner}
+  alias MirrorNeuron.JobBundle
 
   setup do
     Application.ensure_all_started(:mirror_neuron)
@@ -124,4 +125,33 @@ defmodule MirrorNeuron.BundleTest do
 
     assert record_after.fingerprint == current_fp
   end
+
+  test "Archive stores oversized bundles in the local cache without building a Redis payload", %{
+    dir: dir
+  } do
+    old_max_bytes = System.get_env("MIRROR_NEURON_BUNDLE_ARCHIVE_MAX_BYTES")
+    old_cache_dir = System.get_env("MIRROR_NEURON_BUNDLE_CACHE_DIR")
+    cache_dir = Path.join(dir, "archive_cache")
+
+    System.put_env("MIRROR_NEURON_BUNDLE_ARCHIVE_MAX_BYTES", "1")
+    System.put_env("MIRROR_NEURON_BUNDLE_CACHE_DIR", cache_dir)
+
+    on_exit(fn ->
+      restore_system_env("MIRROR_NEURON_BUNDLE_ARCHIVE_MAX_BYTES", old_max_bytes)
+      restore_system_env("MIRROR_NEURON_BUNDLE_CACHE_DIR", old_cache_dir)
+    end)
+
+    bundle_dir = create_bundle(dir, "oversized_bundle")
+    File.write!(Path.join([bundle_dir, "payloads", "large.txt"]), String.duplicate("x", 32))
+
+    assert {:ok, bundle} = JobBundle.load(bundle_dir)
+    assert {:ok, result} = Archive.store(bundle)
+
+    assert result.storage == "local_cache"
+    assert result.total_bytes > 1
+    assert File.dir?(Path.join(cache_dir, result.fingerprint))
+  end
+
+  defp restore_system_env(key, nil), do: System.delete_env(key)
+  defp restore_system_env(key, value), do: System.put_env(key, value)
 end

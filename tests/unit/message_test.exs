@@ -49,6 +49,39 @@ defmodule MirrorNeuron.MessageTest do
     assert Message.content_type(normalized) == "application/x-ndjson"
   end
 
+  test "accessors and summary preserve normalized message values" do
+    generated = Message.new("job-generated", "source", "target", "progress", %{})
+    assert is_binary(Message.id(generated))
+    assert is_binary(Message.correlation_id(generated))
+
+    message =
+      Message.new("job-fast", "source", "target", "progress", %{"value" => 1},
+        message_id: "msg-fast",
+        timestamp: "2026-05-01T00:00:00.000Z",
+        correlation_id: "corr-fast",
+        headers: %{"schema_ref" => "test.progress"},
+        stream: %{"seq" => 1}
+      )
+
+    assert Message.id(message) == "msg-fast"
+    assert Message.job_id(message) == "job-fast"
+    assert Message.from(message) == "source"
+    assert Message.to(message) == "target"
+    assert Message.type(message) == "progress"
+    assert Message.headers(message) == %{"schema_ref" => "test.progress"}
+
+    assert Message.summary(message) == %{
+             "message_id" => "msg-fast",
+             "from" => "source",
+             "to" => "target",
+             "type" => "progress",
+             "class" => "event",
+             "content_type" => "application/json",
+             "content_encoding" => "identity",
+             "stream" => %{"seq" => 1}
+           }
+  end
+
   test "round trips JSON, NDJSON, and compressed erlang binary serialization" do
     message =
       Message.new("job-3", "router", "sink", "result", %{"value" => 123},

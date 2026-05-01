@@ -6,38 +6,8 @@ defmodule MirrorNeuron.Monitor do
   @terminal_statuses ["completed", "failed", "cancelled"]
 
   def list_jobs(opts \\ []) do
-    limit = Keyword.get(opts, :limit)
-    include_terminal = Keyword.get(opts, :include_terminal, true)
-    live_only = Keyword.get(opts, :live_only, false)
-    summary = Keyword.get(opts, :summary, :full)
-
     with {:ok, jobs} <- RedisStore.list_jobs() do
-      jobs =
-        if summary == :basic do
-          jobs
-          |> maybe_filter_terminal(include_terminal)
-          |> Enum.sort_by(&sort_key/1, :desc)
-          |> maybe_limit(limit)
-          |> Enum.map(&basic_job_summary/1)
-          |> maybe_filter_live(live_only)
-        else
-          if live_only do
-            jobs
-            |> maybe_filter_terminal(include_terminal)
-            |> Enum.map(&summarize_job/1)
-            |> maybe_filter_live(true)
-            |> Enum.sort_by(&sort_key/1, :desc)
-            |> maybe_limit(limit)
-          else
-            jobs
-            |> maybe_filter_terminal(include_terminal)
-            |> Enum.sort_by(&sort_key/1, :desc)
-            |> maybe_limit(limit)
-            |> Enum.map(&summarize_job/1)
-          end
-        end
-
-      {:ok, jobs}
+      {:ok, summarize_jobs(jobs, opts)}
     end
   end
 
@@ -72,20 +42,27 @@ defmodule MirrorNeuron.Monitor do
 
   def job_details(job_id, opts \\ []) do
     event_limit = Keyword.get(opts, :event_limit, 25)
+    event_start = if is_integer(event_limit) and event_limit > 0, do: -event_limit, else: 0
 
     with {:ok, job} <- RedisStore.fetch_job(job_id),
          {:ok, agents} <- RedisStore.list_agents(job_id),
-         {:ok, events} <- RedisStore.read_events(job_id) do
-      summary = summarize_job(job)
+         {:ok, events} <- RedisStore.read_events(job_id, event_start, -1) do
       agent_summaries = Enum.map(agents, &summarize_agent/1)
       sandboxes = sandbox_summaries(events, agent_summaries)
+
+      summary =
+        summarize_job(job, %{
+          "agents" => agent_summaries,
+          "recent_events" => events,
+          "sandboxes" => sandboxes
+        })
 
       {:ok,
        %{
          "job" => job,
          "summary" => summary,
          "agents" => Enum.sort_by(agent_summaries, &{&1["assigned_node"], &1["agent_id"]}),
-         "recent_events" => Enum.take(Enum.reverse(events), event_limit),
+         "recent_events" => recent_events(events, event_limit),
          "sandboxes" => sandboxes
        }}
     end
@@ -94,9 +71,11 @@ defmodule MirrorNeuron.Monitor do
   def cluster_overview(opts \\ []) do
     opts = Keyword.put_new(opts, :summary, :basic)
 
-    with {:ok, jobs} <- list_jobs(opts) do
+    with {:ok, raw_jobs} <- RedisStore.list_jobs() do
+      jobs = summarize_jobs(raw_jobs, opts)
+
       metrics =
-        case metrics() do
+        case metrics(raw_jobs) do
           {:ok, values} -> values
           {:error, _reason} -> %{}
         end
@@ -127,26 +106,7 @@ defmodule MirrorNeuron.Monitor do
 
   def metrics do
     with {:ok, jobs} <- RedisStore.list_jobs() do
-      details =
-        jobs
-        |> Enum.map(fn job ->
-          job_id = Map.get(job, "job_id")
-          {:ok, agents} = RedisStore.list_agents(job_id)
-          {:ok, events} = RedisStore.read_events(job_id, -100, -1)
-          {job, agents, events}
-        end)
-
-      {:ok,
-       %{
-         "jobs" => job_metrics(details),
-         "agents" => agent_metrics(details),
-         "events" => event_metrics(details),
-         "runtime" => %{
-           "generated_at" => MirrorNeuron.Runtime.timestamp(),
-           "redis_namespace" =>
-             MirrorNeuron.Config.string("MIRROR_NEURON_REDIS_NAMESPACE", :redis_namespace)
-         }
-       }}
+      metrics(jobs)
     end
   end
 
@@ -171,11 +131,81 @@ defmodule MirrorNeuron.Monitor do
     end
   end
 
-  defp summarize_job(job) do
+  defp summarize_jobs(jobs, opts) do
+    limit = Keyword.get(opts, :limit)
+    include_terminal = Keyword.get(opts, :include_terminal, true)
+    live_only = Keyword.get(opts, :live_only, false)
+    summary = Keyword.get(opts, :summary, :full)
+
+    if summary == :basic do
+      jobs
+      |> maybe_filter_terminal(include_terminal)
+      |> Enum.sort_by(&sort_key/1, :desc)
+      |> maybe_limit(limit)
+      |> Enum.map(&basic_job_summary/1)
+      |> maybe_filter_live(live_only)
+    else
+      if live_only do
+        jobs
+        |> maybe_filter_terminal(include_terminal)
+        |> Enum.map(&summarize_job/1)
+        |> maybe_filter_live(true)
+        |> Enum.sort_by(&sort_key/1, :desc)
+        |> maybe_limit(limit)
+      else
+        jobs
+        |> maybe_filter_terminal(include_terminal)
+        |> Enum.sort_by(&sort_key/1, :desc)
+        |> maybe_limit(limit)
+        |> Enum.map(&summarize_job/1)
+      end
+    end
+  end
+
+  defp metrics(jobs) do
+    with {:ok, details} <- metric_details(jobs) do
+      {:ok,
+       %{
+         "jobs" => job_metrics(details),
+         "agents" => agent_metrics(details),
+         "events" => event_metrics(details),
+         "runtime" => %{
+           "generated_at" => MirrorNeuron.Runtime.timestamp(),
+           "redis_namespace" =>
+             MirrorNeuron.Config.string("MIRROR_NEURON_REDIS_NAMESPACE", :redis_namespace)
+         }
+       }}
+    end
+  end
+
+  defp metric_details(jobs) do
+    Enum.reduce_while(jobs, {:ok, []}, fn job, {:ok, acc} ->
+      job_id = Map.get(job, "job_id")
+
+      with {:ok, agents} <- RedisStore.list_agents(job_id),
+           {:ok, events} <- RedisStore.read_events(job_id, -100, -1) do
+        {:cont, {:ok, [{job, agents, events} | acc]}}
+      else
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, details} -> {:ok, Enum.reverse(details)}
+      error -> error
+    end
+  end
+
+  defp summarize_job(job, details \\ nil) do
     details =
-      case job_details_without_job(Map.get(job, "job_id")) do
-        {:ok, details} -> details
-        {:error, _reason} -> %{"agents" => [], "recent_events" => [], "sandboxes" => []}
+      case details do
+        nil ->
+          case job_details_without_job(Map.get(job, "job_id")) do
+            {:ok, details} -> details
+            {:error, _reason} -> %{"agents" => [], "recent_events" => [], "sandboxes" => []}
+          end
+
+        details ->
+          details
       end
 
     agents = details["agents"]
@@ -221,6 +251,14 @@ defmodule MirrorNeuron.Monitor do
        }}
     end
   end
+
+  defp recent_events(events, limit) when is_integer(limit) and limit > 0 do
+    events
+    |> Enum.reverse()
+    |> Enum.take(limit)
+  end
+
+  defp recent_events(events, _limit), do: Enum.reverse(events)
 
   defp summarize_agent(agent) do
     current_state = Map.get(agent, "current_state", %{})

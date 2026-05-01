@@ -137,6 +137,32 @@ defmodule MirrorNeuron.MonitorTest do
     RedisStore.delete_job(job_id)
   end
 
+  test "job details reads only the requested recent event window" do
+    job_id = "monitor-event-window-#{System.unique_integer([:positive])}"
+
+    RedisStore.persist_job(job_id, %{
+      "job_id" => job_id,
+      "graph_id" => "event_window_demo",
+      "status" => "running",
+      "submitted_at" => "2026-03-28T00:00:00Z",
+      "updated_at" => "2026-03-28T00:00:05Z"
+    })
+
+    for seq <- 1..5 do
+      RedisStore.append_event(job_id, %{
+        "timestamp" => "2026-03-28T00:00:0#{seq}Z",
+        "type" => "event_#{seq}",
+        "seq" => seq
+      })
+    end
+
+    assert {:ok, details} = Monitor.job_details(job_id, event_limit: 2)
+    assert Enum.map(details["recent_events"], & &1["seq"]) == [5, 4]
+    assert details["summary"]["last_event"] == "event_5"
+
+    RedisStore.delete_job(job_id)
+  end
+
   test "lists only live jobs when requested" do
     live_job_id = "monitor-live-#{System.unique_integer([:positive])}"
     stale_job_id = "monitor-stale-#{System.unique_integer([:positive])}"

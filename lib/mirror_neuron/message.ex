@@ -37,13 +37,17 @@ defmodule MirrorNeuron.Message do
   def normalize(message, opts \\ [])
 
   def normalize(message, opts) when is_map(message) do
-    stringified = stringify_keys(message)
-
     normalized =
-      if Map.has_key?(stringified, "envelope") do
-        normalize_spec_message(stringified, opts)
+      if normalized_message?(message, opts) do
+        message
       else
-        normalize_legacy_message(stringified, opts)
+        stringified = stringify_keys(message)
+
+        if Map.has_key?(stringified, "envelope") do
+          normalize_spec_message(stringified, opts)
+        else
+          normalize_legacy_message(stringified, opts)
+        end
       end
 
     {:ok, normalized}
@@ -60,22 +64,22 @@ defmodule MirrorNeuron.Message do
     end
   end
 
-  def envelope(message), do: normalize!(message)["envelope"]
-  def headers(message), do: normalize!(message)["headers"]
-  def body(message), do: normalize!(message)["body"]
-  def artifacts(message), do: normalize!(message)["artifacts"]
-  def stream(message), do: normalize!(message)["stream"]
+  def envelope(message), do: normalized_or_raise!(message)["envelope"]
+  def headers(message), do: normalized_or_raise!(message)["headers"]
+  def body(message), do: normalized_or_raise!(message)["body"]
+  def artifacts(message), do: normalized_or_raise!(message)["artifacts"]
+  def stream(message), do: normalized_or_raise!(message)["stream"]
 
-  def id(message), do: get_in(normalize!(message), ["envelope", "message_id"])
-  def job_id(message), do: get_in(normalize!(message), ["envelope", "job_id"])
-  def from(message), do: get_in(normalize!(message), ["envelope", "from"])
-  def to(message), do: get_in(normalize!(message), ["envelope", "to"])
-  def type(message), do: get_in(normalize!(message), ["envelope", "type"])
-  def class(message), do: get_in(normalize!(message), ["envelope", "class"])
-  def content_type(message), do: get_in(normalize!(message), ["envelope", "content_type"])
-  def content_encoding(message), do: get_in(normalize!(message), ["envelope", "content_encoding"])
-  def correlation_id(message), do: get_in(normalize!(message), ["envelope", "correlation_id"])
-  def causation_id(message), do: get_in(normalize!(message), ["envelope", "causation_id"])
+  def id(message), do: envelope_value(message, "message_id")
+  def job_id(message), do: envelope_value(message, "job_id")
+  def from(message), do: envelope_value(message, "from")
+  def to(message), do: envelope_value(message, "to")
+  def type(message), do: envelope_value(message, "type")
+  def class(message), do: envelope_value(message, "class")
+  def content_type(message), do: envelope_value(message, "content_type")
+  def content_encoding(message), do: envelope_value(message, "content_encoding")
+  def correlation_id(message), do: envelope_value(message, "correlation_id")
+  def causation_id(message), do: envelope_value(message, "causation_id")
 
   def json_encode(message), do: message |> normalize!() |> Jason.encode()
   def json_encode!(message), do: message |> normalize!() |> Jason.encode!()
@@ -141,8 +145,9 @@ defmodule MirrorNeuron.Message do
 
   def body_binary(message) do
     normalized = normalize!(message)
-    content_type = content_type(normalized)
-    content_encoding = content_encoding(normalized)
+    envelope = normalized["envelope"]
+    content_type = envelope["content_type"]
+    content_encoding = envelope["content_encoding"]
     body = normalized["body"]
 
     with {:ok, encoded_body} <- encode_body(body, content_type),
@@ -159,29 +164,31 @@ defmodule MirrorNeuron.Message do
 
   def summary(message) do
     normalized = normalize!(message)
+    envelope = normalized["envelope"]
 
     %{
-      "message_id" => id(normalized),
-      "from" => from(normalized),
-      "to" => to(normalized),
-      "type" => type(normalized),
-      "class" => class(normalized),
-      "content_type" => content_type(normalized),
-      "content_encoding" => content_encoding(normalized),
-      "stream" => stream(normalized)
+      "message_id" => envelope["message_id"],
+      "from" => envelope["from"],
+      "to" => envelope["to"],
+      "type" => envelope["type"],
+      "class" => envelope["class"],
+      "content_type" => envelope["content_type"],
+      "content_encoding" => envelope["content_encoding"],
+      "stream" => normalized["stream"]
     }
   end
 
   def new(job_id, from, to, type, body, opts \\ []) do
     normalize!(%{
       "envelope" => %{
+        "message_id" => Keyword.get(opts, :message_id),
         "job_id" => job_id,
         "from" => from,
         "to" => to,
         "type" => type,
         "class" => Keyword.get(opts, :class, @default_class),
-        "timestamp" => Keyword.get(opts, :timestamp, MirrorNeuron.Runtime.timestamp()),
-        "correlation_id" => Keyword.get(opts, :correlation_id, unique_id()),
+        "timestamp" => Keyword.get_lazy(opts, :timestamp, &MirrorNeuron.Runtime.timestamp/0),
+        "correlation_id" => Keyword.get_lazy(opts, :correlation_id, &unique_id/0),
         "causation_id" => Keyword.get(opts, :causation_id),
         "attempt" => Keyword.get(opts, :attempt, 1),
         "priority" => Keyword.get(opts, :priority, 100),
@@ -253,20 +260,28 @@ defmodule MirrorNeuron.Message do
     %{
       "spec_version" => @spec_version,
       "message_id" =>
-        Map.get(envelope, "message_id", Keyword.get(opts, :message_id, unique_id())),
+        envelope_or_opt_lazy(envelope, "message_id", opts, :message_id, &unique_id/0),
       "job_id" => Map.get(envelope, "job_id", Keyword.get(opts, :job_id)),
       "from" => Map.get(envelope, "from", Keyword.get(opts, :from, "runtime")),
       "to" => Map.get(envelope, "to", Keyword.get(opts, :to)),
       "type" => Map.get(envelope, "type", Keyword.get(opts, :type, "command")),
       "class" => Map.get(envelope, "class", Keyword.get(opts, :class, @default_class)),
       "timestamp" =>
-        Map.get(
+        envelope_or_opt_lazy(
           envelope,
           "timestamp",
-          Keyword.get(opts, :timestamp, MirrorNeuron.Runtime.timestamp())
+          opts,
+          :timestamp,
+          &MirrorNeuron.Runtime.timestamp/0
         ),
       "correlation_id" =>
-        Map.get(envelope, "correlation_id", Keyword.get(opts, :correlation_id, unique_id())),
+        envelope_or_opt_lazy(
+          envelope,
+          "correlation_id",
+          opts,
+          :correlation_id,
+          &unique_id/0
+        ),
       "causation_id" => Map.get(envelope, "causation_id", Keyword.get(opts, :causation_id)),
       "attempt" => Map.get(envelope, "attempt", Keyword.get(opts, :attempt, 1)),
       "priority" => Map.get(envelope, "priority", Keyword.get(opts, :priority, 100)),
@@ -282,6 +297,46 @@ defmodule MirrorNeuron.Message do
     }
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()
+  end
+
+  defp normalized_or_raise!(message) do
+    if normalized_message?(message, []) do
+      message
+    else
+      normalize!(message)
+    end
+  end
+
+  defp envelope_value(%{"envelope" => envelope} = message, key)
+       when is_map(envelope) do
+    if normalized_message?(message, []),
+      do: envelope[key],
+      else: get_in(normalize!(message), ["envelope", key])
+  end
+
+  defp envelope_value(message, key), do: get_in(normalize!(message), ["envelope", key])
+
+  defp normalized_message?(
+         %{
+           "envelope" => %{"spec_version" => @spec_version},
+           "headers" => headers,
+           "artifacts" => artifacts
+         },
+         []
+       )
+       when is_map(headers) and is_list(artifacts),
+       do: true
+
+  defp normalized_message?(_message, _opts), do: false
+
+  defp envelope_or_opt_lazy(envelope, envelope_key, opts, opt_key, default_fun) do
+    case Map.fetch(envelope, envelope_key) do
+      {:ok, value} when not is_nil(value) ->
+        value
+
+      _missing_or_nil ->
+        Keyword.get_lazy(opts, opt_key, default_fun)
+    end
   end
 
   defp normalize_headers(headers) when is_map(headers), do: stringify_keys(headers)

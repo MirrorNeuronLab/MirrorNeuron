@@ -55,26 +55,22 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   def list_jobs do
     with {:ok, job_ids} <- list_job_ids() do
-      jobs =
-        job_ids
-        |> Enum.map(fn job_id ->
-          case fetch_job(job_id) do
-            {:ok, job} -> job
-            {:error, _reason} -> nil
-          end
-        end)
-        |> Enum.reject(&is_nil/1)
-
-      {:ok, jobs}
+      fetch_jobs(job_ids)
     end
   end
 
   def append_event(job_id, event) do
     encoded = Jason.encode!(event)
+    event_key = key("job", job_id, "events")
 
-    with {:ok, _count} <- command(["RPUSH", key("job", job_id, "events"), encoded]),
-         :ok <- trim_event_log(job_id),
-         :ok <- expire_event_log(job_id),
+    commands =
+      [
+        ["RPUSH", event_key, encoded]
+        | event_retention_commands(event_key)
+      ]
+
+    with {:ok, results} <- pipeline(commands),
+         :ok <- expect_first_result(results, &is_integer/1),
          :ok <- wait_for_replicas(),
          {:ok, _count} <- command(["PUBLISH", channel("events", job_id), encoded]) do
       {:ok, event}
@@ -92,9 +88,13 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     encoded = Jason.encode!(snapshot)
 
     with :ok <- validate_agent_lease_epoch(job_id, snapshot),
-         {:ok, "OK"} <- command(["SET", key("job", job_id, "agent", agent_id), encoded]),
-         {:ok, _count} <- command(["SADD", key("job", job_id, "agents"), agent_id]),
-         :ok <- expire_agent_snapshot(job_id, agent_id),
+         {:ok, results} <-
+           pipeline([
+             ["SET", key("job", job_id, "agent", agent_id), encoded],
+             ["SADD", key("job", job_id, "agents"), agent_id]
+             | expire_agent_snapshot_commands(job_id, agent_id)
+           ]),
+         :ok <- expect_persist_agent_results(results),
          :ok <- wait_for_replicas() do
       {:ok, snapshot}
     end
@@ -102,19 +102,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   def list_agents(job_id) do
     with {:ok, agent_ids} <- command(["SMEMBERS", key("job", job_id, "agents")]) do
-      agents =
-        agent_ids
-        |> Enum.sort()
-        |> Enum.map(fn agent_id ->
-          case command(["GET", key("job", job_id, "agent", agent_id)]) do
-            {:ok, nil} -> nil
-            {:ok, encoded} -> Jason.decode!(encoded)
-            {:error, _reason} -> nil
-          end
-        end)
-        |> Enum.reject(&is_nil/1)
-
-      {:ok, agents}
+      fetch_agents(job_id, Enum.sort(agent_ids))
     else
       {:error, reason} -> {:error, format_reason(reason)}
     end
@@ -436,6 +424,43 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     :ok
   end
 
+  defp fetch_jobs([]), do: {:ok, []}
+
+  defp fetch_jobs(job_ids) do
+    keys = Enum.map(job_ids, &key("job", &1))
+
+    case command(["MGET" | keys]) do
+      {:ok, encoded_jobs} -> {:ok, decode_json_items(encoded_jobs)}
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  defp fetch_agents(_job_id, []), do: {:ok, []}
+
+  defp fetch_agents(job_id, agent_ids) do
+    keys = Enum.map(agent_ids, &key("job", job_id, "agent", &1))
+
+    case command(["MGET" | keys]) do
+      {:ok, encoded_agents} -> {:ok, decode_json_items(encoded_agents)}
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  defp decode_json_items(items) do
+    items
+    |> Enum.map(fn
+      nil ->
+        nil
+
+      encoded ->
+        case Jason.decode(encoded) do
+          {:ok, item} -> item
+          {:error, _reason} -> nil
+        end
+    end)
+    |> Enum.reject(&is_nil/1)
+  end
+
   defp validate_job_lease_epoch(job_id, job_map) do
     incoming = lease_epoch(job_map)
 
@@ -562,29 +587,34 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     :ok
   end
 
-  defp trim_event_log(job_id) do
+  defp event_retention_commands(event_key) do
+    maybe_trim_event_log_command(event_key) ++
+      maybe_expire_key_command(event_key, event_ttl_seconds())
+  end
+
+  defp maybe_trim_event_log_command(event_key) do
     case event_max_count() do
       max_count when is_integer(max_count) and max_count > 0 ->
-        case command(["LTRIM", key("job", job_id, "events"), "-#{max_count}", "-1"]) do
-          {:ok, "OK"} -> :ok
-          {:error, _reason} -> :ok
-        end
+        [["LTRIM", event_key, "-#{max_count}", "-1"]]
 
       _ ->
-        :ok
+        []
     end
   end
 
-  defp expire_event_log(job_id) do
-    expire_key(key("job", job_id, "events"), event_ttl_seconds())
-  end
-
-  defp expire_agent_snapshot(job_id, agent_id) do
+  defp expire_agent_snapshot_commands(job_id, agent_id) do
     ttl_seconds = agent_snapshot_ttl_seconds()
 
-    expire_key(key("job", job_id, "agent", agent_id), ttl_seconds)
-    expire_key(key("job", job_id, "agents"), ttl_seconds)
+    maybe_expire_key_command(key("job", job_id, "agent", agent_id), ttl_seconds) ++
+      maybe_expire_key_command(key("job", job_id, "agents"), ttl_seconds)
   end
+
+  defp maybe_expire_key_command(_redis_key, ttl_seconds)
+       when not is_integer(ttl_seconds) or ttl_seconds <= 0,
+       do: []
+
+  defp maybe_expire_key_command(redis_key, ttl_seconds),
+    do: [["EXPIRE", redis_key, to_string(ttl_seconds)]]
 
   defp expire_key(_redis_key, ttl_seconds) when not is_integer(ttl_seconds) or ttl_seconds <= 0,
     do: :ok
@@ -700,6 +730,57 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     :exit, reason ->
       {:error, {:redix_exit, reason}}
   end
+
+  defp pipeline(commands),
+    do: pipeline(commands, redis_reconnect_attempts(), redis_reconnect_backoff_ms())
+
+  defp pipeline(commands, attempts_left, backoff_ms) do
+    case safe_pipeline(MirrorNeuron.Redis.Connection, commands) do
+      {:error, reason} = error ->
+        if attempts_left > 0 and reconnectable_error?(reason) do
+          _ = MirrorNeuron.Redis.reconnect()
+          Process.sleep(backoff_ms)
+          pipeline(commands, attempts_left - 1, next_reconnect_backoff(backoff_ms))
+        else
+          error
+        end
+
+      other ->
+        other
+    end
+  end
+
+  defp safe_pipeline(connection, commands) do
+    Redix.pipeline(connection, commands)
+  catch
+    :exit, {:redix_exited_during_call, reason} ->
+      {:error, {:redix_exited_during_call, reason}}
+
+    :exit, {:noproc, _} = reason ->
+      {:error, {:redix_exit, reason}}
+
+    :exit, reason ->
+      {:error, {:redix_exit, reason}}
+  end
+
+  defp expect_persist_agent_results(["OK", count | _]) when is_integer(count), do: :ok
+
+  defp expect_persist_agent_results([%Redix.Error{} = error | _]),
+    do: {:error, format_reason(error)}
+
+  defp expect_persist_agent_results([_set, %Redix.Error{} = error | _]),
+    do: {:error, format_reason(error)}
+
+  defp expect_persist_agent_results(other), do: {:error, format_reason(other)}
+
+  defp expect_first_result([%Redix.Error{} = error | _], _predicate),
+    do: {:error, format_reason(error)}
+
+  defp expect_first_result([value | _], predicate) do
+    if predicate.(value), do: :ok, else: {:error, format_reason(value)}
+  end
+
+  defp expect_first_result([], _predicate), do: {:error, "missing Redis pipeline result"}
 
   defp reconnectable_error?(reason), do: MirrorNeuron.Redis.reconnectable_error?(reason)
 

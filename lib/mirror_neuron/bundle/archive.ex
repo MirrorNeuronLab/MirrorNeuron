@@ -10,28 +10,9 @@ defmodule MirrorNeuron.Bundle.Archive do
   @default_max_bytes 50 * 1024 * 1024
 
   def store(%JobBundle{root_path: root_path} = bundle) when is_binary(root_path) do
-    with {:ok, fingerprint} <- Fingerprint.compute(root_path),
-         {:ok, files, total_bytes} <- collect_files(root_path),
-         :ok <- validate_size(total_bytes),
-         {:ok, archive} <-
-           RedisStore.persist_bundle_archive(fingerprint, %{
-             "created_at" => MirrorNeuron.Runtime.timestamp(),
-             "graph_id" => bundle.manifest.graph_id,
-             "total_bytes" => total_bytes,
-             "files" => files
-           }) do
-      _ = restore_to_cache(fingerprint, archive)
-      {:ok, %{fingerprint: fingerprint, storage: "redis", total_bytes: total_bytes}}
-    else
-      {:error, {:bundle_too_large, total_bytes, max_bytes}} ->
-        {:ok, fingerprint} = Fingerprint.compute(root_path)
-
-        Logger.warning(
-          "bundle #{bundle.manifest.graph_id} is #{total_bytes} bytes, above archive cap #{max_bytes}; cluster recovery will require a shared path or preloaded bundle cache"
-        )
-
-        _ = copy_local_cache(fingerprint, root_path)
-        {:ok, %{fingerprint: fingerprint, storage: "local_cache", total_bytes: total_bytes}}
+    case Fingerprint.compute(root_path) do
+      {:ok, fingerprint} ->
+        store_with_fingerprint(bundle, fingerprint)
 
       {:error, reason} ->
         Logger.warning("failed to archive bundle for cluster recovery: #{inspect(reason)}")
@@ -61,8 +42,56 @@ defmodule MirrorNeuron.Bundle.Archive do
 
   def cache_path(fingerprint), do: Path.join(cache_root(), fingerprint)
 
-  defp collect_files(root_path) do
-    files =
+  defp store_with_fingerprint(%JobBundle{} = bundle, fingerprint) do
+    case cached_archive(fingerprint) do
+      {:ok, archive} ->
+        _ = restore_to_cache(fingerprint, archive)
+
+        {:ok,
+         %{fingerprint: fingerprint, storage: "redis", total_bytes: archive_total_bytes(archive)}}
+
+      :miss ->
+        store_uncached_archive(bundle, fingerprint)
+    end
+  end
+
+  defp store_uncached_archive(%JobBundle{root_path: root_path} = bundle, fingerprint) do
+    with {:ok, file_specs, total_bytes} <- collect_file_specs(root_path),
+         :ok <- validate_size(total_bytes),
+         {:ok, files} <- read_archive_files(file_specs),
+         {:ok, archive} <-
+           RedisStore.persist_bundle_archive(fingerprint, %{
+             "created_at" => MirrorNeuron.Runtime.timestamp(),
+             "graph_id" => bundle.manifest.graph_id,
+             "total_bytes" => total_bytes,
+             "files" => files
+           }) do
+      _ = restore_to_cache(fingerprint, archive)
+      {:ok, %{fingerprint: fingerprint, storage: "redis", total_bytes: total_bytes}}
+    else
+      {:error, {:bundle_too_large, total_bytes, max_bytes}} ->
+        Logger.warning(
+          "bundle #{bundle.manifest.graph_id} is #{total_bytes} bytes, above archive cap #{max_bytes}; cluster recovery will require a shared path or preloaded bundle cache"
+        )
+
+        _ = copy_local_cache(fingerprint, root_path)
+        {:ok, %{fingerprint: fingerprint, storage: "local_cache", total_bytes: total_bytes}}
+
+      {:error, reason} ->
+        Logger.warning("failed to archive bundle for cluster recovery: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
+
+  defp cached_archive(fingerprint) do
+    case RedisStore.fetch_bundle_archive(fingerprint) do
+      {:ok, archive} -> {:ok, archive}
+      {:error, _reason} -> :miss
+    end
+  end
+
+  defp collect_file_specs(root_path) do
+    file_specs =
       root_path
       |> Path.join("**/*")
       |> Path.wildcard()
@@ -70,19 +99,45 @@ defmodule MirrorNeuron.Bundle.Archive do
       |> Enum.sort()
       |> Enum.map(fn path ->
         relative_path = Path.relative_to(path, root_path)
+        {:ok, stat} = File.stat(path)
+
+        %{
+          "path" => relative_path,
+          "bytes" => stat.size,
+          "source_path" => path
+        }
+      end)
+
+    {:ok, file_specs, Enum.sum(Enum.map(file_specs, & &1["bytes"]))}
+  rescue
+    error -> {:error, error}
+  end
+
+  defp read_archive_files(file_specs) do
+    files =
+      Enum.map(file_specs, fn %{"path" => relative_path, "bytes" => bytes, "source_path" => path} ->
         {:ok, contents} = File.read(path)
 
         %{
           "path" => relative_path,
-          "bytes" => byte_size(contents),
+          "bytes" => bytes,
           "data" => Base.encode64(contents)
         }
       end)
 
-    {:ok, files, Enum.sum(Enum.map(files, & &1["bytes"]))}
+    {:ok, files}
   rescue
     error -> {:error, error}
   end
+
+  defp archive_total_bytes(%{"total_bytes" => total_bytes}) when is_integer(total_bytes),
+    do: total_bytes
+
+  defp archive_total_bytes(%{"files" => files}) when is_list(files) do
+    Enum.sum(Enum.map(files, &Map.get(&1, "bytes", 0)))
+  end
+
+  defp archive_total_bytes(_archive), do: 0
 
   defp validate_size(total_bytes) do
     max_bytes = max_archive_bytes()

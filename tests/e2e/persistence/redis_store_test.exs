@@ -1,7 +1,10 @@
 defmodule MirrorNeuron.Persistence.RedisStoreTest do
   use ExUnit.Case, async: false
 
+  alias MirrorNeuron.Bundle.{Archive, Fingerprint}
+  alias MirrorNeuron.JobBundle
   alias MirrorNeuron.Persistence.RedisStore
+  alias MirrorNeuron.Runtime.EventBus
 
   setup do
     Application.ensure_all_started(:mirror_neuron)
@@ -47,6 +50,35 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
 
     assert {:ok, events} = RedisStore.read_events(job_id)
     assert Enum.map(events, & &1["seq"]) == [3, 4, 5]
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "read_events can fetch a bounded recent window" do
+    job_id = "event-window-#{System.unique_integer([:positive])}"
+
+    for seq <- 1..5 do
+      assert {:ok, _event} = RedisStore.append_event(job_id, %{"type" => "test", "seq" => seq})
+    end
+
+    assert {:ok, events} = RedisStore.read_events(job_id, -2, -1)
+    assert Enum.map(events, & &1["seq"]) == [4, 5]
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "event bus publish persists once and still dispatches to subscribers" do
+    job_id = "event-bus-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _} = EventBus.subscribe(job_id)
+    assert :ok = EventBus.publish(job_id, %{type: :test_event, payload: %{value: 1}})
+
+    assert_receive {:mirror_neuron_event,
+                    %{type: :test_event, payload: %{value: 1}, job_id: ^job_id}},
+                   500
+
+    assert {:ok, [%{"type" => "test_event", "payload" => %{"value" => 1}}]} =
+             RedisStore.read_events(job_id)
 
     RedisStore.delete_job(job_id)
   end
@@ -176,6 +208,40 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert Enum.any?(states, &(&1["node"] == "node-a@test"))
   end
 
+  test "bundle archive store reuses an existing fingerprint archive" do
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "mirror_neuron_archive_cache_#{System.unique_integer([:positive])}"
+      )
+
+    cache_dir = Path.join(tmp_dir, "cache")
+    old_cache_dir = System.get_env("MIRROR_NEURON_BUNDLE_CACHE_DIR")
+    System.put_env("MIRROR_NEURON_BUNDLE_CACHE_DIR", cache_dir)
+
+    on_exit(fn ->
+      File.rm_rf!(tmp_dir)
+      restore_system_env("MIRROR_NEURON_BUNDLE_CACHE_DIR", old_cache_dir)
+    end)
+
+    bundle_dir = create_bundle(tmp_dir, "cached_archive")
+    assert {:ok, fingerprint} = Fingerprint.compute(bundle_dir)
+
+    assert {:ok, _archive} =
+             RedisStore.persist_bundle_archive(fingerprint, %{
+               "graph_id" => "cached_archive",
+               "total_bytes" => 123,
+               "files" => archive_files(bundle_dir)
+             })
+
+    assert {:ok, bundle} = JobBundle.load(bundle_dir)
+    assert {:ok, result} = Archive.store(bundle)
+
+    assert result.storage == "redis"
+    assert result.total_bytes == 123
+    assert File.exists?(Path.join([cache_dir, fingerprint, "manifest.json"]))
+  end
+
   defp restore_env(key, nil), do: Application.delete_env(:mirror_neuron, key)
   defp restore_env(key, value), do: Application.put_env(:mirror_neuron, key, value)
   defp restore_system_env(key, nil), do: System.delete_env(key)
@@ -187,5 +253,41 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
       {:ok, keys} -> _ = Redix.command(MirrorNeuron.Redis.Connection, ["DEL" | keys])
       _ -> :ok
     end
+  end
+
+  defp create_bundle(base_dir, graph_id) do
+    bundle_dir = Path.join(base_dir, graph_id)
+    payloads_dir = Path.join(bundle_dir, "payloads")
+
+    File.mkdir_p!(payloads_dir)
+
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => graph_id,
+      "nodes" => [%{"node_id" => "node1", "agent_type" => "router", "role" => "root"}],
+      "edges" => []
+    }
+
+    File.write!(Path.join(bundle_dir, "manifest.json"), Jason.encode!(manifest))
+    File.write!(Path.join(payloads_dir, "dummy.txt"), "hello")
+
+    bundle_dir
+  end
+
+  defp archive_files(bundle_dir) do
+    bundle_dir
+    |> Path.join("**/*")
+    |> Path.wildcard()
+    |> Enum.filter(&File.regular?/1)
+    |> Enum.sort()
+    |> Enum.map(fn path ->
+      {:ok, contents} = File.read(path)
+
+      %{
+        "path" => Path.relative_to(path, bundle_dir),
+        "bytes" => byte_size(contents),
+        "data" => Base.encode64(contents)
+      }
+    end)
   end
 end
