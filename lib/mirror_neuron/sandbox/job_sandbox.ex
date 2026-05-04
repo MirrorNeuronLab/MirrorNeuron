@@ -191,7 +191,7 @@ defmodule MirrorNeuron.Sandbox.JobSandbox do
     Map.get(
       config,
       "sandbox_cli",
-      Config.executable("MIRROR_NEURON_OPENSHELL_BIN", :openshell_bin)
+      Config.executable("MN_OPENSHELL_BIN", :openshell_bin)
     )
   end
 

@@ -223,7 +223,6 @@ MirrorNeuron is early, but already includes concrete runtime capabilities.
 | Terminal monitoring | Available |
 | Web UI | Ecosystem component |
 | Python SDK | Ecosystem component |
-| TypeScript SDK | Ecosystem component |
 
 Detailed setup, configuration, and operating instructions live in the documentation repository:
 
@@ -271,7 +270,7 @@ MirrorNeuron is designed to make useful AI workflows easier to build, run, and d
 - CLI-first workflow launch
 - local development support
 - observable events and workflow state
-- Python and TypeScript SDK ecosystem
+- Python SDK ecosystem
 - clear path from demo workflow to repeatable system
 
 ---

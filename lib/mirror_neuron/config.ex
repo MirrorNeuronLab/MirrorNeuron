@@ -28,15 +28,15 @@ defmodule MirrorNeuron.Config do
   def boolean(env_name, key), do: parse_boolean(env_or_app(env_name, key), env_name)
 
   def env do
-    System.get_env("MIRROR_NEURON_ENV", "dev")
+    System.get_env("MN_ENV", "dev")
   end
 
   def prod?, do: env() == "prod"
 
   def validate! do
     validate_mirror_neuron_env!()
-    validate_port!("MIRROR_NEURON_GRPC_PORT", System.get_env("MIRROR_NEURON_GRPC_PORT", "50051"))
-    validate_port!("MIRROR_NEURON_API_PORT", string("MIRROR_NEURON_API_PORT", :api_port))
+    validate_port!("MN_GRPC_PORT", System.get_env("MN_GRPC_PORT", "50051"))
+    validate_port!("MN_API_PORT", string("MN_API_PORT", :api_port))
     validate_redis_config!()
     validate_queue_limits!()
     validate_sandbox_limits!()
@@ -103,7 +103,7 @@ defmodule MirrorNeuron.Config do
 
   defp validate_mirror_neuron_env! do
     unless env() in ["dev", "test", "prod"] do
-      raise ArgumentError, "MIRROR_NEURON_ENV must be one of dev, test, or prod"
+      raise ArgumentError, "MN_ENV must be one of dev, test, or prod"
     end
   end
 
@@ -125,119 +125,119 @@ defmodule MirrorNeuron.Config do
 
       other ->
         raise ArgumentError,
-              "MIRROR_NEURON_REDIS_HA_MODE must be one of single or sentinel, got #{inspect(other)}"
+              "MN_REDIS_HA_MODE must be one of single or sentinel, got #{inspect(other)}"
     end
 
     validate_redis_wait!()
   end
 
   defp redis_ha_mode do
-    "MIRROR_NEURON_REDIS_HA_MODE"
+    "MN_REDIS_HA_MODE"
     |> string(:redis_ha_mode)
     |> String.downcase()
   end
 
   defp validate_redis_url! do
-    url = string("MIRROR_NEURON_REDIS_URL", :redis_url)
+    url = string("MN_REDIS_URL", :redis_url)
     uri = URI.parse(url)
 
     unless uri.scheme in ["redis", "rediss"] and is_binary(uri.host) do
-      raise ArgumentError, "MIRROR_NEURON_REDIS_URL must be a valid redis:// or rediss:// URL"
+      raise ArgumentError, "MN_REDIS_URL must be a valid redis:// or rediss:// URL"
     end
   end
 
   defp validate_redis_sentinel! do
-    sentinels = string("MIRROR_NEURON_REDIS_SENTINELS", :redis_sentinels)
+    sentinels = string("MN_REDIS_SENTINELS", :redis_sentinels)
 
     if MirrorNeuron.Redis.Sentinel.parse_sentinels(sentinels) == [] do
       raise ArgumentError,
-            "MIRROR_NEURON_REDIS_SENTINELS must contain at least one host:port when MIRROR_NEURON_REDIS_HA_MODE=sentinel"
+            "MN_REDIS_SENTINELS must contain at least one host:port when MN_REDIS_HA_MODE=sentinel"
     end
 
-    if String.trim(string("MIRROR_NEURON_REDIS_SENTINEL_MASTER", :redis_sentinel_master)) == "" do
-      raise ArgumentError, "MIRROR_NEURON_REDIS_SENTINEL_MASTER must not be empty"
+    if String.trim(string("MN_REDIS_SENTINEL_MASTER", :redis_sentinel_master)) == "" do
+      raise ArgumentError, "MN_REDIS_SENTINEL_MASTER must not be empty"
     end
 
-    db = integer("MIRROR_NEURON_REDIS_DB", :redis_db)
+    db = integer("MN_REDIS_DB", :redis_db)
 
     if db < 0 do
-      raise ArgumentError, "MIRROR_NEURON_REDIS_DB must be greater than or equal to 0"
+      raise ArgumentError, "MN_REDIS_DB must be greater than or equal to 0"
     end
   end
 
   defp validate_redis_wait! do
-    wait_replicas = integer("MIRROR_NEURON_REDIS_WAIT_REPLICAS", :redis_wait_replicas)
-    wait_timeout_ms = integer("MIRROR_NEURON_REDIS_WAIT_TIMEOUT_MS", :redis_wait_timeout_ms)
+    wait_replicas = integer("MN_REDIS_WAIT_REPLICAS", :redis_wait_replicas)
+    wait_timeout_ms = integer("MN_REDIS_WAIT_TIMEOUT_MS", :redis_wait_timeout_ms)
 
     if wait_replicas < 0 do
-      raise ArgumentError, "MIRROR_NEURON_REDIS_WAIT_REPLICAS must be greater than or equal to 0"
+      raise ArgumentError, "MN_REDIS_WAIT_REPLICAS must be greater than or equal to 0"
     end
 
     if wait_timeout_ms < 0 do
       raise ArgumentError,
-            "MIRROR_NEURON_REDIS_WAIT_TIMEOUT_MS must be greater than or equal to 0"
+            "MN_REDIS_WAIT_TIMEOUT_MS must be greater than or equal to 0"
     end
 
-    optional_positive_int!("MIRROR_NEURON_REDIS_RECONNECT_ATTEMPTS")
-    optional_positive_int!("MIRROR_NEURON_REDIS_RECONNECT_BACKOFF_MS")
-    optional_positive_int!("MIRROR_NEURON_REDIS_RECONNECT_MAX_BACKOFF_MS")
+    optional_positive_int!("MN_REDIS_RECONNECT_ATTEMPTS")
+    optional_positive_int!("MN_REDIS_RECONNECT_BACKOFF_MS")
+    optional_positive_int!("MN_REDIS_RECONNECT_MAX_BACKOFF_MS")
   end
 
   defp validate_queue_limits! do
-    max_depth = optional_positive_int!("MIRROR_NEURON_DEFAULT_MAX_AGENT_QUEUE_DEPTH")
-    high = optional_positive_int!("MIRROR_NEURON_DEFAULT_AGENT_QUEUE_HIGH_WATERMARK")
-    low = optional_nonnegative_int!("MIRROR_NEURON_DEFAULT_AGENT_QUEUE_LOW_WATERMARK")
+    max_depth = optional_positive_int!("MN_DEFAULT_MAX_AGENT_QUEUE_DEPTH")
+    high = optional_positive_int!("MN_DEFAULT_AGENT_QUEUE_HIGH_WATERMARK")
+    low = optional_nonnegative_int!("MN_DEFAULT_AGENT_QUEUE_LOW_WATERMARK")
 
     if max_depth && high && high > max_depth do
       raise ArgumentError,
-            "MIRROR_NEURON_DEFAULT_AGENT_QUEUE_HIGH_WATERMARK must be <= MIRROR_NEURON_DEFAULT_MAX_AGENT_QUEUE_DEPTH"
+            "MN_DEFAULT_AGENT_QUEUE_HIGH_WATERMARK must be <= MN_DEFAULT_MAX_AGENT_QUEUE_DEPTH"
     end
 
     if high && low && low > high do
       raise ArgumentError,
-            "MIRROR_NEURON_DEFAULT_AGENT_QUEUE_LOW_WATERMARK must be <= MIRROR_NEURON_DEFAULT_AGENT_QUEUE_HIGH_WATERMARK"
+            "MN_DEFAULT_AGENT_QUEUE_LOW_WATERMARK must be <= MN_DEFAULT_AGENT_QUEUE_HIGH_WATERMARK"
     end
   end
 
   defp validate_production_secrets! do
     if prod?() do
-      cookie = string("MIRROR_NEURON_COOKIE", :cookie)
+      cookie = string("MN_COOKIE", :cookie)
 
       if cookie in ["", "mirrorneuron"] do
         raise ArgumentError,
-              "MIRROR_NEURON_COOKIE must be set to a non-default secret when MIRROR_NEURON_ENV=prod"
+              "MN_COOKIE must be set to a non-default secret when MN_ENV=prod"
       end
     end
   end
 
   defp validate_sandbox_limits! do
-    optional_positive_int!("MIRROR_NEURON_MAX_COMMAND_LENGTH")
-    optional_positive_int!("MIRROR_NEURON_MAX_EVENT_BYTES")
-    optional_positive_int!("MIRROR_NEURON_MAX_ARTIFACT_BYTES")
-    optional_positive_int!("MIRROR_NEURON_MAX_FAN_OUT")
+    optional_positive_int!("MN_MAX_COMMAND_LENGTH")
+    optional_positive_int!("MN_MAX_EVENT_BYTES")
+    optional_positive_int!("MN_MAX_ARTIFACT_BYTES")
+    optional_positive_int!("MN_MAX_FAN_OUT")
   end
 
   defp validate_resource_admission! do
-    optional_positive_float!("MIRROR_NEURON_MAX_CPU_LOAD_RATIO")
-    optional_ratio!("MIRROR_NEURON_MAX_MEMORY_USED_RATIO")
-    optional_ratio!("MIRROR_NEURON_MAX_GPU_UTILIZATION_RATIO")
-    optional_ratio!("MIRROR_NEURON_MAX_GPU_MEMORY_USED_RATIO")
-    boolean("MIRROR_NEURON_RESOURCE_ADMISSION_ENABLED", :resource_admission_enabled)
+    optional_positive_float!("MN_MAX_CPU_LOAD_RATIO")
+    optional_ratio!("MN_MAX_MEMORY_USED_RATIO")
+    optional_ratio!("MN_MAX_GPU_UTILIZATION_RATIO")
+    optional_ratio!("MN_MAX_GPU_MEMORY_USED_RATIO")
+    boolean("MN_RESOURCE_ADMISSION_ENABLED", :resource_admission_enabled)
   end
 
   defp validate_retention! do
-    optional_nonnegative_int!("MIRROR_NEURON_TERMINAL_JOB_TTL_SECONDS")
-    optional_nonnegative_int!("MIRROR_NEURON_EVENT_TTL_SECONDS")
-    optional_nonnegative_int!("MIRROR_NEURON_EVENT_MAX_COUNT")
-    optional_nonnegative_int!("MIRROR_NEURON_AGENT_SNAPSHOT_TTL_SECONDS")
-    optional_nonnegative_int!("MIRROR_NEURON_RETENTION_GC_INTERVAL_MS")
+    optional_nonnegative_int!("MN_TERMINAL_JOB_TTL_SECONDS")
+    optional_nonnegative_int!("MN_EVENT_TTL_SECONDS")
+    optional_nonnegative_int!("MN_EVENT_MAX_COUNT")
+    optional_nonnegative_int!("MN_AGENT_SNAPSHOT_TTL_SECONDS")
+    optional_nonnegative_int!("MN_RETENTION_GC_INTERVAL_MS")
   end
 
   defp validate_runtime_efficiency! do
-    optional_positive_int!("MIRROR_NEURON_AGENT_PENDING_DRAIN_BATCH_SIZE")
-    optional_positive_int!("MIRROR_NEURON_AGENT_SNAPSHOT_PENDING_LIMIT")
-    optional_positive_int!("MIRROR_NEURON_LEASE_QUEUE_TIMEOUT_MS")
-    optional_nonnegative_int!("MIRROR_NEURON_LEASE_MAX_QUEUE_LENGTH")
+    optional_positive_int!("MN_AGENT_PENDING_DRAIN_BATCH_SIZE")
+    optional_positive_int!("MN_AGENT_SNAPSHOT_PENDING_LIMIT")
+    optional_positive_int!("MN_LEASE_QUEUE_TIMEOUT_MS")
+    optional_nonnegative_int!("MN_LEASE_MAX_QUEUE_LENGTH")
   end
 
   defp optional_positive_int!(env_name) do

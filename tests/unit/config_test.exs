@@ -24,10 +24,10 @@ defmodule MirrorNeuron.ConfigTest do
 
       System.put_env("HOME", tmp_dir)
       System.put_env("PATH", "/usr/bin:/bin")
-      System.delete_env("MIRROR_NEURON_TEST_TOOL_BIN")
+      System.delete_env("MN_TEST_TOOL_BIN")
       Application.put_env(:mirror_neuron, :test_tool_bin, "test-tool")
 
-      assert Config.executable("MIRROR_NEURON_TEST_TOOL_BIN", :test_tool_bin) == tool_path
+      assert Config.executable("MN_TEST_TOOL_BIN", :test_tool_bin) == tool_path
     after
       restore_env("HOME", previous_home)
       restore_env("PATH", previous_path)

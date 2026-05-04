@@ -3,8 +3,8 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
   alias MirrorNeuron.Message
   alias MirrorNeuron.Sandbox.JobSandbox
 
-  @result_start "__MIRROR_NEURON_RESULT_START__"
-  @result_end "__MIRROR_NEURON_RESULT_END__"
+  @result_start "__MN_RESULT_START__"
+  @result_end "__MN_RESULT_END__"
 
   def run(payload, config, opts \\ []) do
     config = resolve_local_cli_paths(config, opts)
@@ -147,23 +147,23 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
 
     wrapper = """
     set +e
-    export MIRROR_NEURON_INPUT_FILE=#{shell_escape(input_file)}
-    export MIRROR_NEURON_CONTEXT_FILE=#{shell_escape(context_file)}
-    export MIRROR_NEURON_MESSAGE_FILE=#{shell_escape(message_file)}
-    export MIRROR_NEURON_BODY_FILE=#{shell_escape(body_file)}
-    export MIRROR_NEURON_BODY_CONTENT_TYPE=#{shell_escape(Message.content_type(message))}
-    export MIRROR_NEURON_BODY_CONTENT_ENCODING=#{shell_escape(Message.content_encoding(message))}
-    export MIRROR_NEURON_AGENT_TYPE=#{shell_escape(to_string(Keyword.get(opts, :agent_type, "")))}
-    export MIRROR_NEURON_AGENT_TEMPLATE=#{shell_escape(Keyword.get(opts, :template_type, "generic"))}
-    export MIRROR_NEURON_JOB_ID=#{shell_escape(Keyword.get(opts, :job_id, ""))}
-    export MIRROR_NEURON_AGENT_ID=#{shell_escape(Keyword.get(opts, :agent_id, ""))}
-    export MIRROR_NEURON_WORKDIR=#{shell_escape(workdir)}
+    export MN_INPUT_FILE=#{shell_escape(input_file)}
+    export MN_CONTEXT_FILE=#{shell_escape(context_file)}
+    export MN_MESSAGE_FILE=#{shell_escape(message_file)}
+    export MN_BODY_FILE=#{shell_escape(body_file)}
+    export MN_BODY_CONTENT_TYPE=#{shell_escape(Message.content_type(message))}
+    export MN_BODY_CONTENT_ENCODING=#{shell_escape(Message.content_encoding(message))}
+    export MN_AGENT_TYPE=#{shell_escape(to_string(Keyword.get(opts, :agent_type, "")))}
+    export MN_AGENT_TEMPLATE=#{shell_escape(Keyword.get(opts, :template_type, "generic"))}
+    export MN_JOB_ID=#{shell_escape(Keyword.get(opts, :job_id, ""))}
+    export MN_AGENT_ID=#{shell_escape(Keyword.get(opts, :agent_id, ""))}
+    export MN_WORKDIR=#{shell_escape(workdir)}
     #{extra_env_exports}
     mkdir -p #{shell_escape(remote_dir)}
     cd #{shell_escape(workdir)}
     #{actual_command} >#{shell_escape(stdout_file)} 2>#{shell_escape(stderr_file)}
     status=$?
-    MIRROR_NEURON_EXIT_CODE="$status" python3 - <<'PY'
+    MN_EXIT_CODE="$status" python3 - <<'PY'
     import json
     import os
     import pathlib
@@ -171,7 +171,7 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
     stdout = pathlib.Path(#{shell_escape(stdout_file)}).read_text()
     stderr = pathlib.Path(#{shell_escape(stderr_file)}).read_text()
     result = {
-        "exit_code": int(os.environ["MIRROR_NEURON_EXIT_CODE"]),
+        "exit_code": int(os.environ["MN_EXIT_CODE"]),
         "stdout": stdout,
         "stderr": stderr,
     }
@@ -184,14 +184,14 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
     """
 
     if byte_size(actual_command) > max_command_length() do
-      {:error, "command exceeds MIRROR_NEURON_MAX_COMMAND_LENGTH"}
+      {:error, "command exceeds MN_MAX_COMMAND_LENGTH"}
     else
       {:ok, ["bash", "-lc", wrapper]}
     end
   end
 
   defp max_command_length do
-    System.get_env("MIRROR_NEURON_MAX_COMMAND_LENGTH", "32768")
+    System.get_env("MN_MAX_COMMAND_LENGTH", "32768")
     |> String.to_integer()
   end
 
@@ -241,7 +241,7 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
 
     temp_config =
       Path.join(
-        Config.string("MIRROR_NEURON_TEMP_DIR", :temp_dir),
+        Config.string("MN_TEMP_DIR", :temp_dir),
         "mirror_neuron_ssh_#{System.unique_integer([:positive])}"
       )
 
@@ -340,11 +340,11 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
 
   defp truncate_artifact(text) do
     max_bytes =
-      System.get_env("MIRROR_NEURON_MAX_ARTIFACT_BYTES", "1048576")
+      System.get_env("MN_MAX_ARTIFACT_BYTES", "1048576")
       |> String.to_integer()
 
     if byte_size(text) > max_bytes do
-      binary_part(text, 0, max_bytes) <> "\n[truncated by MIRROR_NEURON_MAX_ARTIFACT_BYTES]"
+      binary_part(text, 0, max_bytes) <> "\n[truncated by MN_MAX_ARTIFACT_BYTES]"
     else
       text
     end
@@ -360,7 +360,7 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
 
     base_dir =
       Path.join(
-        Config.string("MIRROR_NEURON_TEMP_DIR", :temp_dir),
+        Config.string("MN_TEMP_DIR", :temp_dir),
         "mirror_neuron_#{sandbox_name}_#{System.unique_integer([:positive])}"
       )
 
@@ -640,7 +640,7 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
     Map.get(
       config,
       "sandbox_cli",
-      Config.executable("MIRROR_NEURON_OPENSHELL_BIN", :openshell_bin)
+      Config.executable("MN_OPENSHELL_BIN", :openshell_bin)
     )
   end
 

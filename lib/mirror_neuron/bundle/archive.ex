@@ -191,13 +191,13 @@ defmodule MirrorNeuron.Bundle.Archive do
   defp safe_relative_path?(_path), do: false
 
   defp cache_root do
-    System.get_env("MIRROR_NEURON_BUNDLE_CACHE_DIR") ||
+    System.get_env("MN_BUNDLE_CACHE_DIR") ||
       Application.get_env(:mirror_neuron, :bundle_cache_dir) ||
-      Path.join(MirrorNeuron.Config.string("MIRROR_NEURON_TEMP_DIR", :temp_dir), "bundle_cache")
+      Path.join(MirrorNeuron.Config.string("MN_TEMP_DIR", :temp_dir), "bundle_cache")
   end
 
   defp max_archive_bytes do
-    case System.get_env("MIRROR_NEURON_BUNDLE_ARCHIVE_MAX_BYTES") do
+    case System.get_env("MN_BUNDLE_ARCHIVE_MAX_BYTES") do
       nil -> Application.get_env(:mirror_neuron, :bundle_archive_max_bytes, @default_max_bytes)
       "" -> Application.get_env(:mirror_neuron, :bundle_archive_max_bytes, @default_max_bytes)
       value -> parse_positive_integer(value, @default_max_bytes)

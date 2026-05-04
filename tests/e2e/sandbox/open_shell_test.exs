@@ -30,7 +30,7 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
       import os
       from pathlib import Path
 
-      payload = json.loads(Path(os.environ["MIRROR_NEURON_INPUT_FILE"]).read_text())
+      payload = json.loads(Path(os.environ["MN_INPUT_FILE"]).read_text())
       print(json.dumps({"seen": payload["value"]}))
       """
     )
@@ -241,13 +241,13 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
       import os
       from pathlib import Path
 
-      message = json.loads(Path(os.environ["MIRROR_NEURON_MESSAGE_FILE"]).read_text())
-      body = Path(os.environ["MIRROR_NEURON_BODY_FILE"]).read_text()
+      message = json.loads(Path(os.environ["MN_MESSAGE_FILE"]).read_text())
+      body = Path(os.environ["MN_BODY_FILE"]).read_text()
       print(json.dumps({
           "schema_ref": message["headers"]["schema_ref"],
           "stream_id": message["stream"]["stream_id"],
           "body": body,
-          "content_type": os.environ["MIRROR_NEURON_BODY_CONTENT_TYPE"]
+          "content_type": os.environ["MN_BODY_CONTENT_TYPE"]
       }))
       """
     )
@@ -468,7 +468,7 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
       import os
       from pathlib import Path
 
-      payload = json.loads(Path(os.environ["MIRROR_NEURON_INPUT_FILE"]).read_text())
+      payload = json.loads(Path(os.environ["MN_INPUT_FILE"]).read_text())
       print(json.dumps({"seen": payload["value"]}))
       """
     )
@@ -711,7 +711,7 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
       import os
       from pathlib import Path
 
-      counter_file = Path(os.environ["MIRROR_NEURON_WORKDIR"]) / "state" / "counter.json"
+      counter_file = Path(os.environ["MN_WORKDIR"]) / "state" / "counter.json"
       counter_file.parent.mkdir(parents=True, exist_ok=True)
       if counter_file.exists():
           payload = json.loads(counter_file.read_text())

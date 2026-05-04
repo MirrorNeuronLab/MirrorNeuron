@@ -267,11 +267,11 @@ defmodule MirrorNeuron.RuntimeTest do
   setup do
     original_health = Application.get_env(:mirror_neuron, :job_health_check_interval_ms)
     original_heartbeat = Application.get_env(:mirror_neuron, :agent_heartbeat_interval_ms)
-    original_resource_admission_env = System.get_env("MIRROR_NEURON_RESOURCE_ADMISSION_ENABLED")
+    original_resource_admission_env = System.get_env("MN_RESOURCE_ADMISSION_ENABLED")
 
     Application.put_env(:mirror_neuron, :job_health_check_interval_ms, 100)
     Application.put_env(:mirror_neuron, :agent_heartbeat_interval_ms, 100)
-    System.put_env("MIRROR_NEURON_RESOURCE_ADMISSION_ENABLED", "false")
+    System.put_env("MN_RESOURCE_ADMISSION_ENABLED", "false")
 
     on_exit(fn ->
       if original_health == nil do
@@ -287,10 +287,10 @@ defmodule MirrorNeuron.RuntimeTest do
       end
 
       if original_resource_admission_env == nil do
-        System.delete_env("MIRROR_NEURON_RESOURCE_ADMISSION_ENABLED")
+        System.delete_env("MN_RESOURCE_ADMISSION_ENABLED")
       else
         System.put_env(
-          "MIRROR_NEURON_RESOURCE_ADMISSION_ENABLED",
+          "MN_RESOURCE_ADMISSION_ENABLED",
           original_resource_admission_env
         )
       end

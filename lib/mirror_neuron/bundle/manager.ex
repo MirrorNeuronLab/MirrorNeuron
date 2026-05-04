@@ -41,7 +41,7 @@ defmodule MirrorNeuron.Bundle.Manager do
     }
 
     # Automatically load from configured env if present
-    if dir = System.get_env("MIRROR_NEURON_BUNDLES_DIR") do
+    if dir = System.get_env("MN_BUNDLES_DIR") do
       send(self(), {:scan_dir, dir})
     end
 
@@ -139,8 +139,8 @@ defmodule MirrorNeuron.Bundle.Manager do
             bundle_id = bundle.manifest.graph_id
 
             # Use environment overrides if provided
-            mode_env = System.get_env("MIRROR_NEURON_BUNDLE_RELOAD_MODE")
-            interval_env = System.get_env("MIRROR_NEURON_BUNDLE_RELOAD_INTERVAL_SECONDS")
+            mode_env = System.get_env("MN_BUNDLE_RELOAD_MODE")
+            interval_env = System.get_env("MN_BUNDLE_RELOAD_INTERVAL_SECONDS")
 
             reload_config = bundle.manifest.reload
 

@@ -23,7 +23,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
       import os
       from pathlib import Path
 
-      payload = json.loads(Path(os.environ["MIRROR_NEURON_INPUT_FILE"]).read_text())
+      payload = json.loads(Path(os.environ["MN_INPUT_FILE"]).read_text())
       print(json.dumps({"seen": payload["value"], "flag": os.environ["WORKER_FLAG"]}))
       """
     )

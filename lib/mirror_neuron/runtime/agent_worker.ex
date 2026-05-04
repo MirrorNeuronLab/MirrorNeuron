@@ -594,7 +594,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
 
   defp pending_drain_batch_size do
     config_integer(
-      "MIRROR_NEURON_AGENT_PENDING_DRAIN_BATCH_SIZE",
+      "MN_AGENT_PENDING_DRAIN_BATCH_SIZE",
       :agent_pending_drain_batch_size,
       @default_pending_drain_batch_size
     )
@@ -618,7 +618,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   defp snapshot_pending_limit(state) do
     configured =
       config_integer(
-        "MIRROR_NEURON_AGENT_SNAPSHOT_PENDING_LIMIT",
+        "MN_AGENT_SNAPSHOT_PENDING_LIMIT",
         :agent_snapshot_pending_limit,
         @default_snapshot_pending_limit
       )

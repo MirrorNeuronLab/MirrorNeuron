@@ -650,7 +650,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   defp terminal_job_ttl_seconds do
     config_integer(
-      "MIRROR_NEURON_TERMINAL_JOB_TTL_SECONDS",
+      "MN_TERMINAL_JOB_TTL_SECONDS",
       :terminal_job_ttl_seconds,
       @default_terminal_job_ttl_seconds
     )
@@ -658,19 +658,19 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   defp event_ttl_seconds do
     config_integer(
-      "MIRROR_NEURON_EVENT_TTL_SECONDS",
+      "MN_EVENT_TTL_SECONDS",
       :event_ttl_seconds,
       @default_event_ttl_seconds
     )
   end
 
   defp event_max_count do
-    config_integer("MIRROR_NEURON_EVENT_MAX_COUNT", :event_max_count, @default_event_max_count)
+    config_integer("MN_EVENT_MAX_COUNT", :event_max_count, @default_event_max_count)
   end
 
   defp agent_snapshot_ttl_seconds do
     config_integer(
-      "MIRROR_NEURON_AGENT_SNAPSHOT_TTL_SECONDS",
+      "MN_AGENT_SNAPSHOT_TTL_SECONDS",
       :agent_snapshot_ttl_seconds,
       @default_agent_snapshot_ttl_seconds
     )
@@ -678,7 +678,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   defp bundle_archive_ttl_seconds do
     config_integer(
-      "MIRROR_NEURON_BUNDLE_ARCHIVE_TTL_SECONDS",
+      "MN_BUNDLE_ARCHIVE_TTL_SECONDS",
       :bundle_archive_ttl_seconds,
       @default_bundle_archive_ttl_seconds
     )
@@ -785,16 +785,16 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   defp reconnectable_error?(reason), do: MirrorNeuron.Redis.reconnectable_error?(reason)
 
   defp redis_reconnect_attempts do
-    config_integer("MIRROR_NEURON_REDIS_RECONNECT_ATTEMPTS", :redis_reconnect_attempts, 10)
+    config_integer("MN_REDIS_RECONNECT_ATTEMPTS", :redis_reconnect_attempts, 10)
   end
 
   defp redis_reconnect_backoff_ms do
-    config_integer("MIRROR_NEURON_REDIS_RECONNECT_BACKOFF_MS", :redis_reconnect_backoff_ms, 250)
+    config_integer("MN_REDIS_RECONNECT_BACKOFF_MS", :redis_reconnect_backoff_ms, 250)
   end
 
   defp redis_reconnect_max_backoff_ms do
     config_integer(
-      "MIRROR_NEURON_REDIS_RECONNECT_MAX_BACKOFF_MS",
+      "MN_REDIS_RECONNECT_MAX_BACKOFF_MS",
       :redis_reconnect_max_backoff_ms,
       2_000
     )
@@ -805,10 +805,10 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   defp wait_for_replicas do
-    wait_replicas = config_integer("MIRROR_NEURON_REDIS_WAIT_REPLICAS", :redis_wait_replicas, 0)
+    wait_replicas = config_integer("MN_REDIS_WAIT_REPLICAS", :redis_wait_replicas, 0)
 
     wait_timeout_ms =
-      config_integer("MIRROR_NEURON_REDIS_WAIT_TIMEOUT_MS", :redis_wait_timeout_ms, 100)
+      config_integer("MN_REDIS_WAIT_TIMEOUT_MS", :redis_wait_timeout_ms, 100)
 
     cond do
       wait_replicas <= 0 ->
@@ -839,7 +839,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   defp channel(part1, part2), do: Enum.join([namespace(), "channel", part1, part2], ":")
 
   defp namespace,
-    do: Config.string("MIRROR_NEURON_REDIS_NAMESPACE", :redis_namespace)
+    do: Config.string("MN_REDIS_NAMESPACE", :redis_namespace)
 
   defp format_reason(reason) when is_binary(reason), do: reason
   defp format_reason(reason), do: inspect(reason)

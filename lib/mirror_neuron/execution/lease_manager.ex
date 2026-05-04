@@ -25,11 +25,11 @@ defmodule MirrorNeuron.Execution.LeaseManager do
   @impl true
   def init(opts) do
     default_capacities =
-      "MIRROR_NEURON_EXECUTOR_POOL_CAPACITIES"
+      "MN_EXECUTOR_POOL_CAPACITIES"
       |> System.get_env("")
       |> String.split(",", trim: true)
       |> Enum.reduce(
-        %{@default_pool => parse_positive_integer("MIRROR_NEURON_EXECUTOR_MAX_CONCURRENCY", 4)},
+        %{@default_pool => parse_positive_integer("MN_EXECUTOR_MAX_CONCURRENCY", 4)},
         fn entry, acc ->
           case String.split(entry, "=", parts: 2) do
             [pool, raw_capacity] ->
@@ -61,14 +61,14 @@ defmodule MirrorNeuron.Execution.LeaseManager do
       queue_timeout_ms:
         Keyword.get(opts, :queue_timeout_ms) ||
           config_positive_integer(
-            "MIRROR_NEURON_LEASE_QUEUE_TIMEOUT_MS",
+            "MN_LEASE_QUEUE_TIMEOUT_MS",
             :lease_queue_timeout_ms,
             @default_queue_timeout_ms
           ),
       max_queue_length:
         Keyword.get(opts, :max_queue_length) ||
           config_nonnegative_integer(
-            "MIRROR_NEURON_LEASE_MAX_QUEUE_LENGTH",
+            "MN_LEASE_MAX_QUEUE_LENGTH",
             :lease_max_queue_length,
             @default_max_queue_length
           )

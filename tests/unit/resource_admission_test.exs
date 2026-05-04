@@ -7,11 +7,11 @@ defmodule MirrorNeuron.ResourceAdmissionTest do
 
   setup do
     keys = [
-      "MIRROR_NEURON_RESOURCE_ADMISSION_ENABLED",
-      "MIRROR_NEURON_MAX_CPU_LOAD_RATIO",
-      "MIRROR_NEURON_MAX_MEMORY_USED_RATIO",
-      "MIRROR_NEURON_MAX_GPU_UTILIZATION_RATIO",
-      "MIRROR_NEURON_MAX_GPU_MEMORY_USED_RATIO"
+      "MN_RESOURCE_ADMISSION_ENABLED",
+      "MN_MAX_CPU_LOAD_RATIO",
+      "MN_MAX_MEMORY_USED_RATIO",
+      "MN_MAX_GPU_UTILIZATION_RATIO",
+      "MN_MAX_GPU_MEMORY_USED_RATIO"
     ]
 
     previous = Map.new(keys, &{&1, System.get_env(&1)})
@@ -55,8 +55,8 @@ defmodule MirrorNeuron.ResourceAdmissionTest do
     assert log =~ "resources are overloaded"
   end
 
-  test "can disable resource admission with MIRROR_NEURON_RESOURCE_ADMISSION_ENABLED" do
-    System.put_env("MIRROR_NEURON_RESOURCE_ADMISSION_ENABLED", "false")
+  test "can disable resource admission with MN_RESOURCE_ADMISSION_ENABLED" do
+    System.put_env("MN_RESOURCE_ADMISSION_ENABLED", "false")
 
     snapshot = %{cpu: %{load_ratio: 99.0}, memory: %{used_ratio: 0.99}}
 
@@ -64,7 +64,7 @@ defmodule MirrorNeuron.ResourceAdmissionTest do
   end
 
   test "run_manifest rejects before loading work when local resource pressure is high" do
-    System.put_env("MIRROR_NEURON_MAX_MEMORY_USED_RATIO", "0.000001")
+    System.put_env("MN_MAX_MEMORY_USED_RATIO", "0.000001")
 
     log =
       capture_log(fn ->

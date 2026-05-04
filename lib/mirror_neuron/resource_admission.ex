@@ -34,18 +34,18 @@ defmodule MirrorNeuron.ResourceAdmission do
 
   def thresholds do
     %{
-      cpu_load_ratio: float_env("MIRROR_NEURON_MAX_CPU_LOAD_RATIO", "1.5"),
-      memory_used_ratio: float_env("MIRROR_NEURON_MAX_MEMORY_USED_RATIO", "0.95"),
-      gpu_utilization_ratio: float_env("MIRROR_NEURON_MAX_GPU_UTILIZATION_RATIO", "0.98"),
-      gpu_memory_used_ratio: float_env("MIRROR_NEURON_MAX_GPU_MEMORY_USED_RATIO", "0.98")
+      cpu_load_ratio: float_env("MN_MAX_CPU_LOAD_RATIO", "1.5"),
+      memory_used_ratio: float_env("MN_MAX_MEMORY_USED_RATIO", "0.95"),
+      gpu_utilization_ratio: float_env("MN_MAX_GPU_UTILIZATION_RATIO", "0.98"),
+      gpu_memory_used_ratio: float_env("MN_MAX_GPU_MEMORY_USED_RATIO", "0.98")
     }
   end
 
   def enabled? do
-    Config.boolean("MIRROR_NEURON_RESOURCE_ADMISSION_ENABLED", :resource_admission_enabled)
+    Config.boolean("MN_RESOURCE_ADMISSION_ENABLED", :resource_admission_enabled)
   rescue
     _ ->
-      System.get_env("MIRROR_NEURON_RESOURCE_ADMISSION_ENABLED", "true") not in [
+      System.get_env("MN_RESOURCE_ADMISSION_ENABLED", "true") not in [
         "0",
         "false",
         "FALSE",

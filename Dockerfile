@@ -29,4 +29,4 @@ RUN mix compile
 EXPOSE 50051 4369 9000-9010
 
 # Set the default command
-CMD ["sh", "-c", "if [ -n \"$MIRROR_NEURON_NODE_NAME\" ]; then elixir --name $MIRROR_NEURON_NODE_NAME --cookie ${MIRROR_NEURON_COOKIE:-mirrorneuron} --erl \"-kernel inet_dist_listen_min 9000 inet_dist_listen_max 9010\" -S mix run --no-halt; else mix run --no-halt; fi"]
+CMD ["sh", "-c", "if [ -n \"$MN_NODE_NAME\" ]; then elixir --name $MN_NODE_NAME --cookie ${MN_COOKIE:-mirrorneuron} --erl \"-kernel inet_dist_listen_min 9000 inet_dist_listen_max 9010\" -S mix run --no-halt; else mix run --no-halt; fi"]

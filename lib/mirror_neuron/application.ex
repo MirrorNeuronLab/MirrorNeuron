@@ -8,7 +8,7 @@ defmodule MirrorNeuron.Application do
     Config.validate!()
 
     cluster_hosts =
-      "MIRROR_NEURON_CLUSTER_NODES"
+      "MN_CLUSTER_NODES"
       |> System.get_env("")
       |> String.split(",", trim: true)
       |> Enum.map(&String.to_atom/1)
@@ -27,8 +27,8 @@ defmodule MirrorNeuron.Application do
 
     role = node_role()
 
-    grpc_port = String.to_integer(System.get_env("MIRROR_NEURON_GRPC_PORT", "50051"))
-    grpc_host = System.get_env("MIRROR_NEURON_CORE_HOST", "localhost")
+    grpc_port = String.to_integer(System.get_env("MN_GRPC_PORT", "50051"))
+    grpc_host = System.get_env("MN_CORE_HOST", "localhost")
     grpc_bind_opts = grpc_bind_opts(grpc_host)
 
     common_children =
@@ -68,7 +68,7 @@ defmodule MirrorNeuron.Application do
   end
 
   def node_role do
-    System.get_env("MIRROR_NEURON_NODE_ROLE", "runtime")
+    System.get_env("MN_NODE_ROLE", "runtime")
   end
 
   defp grpc_bind_opts(host) when host in ["", "localhost"] do

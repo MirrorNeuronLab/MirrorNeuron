@@ -136,7 +136,7 @@ defmodule MirrorNeuron.Runtime.Backpressure do
 
   defp default_max_queue_depth do
     env_integer(
-      "MIRROR_NEURON_DEFAULT_MAX_AGENT_QUEUE_DEPTH",
+      "MN_DEFAULT_MAX_AGENT_QUEUE_DEPTH",
       Application.get_env(
         :mirror_neuron,
         :default_max_agent_queue_depth,
@@ -147,7 +147,7 @@ defmodule MirrorNeuron.Runtime.Backpressure do
 
   defp default_high_watermark(max_queue_depth) do
     env_integer(
-      "MIRROR_NEURON_DEFAULT_AGENT_QUEUE_HIGH_WATERMARK",
+      "MN_DEFAULT_AGENT_QUEUE_HIGH_WATERMARK",
       Application.get_env(
         :mirror_neuron,
         :default_agent_queue_high_watermark,
@@ -158,7 +158,7 @@ defmodule MirrorNeuron.Runtime.Backpressure do
 
   defp default_low_watermark(high_watermark) do
     env_integer(
-      "MIRROR_NEURON_DEFAULT_AGENT_QUEUE_LOW_WATERMARK",
+      "MN_DEFAULT_AGENT_QUEUE_LOW_WATERMARK",
       Application.get_env(
         :mirror_neuron,
         :default_agent_queue_low_watermark,

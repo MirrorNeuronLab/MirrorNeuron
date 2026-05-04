@@ -2,15 +2,15 @@ defmodule MirrorNeuron.Runner.HostLocal do
   alias MirrorNeuron.Message
   alias MirrorNeuron.Config
 
-  @result_start "__MIRROR_NEURON_RESULT_START__"
-  @result_end "__MIRROR_NEURON_RESULT_END__"
+  @result_start "__MN_RESULT_START__"
+  @result_end "__MN_RESULT_END__"
 
   def run(payload, config, opts \\ []) do
     runner_name = build_runner_name(config, opts)
 
     base_dir =
       Path.join(
-        Config.string("MIRROR_NEURON_TEMP_DIR", :temp_dir),
+        Config.string("MN_TEMP_DIR", :temp_dir),
         "mirror_neuron_host_local_#{runner_name}_#{System.unique_integer([:positive])}"
       )
 
@@ -128,14 +128,14 @@ defmodule MirrorNeuron.Runner.HostLocal do
     command_size = command_size(configured_command)
 
     if command_size > max_command_length() do
-      {:error, "command exceeds MIRROR_NEURON_MAX_COMMAND_LENGTH"}
+      {:error, "command exceeds MN_MAX_COMMAND_LENGTH"}
     else
       {normalize_command(configured_command), env, workdir}
     end
   end
 
   defp max_command_length do
-    System.get_env("MIRROR_NEURON_MAX_COMMAND_LENGTH", "32768")
+    System.get_env("MN_MAX_COMMAND_LENGTH", "32768")
     |> String.to_integer()
   end
 
@@ -152,7 +152,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
     set +e
     #{command} >#{shell_escape(stdout_file)} 2>#{shell_escape(stderr_file)}
     status=$?
-    MIRROR_NEURON_EXIT_CODE="$status" python3 - <<'PY'
+    MN_EXIT_CODE="$status" python3 - <<'PY'
     import json
     import os
     import pathlib
@@ -160,7 +160,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
     stdout = pathlib.Path(#{shell_escape(stdout_file)}).read_text()
     stderr = pathlib.Path(#{shell_escape(stderr_file)}).read_text()
     result = {
-        "exit_code": int(os.environ["MIRROR_NEURON_EXIT_CODE"]),
+        "exit_code": int(os.environ["MN_EXIT_CODE"]),
         "stdout": stdout,
         "stderr": stderr,
     }
@@ -257,7 +257,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
   defp max_output_bytes(config) do
     case Map.get(config, "max_output_bytes") do
       value when is_integer(value) and value > 0 -> value
-      _ -> System.get_env("MIRROR_NEURON_MAX_ARTIFACT_BYTES", "1048576") |> String.to_integer()
+      _ -> System.get_env("MN_MAX_ARTIFACT_BYTES", "1048576") |> String.to_integer()
     end
   end
 
@@ -326,11 +326,11 @@ defmodule MirrorNeuron.Runner.HostLocal do
 
   defp truncate_artifact(text) do
     max_bytes =
-      System.get_env("MIRROR_NEURON_MAX_ARTIFACT_BYTES", "1048576")
+      System.get_env("MN_MAX_ARTIFACT_BYTES", "1048576")
       |> String.to_integer()
 
     if byte_size(text) > max_bytes do
-      binary_part(text, 0, max_bytes) <> "\n[truncated by MIRROR_NEURON_MAX_ARTIFACT_BYTES]"
+      binary_part(text, 0, max_bytes) <> "\n[truncated by MN_MAX_ARTIFACT_BYTES]"
     else
       text
     end
@@ -495,17 +495,17 @@ defmodule MirrorNeuron.Runner.HostLocal do
 
   defp runtime_env(input_file, context_file, message_file, body_file, workdir, message, opts) do
     %{
-      "MIRROR_NEURON_INPUT_FILE" => input_file,
-      "MIRROR_NEURON_CONTEXT_FILE" => context_file,
-      "MIRROR_NEURON_MESSAGE_FILE" => message_file,
-      "MIRROR_NEURON_BODY_FILE" => body_file,
-      "MIRROR_NEURON_BODY_CONTENT_TYPE" => Message.content_type(message),
-      "MIRROR_NEURON_BODY_CONTENT_ENCODING" => Message.content_encoding(message),
-      "MIRROR_NEURON_AGENT_TYPE" => to_string(Keyword.get(opts, :agent_type, "")),
-      "MIRROR_NEURON_AGENT_TEMPLATE" => Keyword.get(opts, :template_type, "generic"),
-      "MIRROR_NEURON_JOB_ID" => to_string(Keyword.get(opts, :job_id, "")),
-      "MIRROR_NEURON_AGENT_ID" => to_string(Keyword.get(opts, :agent_id, "")),
-      "MIRROR_NEURON_WORKDIR" => workdir
+      "MN_INPUT_FILE" => input_file,
+      "MN_CONTEXT_FILE" => context_file,
+      "MN_MESSAGE_FILE" => message_file,
+      "MN_BODY_FILE" => body_file,
+      "MN_BODY_CONTENT_TYPE" => Message.content_type(message),
+      "MN_BODY_CONTENT_ENCODING" => Message.content_encoding(message),
+      "MN_AGENT_TYPE" => to_string(Keyword.get(opts, :agent_type, "")),
+      "MN_AGENT_TEMPLATE" => Keyword.get(opts, :template_type, "generic"),
+      "MN_JOB_ID" => to_string(Keyword.get(opts, :job_id, "")),
+      "MN_AGENT_ID" => to_string(Keyword.get(opts, :agent_id, "")),
+      "MN_WORKDIR" => workdir
     }
   end
 

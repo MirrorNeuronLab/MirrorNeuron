@@ -129,16 +129,16 @@ defmodule MirrorNeuron.BundleTest do
   test "Archive stores oversized bundles in the local cache without building a Redis payload", %{
     dir: dir
   } do
-    old_max_bytes = System.get_env("MIRROR_NEURON_BUNDLE_ARCHIVE_MAX_BYTES")
-    old_cache_dir = System.get_env("MIRROR_NEURON_BUNDLE_CACHE_DIR")
+    old_max_bytes = System.get_env("MN_BUNDLE_ARCHIVE_MAX_BYTES")
+    old_cache_dir = System.get_env("MN_BUNDLE_CACHE_DIR")
     cache_dir = Path.join(dir, "archive_cache")
 
-    System.put_env("MIRROR_NEURON_BUNDLE_ARCHIVE_MAX_BYTES", "1")
-    System.put_env("MIRROR_NEURON_BUNDLE_CACHE_DIR", cache_dir)
+    System.put_env("MN_BUNDLE_ARCHIVE_MAX_BYTES", "1")
+    System.put_env("MN_BUNDLE_CACHE_DIR", cache_dir)
 
     on_exit(fn ->
-      restore_system_env("MIRROR_NEURON_BUNDLE_ARCHIVE_MAX_BYTES", old_max_bytes)
-      restore_system_env("MIRROR_NEURON_BUNDLE_CACHE_DIR", old_cache_dir)
+      restore_system_env("MN_BUNDLE_ARCHIVE_MAX_BYTES", old_max_bytes)
+      restore_system_env("MN_BUNDLE_CACHE_DIR", old_cache_dir)
     end)
 
     bundle_dir = create_bundle(dir, "oversized_bundle")

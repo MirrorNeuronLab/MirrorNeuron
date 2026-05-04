@@ -19,13 +19,13 @@ defmodule MirrorNeuron.BundleUpdateTest do
     File.mkdir_p!(tmp_dir)
 
     # Clean up environment variables before each test
-    System.delete_env("MIRROR_NEURON_BUNDLE_RELOAD_MODE")
-    System.delete_env("MIRROR_NEURON_BUNDLE_RELOAD_INTERVAL_SECONDS")
+    System.delete_env("MN_BUNDLE_RELOAD_MODE")
+    System.delete_env("MN_BUNDLE_RELOAD_INTERVAL_SECONDS")
 
     on_exit(fn ->
       File.rm_rf!(tmp_dir)
-      System.delete_env("MIRROR_NEURON_BUNDLE_RELOAD_MODE")
-      System.delete_env("MIRROR_NEURON_BUNDLE_RELOAD_INTERVAL_SECONDS")
+      System.delete_env("MN_BUNDLE_RELOAD_MODE")
+      System.delete_env("MN_BUNDLE_RELOAD_INTERVAL_SECONDS")
     end)
 
     %{dir: tmp_dir}
@@ -54,10 +54,10 @@ defmodule MirrorNeuron.BundleUpdateTest do
     bundle_dir
   end
 
-  test "Manager respects MIRROR_NEURON_BUNDLE_RELOAD_MODE and MIRROR_NEURON_BUNDLE_RELOAD_INTERVAL_SECONDS environment variables",
+  test "Manager respects MN_BUNDLE_RELOAD_MODE and MN_BUNDLE_RELOAD_INTERVAL_SECONDS environment variables",
        %{dir: dir} do
-    System.put_env("MIRROR_NEURON_BUNDLE_RELOAD_MODE", "interval")
-    System.put_env("MIRROR_NEURON_BUNDLE_RELOAD_INTERVAL_SECONDS", "5")
+    System.put_env("MN_BUNDLE_RELOAD_MODE", "interval")
+    System.put_env("MN_BUNDLE_RELOAD_INTERVAL_SECONDS", "5")
 
     # Create a bundle that is defined as manual in its manifest
     create_bundle(dir, "env_test_bundle", "manual", 60)

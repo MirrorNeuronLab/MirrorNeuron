@@ -11,23 +11,23 @@ defmodule MirrorNeuron.Redis.Sentinel do
   end
 
   def mode do
-    "MIRROR_NEURON_REDIS_HA_MODE"
+    "MN_REDIS_HA_MODE"
     |> Config.string(:redis_ha_mode)
     |> String.downcase()
   end
 
   def sentinels do
-    "MIRROR_NEURON_REDIS_SENTINELS"
+    "MN_REDIS_SENTINELS"
     |> Config.string(:redis_sentinels)
     |> parse_sentinels()
   end
 
   def master_name do
-    Config.string("MIRROR_NEURON_REDIS_SENTINEL_MASTER", :redis_sentinel_master)
+    Config.string("MN_REDIS_SENTINEL_MASTER", :redis_sentinel_master)
   end
 
   def db do
-    Config.integer("MIRROR_NEURON_REDIS_DB", :redis_db)
+    Config.integer("MN_REDIS_DB", :redis_db)
   end
 
   def resolve_primary_url(query_fun \\ &query_sentinel/2) do
@@ -144,7 +144,7 @@ defmodule MirrorNeuron.Redis.Sentinel do
 
   defp redis_scheme do
     scheme =
-      "MIRROR_NEURON_REDIS_URL"
+      "MN_REDIS_URL"
       |> Config.string(:redis_url)
       |> URI.parse()
       |> Map.get(:scheme)
@@ -156,14 +156,14 @@ defmodule MirrorNeuron.Redis.Sentinel do
     end
   end
 
-  defp redis_username, do: optional_env("MIRROR_NEURON_REDIS_USERNAME", :redis_username)
-  defp redis_password, do: optional_env("MIRROR_NEURON_REDIS_PASSWORD", :redis_password)
+  defp redis_username, do: optional_env("MN_REDIS_USERNAME", :redis_username)
+  defp redis_password, do: optional_env("MN_REDIS_PASSWORD", :redis_password)
 
   defp sentinel_username,
-    do: optional_env("MIRROR_NEURON_REDIS_SENTINEL_USERNAME", :redis_sentinel_username)
+    do: optional_env("MN_REDIS_SENTINEL_USERNAME", :redis_sentinel_username)
 
   defp sentinel_password,
-    do: optional_env("MIRROR_NEURON_REDIS_SENTINEL_PASSWORD", :redis_sentinel_password)
+    do: optional_env("MN_REDIS_SENTINEL_PASSWORD", :redis_sentinel_password)
 
   defp optional_env(env_name, key) do
     case System.get_env(env_name) do
@@ -179,7 +179,7 @@ defmodule MirrorNeuron.Redis.Sentinel do
   end
 
   defp host_map do
-    "MIRROR_NEURON_REDIS_SENTINEL_HOST_MAP"
+    "MN_REDIS_SENTINEL_HOST_MAP"
     |> optional_env(:redis_sentinel_host_map)
     |> to_string()
     |> String.split(",", trim: true)

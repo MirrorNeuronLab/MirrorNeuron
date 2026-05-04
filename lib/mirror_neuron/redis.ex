@@ -25,7 +25,7 @@ defmodule MirrorNeuron.Redis do
           raise "could not resolve Redis Sentinel primary: #{inspect(reason)}"
       end
     else
-      Config.string("MIRROR_NEURON_REDIS_URL", :redis_url)
+      Config.string("MN_REDIS_URL", :redis_url)
     end
   end
 

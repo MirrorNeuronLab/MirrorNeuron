@@ -26,17 +26,17 @@ defmodule MirrorNeuron.Cluster.ControlTest do
 
   setup do
     original_nodes = Node.list()
-    original_env = System.get_env("MIRROR_NEURON_CLUSTER_NODES")
+    original_env = System.get_env("MN_CLUSTER_NODES")
     original_adapter = Application.get_env(:mirror_neuron, :rpc_adapter)
 
     Application.put_env(:mirror_neuron, :rpc_adapter, RPCStub)
-    System.put_env("MIRROR_NEURON_CLUSTER_NODES", "mn1@test,mn2@test,offline@test")
+    System.put_env("MN_CLUSTER_NODES", "mn1@test,mn2@test,offline@test")
 
     on_exit(fn ->
       if original_env do
-        System.put_env("MIRROR_NEURON_CLUSTER_NODES", original_env)
+        System.put_env("MN_CLUSTER_NODES", original_env)
       else
-        System.delete_env("MIRROR_NEURON_CLUSTER_NODES")
+        System.delete_env("MN_CLUSTER_NODES")
       end
 
       if original_adapter do

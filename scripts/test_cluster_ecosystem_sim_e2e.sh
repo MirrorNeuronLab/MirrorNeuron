@@ -4,12 +4,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BOX1_IP=""
 BOX2_IP=""
-COOKIE="${MIRROR_NEURON_COOKIE:-mirrorneuron}"
-DIST_PORT="${MIRROR_NEURON_DIST_PORT:-4370}"
-REMOTE_ROOT="${MIRROR_NEURON_REMOTE_ROOT:-/Users/homer/Personal_Projects/MirrorNeuron}"
+COOKIE="${MN_COOKIE:-mirrorneuron}"
+DIST_PORT="${MN_DIST_PORT:-4370}"
+REMOTE_ROOT="${MN_REMOTE_ROOT:-/Users/homer/Personal_Projects/MirrorNeuron}"
 SKIP_SYNC="0"
 KEEP_CLUSTER_UP="0"
-WAIT_TIMEOUT_SECONDS="${MIRROR_NEURON_SIM_WAIT_TIMEOUT_SECONDS:-420}"
+WAIT_TIMEOUT_SECONDS="${MN_SIM_WAIT_TIMEOUT_SECONDS:-420}"
 POLL_INTERVAL_SECONDS="5"
 ANIMALS="2000"
 REGIONS="16"
@@ -122,11 +122,11 @@ start_local_runtime() {
   (
     cd "$ROOT_DIR"
     export ERL_AFLAGS="-kernel inet_dist_listen_min $DIST_PORT inet_dist_listen_max $DIST_PORT"
-    export MIRROR_NEURON_NODE_NAME="mn1@$BOX1_IP"
-    export MIRROR_NEURON_NODE_ROLE="runtime"
-    export MIRROR_NEURON_COOKIE="$COOKIE"
-    export MIRROR_NEURON_CLUSTER_NODES="mn1@$BOX1_IP,mn2@$BOX2_IP"
-    export MIRROR_NEURON_REDIS_URL="redis://$BOX1_IP:6379/0"
+    export MN_NODE_NAME="mn1@$BOX1_IP"
+    export MN_NODE_ROLE="runtime"
+    export MN_COOKIE="$COOKIE"
+    export MN_CLUSTER_NODES="mn1@$BOX1_IP,mn2@$BOX2_IP"
+    export MN_REDIS_URL="redis://$BOX1_IP:6379/0"
     mix run --no-halt >"$LOCAL_LOG" 2>&1 &
     echo $!
   )
@@ -134,7 +134,7 @@ start_local_runtime() {
 
 start_remote_runtime() {
   echo "Starting box 2 runtime..."
-  ssh "$BOX2_IP" "cd \"$REMOTE_ROOT\" && $REMOTE_PATH_PREFIX export ERL_AFLAGS='-kernel inet_dist_listen_min $DIST_PORT inet_dist_listen_max $DIST_PORT'; export MIRROR_NEURON_NODE_NAME='mn2@$BOX2_IP'; export MIRROR_NEURON_NODE_ROLE='runtime'; export MIRROR_NEURON_COOKIE='$COOKIE'; export MIRROR_NEURON_CLUSTER_NODES='mn1@$BOX1_IP,mn2@$BOX2_IP'; export MIRROR_NEURON_REDIS_URL='redis://$BOX1_IP:6379/0'; nohup mix run --no-halt >'$REMOTE_LOG' 2>&1 </dev/null & echo \$!"
+  ssh "$BOX2_IP" "cd \"$REMOTE_ROOT\" && $REMOTE_PATH_PREFIX export ERL_AFLAGS='-kernel inet_dist_listen_min $DIST_PORT inet_dist_listen_max $DIST_PORT'; export MN_NODE_NAME='mn2@$BOX2_IP'; export MN_NODE_ROLE='runtime'; export MN_COOKIE='$COOKIE'; export MN_CLUSTER_NODES='mn1@$BOX1_IP,mn2@$BOX2_IP'; export MN_REDIS_URL='redis://$BOX1_IP:6379/0'; nohup mix run --no-halt >'$REMOTE_LOG' 2>&1 </dev/null & echo \$!"
 }
 
 cluster_inspect_nodes() {

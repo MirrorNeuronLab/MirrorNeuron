@@ -15,7 +15,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     end
 
     old_namespace = Application.get_env(:mirror_neuron, :redis_namespace)
-    old_system_namespace = System.get_env("MIRROR_NEURON_REDIS_NAMESPACE")
+    old_system_namespace = System.get_env("MN_REDIS_NAMESPACE")
     old_event_max_count = Application.get_env(:mirror_neuron, :event_max_count)
     old_terminal_ttl = Application.get_env(:mirror_neuron, :terminal_job_ttl_seconds)
     old_wait_replicas = Application.get_env(:mirror_neuron, :redis_wait_replicas)
@@ -23,13 +23,13 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
 
     namespace = "mirror_neuron_test_#{System.unique_integer([:positive])}"
     Application.put_env(:mirror_neuron, :redis_namespace, namespace)
-    System.put_env("MIRROR_NEURON_REDIS_NAMESPACE", namespace)
+    System.put_env("MN_REDIS_NAMESPACE", namespace)
     Application.put_env(:mirror_neuron, :redis_wait_replicas, 0)
     Application.put_env(:mirror_neuron, :redis_wait_timeout_ms, 100)
 
     on_exit(fn ->
       cleanup_namespace(namespace)
-      restore_system_env("MIRROR_NEURON_REDIS_NAMESPACE", old_system_namespace)
+      restore_system_env("MN_REDIS_NAMESPACE", old_system_namespace)
       restore_env(:redis_namespace, old_namespace)
       restore_env(:event_max_count, old_event_max_count)
       restore_env(:terminal_job_ttl_seconds, old_terminal_ttl)
@@ -216,12 +216,12 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
       )
 
     cache_dir = Path.join(tmp_dir, "cache")
-    old_cache_dir = System.get_env("MIRROR_NEURON_BUNDLE_CACHE_DIR")
-    System.put_env("MIRROR_NEURON_BUNDLE_CACHE_DIR", cache_dir)
+    old_cache_dir = System.get_env("MN_BUNDLE_CACHE_DIR")
+    System.put_env("MN_BUNDLE_CACHE_DIR", cache_dir)
 
     on_exit(fn ->
       File.rm_rf!(tmp_dir)
-      restore_system_env("MIRROR_NEURON_BUNDLE_CACHE_DIR", old_cache_dir)
+      restore_system_env("MN_BUNDLE_CACHE_DIR", old_cache_dir)
     end)
 
     bundle_dir = create_bundle(tmp_dir, "cached_archive")

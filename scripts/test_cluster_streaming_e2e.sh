@@ -4,12 +4,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BOX1_IP=""
 BOX2_IP=""
-COOKIE="${MIRROR_NEURON_COOKIE:-mirrorneuron}"
-DIST_PORT="${MIRROR_NEURON_DIST_PORT:-4370}"
-REMOTE_ROOT="${MIRROR_NEURON_REMOTE_ROOT:-/Users/homer/Personal_Projects/MirrorNeuron}"
+COOKIE="${MN_COOKIE:-mirrorneuron}"
+DIST_PORT="${MN_DIST_PORT:-4370}"
+REMOTE_ROOT="${MN_REMOTE_ROOT:-/Users/homer/Personal_Projects/MirrorNeuron}"
 SKIP_SYNC="0"
 KEEP_CLUSTER_UP="0"
-WAIT_TIMEOUT_SECONDS="${MIRROR_NEURON_STREAM_WAIT_TIMEOUT_SECONDS:-120}"
+WAIT_TIMEOUT_SECONDS="${MN_STREAM_WAIT_TIMEOUT_SECONDS:-120}"
 POLL_INTERVAL_SECONDS="3"
 SAMPLE_COUNT="60"
 CHUNK_SIZE="6"
@@ -267,19 +267,19 @@ start_local_runtime() {
     cd "$ROOT_DIR"
     epmd -daemon
     env \
-      MIRROR_NEURON_NODE_NAME="mn1@${BOX1_IP}" \
-      MIRROR_NEURON_NODE_ROLE="runtime" \
-      MIRROR_NEURON_COOKIE="$COOKIE" \
-      MIRROR_NEURON_CLUSTER_NODES="mn1@${BOX1_IP},mn2@${BOX2_IP}" \
-      MIRROR_NEURON_REDIS_URL="redis://${BOX1_IP}:6379/0" \
-      MIRROR_NEURON_DIST_PORT="$DIST_PORT" \
+      MN_NODE_NAME="mn1@${BOX1_IP}" \
+      MN_NODE_ROLE="runtime" \
+      MN_COOKIE="$COOKIE" \
+      MN_CLUSTER_NODES="mn1@${BOX1_IP},mn2@${BOX2_IP}" \
+      MN_REDIS_URL="redis://${BOX1_IP}:6379/0" \
+      MN_DIST_PORT="$DIST_PORT" \
       ERL_AFLAGS="-kernel inet_dist_listen_min ${DIST_PORT} inet_dist_listen_max ${DIST_PORT}" \
-      MIRROR_NEURON_LOG_PATH="$LOCAL_LOG" \
+      MN_LOG_PATH="$LOCAL_LOG" \
       python3 - <<'PY'
 import os
 import subprocess
 
-log_path = os.environ["MIRROR_NEURON_LOG_PATH"]
+log_path = os.environ["MN_LOG_PATH"]
 with open(log_path, "ab", buffering=0) as log_file:
     proc = subprocess.Popen(
         ["mix", "run", "--no-halt"],
@@ -303,19 +303,19 @@ start_remote_runtime() {
     epmd -daemon
     : >\"$REMOTE_LOG\"
     env \
-      MIRROR_NEURON_NODE_NAME=\"mn2@${BOX2_IP}\" \
-      MIRROR_NEURON_NODE_ROLE=\"runtime\" \
-      MIRROR_NEURON_COOKIE=\"$COOKIE\" \
-      MIRROR_NEURON_CLUSTER_NODES=\"mn1@${BOX1_IP},mn2@${BOX2_IP}\" \
-      MIRROR_NEURON_REDIS_URL=\"redis://${BOX1_IP}:6379/0\" \
-      MIRROR_NEURON_DIST_PORT=\"$DIST_PORT\" \
+      MN_NODE_NAME=\"mn2@${BOX2_IP}\" \
+      MN_NODE_ROLE=\"runtime\" \
+      MN_COOKIE=\"$COOKIE\" \
+      MN_CLUSTER_NODES=\"mn1@${BOX1_IP},mn2@${BOX2_IP}\" \
+      MN_REDIS_URL=\"redis://${BOX1_IP}:6379/0\" \
+      MN_DIST_PORT=\"$DIST_PORT\" \
       ERL_AFLAGS=\"-kernel inet_dist_listen_min ${DIST_PORT} inet_dist_listen_max ${DIST_PORT}\" \
-      MIRROR_NEURON_LOG_PATH=\"$REMOTE_LOG\" \
+      MN_LOG_PATH=\"$REMOTE_LOG\" \
       python3 - <<'PY'
 import os
 import subprocess
 
-log_path = os.environ[\"MIRROR_NEURON_LOG_PATH\"]
+log_path = os.environ[\"MN_LOG_PATH\"]
 with open(log_path, \"ab\", buffering=0) as log_file:
     proc = subprocess.Popen(
         [\"mix\", \"run\", \"--no-halt\"],

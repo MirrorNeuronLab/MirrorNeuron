@@ -15,7 +15,7 @@ defmodule MirrorNeuron.Persistence.Retention do
     interval_ms =
       Keyword.get(opts, :interval_ms) ||
         config_integer(
-          "MIRROR_NEURON_RETENTION_GC_INTERVAL_MS",
+          "MN_RETENTION_GC_INTERVAL_MS",
           :retention_gc_interval_ms,
           @default_interval_ms
         )
