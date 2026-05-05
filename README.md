@@ -1,437 +1,415 @@
-# 🧠 MirrorNeuron: On-Edge AI Infrastructure
+# MirrorNeuron Core
 
-### Durable runtime and control plane for adaptive AI workflows at the edge.
-
-MirrorNeuron is an open-source runtime for AI systems that need to run close to data, users, devices, sensors, robots, private networks, and local compute.
-
-It provides the missing execution layer for **long-running, stateful, observable, and adaptive AI workflows** — from a developer laptop to edge nodes, private clusters, and hybrid cloud environments.
+MirrorNeuron Core is an Elixir/OTP runtime for durable, message-driven AI workflows. It runs workflow graphs, stores job state, exposes gRPC services, and supports local or clustered execution.
 
 <!-- start-badges -->
 [![License](https://img.shields.io/badge/License-MIT-blue)](https://github.com/MirrorNeuronLab/MirrorNeuron/blob/main/LICENSE)
 [![Security Policy](https://img.shields.io/badge/Security-Report%20a%20Vulnerability-red)](https://github.com/MirrorNeuronLab/MirrorNeuron/security/policy)
 [![Project Status](https://img.shields.io/badge/status-alpha-orange)](https://github.com/MirrorNeuronLab/mn-docs)
-[![On-Edge AI](https://img.shields.io/badge/On--Edge%20AI-Infrastructure-purple)](https://mirrorneuron.io)
 [![Docs](https://img.shields.io/badge/Docs-mn--docs-blue)](https://github.com/MirrorNeuronLab/mn-docs)
-[![Discord](https://img.shields.io/badge/Discord-Join-7289da)](https://discord.com/invite/XmSQqFEz)
 <!-- end-badges -->
 
 > [!IMPORTANT]
-> MirrorNeuron is in **alpha / developer preview**. The core direction is stable, but APIs, blueprints, and ecosystem components may evolve quickly. We are releasing early to invite contributors, design partners, and real-world feedback.
+> MirrorNeuron is in alpha. APIs, manifests, release artifacts, and ecosystem components may change between releases.
 
----
+## Contents
 
-## The Thesis
+- [Features](#features)
+- [Demo](#demo)
+- [Tech Stack](#tech-stack)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [API](#api)
+- [Project Structure](#project-structure)
+- [Testing](#testing)
+- [Deployment and Releases](#deployment-and-releases)
+- [Troubleshooting](#troubleshooting)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [Code of Conduct](#code-of-conduct)
+- [Security](#security)
+- [Acknowledgments](#acknowledgments)
+- [License](#license)
 
-AI is moving from cloud-only chat interfaces into real-world operational systems.
+## Features
 
-```text
-Models are becoming available.
-Agents are becoming useful.
-Reliable on-edge execution is still missing.
-```
+| Feature | Status | Notes |
+|---|---:|---|
+| Workflow manifest validation | Available | Validates graph structure and supported runtime primitives. |
+| Message-driven execution | Available | Routes workflow messages between runtime nodes and agents. |
+| Built-in runtime primitives | Available | Includes `router`, `executor`, `aggregator`, `sensor`, and `module`. |
+| Durable job state | Available | Persists job metadata, events, agents, and terminal state through Redis. |
+| Runtime monitoring | Available | Lists jobs, job details, cluster overview, metrics, and dead letters. |
+| Cluster coordination | Available | Uses Erlang distribution plus `libcluster` and Horde. |
+| Redis high availability helpers | Available | Includes scripts and config for Redis Sentinel development workflows. |
+| gRPC services | Available | Job, cluster, and observability protobuf services are included. |
+| REST API, CLI, Web UI, SDK | External components | Provided by separate ecosystem repositories. |
 
-MirrorNeuron is building that missing layer: **durable, adaptive infrastructure for AI workflows that run where work actually happens**.
+## Demo
 
----
+Screenshots, GIFs, and short workflow recordings should be added here.
 
-## Quick Install
+Suggested demo assets:
+
+- A short terminal recording of `mn run` or `mn blueprint run`.
+- A Web UI screenshot showing a running job graph.
+- A log excerpt showing workflow events and job completion.
+
+## Tech Stack
+
+| Area | Technology |
+|---|---|
+| Runtime | Elixir `~> 1.16`, OTP |
+| Application packaging | `mix release` |
+| Storage | Redis via `redix` |
+| Clustering | Erlang distribution, `libcluster`, Horde |
+| Serialization | JSON via `jason`, protobuf via `protobuf` |
+| RPC | gRPC via `grpc` |
+| Tests | ExUnit |
+| Release channel | GitHub Releases with platform-specific OTP tarballs |
+
+## Prerequisites
+
+For local development:
+
+- Elixir `~> 1.16`
+- Erlang/OTP compatible with the project and CI configuration
+- Redis `7` or Docker for running Redis locally
+- Bash for helper scripts
+
+For installed runtime usage:
+
+- Docker, when using the `mn-deploy` released-package installer
+- Redis, either local or containerized
+- Matching OTP release asset for the target OS and CPU architecture
+
+## Installation
+
+### Recommended Install
+
+Use the deployment repository installer when installing MirrorNeuron as a user-facing system:
 
 ```bash
 curl -fsSL https://mirrorneuron.io/install.sh | bash
 ```
 
----
-
-## Launch Something Useful
-
-Run a real multi-agent blueprint with one command:
+For the released-package installer, use `mn-deploy/install_new.sh` from the deployment repository:
 
 ```bash
-mn blueprint run science_drug_discovery_deamon
+git clone https://github.com/MirrorNeuronLab/mn-deploy.git
+cd mn-deploy
+./install_new.sh
 ```
 
-This is intended to demonstrate MirrorNeuron as a runtime for useful AI workflows, not just a toy prompt demo.
+That installer uses released packages instead of source checkouts:
 
-Expected flow:
+- Core runtime from GitHub Release OTP tarballs
+- Python CLI/API/SDK packages from PyPI
+- Web UI package from npm
 
-- the blueprint is resolved
-- the workflow graph is validated
-- agents begin executing
-- progress is visible through runtime events
-- intermediate state and outputs are tracked
-- the workflow can recover from interruptions or failures
+### Local Development Setup
 
----
+Clone the core repository and install dependencies:
 
-## Why On-Edge AI Infrastructure?
+```bash
+git clone https://github.com/MirrorNeuronLab/MirrorNeuron.git
+cd MirrorNeuron
+mix deps.get
+```
 
-AI systems are moving closer to where data is created and decisions are made:
+Start Redis locally or with Docker:
 
-- private enterprise environments
-- robotics and physical AI platforms
-- factories, labs, clinics, vehicles, and field operations
-- developer machines and local clusters
-- hybrid systems that combine local execution with cloud services
+```bash
+docker run --rm --name mirror-neuron-redis -p 6379:6379 redis:7
+```
 
-This shift creates a new infrastructure bottleneck.
+Run the runtime in development mode:
 
-Models can run locally. Tools can be called remotely. Agents can be composed. But real-world systems still need a runtime that can coordinate agents, preserve state, recover from failures, expose observability, enforce policies, and adapt to changing conditions.
+```bash
+mix run --no-halt
+```
 
-MirrorNeuron is built for that bottleneck.
+Build a local OTP release:
 
-### Why now?
+```bash
+MIX_PROJECT_VERSION=1.0.0 MIX_ENV=prod mix release --overwrite
+_build/prod/rel/mirror_neuron/bin/mirror_neuron start
+```
 
-| Driver | Why it matters |
-|---|---|
-| **Privacy** | Sensitive data often needs to stay inside a device, site, lab, enterprise network, or regulated environment. |
-| **Latency** | Robots, industrial systems, interactive agents, and real-time workflows cannot always wait for cloud round trips. |
-| **Bandwidth** | Sending every sensor stream, video frame, tool call, and intermediate state to the cloud is expensive and brittle. |
-| **Reliability** | Edge systems must continue operating when networks are slow, intermittent, or unavailable. |
-| **Ownership** | Teams increasingly want control over where models, agents, tools, and workflow state actually run. |
-| **Opportunity** | As inference moves closer to data, the bottleneck shifts from model access to orchestration, reliability, and control. |
+## Configuration
 
-### Industry context
+Runtime configuration is read from environment variables in `config/runtime.exs`.
 
-- NVIDIA describes edge computing as useful for faster response times, lower bandwidth costs, and resilience from network failure: https://blogs.nvidia.com/blog/what-is-edge-ai/
-- McKinsey notes that a significant portion of inferencing is expected to continue shifting toward the edge to reduce latency and bandwidth demands: https://www.mckinsey.com/industries/technology-media-and-telecommunications/our-insights/the-next-big-shifts-in-ai-workloads-and-hyperscaler-strategies
-- Qualcomm highlights on-device AI as a way to use local context while improving privacy, personalization, and efficiency: https://www.qualcomm.com/news/onq/2023/12/ai-on-the-edge-generative-ai-technology-impacts-insights-and-predictions
+### Core Settings
 
----
+| Variable | Default | Description |
+|---|---|---|
+| `MN_ENV` | `dev` | Runtime environment. Must be `dev`, `test`, or `prod`. |
+| `MN_COOKIE` | `mirrorneuron` | Erlang distribution cookie. |
+| `MN_NODE_NAME` | Not set by config | Erlang node name used by release/cluster scripts. |
+| `MN_CLUSTER_NODES` | Empty | Comma-separated Erlang node names for cluster discovery. |
+| `MN_CORE_HOST` | `localhost` | Host/IP used by the gRPC listener. |
+| `MN_GRPC_PORT` | `50051` | gRPC port. |
+| `MN_API_ENABLED` | `true` | Enables API-related runtime config. |
+| `MN_API_PORT` | `4000` | Core API config port. The separate `mn-api` package uses its own defaults. |
+| `MN_TEMP_DIR` | `/tmp/mirror_neuron` | Temporary runtime directory. |
+| `MN_OPENSHELL_BIN` | `openshell` | OpenShell executable path or command name. |
 
-## What MirrorNeuron Provides
+### Redis Settings
 
-| Capability | Purpose |
-|---|---|
-| **Durable execution** | Preserve workflow progress across crashes, retries, and restarts. |
-| **Message-driven orchestration** | Coordinate agents, tools, sensors, and workflow nodes through explicit events. |
-| **Adaptive routing** | Respond to signals, load, failures, and changing workflow state. |
-| **Backpressure** | Prevent overloaded agents, tools, or local resources from destabilizing the system. |
-| **Observability** | Inspect workflow state, events, messages, decisions, and execution progress. |
-| **Blueprints** | Package useful AI workflows as reusable, repeatable templates. |
-| **Edge/cloud flexibility** | Run near data while still integrating with cloud services when useful. |
+| Variable | Default | Description |
+|---|---|---|
+| `MN_REDIS_HOST` | `localhost` | Redis host used to build the default Redis URL. |
+| `MN_REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL. |
+| `MN_REDIS_NAMESPACE` | `mirror_neuron` | Prefix/namespace for persisted runtime data. |
+| `MN_REDIS_DB` | `0` | Redis database number. |
+| `MN_REDIS_USERNAME` | Empty | Redis username. |
+| `MN_REDIS_PASSWORD` | Empty | Redis password. |
+| `MN_REDIS_HA_MODE` | `single` | Redis mode, currently `single` or Sentinel-related configuration. |
+| `MN_REDIS_SENTINELS` | Empty | Comma-separated Sentinel endpoints. |
+| `MN_REDIS_SENTINEL_MASTER` | `mirror-neuron` | Sentinel master name. |
+| `MN_REDIS_SENTINEL_HOST_MAP` | Empty | Optional host mapping used when resolving Sentinel primary hosts. |
+| `MN_REDIS_SENTINEL_USERNAME` | Empty | Sentinel username. |
+| `MN_REDIS_SENTINEL_PASSWORD` | Empty | Sentinel password. |
+| `MN_REDIS_WAIT_REPLICAS` | `0` | Redis write durability wait replica count. |
+| `MN_REDIS_WAIT_TIMEOUT_MS` | `100` | Redis wait timeout in milliseconds. |
+| `MN_REDIS_RECONNECT_ATTEMPTS` | `10` | Redis reconnect attempt count. |
+| `MN_REDIS_RECONNECT_BACKOFF_MS` | `250` | Initial Redis reconnect backoff. |
+| `MN_REDIS_RECONNECT_MAX_BACKOFF_MS` | `2000` | Maximum Redis reconnect backoff. |
 
----
+### Resource Admission
 
-## Core Concept
+| Variable | Default | Description |
+|---|---|---|
+| `MN_RESOURCE_ADMISSION_ENABLED` | `true` | Enables local resource checks before accepting work. |
+| `MN_MAX_CPU_LOAD_RATIO` | See source defaults | Maximum allowed CPU load ratio. |
+| `MN_MAX_MEMORY_USED_RATIO` | See source defaults | Maximum allowed memory usage ratio. |
+| `MN_MAX_GPU_UTILIZATION_RATIO` | See source defaults | Maximum allowed GPU utilization ratio. |
+| `MN_MAX_GPU_MEMORY_USED_RATIO` | See source defaults | Maximum allowed GPU memory usage ratio. |
 
-AI is moving from:
+Some resource-admission defaults are defined outside `runtime.exs`; check `lib/mirror_neuron/config.ex` and `lib/mirror_neuron/resource_admission.ex` before changing production thresholds.
+
+## Usage
+
+### Start the Core Runtime
+
+```bash
+mix run --no-halt
+```
+
+With explicit Redis and gRPC settings:
+
+```bash
+MN_REDIS_URL=redis://localhost:6379/0 \
+MN_GRPC_PORT=50051 \
+mix run --no-halt
+```
+
+### Validate a Manifest from Elixir
+
+```elixir
+MirrorNeuron.validate_manifest("path/to/manifest.json")
+```
+
+### Run a Manifest from Elixir
+
+```elixir
+MirrorNeuron.run_manifest("path/to/manifest.json")
+```
+
+### Inspect Jobs and Events
+
+```elixir
+MirrorNeuron.list_jobs()
+MirrorNeuron.inspect_job("job-id")
+MirrorNeuron.inspect_agents("job-id")
+MirrorNeuron.events("job-id")
+```
+
+### Pause, Resume, or Cancel a Job
+
+```elixir
+MirrorNeuron.pause("job-id")
+MirrorNeuron.resume("job-id")
+MirrorNeuron.cancel("job-id")
+```
+
+### Cluster Helpers
+
+Development and smoke-test scripts are available under `scripts/`.
+
+```bash
+bash scripts/cluster_cli.sh --help
+bash scripts/redis_ha.sh --help
+bash scripts/test_redis_sentinel_ha.sh --help
+```
+
+## API
+
+MirrorNeuron Core includes protobuf definitions and generated Elixir modules for:
+
+- `proto/job.proto`
+- `proto/cluster.proto`
+- `proto/observability.proto`
+
+Generated modules live under `lib/mirror_neuron_grpc/`.
+
+The separate REST API package is maintained in [`mn-api`](https://github.com/MirrorNeuronLab/mn-api). The Python SDK is maintained in [`mn-python-sdk`](https://github.com/MirrorNeuronLab/mn-python-sdk).
+
+## Project Structure
 
 ```text
-prompt → response
+.
+├── config/                  # Mix and runtime configuration
+├── lib/
+│   ├── mirror_neuron/       # Core runtime modules
+│   └── mirror_neuron_grpc/  # Generated gRPC/protobuf modules
+├── proto/                   # gRPC protobuf definitions
+├── scripts/                 # Local, cluster, Redis, and release helper scripts
+├── tests/                   # ExUnit tests and script-based regression checks
+├── mix.exs                  # Mix project definition
+├── mix.lock                 # Locked dependencies
+├── RELEASE.md              # Release policy and tag workflow
+└── LICENSE                 # MIT license
 ```
 
-to:
+## Testing
 
-```text
-goal → agents → tools → events → state → recovery → results
+Install dependencies:
+
+```bash
+mix deps.get
 ```
 
-MirrorNeuron turns AI workflows into durable, observable, message-driven systems.
+Check formatting:
 
-Instead of fragile pipelines:
-
-```text
-prompt → tool → output
+```bash
+mix format --check-formatted
 ```
 
-MirrorNeuron executes durable workflow graphs:
+Run tests:
 
-```text
-signals → workflow graph → controlled execution → observable system
+```bash
+mix test
 ```
 
-Workflows are treated as first-class software artifacts:
+Compile with warnings as errors:
 
-- versioned
-- testable
-- stateful
-- replayable
-- observable
-- extensible
-
----
-
-## Architecture at a Glance
-
-MirrorNeuron keeps the runtime intentionally small and composable.
-
-```text
-Sensors / users / devices / tools / models
-                    │
-                    ▼
-          MirrorNeuron Runtime
-    ┌──────────┬───────────┬────────────┬─────────┐
-    │ router   │ executor  │ aggregator │ sensor  │
-    └──────────┴───────────┴────────────┴─────────┘
-                    │
-                    ▼
-      Durable workflow graph + state + events
-                    │
-                    ▼
-      Edge node / private cluster / hybrid cloud
+```bash
+mix compile --warnings-as-errors
 ```
 
-### Runtime primitives
+Run a local production release build:
 
-| Primitive | Role |
+```bash
+MIX_PROJECT_VERSION=1.2.3 MIX_ENV=prod mix release --overwrite
+```
+
+Run shell syntax checks:
+
+```bash
+while IFS= read -r -d '' script; do
+  bash -n "$script"
+done < <(find scripts -name '*.sh' -print0)
+```
+
+## Deployment and Releases
+
+MirrorNeuron Core is released from Git tags. Tags must use SemVer with a leading `v`, for example:
+
+- `v1.0.1`
+- `v1.1.0`
+- `v2.0.0`
+- `v1.0.1-rc.1`
+
+The release workflow builds platform-specific OTP tarballs:
+
+- `MirrorNeuron-vX.Y.Z-darwin-arm64-otp-release.tar.gz`
+- `MirrorNeuron-vX.Y.Z-linux-x64-otp-release.tar.gz`
+- `MirrorNeuron-vX.Y.Z-linux-arm64-otp-release.tar.gz`
+- `SHA256SUMS.txt`
+
+Create a stable release:
+
+```bash
+git checkout main
+git pull
+mix deps.get
+mix format --check-formatted
+mix test
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+See [RELEASE.md](RELEASE.md) for the full release process.
+
+## Troubleshooting
+
+| Problem | Check |
 |---|---|
-| `router` | Routes messages between workflow nodes and agents. |
-| `executor` | Runs bounded units of work. |
-| `aggregator` | Coordinates intermediate and final results. |
-| `sensor` | Ingests external events, signals, and triggers. |
+| Runtime cannot connect to Redis | Confirm Redis is running and `MN_REDIS_URL` points to the correct host, port, and database. |
+| gRPC port is already in use | Change `MN_GRPC_PORT` or stop the process using port `50051`. |
+| Cluster nodes do not join | Verify `MN_NODE_NAME`, `MN_CLUSTER_NODES`, `MN_COOKIE`, EPMD connectivity, and Erlang distribution ports. |
+| Resource admission rejects jobs | Check `MN_RESOURCE_ADMISSION_ENABLED` and resource threshold variables. |
+| Redis Sentinel failover is not resolving | Verify `MN_REDIS_SENTINELS`, `MN_REDIS_SENTINEL_MASTER`, credentials, and optional host mapping. |
+| OTP release fails after extraction | Make sure the release asset matches the target OS and CPU architecture. |
 
-Minimal primitives keep MirrorNeuron understandable while enabling complex orchestration patterns.
+## Roadmap
 
----
+Current roadmap items should be tracked in issues or the documentation repository. Useful future additions to this README include:
 
-## Key Design Idea
-
-### Logical Workers vs. Execution Leases
-
-MirrorNeuron separates workflow state from execution capacity.
-
-| Concept | Meaning |
-|---|---|
-| **Logical Worker** | Lightweight state holder for a workflow node or agent. |
-| **Execution Lease** | Bounded compute capacity used when actual execution is needed. |
-
-This separation enables:
-
-- efficient resource utilization
-- safe execution isolation
-- adaptive scheduling
-- backpressure under load
-- scalable long-running workflows
-
-For on-edge systems, this distinction is especially important: local compute is valuable, constrained, and often shared across agents, tools, sensors, models, and services.
-
----
-
-## Available Today
-
-MirrorNeuron is early, but already includes concrete runtime capabilities.
-
-| Capability | Status |
-|---|---|
-| Core runtime | Available |
-| Message-driven workflow execution | Available |
-| CLI workflow launch | Available |
-| Blueprint runner | Available |
-| Local execution | Available |
-| Clustered execution | Available |
-| Persistence support | Available |
-| Terminal monitoring | Available |
-| Web UI | Ecosystem component |
-| Python SDK | Ecosystem component |
-
-Detailed setup, configuration, and operating instructions live in the documentation repository:
-
-- [Docs landing page](https://github.com/MirrorNeuronLab/mn-docs/blob/main/README.md)
-- [Quickstart](https://github.com/MirrorNeuronLab/mn-docs/blob/main/quickstart.md)
-- [Installation](https://github.com/MirrorNeuronLab/mn-docs/blob/main/installation.md)
-- [Security model](https://github.com/MirrorNeuronLab/mn-docs/blob/main/security.md)
-
----
-
-## Who Is MirrorNeuron For?
-
-| Audience | Why it matters |
-|---|---|
-| **AI application developers** | Build agents that survive failures and run beyond one request. |
-| **Robotics / physical AI teams** | Coordinate local workflows close to sensors, machines, and real-time signals. |
-| **Enterprise AI teams** | Keep sensitive workflows inside private or regulated environments. |
-| **Research labs** | Run long-running scientific agents with state, checkpoints, and recovery. |
-| **Platform teams** | Provide a reusable runtime layer for AI workflows across teams and products. |
-| **Open-source builders** | Contribute to an ambitious infrastructure layer for adaptive AI systems. |
-
----
-
-## Beachhead Use Cases
-
-MirrorNeuron is especially suited for AI systems where cloud-only execution is not enough.
-
-| Use Case | Why Edge Matters |
-|---|---|
-| **Scientific research agents** | Private data, long-running workflows, repeatable experiments. |
-| **Drug discovery workflows** | Multi-step reasoning, tool calls, auditability, recovery. |
-| **Robotics / physical AI** | Low latency, local sensors, safety boundaries. |
-| **Manufacturing / industrial AI** | Private site data, unreliable networks, real-time signals. |
-| **Enterprise agents** | Data ownership, policy control, internal system integration. |
-| **Financial workflows** | Audit trails, deterministic execution, compliance-sensitive data. |
-
----
-
-## Why Developers Care
-
-MirrorNeuron is designed to make useful AI workflows easier to build, run, and debug.
-
-- one-command install
-- reusable blueprints
-- CLI-first workflow launch
-- local development support
-- observable events and workflow state
-- Python SDK ecosystem
-- clear path from demo workflow to repeatable system
-
----
-
-## Why Tech Leads Care
-
-MirrorNeuron is designed for teams that need AI workflows to behave like production software.
-
-- explicit workflow graphs
-- durable state
-- replayable execution
-- observable events
-- bounded execution capacity
-- backpressure under load
-- edge/cloud deployment flexibility
-- SDK, API, and CLI ecosystem
-
----
-
-## Investment Thesis
-
-AI is moving from centralized demos into operational systems: robots, labs, factories, private enterprise networks, developer machines, local clusters, and edge devices.
-
-These systems need more than models. They need infrastructure for orchestration, state, recovery, observability, policy, and control.
-
-MirrorNeuron starts with durable AI workflow execution and expands toward a broader **control plane for on-edge AI systems**.
-
----
-
-## What MirrorNeuron Is — and Is Not
-
-MirrorNeuron is **not** just another prompt framework.
-
-| MirrorNeuron is not | MirrorNeuron is |
-|---|---|
-| A prompt wrapper | A durable runtime for AI systems |
-| A batch scheduler | A message-driven workflow engine |
-| A demo-only agent framework | Infrastructure for long-running agents |
-| A black-box automation tool | Observable, controllable orchestration |
-| A cloud-only platform | Edge-ready AI infrastructure |
-
-MirrorNeuron is designed to sit underneath agent frameworks, tools, SDKs, and interfaces as the execution layer for reliable AI workflows.
-
----
-
-## Comparison
-
-| Project | Primary Focus | Strength | Gap MirrorNeuron Targets |
-|---|---|---|---|
-| **LangGraph** | Agent/workflow graphs | Easy LLM graph composition | Less focused on durable on-edge execution and resource-aware orchestration |
-| **Temporal** | Durable workflows | Production-grade reliability | Not designed specifically for adaptive AI agents or edge-native execution |
-| **Airflow** | Batch/data workflows | Mature scheduling ecosystem | Not ideal for adaptive, message-driven, long-running AI agents |
-| **Ray** | Distributed compute | Scalable parallel execution | Less opinionated around durable workflow control, replay, and agent orchestration |
-| **MirrorNeuron** | On-edge AI infrastructure | Durable, adaptive, message-driven AI runtime | Early ecosystem, actively evolving |
-
----
+- A maintained compatibility matrix for OS, CPU architecture, Elixir, and OTP versions.
+- A manifest schema reference.
+- A complete gRPC API reference.
+- Production deployment examples.
+- Screenshots or demos for CLI and Web UI workflows.
 
 ## Ecosystem
 
-MirrorNeuron is a modular open-source ecosystem.
-
-| Component | Description |
+| Component | Repository |
 |---|---|
-| 🧠 **MirrorNeuron Core Runtime** | https://github.com/MirrorNeuronLab/MirrorNeuron |
-| 🔌 **mn-api** | REST gateway for HTTP access — https://github.com/MirrorNeuronLab/mn-api |
-| 💻 **mn-cli** | CLI for workflow and job lifecycle management — https://github.com/MirrorNeuronLab/mn-cli |
-| 🌐 **mn-web-ui** | Visual workflow dashboard — https://github.com/MirrorNeuronLab/mn-web-ui |
-| 🐍 **mn-python-sdk** | Python SDK for agents and integrations — https://github.com/MirrorNeuronLab/mn-python-sdk |
-| 📦 **mn-deploy** | Deployment tooling — https://github.com/MirrorNeuronLab/mn-deploy |
-| 🧪 **mn-system-tests** | End-to-end testing — https://github.com/MirrorNeuronLab/mn-system-tests |
-| 🏗 **mirrorneuron-blueprints** | Reusable AI workflow examples — https://github.com/MirrorNeuronLab/mirrorneuron-blueprints |
-| 📚 **mn-docs** | Documentation, architecture notes, and guides — https://github.com/MirrorNeuronLab/mn-docs |
-
----
-
-## Roadmap Themes
-
-MirrorNeuron is an ambitious open-source infrastructure project. The long-term goal is to become a shared runtime foundation for adaptive AI systems.
-
-Current roadmap themes include:
-
-- richer blueprint catalog
-- stronger workflow replay and debugging
-- high-availability runtime patterns
-- advanced scheduling and backpressure policies
-- artifact and memory integrations
-- deeper SDK support
-- production-grade observability
-- edge deployment patterns
-- community-driven examples and benchmarks
-
----
-
-## Documentation
-
-The dedicated documentation repository is organized around fast first success, safe operation, and contributor onboarding:
-
-| Goal | Start here |
-|---|---|
-| Install and run the first workflow | [Quickstart](https://github.com/MirrorNeuronLab/mn-docs/blob/main/quickstart.md) |
-| Set up local dependencies | [Installation](https://github.com/MirrorNeuronLab/mn-docs/blob/main/installation.md) |
-| Learn the runtime model | [Runtime Architecture](https://github.com/MirrorNeuronLab/mn-docs/blob/main/runtime-architecture.md) |
-| Use the CLI | [CLI Reference](https://github.com/MirrorNeuronLab/mn-docs/blob/main/cli.md) |
-| Build or run blueprints | [Blueprints and Skills](https://github.com/MirrorNeuronLab/mn-docs/blob/main/blueprints-and-skills.md) |
-| Configure Redis failover | [Redis High Availability](https://github.com/MirrorNeuronLab/mn-docs/blob/main/redis-ha.md) |
-| Operate safely | [Security Model](https://github.com/MirrorNeuronLab/mn-docs/blob/main/security.md) |
-| Fix common failures | [Troubleshooting](https://github.com/MirrorNeuronLab/mn-docs/blob/main/troubleshooting.md) |
-
-Full docs index:
-
-**https://github.com/MirrorNeuronLab/mn-docs**
-
----
-
-## Community
-
-Join the community, share feedback, and help shape the runtime for adaptive on-edge AI workflows.
-
-- Discord: https://discord.com/invite/XmSQqFEz
-- Slack: https://mirrorneuron.slack.com/ssb/redirect
-- Website: https://mirrorneuron.io
-
----
+| Core runtime | <https://github.com/MirrorNeuronLab/MirrorNeuron> |
+| REST API | <https://github.com/MirrorNeuronLab/mn-api> |
+| CLI | <https://github.com/MirrorNeuronLab/mn-cli> |
+| Web UI | <https://github.com/MirrorNeuronLab/mn-web-ui> |
+| Python SDK | <https://github.com/MirrorNeuronLab/mn-python-sdk> |
+| Deployment tooling | <https://github.com/MirrorNeuronLab/mn-deploy> |
+| System tests | <https://github.com/MirrorNeuronLab/mn-system-tests> |
+| Blueprints | <https://github.com/MirrorNeuronLab/mirrorneuron-blueprints> |
+| Documentation | <https://github.com/MirrorNeuronLab/mn-docs> |
 
 ## Contributing
 
-Contributions are welcome across the ecosystem.
+Contributions are welcome. Before opening a pull request:
 
-Good places to contribute:
+1. Run formatting and tests.
+2. Keep changes scoped.
+3. Add or update tests for behavior changes.
+4. Update documentation when configuration, commands, or release behavior changes.
 
-- runtime primitives
-- blueprints and examples
-- SDK integrations
-- documentation
-- tests and benchmarks
-- design discussions
-- edge deployment examples
-
-Start with:
+References:
 
 - [Contributing guide](https://github.com/MirrorNeuronLab/mn-docs/blob/main/contributing.md)
 - [Testing guide](https://github.com/MirrorNeuronLab/mn-docs/blob/main/testing.md)
 - [Documentation style guide](https://github.com/MirrorNeuronLab/mn-docs/blob/main/documentation-style.md)
-- [Blueprints and Skills](https://github.com/MirrorNeuronLab/mn-docs/blob/main/blueprints-and-skills.md)
 
----
+## Code of Conduct
+
+A project-specific code of conduct is not currently included in this repository. Add one here when the project adopts a formal community policy.
 
 ## Security
 
-If you believe you have found a vulnerability, please do **not** disclose exploit details in a public issue.
+Do not disclose vulnerabilities in public issues.
 
-Read the operator-facing security model before running third-party bundles, passing secrets into workers, or exposing a cluster:
+- Security model: <https://github.com/MirrorNeuronLab/mn-docs/blob/main/security.md>
+- Report a vulnerability: <https://github.com/MirrorNeuronLab/MirrorNeuron/security>
 
-**https://github.com/MirrorNeuronLab/mn-docs/blob/main/security.md**
+## Acknowledgments
 
-Use the repository security page for vulnerability reports:
-
-**https://github.com/MirrorNeuronLab/MirrorNeuron/security**
-
----
+MirrorNeuron Core uses the Elixir/OTP ecosystem, Redis, gRPC, protobuf, Horde, and libcluster. See `mix.exs` and `mix.lock` for the current dependency list.
 
 ## License
 
-MIT License
+MirrorNeuron Core is licensed under the MIT License. See [LICENSE](LICENSE).
