@@ -639,22 +639,23 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp persist_job(state) do
     lease = Keyword.get(state.opts, :job_lease)
 
-    job_map = %{
-      job_id: state.job_id,
-      graph_id: state.manifest.graph_id,
-      job_name: state.manifest.job_name,
-      required_context_engine: Map.get(state.manifest, :required_context_engine, false),
-      status: state.status,
-      submitted_at: Map.get(state, :submitted_at, Runtime.timestamp()),
-      updated_at: Runtime.timestamp(),
-      root_agent_ids: state.manifest.entrypoints,
-      placement_policy: Map.get(state.manifest.policies, "placement_policy", "local"),
-      recovery_policy: Map.get(state.manifest.policies, "recovery_mode", "local_restart"),
-      result: state.result,
-      topology: MirrorNeuron.Manifest.topology(state.manifest),
-      manifest_ref: manifest_ref(state)
-    }
-    |> maybe_put_lease(lease)
+    job_map =
+      %{
+        job_id: state.job_id,
+        graph_id: state.manifest.graph_id,
+        job_name: state.manifest.job_name,
+        required_context_engine: Map.get(state.manifest, :required_context_engine, false),
+        status: state.status,
+        submitted_at: Map.get(state, :submitted_at, Runtime.timestamp()),
+        updated_at: Runtime.timestamp(),
+        root_agent_ids: state.manifest.entrypoints,
+        placement_policy: Map.get(state.manifest.policies, "placement_policy", "local"),
+        recovery_policy: Map.get(state.manifest.policies, "recovery_mode", "local_restart"),
+        result: state.result,
+        topology: MirrorNeuron.Manifest.topology(state.manifest),
+        manifest_ref: manifest_ref(state)
+      }
+      |> maybe_put_lease(lease)
 
     case RedisStore.persist_job(state.job_id, job_map) do
       {:ok, _job} ->

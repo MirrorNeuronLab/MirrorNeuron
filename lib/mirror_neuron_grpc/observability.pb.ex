@@ -6,7 +6,7 @@ defmodule Mirrorneuron.Observability.V1.StreamEventsRequest do
     protoc_gen_elixir_version: "0.16.0",
     syntax: :proto3
 
-  field :job_id, 1, type: :string, json_name: "jobId"
+  field(:job_id, 1, type: :string, json_name: "jobId")
 end
 
 defmodule Mirrorneuron.Observability.V1.EventResponse do
@@ -17,7 +17,7 @@ defmodule Mirrorneuron.Observability.V1.EventResponse do
     protoc_gen_elixir_version: "0.16.0",
     syntax: :proto3
 
-  field :event_json, 1, type: :string, json_name: "eventJson"
+  field(:event_json, 1, type: :string, json_name: "eventJson")
 end
 
 defmodule Mirrorneuron.Observability.V1.ObservabilityService.Service do
@@ -27,9 +27,11 @@ defmodule Mirrorneuron.Observability.V1.ObservabilityService.Service do
     name: "mirrorneuron.observability.v1.ObservabilityService",
     protoc_gen_elixir_version: "0.16.0"
 
-  rpc :StreamEvents,
-      Mirrorneuron.Observability.V1.StreamEventsRequest,
-      stream(Mirrorneuron.Observability.V1.EventResponse)
+  rpc(
+    :StreamEvents,
+    Mirrorneuron.Observability.V1.StreamEventsRequest,
+    stream(Mirrorneuron.Observability.V1.EventResponse)
+  )
 end
 
 defmodule Mirrorneuron.Observability.V1.ObservabilityService.Stub do

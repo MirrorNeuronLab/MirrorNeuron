@@ -14,10 +14,8 @@ config :mirror_neuron,
   redis_password: System.get_env("MN_REDIS_PASSWORD"),
   redis_sentinel_username: System.get_env("MN_REDIS_SENTINEL_USERNAME"),
   redis_sentinel_password: System.get_env("MN_REDIS_SENTINEL_PASSWORD"),
-  redis_wait_replicas:
-    String.to_integer(System.get_env("MN_REDIS_WAIT_REPLICAS", "0")),
-  redis_wait_timeout_ms:
-    String.to_integer(System.get_env("MN_REDIS_WAIT_TIMEOUT_MS", "100")),
+  redis_wait_replicas: String.to_integer(System.get_env("MN_REDIS_WAIT_REPLICAS", "0")),
+  redis_wait_timeout_ms: String.to_integer(System.get_env("MN_REDIS_WAIT_TIMEOUT_MS", "100")),
   redis_reconnect_attempts:
     String.to_integer(System.get_env("MN_REDIS_RECONNECT_ATTEMPTS", "10")),
   redis_reconnect_backoff_ms:

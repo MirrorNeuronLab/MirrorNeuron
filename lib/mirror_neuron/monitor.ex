@@ -171,8 +171,7 @@ defmodule MirrorNeuron.Monitor do
          "events" => event_metrics(details),
          "runtime" => %{
            "generated_at" => MirrorNeuron.Runtime.timestamp(),
-           "redis_namespace" =>
-             MirrorNeuron.Config.string("MN_REDIS_NAMESPACE", :redis_namespace)
+           "redis_namespace" => MirrorNeuron.Config.string("MN_REDIS_NAMESPACE", :redis_namespace)
          }
        }}
     end

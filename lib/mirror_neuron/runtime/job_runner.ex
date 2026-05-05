@@ -58,6 +58,7 @@ defmodule MirrorNeuron.Runtime.JobRunner do
 
       {:error, reason} ->
         Logger.warning("failed to start job coordinator for #{job_id}: #{inspect(reason)}")
+
         persist_runner_failure(
           job_id,
           manifest,
@@ -200,17 +201,18 @@ defmodule MirrorNeuron.Runtime.JobRunner do
   end
 
   defp persist_runner_failure(job_id, manifest, bundle, manifest_ref, lease, reason) do
-    defaults = %{
-      "graph_id" => manifest.graph_id,
-      "job_name" => manifest.job_name,
-      "required_context_engine" => Map.get(manifest, :required_context_engine, false),
-      "root_agent_ids" => manifest.entrypoints,
-      "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
-      "recovery_policy" => Map.get(manifest.policies, "recovery_mode", "local_restart"),
-      "manifest_ref" => manifest_ref || Runtime.bundle_ref(manifest, bundle),
-      "submitted_at" => Runtime.timestamp()
-    }
-    |> maybe_put_lease(lease)
+    defaults =
+      %{
+        "graph_id" => manifest.graph_id,
+        "job_name" => manifest.job_name,
+        "required_context_engine" => Map.get(manifest, :required_context_engine, false),
+        "root_agent_ids" => manifest.entrypoints,
+        "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
+        "recovery_policy" => Map.get(manifest.policies, "recovery_mode", "local_restart"),
+        "manifest_ref" => manifest_ref || Runtime.bundle_ref(manifest, bundle),
+        "submitted_at" => Runtime.timestamp()
+      }
+      |> maybe_put_lease(lease)
 
     updates = %{
       "status" => "failed",
