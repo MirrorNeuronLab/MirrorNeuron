@@ -5,6 +5,16 @@ defmodule MirrorNeuron.ResourceAdmissionTest do
 
   alias MirrorNeuron.ResourceAdmission
 
+  defmodule OverloadedHardware do
+    def info do
+      %{
+        cpu: %{load_ratio: 0.2},
+        memory: %{used_ratio: 0.99},
+        gpu: []
+      }
+    end
+  end
+
   setup do
     keys = [
       "MN_RESOURCE_ADMISSION_ENABLED",
@@ -21,6 +31,8 @@ defmodule MirrorNeuron.ResourceAdmissionTest do
         {key, nil} -> System.delete_env(key)
         {key, value} -> System.put_env(key, value)
       end)
+
+      Application.delete_env(:mirror_neuron, :hardware_module)
     end)
 
     :ok
@@ -64,6 +76,7 @@ defmodule MirrorNeuron.ResourceAdmissionTest do
   end
 
   test "run_manifest rejects before loading work when local resource pressure is high" do
+    Application.put_env(:mirror_neuron, :hardware_module, OverloadedHardware)
     System.put_env("MN_MAX_MEMORY_USED_RATIO", "0.000001")
 
     log =

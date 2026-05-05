@@ -6,7 +6,7 @@ defmodule MirrorNeuron.ResourceAdmission do
   alias MirrorNeuron.Cluster.Hardware
   alias MirrorNeuron.Config
 
-  def check(snapshot \\ Hardware.info()) do
+  def check(snapshot \\ hardware_info()) do
     if enabled?() do
       case violations(snapshot) do
         [] ->
@@ -123,5 +123,11 @@ defmodule MirrorNeuron.ResourceAdmission do
       {float, _rest} -> float
       :error -> raise ArgumentError, "#{env_name} must be a number"
     end
+  end
+
+  defp hardware_info do
+    :mirror_neuron
+    |> Application.get_env(:hardware_module, Hardware)
+    |> apply(:info, [])
   end
 end
