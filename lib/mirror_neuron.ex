@@ -75,6 +75,8 @@ defmodule MirrorNeuron do
   def metrics, do: Monitor.metrics()
   def dead_letters(job_id), do: Monitor.dead_letters(job_id)
   def replay_dead_letter(job_id, index), do: Monitor.replay_dead_letter(job_id, index)
+  def recover_unfinished_jobs(opts \\ []), do: Runtime.LocalRecovery.recover_unfinished_jobs(opts)
+  def recover_job(job_id, opts \\ []), do: Runtime.LocalRecovery.recover_job(job_id, opts)
 
   def pause(job_id) do
     if control_node?() do

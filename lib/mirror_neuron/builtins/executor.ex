@@ -128,16 +128,14 @@ defmodule MirrorNeuron.Builtins.Executor do
 
   @impl true
   def recover(%{last_output_payload: payload} = state, _context) when is_map(payload) do
-    actions =
-      [
-        {:event, :executor_output_replayed,
-         %{
-           "reason" => "agent_recovery",
-           "agent_id" => payload["agent_id"]
-         }}
-      ] ++ default_output_actions(state.config, payload)
-
-    {:ok, state, actions}
+    {:ok, state,
+     [
+       {:event, :executor_output_not_replayed,
+        %{
+          "reason" => "completed_output_already_recorded",
+          "agent_id" => payload["agent_id"]
+        }}
+     ]}
   end
 
   def recover(state, _context), do: {:ok, state, []}

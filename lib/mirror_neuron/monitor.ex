@@ -22,6 +22,9 @@ defmodule MirrorNeuron.Monitor do
       "updated_at" => Map.get(job, "updated_at"),
       "placement_policy" => Map.get(job, "placement_policy"),
       "recovery_policy" => Map.get(job, "recovery_policy"),
+      "recovery_status" => Map.get(job, "recovery_status"),
+      "recovery_requires_review" => Map.get(job, "recovery_requires_review", false),
+      "recovery_reason" => Map.get(job, "recovery_reason"),
       "executor_count" => Map.get(job, "executor_count", 0),
       "active_executors" => Map.get(job, "active_executors", 0),
       "nodes" => Map.get(job, "nodes", []),
@@ -220,6 +223,7 @@ defmodule MirrorNeuron.Monitor do
       "updated_at" => Map.get(job, "updated_at"),
       "placement_policy" => Map.get(job, "placement_policy"),
       "recovery_policy" => Map.get(job, "recovery_policy"),
+      "recovery" => recovery_summary(job),
       "executor_count" => Enum.count(agents, &(&1["agent_type"] == "executor")),
       "active_executors" =>
         Enum.count(agents, &(&1["agent_type"] == "executor" and &1["running?"])),
@@ -249,6 +253,17 @@ defmodule MirrorNeuron.Monitor do
          "sandboxes" => sandbox_summaries(events, agent_summaries)
        }}
     end
+  end
+
+  defp recovery_summary(job) do
+    Map.get(job, "recovery") ||
+      %{
+        "status" => Map.get(job, "recovery_status"),
+        "reason" => Map.get(job, "recovery_reason"),
+        "requires_review" => Map.get(job, "recovery_requires_review", false),
+        "can_resume" => Map.get(job, "status") == "paused",
+        "updated_at" => Map.get(job, "updated_at")
+      }
   end
 
   defp recent_events(events, limit) when is_integer(limit) and limit > 0 do

@@ -70,8 +70,45 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   @impl true
   def handle_continue(:recover, state) do
-    schedule_health_check(100)
-    {:noreply, state}
+    terminate_agent_workers(state)
+
+    with :ok <- wait_for_agents_stopped(state, 5_000),
+         {:ok, next_state} <- recover_missing_agents(state) do
+      persist_job(next_state)
+
+      EventBus.publish(state.job_id, %{
+        type: :job_recovered,
+        status: next_state.status,
+        timestamp: Runtime.timestamp()
+      })
+
+      schedule_health_check(next_state.health_check_interval_ms)
+      {:noreply, next_state}
+    else
+      {:error, reason} ->
+        failed_state =
+          finalize_job(
+            state,
+            "failed",
+            %{agent_id: "job_coordinator", error: reason},
+            :job_failed,
+            %{agent_id: "job_coordinator", reason: reason}
+          )
+
+        {:stop, {:shutdown, reason}, failed_state}
+
+      {:error, reason, next_state} ->
+        failed_state =
+          finalize_job(
+            next_state,
+            "failed",
+            %{agent_id: "job_coordinator", error: reason},
+            :job_failed,
+            %{agent_id: "job_coordinator", reason: reason}
+          )
+
+        {:stop, {:shutdown, reason}, failed_state}
+    end
   end
 
   @impl true
@@ -473,6 +510,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   defp start_agent(state, agent_id, recovery_snapshot \\ nil, retry_count \\ 0) do
     node = Map.fetch!(state.nodes_by_id, agent_id)
+    recovery_snapshot = align_recovery_snapshot_with_job_status(state, recovery_snapshot)
 
     spec =
       {AgentWorker,
@@ -489,6 +527,44 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         other
     end
   end
+
+  defp wait_for_agents_stopped(state, timeout_ms) do
+    started_at = System.monotonic_time(:millisecond)
+    do_wait_for_agents_stopped(state, started_at, timeout_ms)
+  end
+
+  defp do_wait_for_agents_stopped(state, started_at, timeout_ms) do
+    running_agents = Enum.filter(state.agent_ids, &agent_ready?(state, &1))
+
+    case running_agents do
+      [] ->
+        :ok
+
+      _agents ->
+        if System.monotonic_time(:millisecond) - started_at > timeout_ms do
+          {:error, "timed out waiting for existing agents to stop before recovery"}
+        else
+          Process.sleep(25)
+          do_wait_for_agents_stopped(state, started_at, timeout_ms)
+        end
+    end
+  end
+
+  defp align_recovery_snapshot_with_job_status(%{status: "paused"}, nil) do
+    %{"metadata" => %{"paused" => true}}
+  end
+
+  defp align_recovery_snapshot_with_job_status(%{status: status}, snapshot)
+       when status in ["running", "paused"] and is_map(snapshot) do
+    metadata =
+      snapshot
+      |> Map.get("metadata", %{})
+      |> Map.put("paused", status == "paused")
+
+    Map.put(snapshot, "metadata", metadata)
+  end
+
+  defp align_recovery_snapshot_with_job_status(_state, snapshot), do: snapshot
 
   defp wait_for_agent_ready(state, agent_id, timeout_ms) do
     started_at = System.monotonic_time(:millisecond)
@@ -509,13 +585,13 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp agent_ready?(state, agent_id) do
-    match?(
-      [{_pid, _meta}],
-      Horde.Registry.lookup(
-        MirrorNeuron.DistributedRegistry,
-        {:agent, state.job_id, agent_id}
-      )
-    )
+    case Horde.Registry.lookup(
+           MirrorNeuron.DistributedRegistry,
+           {:agent, state.job_id, agent_id}
+         ) do
+      [{pid, _meta}] -> Process.alive?(pid)
+      _ -> false
+    end
   end
 
   defp schedule_health_check(interval_ms) do
@@ -653,9 +729,11 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         recovery_policy: Map.get(state.manifest.policies, "recovery_mode", "local_restart"),
         result: state.result,
         topology: MirrorNeuron.Manifest.topology(state.manifest),
+        manifest: MirrorNeuron.Manifest.to_map(state.manifest),
         manifest_ref: manifest_ref(state)
       }
       |> maybe_put_lease(lease)
+      |> Map.merge(existing_recovery_fields(state.job_id))
 
     case RedisStore.persist_job(state.job_id, job_map) do
       {:ok, _job} ->
@@ -685,6 +763,24 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     end)
   end
 
+  defp existing_recovery_fields(job_id) do
+    case RedisStore.fetch_job(job_id) do
+      {:ok, job} ->
+        job
+        |> Map.take([
+          "recovery",
+          "recovery_status",
+          "recovery_reason",
+          "recovery_requires_review"
+        ])
+        |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+        |> Map.new()
+
+      _ ->
+        %{}
+    end
+  end
+
   defp agent_runtime_context(state) do
     lease = Keyword.get(state.opts, :job_lease)
 
@@ -693,6 +789,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       manifest_path: state.bundle && state.bundle.manifest_path,
       payloads_path: state.bundle && state.bundle.payloads_path,
       manifest_ref: manifest_ref(state),
+      manifest: MirrorNeuron.Manifest.to_map(state.manifest),
       graph_id: state.manifest.graph_id,
       job_name: state.manifest.job_name,
       required_context_engine: Map.get(state.manifest, :required_context_engine, false),

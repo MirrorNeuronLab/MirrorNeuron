@@ -150,20 +150,35 @@ defmodule MirrorNeuron.Cluster.Leader do
     case RedisStore.get_lease(lease_name) do
       {:ok, nil} ->
         if safe_to_sweep?(job) do
-          if recoverable_on_cluster?(job) do
-            Logger.info("Job #{job_id} has no active lease. Leader is re-assigning...")
-            # Start the job on the cluster (Horde will distribute it)
-            case start_job_on_cluster(job_id) do
-              :ok -> :recovered
-              _ -> :checked
-            end
-          else
-            Logger.info(
-              "Job #{job_id} has no active lease and is not cluster-recoverable. Marking as failed."
-            )
+          cond do
+            recoverable_on_cluster?(job) ->
+              Logger.info("Job #{job_id} has no active lease. Leader is re-assigning...")
+              # Start the job on the cluster (Horde will distribute it)
+              case start_job_on_cluster(job_id) do
+                :ok -> :recovered
+                _ -> :checked
+              end
 
-            fail_orphaned_job(job_id)
-            :failed
+            recoverable_locally?(job) ->
+              Logger.info(
+                "Job #{job_id} has no active lease and is configured for local recovery. Leaving it for local startup recovery."
+              )
+
+              MirrorNeuron.Runtime.EventBus.publish(job_id, %{
+                type: :local_recovery_waiting,
+                reason: "job requires local recovery on its original machine",
+                timestamp: MirrorNeuron.Runtime.timestamp()
+              })
+
+              :checked
+
+            true ->
+              Logger.info(
+                "Job #{job_id} has no active lease and is not cluster-recoverable. Marking as failed."
+              )
+
+              fail_orphaned_job(job_id)
+              :failed
           end
         else
           :checked
@@ -243,6 +258,10 @@ defmodule MirrorNeuron.Cluster.Leader do
 
   defp recoverable_on_cluster?(job) do
     Map.get(job, "recovery_policy", "local_restart") == "cluster_recover"
+  end
+
+  defp recoverable_locally?(job) do
+    Map.get(job, "recovery_policy", "local_restart") in ["local_restart", "manual_recover"]
   end
 
   defp load_recovery_bundle(job_map) do

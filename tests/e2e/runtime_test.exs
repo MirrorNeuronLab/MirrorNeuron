@@ -3,6 +3,7 @@ defmodule MirrorNeuron.RuntimeTest do
 
   alias MirrorNeuron.Message
   alias MirrorNeuron.Persistence.RedisStore
+  alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.AgentWorker
 
   defmodule StreamProducerRunner do
@@ -230,6 +231,26 @@ defmodule MirrorNeuron.RuntimeTest do
     end
   end
 
+  defmodule SafeRetryRunner do
+    def run(payload, _config, opts) do
+      {:ok,
+       %{
+         "sandbox_name" => "safe-retry",
+         "exit_code" => 0,
+         "stdout" =>
+           Jason.encode!(%{
+             "complete_job" => %{
+               "retried" => true,
+               "payload" => payload,
+               "attempt" => Keyword.get(opts, :attempt)
+             }
+           }),
+         "stderr" => "",
+         "logs" => ""
+       }}
+    end
+  end
+
   defmodule ExplicitCheckpointAgent do
     use MirrorNeuron.AgentTemplate
 
@@ -249,6 +270,54 @@ defmodule MirrorNeuron.RuntimeTest do
             "metadata" => %{"explicit_checkpoint" => true}
           }}
        ]}
+    end
+  end
+
+  defmodule DurableCounterAgent do
+    use MirrorNeuron.AgentTemplate
+
+    @impl true
+    def init(node) do
+      {:ok, %{count: 0, target: Map.get(node.config, "target", 12), seen_ids: []}}
+    end
+
+    @impl true
+    def handle_message(message, state, _context) do
+      payload = payload(message) || %{}
+      message_id = Map.get(payload, "id")
+
+      cond do
+        is_nil(message_id) ->
+          {:ok, state, [{:event, :counter_control_ignored, %{"count" => state.count}}]}
+
+        message_id in state.seen_ids ->
+          {:ok, state,
+           [{:event, :counter_duplicate_ignored, %{"id" => message_id, "count" => state.count}}]}
+
+        true ->
+          seen_ids =
+            if is_nil(message_id), do: state.seen_ids, else: state.seen_ids ++ [message_id]
+
+          next_state = %{state | count: state.count + 1, seen_ids: seen_ids}
+
+          actions = [{:event, :counter_step_completed, %{"count" => next_state.count}}]
+
+          actions =
+            if next_state.count >= next_state.target do
+              actions ++
+                [
+                  {:complete_job,
+                   %{
+                     "count" => next_state.count,
+                     "seen_ids" => next_state.seen_ids
+                   }}
+                ]
+            else
+              actions
+            end
+
+          {:ok, next_state, actions}
+      end
     end
   end
 
@@ -374,6 +443,7 @@ defmodule MirrorNeuron.RuntimeTest do
     wait_until(fn -> running_status?(job_id) end)
 
     assert {:ok, "paused"} = MirrorNeuron.pause(job_id)
+    wait_until(fn -> agent_paused?(job_id, "sink") end)
 
     assert {:ok, "delivered"} =
              MirrorNeuron.send_message(job_id, "sink", %{
@@ -381,9 +451,721 @@ defmodule MirrorNeuron.RuntimeTest do
                "payload" => %{"text" => "approved while paused"}
              })
 
+    wait_until(fn -> agent_pending_count(job_id, "sink") == 1 end)
+
     assert {:ok, "resumed"} = MirrorNeuron.resume(job_id)
     assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 2_000)
     assert job["status"] == "completed"
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "recovers a paused job after coordinator restart and completes after resume" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "pause_resume_recovery_test",
+      "nodes" => [
+        %{
+          "node_id" => "root",
+          "agent_type" => "router",
+          "role" => "root_coordinator",
+          "config" => %{"emit_type" => "manual_result"}
+        },
+        %{
+          "node_id" => "sink",
+          "agent_type" => "aggregator",
+          "config" => %{"complete_on_message" => true}
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    wait_until(fn -> running_status?(job_id) end)
+
+    assert {:ok, "paused"} = MirrorNeuron.pause(job_id)
+    wait_until(fn -> agent_paused?(job_id, "sink") end)
+
+    assert {:ok, "delivered"} =
+             MirrorNeuron.send_message(job_id, "sink", %{
+               "type" => "manual_result",
+               "payload" => %{"text" => "approved across restart"}
+             })
+
+    wait_until(fn -> agent_pending_count(job_id, "sink") == 1 end)
+
+    old_coordinator = job_coordinator_pid(job_id)
+    Process.exit(old_coordinator, :kill)
+
+    wait_until(
+      fn ->
+        case Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:job, job_id}) do
+          [{pid, _meta}] -> pid != old_coordinator
+          _ -> false
+        end
+      end,
+      3_000
+    )
+
+    wait_until(fn -> agent_paused?(job_id, "sink") end, 3_000)
+    assert {:ok, %{"status" => "paused"}} = MirrorNeuron.inspect_job(job_id)
+    assert agent_pending_count(job_id, "sink") == 1
+
+    assert {:ok, "resumed"} = MirrorNeuron.resume(job_id)
+    assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 3_000)
+    assert job["status"] == "completed"
+    assert get_in(job, ["result", "output", "last_message", "text"]) == "approved across restart"
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+    assert Enum.any?(events, &(&1["type"] == "job_recovery_scheduled"))
+    assert Enum.any?(events, &(&1["type"] == "job_recovered"))
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "manual resume restarts a paused orphaned job after local process loss" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "manual_resume_orphan_test",
+      "nodes" => [
+        %{
+          "node_id" => "root",
+          "agent_type" => "router",
+          "role" => "root_coordinator",
+          "config" => %{"emit_type" => "manual_result"}
+        },
+        %{
+          "node_id" => "sink",
+          "agent_type" => "aggregator",
+          "config" => %{"complete_on_message" => true}
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    wait_until(fn -> running_status?(job_id) end)
+
+    assert {:ok, "paused"} = MirrorNeuron.pause(job_id)
+    wait_until(fn -> agent_paused?(job_id, "sink") end)
+
+    assert {:ok, "delivered"} =
+             MirrorNeuron.send_message(job_id, "sink", %{
+               "type" => "manual_result",
+               "payload" => %{"text" => "manual resume after reboot"}
+             })
+
+    wait_until(fn -> agent_pending_count(job_id, "sink") == 1 end)
+
+    runner = job_runner_pid(job_id)
+    :ok = Horde.DynamicSupervisor.terminate_child(MirrorNeuron.Runtime.JobSupervisor, runner)
+    wait_until(fn -> job_runner_pid(job_id, false) == nil end, 2_000)
+
+    assert {:ok, "resumed"} = MirrorNeuron.resume(job_id)
+    assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 3_000)
+    assert job["status"] == "completed"
+
+    assert get_in(job, ["result", "output", "last_message", "text"]) ==
+             "manual resume after reboot"
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "long-running workflow resumes from checkpoint without repeating completed steps" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "long_running_checkpoint_resume_test",
+      "nodes" => [
+        %{
+          "node_id" => "counter",
+          "agent_type" => "module",
+          "role" => "root_coordinator",
+          "config" => %{"module" => DurableCounterAgent, "target" => 12}
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    wait_until(fn -> running_status?(job_id) end)
+
+    send_counter_messages(job_id, 1..5)
+
+    wait_until(
+      fn ->
+        agent_current_count(job_id, "counter") == 5
+      end,
+      2_000
+    )
+
+    old_coordinator = job_coordinator_pid(job_id)
+    Process.exit(old_coordinator, :kill)
+
+    wait_until(
+      fn ->
+        running_status?(job_id) and
+          case Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:job, job_id}) do
+            [{pid, _meta}] -> pid != old_coordinator
+            _ -> false
+          end
+      end,
+      3_000
+    )
+
+    wait_until(fn -> agent_current_count(job_id, "counter") == 5 end, 3_000)
+
+    assert {:ok, "delivered"} =
+             MirrorNeuron.send_message(job_id, "counter", %{
+               "type" => "counter_step",
+               "payload" => %{"id" => 5}
+             })
+
+    send_counter_messages(job_id, 6..12)
+
+    assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 3_000)
+    assert job["status"] == "completed"
+    assert get_in(job, ["result", "output", "count"]) == 12
+    assert get_in(job, ["result", "output", "seen_ids"]) == Enum.to_list(1..12)
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+    assert Enum.any?(events, &(&1["type"] == "job_recovered"))
+    assert Enum.any?(events, &(&1["type"] == "counter_duplicate_ignored"))
+    assert Enum.count(events, &(&1["type"] == "counter_step_completed")) == 12
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "reboot-like startup scan resumes a safe workflow from its durable checkpoint" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "local_reboot_resume_test",
+      "nodes" => [
+        %{
+          "node_id" => "counter",
+          "agent_type" => "module",
+          "role" => "root_coordinator",
+          "config" => %{"module" => DurableCounterAgent, "target" => 8}
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    wait_until(fn -> running_status?(job_id) end)
+
+    send_counter_messages(job_id, 1..5)
+    wait_until(fn -> agent_current_count(job_id, "counter") == 5 end, 2_000)
+
+    runner = job_runner_pid(job_id)
+    :ok = Horde.DynamicSupervisor.terminate_child(MirrorNeuron.Runtime.JobSupervisor, runner)
+    wait_until(fn -> job_runner_pid(job_id, false) == nil end, 2_000)
+
+    assert {:ok, result} = MirrorNeuron.recover_unfinished_jobs(reason: "test_startup_scan")
+    recovered = Enum.find(result.jobs, &(&1.job_id == job_id))
+    assert recovered.action in [:started, :already_running]
+
+    wait_until(fn -> running_status?(job_id) end, 3_000)
+    wait_until(fn -> agent_current_count(job_id, "counter") == 5 end, 3_000)
+
+    assert {:ok, "delivered"} =
+             MirrorNeuron.send_message(job_id, "counter", %{
+               "type" => "counter_step",
+               "payload" => %{"id" => 5}
+             })
+
+    send_counter_messages(job_id, 6..8)
+
+    assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 3_000)
+    assert job["status"] == "completed"
+    assert get_in(job, ["result", "output", "count"]) == 8
+    assert get_in(job, ["result", "output", "seen_ids"]) == Enum.to_list(1..8)
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+    assert Enum.any?(events, &(&1["type"] == "local_recovery_auto_resumed"))
+    assert Enum.count(events, &(&1["type"] == "counter_step_completed")) == 8
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "startup scan repairs a missing job index before recovery" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "local_reboot_index_repair_test",
+      "nodes" => [
+        %{
+          "node_id" => "counter",
+          "agent_type" => "module",
+          "role" => "root_coordinator",
+          "config" => %{"module" => DurableCounterAgent, "target" => 3}
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    wait_until(fn -> running_status?(job_id) end)
+
+    send_counter_messages(job_id, 1..1)
+    wait_until(fn -> agent_current_count(job_id, "counter") == 1 end, 2_000)
+
+    runner = job_runner_pid(job_id)
+    :ok = Horde.DynamicSupervisor.terminate_child(MirrorNeuron.Runtime.JobSupervisor, runner)
+    wait_until(fn -> job_runner_pid(job_id, false) == nil end, 2_000)
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SREM",
+               redis_key(["jobs"]),
+               job_id
+             ])
+
+    assert {:ok, result} = MirrorNeuron.recover_unfinished_jobs(reason: "test_index_repair")
+    recovered = Enum.find(result.jobs, &(&1.job_id == job_id))
+    assert recovered.action in [:started, :already_running]
+
+    wait_until(fn -> agent_current_count(job_id, "counter") == 1 end, 3_000)
+    send_counter_messages(job_id, 2..3)
+
+    assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 3_000)
+    assert job["status"] == "completed"
+    assert get_in(job, ["result", "output", "count"]) == 3
+    assert get_in(job, ["result", "output", "seen_ids"]) == Enum.to_list(1..3)
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+    assert Enum.any?(events, &(&1["type"] == "local_recovery_auto_resumed"))
+    assert Enum.count(events, &(&1["type"] == "counter_step_completed")) == 3
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "startup scan repairs a missing agent index before recovery" do
+    config = %{
+      "runner_module" => SafeRetryRunner,
+      "safe_to_retry" => true,
+      "output_message_type" => nil
+    }
+
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "local_reboot_agent_index_repair_test",
+      "entrypoints" => ["worker"],
+      "nodes" => [
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "role" => "root_coordinator",
+          "config" => config
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    {:ok, job_id} = persist_recoverable_job(manifest, "agent-index-repair")
+
+    RedisStore.persist_agent(job_id, "worker", %{
+      "agent_id" => "worker",
+      "node_id" => "worker",
+      "agent_type" => "executor",
+      "current_state" => %{"runs" => 0},
+      "mailbox_depth" => 0,
+      "processed_messages" => 0,
+      "inflight_message" => %{
+        "id" => "agent-index-message-1",
+        "job_id" => job_id,
+        "to" => "worker",
+        "type" => "retry_safe_work",
+        "payload" => %{"value" => 77}
+      },
+      "pending_messages" => [],
+      "last_heartbeat_at" => Runtime.timestamp(),
+      "parent_job_id" => job_id,
+      "metadata" => %{
+        "paused" => false,
+        "recovery_state" =>
+          encoded_checkpoint(%{
+            config: config,
+            runs: 0,
+            agent_state: %{},
+            last_output_payload: nil,
+            last_result: nil,
+            last_error: nil
+          })
+      }
+    })
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SREM",
+               redis_key(["job", job_id, "agents"]),
+               "worker"
+             ])
+
+    assert {:ok, result} = MirrorNeuron.recover_unfinished_jobs(reason: "test_agent_index_repair")
+    recovered = Enum.find(result.jobs, &(&1.job_id == job_id))
+    assert recovered.action in [:started, :already_running]
+
+    assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 3_000)
+    assert job["status"] == "completed"
+    assert get_in(job, ["result", "output", "payload", "value"]) == 77
+    assert get_in(job, ["result", "output", "retried"]) == true
+
+    assert {:ok, agents} = MirrorNeuron.inspect_agents(job_id)
+    assert Enum.any?(agents, &(&1["agent_id"] == "worker"))
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+    assert Enum.any?(events, &(&1["type"] == "local_recovery_auto_resumed"))
+    assert Enum.any?(events, &(&1["type"] == "sandbox_job_completed"))
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "local recovery retries an in-progress step when it is explicitly safe" do
+    config = %{
+      "runner_module" => SafeRetryRunner,
+      "safe_to_retry" => true,
+      "output_message_type" => nil
+    }
+
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "safe_inflight_retry_test",
+      "entrypoints" => ["worker"],
+      "nodes" => [
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "role" => "root_coordinator",
+          "config" => config
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    {:ok, job_id} = persist_recoverable_job(manifest, "safe-retry")
+
+    RedisStore.persist_agent(job_id, "worker", %{
+      "agent_id" => "worker",
+      "node_id" => "worker",
+      "agent_type" => "executor",
+      "current_state" => %{"runs" => 0},
+      "mailbox_depth" => 0,
+      "processed_messages" => 0,
+      "inflight_message" => %{
+        "id" => "safe-message-1",
+        "job_id" => job_id,
+        "to" => "worker",
+        "type" => "retry_safe_work",
+        "payload" => %{"value" => 42}
+      },
+      "pending_messages" => [],
+      "last_heartbeat_at" => Runtime.timestamp(),
+      "parent_job_id" => job_id,
+      "metadata" => %{
+        "paused" => false,
+        "recovery_state" =>
+          encoded_checkpoint(%{
+            config: config,
+            runs: 0,
+            agent_state: %{},
+            last_output_payload: nil,
+            last_result: nil,
+            last_error: nil
+          })
+      }
+    })
+
+    assert {:ok, %{action: :started}} = MirrorNeuron.recover_job(job_id)
+    assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 3_000)
+    assert job["status"] == "completed"
+    assert get_in(job, ["result", "output", "payload", "value"]) == 42
+    assert get_in(job, ["result", "output", "retried"]) == true
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+    assert Enum.any?(events, &(&1["type"] == "local_recovery_auto_resumed"))
+    assert Enum.any?(events, &(&1["type"] == "sandbox_job_completed"))
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "local recovery does not start a duplicate runner while an active lease exists" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "active_lease_recovery_guard_test",
+      "entrypoints" => ["sink"],
+      "nodes" => [
+        %{
+          "node_id" => "sink",
+          "agent_type" => "aggregator",
+          "role" => "root_coordinator",
+          "config" => %{"complete_after" => 1}
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    {:ok, job_id} = persist_recoverable_job(manifest, "active-lease")
+    {:ok, lease} = RedisStore.acquire_fenced_lease("job:#{job_id}", "other-runtime", 10_000)
+
+    assert {:ok, %{action: :skipped, reason: "job lease is still active"}} =
+             MirrorNeuron.recover_job(job_id)
+
+    assert job_runner_pid(job_id, false) == nil
+    assert {:ok, job} = MirrorNeuron.inspect_job(job_id)
+    assert job["status"] == "running"
+    assert is_nil(job["recovery_status"])
+
+    RedisStore.release_fenced_lease("job:#{job_id}", "other-runtime", lease["epoch"])
+    RedisStore.delete_job(job_id)
+  end
+
+  test "manual_recover policy pauses a safe unfinished run until the operator resumes it" do
+    config = %{
+      "runner_module" => SafeRetryRunner,
+      "safe_to_retry" => true,
+      "output_message_type" => nil
+    }
+
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "manual_policy_recovery_test",
+      "entrypoints" => ["worker"],
+      "nodes" => [
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "role" => "root_coordinator",
+          "config" => config
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "manual_recover"}
+    }
+
+    {:ok, job_id} = persist_recoverable_job(manifest, "manual-policy")
+
+    RedisStore.persist_agent(job_id, "worker", %{
+      "agent_id" => "worker",
+      "node_id" => "worker",
+      "agent_type" => "executor",
+      "current_state" => %{"runs" => 0},
+      "mailbox_depth" => 0,
+      "processed_messages" => 0,
+      "inflight_message" => %{
+        "id" => "manual-policy-message-1",
+        "job_id" => job_id,
+        "to" => "worker",
+        "type" => "retry_safe_work",
+        "payload" => %{"value" => 99}
+      },
+      "pending_messages" => [],
+      "last_heartbeat_at" => Runtime.timestamp(),
+      "parent_job_id" => job_id,
+      "metadata" => %{
+        "paused" => false,
+        "recovery_state" =>
+          encoded_checkpoint(%{
+            config: config,
+            runs: 0,
+            agent_state: %{},
+            last_output_payload: nil,
+            last_result: nil,
+            last_error: nil
+          })
+      }
+    })
+
+    assert {:ok, %{action: :paused_for_review, reason: reason}} =
+             MirrorNeuron.recover_job(job_id)
+
+    assert reason =~ "manual recovery"
+    wait_until(fn -> agent_paused?(job_id, "worker") end, 2_000)
+
+    assert {:ok, job} = MirrorNeuron.inspect_job(job_id)
+    assert job["status"] == "paused"
+    assert job["recovery_requires_review"] == true
+    assert get_in(job, ["recovery", "can_resume"]) == true
+
+    assert {:ok, "resumed"} = MirrorNeuron.resume(job_id)
+    assert {:ok, completed} = MirrorNeuron.wait_for_job(job_id, 3_000)
+    assert completed["status"] == "completed"
+    assert get_in(completed, ["result", "output", "payload", "value"]) == 99
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "local recovery pauses unsafe in-progress steps for manual review" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "unsafe_recovery_review_test",
+      "entrypoints" => ["writer"],
+      "nodes" => [
+        %{
+          "node_id" => "writer",
+          "agent_type" => "executor",
+          "role" => "root_coordinator",
+          "config" => %{"side_effects" => "external", "output_message_type" => nil}
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    {:ok, job_id} = persist_recoverable_job(manifest, "unsafe-review")
+
+    RedisStore.persist_agent(job_id, "writer", %{
+      "agent_id" => "writer",
+      "node_id" => "writer",
+      "agent_type" => "executor",
+      "current_state" => %{"runs" => 0},
+      "mailbox_depth" => 0,
+      "processed_messages" => 0,
+      "inflight_message" => %{
+        "id" => "unsafe-message-1",
+        "job_id" => job_id,
+        "to" => "writer",
+        "type" => "write_file",
+        "payload" => %{"path" => "/tmp/out"}
+      },
+      "pending_messages" => [],
+      "last_heartbeat_at" => Runtime.timestamp(),
+      "parent_job_id" => job_id,
+      "metadata" => %{
+        "paused" => false,
+        "recovery_state" =>
+          encoded_checkpoint(%{
+            config: %{"side_effects" => "external", "output_message_type" => nil},
+            runs: 0,
+            agent_state: %{},
+            last_output_payload: nil,
+            last_result: nil,
+            last_error: nil
+          })
+      }
+    })
+
+    assert {:ok, %{action: :paused_for_review, reason: reason}} =
+             MirrorNeuron.recover_job(job_id)
+
+    assert reason =~ "unsafe side effects"
+    wait_until(fn -> job_runner_pid(job_id, false) != nil end, 2_000)
+    wait_until(fn -> agent_paused?(job_id, "writer") end, 2_000)
+
+    assert {:ok, job} = MirrorNeuron.inspect_job(job_id)
+    assert job["status"] == "paused"
+    assert job["recovery_requires_review"] == true
+    assert get_in(job, ["recovery", "status"]) == "paused_for_review"
+
+    assert {:ok, jobs} = MirrorNeuron.list_jobs(summary: :basic, include_terminal: false)
+    summary = Enum.find(jobs, &(&1["job_id"] == job_id))
+    assert summary["recovery_status"] == "paused_for_review"
+    assert summary["recovery_requires_review"] == true
+
+    assert {:ok, details} = MirrorNeuron.job_details(job_id)
+    assert get_in(details, ["summary", "recovery", "status"]) == "paused_for_review"
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+    assert Enum.any?(events, &(&1["type"] == "local_recovery_paused_for_review"))
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "local recovery pauses corrupted checkpoints without resetting state" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "corrupt_checkpoint_recovery_test",
+      "entrypoints" => ["sink"],
+      "nodes" => [
+        %{
+          "node_id" => "sink",
+          "agent_type" => "aggregator",
+          "role" => "root_coordinator",
+          "config" => %{"complete_after" => 2}
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    {:ok, job_id} = persist_recoverable_job(manifest, "corrupt-checkpoint")
+
+    RedisStore.persist_agent(job_id, "sink", %{
+      "agent_id" => "sink",
+      "node_id" => "sink",
+      "agent_type" => "aggregator",
+      "current_state" => %{"messages" => [%{"value" => 1}]},
+      "mailbox_depth" => 0,
+      "processed_messages" => 1,
+      "inflight_message" => nil,
+      "pending_messages" => [],
+      "last_heartbeat_at" => Runtime.timestamp(),
+      "parent_job_id" => job_id,
+      "metadata" => %{"paused" => false, "recovery_state" => "not valid base64"}
+    })
+
+    assert {:ok, %{action: :paused_for_review, blocked: true}} =
+             MirrorNeuron.recover_job(job_id)
+
+    assert job_runner_pid(job_id, false) == nil
+    assert {:ok, job} = MirrorNeuron.inspect_job(job_id)
+    assert job["status"] == "paused"
+    assert job["recovery_requires_review"] == true
+    assert job["recovery_reason"] =~ "checkpoints are corrupt"
+
+    assert {:ok, agents} = MirrorNeuron.inspect_agents(job_id)
+    assert [%{"current_state" => %{"messages" => [%{"value" => 1}]}}] = agents
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "local recovery pauses visibly when recovery manifest is missing" do
+    job_id = "#{Runtime.generate_job_id("missing_manifest_recovery_test")}-missing-manifest"
+
+    {:ok, _job} =
+      RedisStore.persist_job(job_id, %{
+        "job_id" => job_id,
+        "graph_id" => "missing_manifest_recovery_test",
+        "job_name" => "missing_manifest_recovery_test",
+        "status" => "running",
+        "submitted_at" => Runtime.timestamp(),
+        "updated_at" => Runtime.timestamp(),
+        "root_agent_ids" => ["worker"],
+        "placement_policy" => "local",
+        "recovery_policy" => "local_restart",
+        "result" => nil,
+        "topology" => %{
+          "nodes" => [
+            %{
+              "node_id" => "worker",
+              "agent_type" => "executor",
+              "type" => "generic",
+              "role" => "root_coordinator"
+            }
+          ],
+          "edges" => []
+        },
+        "manifest_ref" => %{}
+      })
+
+    assert {:error, reason} = MirrorNeuron.recover_job(job_id)
+    assert reason =~ "missing_recovery_manifest"
+    assert job_runner_pid(job_id, false) == nil
+
+    assert {:ok, job} = MirrorNeuron.inspect_job(job_id)
+    assert job["status"] == "paused"
+    assert job["recovery_requires_review"] == true
+    assert job["recovery_status"] == "paused_for_review"
+    assert job["recovery_reason"] =~ "missing_recovery_manifest"
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+    assert Enum.any?(events, &(&1["type"] == "local_recovery_paused_for_review"))
 
     RedisStore.delete_job(job_id)
   end
@@ -1040,6 +1822,100 @@ defmodule MirrorNeuron.RuntimeTest do
     end
   end
 
+  defp job_coordinator_pid(job_id) do
+    case Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:job, job_id}) do
+      [{pid, _meta}] -> pid
+      _ -> flunk("job coordinator was not registered for #{job_id}")
+    end
+  end
+
+  defp job_runner_pid(job_id, fail? \\ true) do
+    case Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:job_runner, job_id}) do
+      [{pid, _meta}] ->
+        pid
+
+      _ when fail? ->
+        flunk("job runner was not registered for #{job_id}")
+
+      _ ->
+        nil
+    end
+  end
+
+  defp agent_paused?(job_id, agent_id) do
+    case agent_snapshot(job_id, agent_id) do
+      %{"metadata" => %{"paused" => true}} -> true
+      _ -> false
+    end
+  end
+
+  defp agent_pending_count(job_id, agent_id) do
+    case agent_snapshot(job_id, agent_id) do
+      %{"metadata" => %{"pending_message_count" => count}} when is_integer(count) -> count
+      _ -> 0
+    end
+  end
+
+  defp agent_current_count(job_id, agent_id) do
+    case agent_snapshot(job_id, agent_id) do
+      %{"current_state" => %{"count" => count}} when is_integer(count) ->
+        count
+
+      %{"current_state" => %{"delegate_state" => %{"count" => count}}} when is_integer(count) ->
+        count
+
+      _ ->
+        0
+    end
+  end
+
+  defp agent_snapshot(job_id, agent_id) do
+    case MirrorNeuron.inspect_agents(job_id) do
+      {:ok, agents} -> Enum.find(agents, &(&1["agent_id"] == agent_id))
+      _ -> nil
+    end
+  end
+
+  defp persist_recoverable_job(manifest, suffix) do
+    with {:ok, bundle} <- MirrorNeuron.JobBundle.load(manifest) do
+      job_id = "#{Runtime.generate_job_id(bundle.manifest.graph_id)}-#{suffix}"
+      manifest_map = MirrorNeuron.Manifest.to_map(bundle.manifest)
+
+      {:ok, _job} =
+        RedisStore.persist_job(job_id, %{
+          "job_id" => job_id,
+          "graph_id" => bundle.manifest.graph_id,
+          "job_name" => bundle.manifest.job_name,
+          "daemon" => bundle.manifest.daemon,
+          "required_context_engine" => bundle.manifest.required_context_engine,
+          "status" => "running",
+          "submitted_at" => Runtime.timestamp(),
+          "updated_at" => Runtime.timestamp(),
+          "root_agent_ids" => bundle.manifest.entrypoints,
+          "placement_policy" => Map.get(bundle.manifest.policies, "placement_policy", "local"),
+          "recovery_policy" =>
+            Map.get(bundle.manifest.policies, "recovery_mode", "local_restart"),
+          "result" => nil,
+          "topology" => MirrorNeuron.Manifest.topology(bundle.manifest),
+          "manifest" => manifest_map,
+          "manifest_ref" => %{}
+        })
+
+      {:ok, job_id}
+    end
+  end
+
+  defp encoded_checkpoint(term) do
+    term
+    |> :erlang.term_to_binary()
+    |> Base.encode64()
+  end
+
+  defp redis_key(parts) do
+    namespace = MirrorNeuron.Config.string("MN_REDIS_NAMESPACE", :redis_namespace)
+    Enum.join([namespace | parts], ":")
+  end
+
   defp agent_unregistered?(job_id, agent_id) do
     Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:agent, job_id, agent_id}) == []
   end
@@ -1058,6 +1934,16 @@ defmodule MirrorNeuron.RuntimeTest do
       _message ->
         checkpoint_proxy(parent, job_id)
     end
+  end
+
+  defp send_counter_messages(job_id, range) do
+    Enum.each(range, fn id ->
+      assert {:ok, "delivered"} =
+               MirrorNeuron.send_message(job_id, "counter", %{
+                 "type" => "counter_step",
+                 "payload" => %{"id" => id}
+               })
+    end)
   end
 
   defp wait_until(fun, timeout \\ 1_000) do

@@ -134,6 +134,40 @@ defmodule MirrorNeuron.ManifestTest do
     assert Enum.find(normalized.nodes, &(&1.node_id == "router")).type == "generic"
   end
 
+  test "serializes normalized manifests for durable local recovery reload" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "durable-reload",
+      "entrypoints" => ["worker"],
+      "nodes" => [
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "role" => "root_coordinator",
+          "config" => %{
+            "safe_to_retry" => true,
+            "idempotency_key" => "job:worker:input"
+          }
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"},
+      "initial_inputs" => %{"worker" => [%{"id" => 1}]}
+    }
+
+    assert {:ok, normalized} = Manifest.load(manifest)
+    durable = Manifest.to_map(normalized)
+
+    assert {:ok, reloaded} = Manifest.load(durable)
+    assert reloaded.graph_id == normalized.graph_id
+    assert reloaded.entrypoints == ["worker"]
+    assert reloaded.initial_inputs == %{"worker" => [%{"id" => 1}]}
+
+    worker = Enum.find(reloaded.nodes, &(&1.node_id == "worker"))
+    assert worker.config["safe_to_retry"] == true
+    assert worker.config["idempotency_key"] == "job:worker:input"
+  end
+
   test "defaults requiredContextEngine to false" do
     manifest = %{
       "manifest_version" => "1.0",

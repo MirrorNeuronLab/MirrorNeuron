@@ -109,10 +109,15 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   end
 
   @impl true
-  def handle_cast(:pause, state), do: {:noreply, %{state | paused?: true}}
+  def handle_cast(:pause, state) do
+    next_state = %{state | paused?: true}
+    persist_snapshot(next_state)
+    {:noreply, next_state}
+  end
 
   def handle_cast(:resume, state) do
     next_state = %{state | paused?: false}
+    persist_snapshot(next_state)
     {:noreply, drain_pending(next_state)}
   end
 
@@ -454,6 +459,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
         "root_agent_ids" => state.runtime_context[:entrypoints] || [],
         "placement_policy" => state.runtime_context[:placement_policy] || "local",
         "recovery_policy" => state.runtime_context[:recovery_policy] || "local_restart",
+        "manifest" => state.runtime_context[:manifest],
         "manifest_ref" => manifest_ref(state),
         "submitted_at" => state.runtime_context[:submitted_at] || Runtime.timestamp()
       }
@@ -510,11 +516,17 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
 
   defp initialize_local_state(module, node, %{"metadata" => metadata})
        when is_map(metadata) do
-    case decode_local_state(Map.get(metadata, "recovery_state")) do
-      {:ok, local_state} ->
-        restore_local_state(module, local_state)
+    case Map.fetch(metadata, "recovery_state") do
+      {:ok, encoded} when is_binary(encoded) ->
+        case decode_local_state(encoded) do
+          {:ok, local_state} ->
+            restore_local_state(module, local_state)
 
-      :error ->
+          :error ->
+            {:error, "corrupt recovery_state checkpoint"}
+        end
+
+      _ ->
         module.init(node)
     end
   end

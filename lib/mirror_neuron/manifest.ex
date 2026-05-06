@@ -61,6 +61,23 @@ defmodule MirrorNeuron.Manifest do
     }
   end
 
+  def to_map(%__MODULE__{} = manifest) do
+    %{
+      "manifest_version" => manifest.manifest_version,
+      "graph_id" => manifest.graph_id,
+      "job_name" => manifest.job_name,
+      "daemon" => manifest.daemon,
+      "required_context_engine" => manifest.required_context_engine,
+      "metadata" => json_safe(manifest.metadata),
+      "nodes" => Enum.map(manifest.nodes, &node_to_map/1),
+      "edges" => Enum.map(manifest.edges, &edge_to_map/1),
+      "policies" => json_safe(manifest.policies),
+      "entrypoints" => manifest.entrypoints,
+      "initial_inputs" => json_safe(manifest.initial_inputs),
+      "reload" => json_safe(manifest.reload)
+    }
+  end
+
   defp normalize_and_validate(raw) do
     manifest = %__MODULE__{
       manifest_version: Map.get(raw, "manifest_version"),
@@ -237,6 +254,31 @@ defmodule MirrorNeuron.Manifest do
     }
   end
 
+  defp node_to_map(node) do
+    %{
+      "node_id" => node.node_id,
+      "agent_type" => node.agent_type,
+      "type" => node.type,
+      "role" => node.role,
+      "config" => json_safe(node.config),
+      "tool_bindings" => json_safe(node.tool_bindings),
+      "retry_policy" => json_safe(node.retry_policy),
+      "checkpoint_policy" => json_safe(node.checkpoint_policy),
+      "spawn_policy" => json_safe(node.spawn_policy)
+    }
+  end
+
+  defp edge_to_map(edge) do
+    %{
+      "edge_id" => edge.edge_id,
+      "from_node" => edge.from_node,
+      "to_node" => edge.to_node,
+      "message_type" => edge.message_type,
+      "routing_mode" => edge.routing_mode,
+      "conditions" => json_safe(edge.conditions)
+    }
+  end
+
   defp normalize_edge(raw) do
     %{
       edge_id: Map.get(raw, "edge_id"),
@@ -285,6 +327,19 @@ defmodule MirrorNeuron.Manifest do
 
   defp normalize_required_context_engine(value) when is_boolean(value), do: value
   defp normalize_required_context_engine(value), do: value
+
+  defp json_safe(map) when is_map(map) do
+    Enum.into(map, %{}, fn {key, value} ->
+      key = if is_atom(key), do: Atom.to_string(key), else: key
+      {key, json_safe(value)}
+    end)
+  end
+
+  defp json_safe(list) when is_list(list), do: Enum.map(list, &json_safe/1)
+  defp json_safe(value) when is_binary(value) or is_number(value) or is_boolean(value), do: value
+  defp json_safe(nil), do: nil
+  defp json_safe(value) when is_atom(value), do: Atom.to_string(value)
+  defp json_safe(value), do: inspect(value)
 
   defp maybe_add_error(errors, true, message), do: [message | errors]
   defp maybe_add_error(errors, false, _message), do: errors

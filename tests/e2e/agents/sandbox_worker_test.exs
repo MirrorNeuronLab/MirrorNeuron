@@ -68,6 +68,19 @@ defmodule MirrorNeuron.ExecutorTest do
     end
   end
 
+  defmodule InvalidStructuredRunner do
+    def run(_payload, _config, _opts) do
+      {:ok,
+       %{
+         "sandbox_name" => "invalid-structured-runner",
+         "exit_code" => 0,
+         "stdout" => "{\"emit_messages\":",
+         "stderr" => "",
+         "logs" => ""
+       }}
+    end
+  end
+
   test "retries transient sandbox failures and emits the successful result" do
     lease_manager =
       start_supervised!({LeaseManager, name: unique_name(), capacities: %{"default" => 1}})
@@ -195,6 +208,87 @@ defmodule MirrorNeuron.ExecutorTest do
 
     assert state2.agent_state["count"] == 2
     assert {:complete_job, %{"count" => 2}} = Enum.find(actions2, &match?({:complete_job, _}, &1))
+  end
+
+  test "invalid structured stdout is ignored instead of crashing the workflow" do
+    lease_manager =
+      start_supervised!({LeaseManager, name: unique_name(), capacities: %{"default" => 1}})
+
+    node = %{
+      node_id: "invalid_output_worker",
+      config: %{
+        :runner_module => InvalidStructuredRunner,
+        :lease_manager => lease_manager,
+        "output_message_type" => nil
+      }
+    }
+
+    {:ok, state0} = Executor.init(node)
+
+    context = %{
+      job_id: "job-invalid-structured-output",
+      node: %{node_id: "invalid_output_worker"},
+      coordinator: self(),
+      bundle_root: "/tmp",
+      manifest_path: "/tmp/manifest.json",
+      payloads_path: "/tmp/payloads"
+    }
+
+    assert {:ok, state1, actions} =
+             Executor.handle_message(%{type: "tick", payload: %{}}, state0, context)
+
+    assert state1.runs == 1
+    assert state1.agent_state == %{}
+    assert state1.last_result["stdout"] == "{\"emit_messages\":"
+
+    assert actions == [
+             {:event, :sandbox_job_completed,
+              %{
+                "attempts" => 1,
+                "exit_code" => 0,
+                "lease_id" => state1.last_result["lease"]["lease_id"],
+                "pool" => "default",
+                "sandbox_name" => "invalid-structured-runner"
+              }}
+           ]
+  end
+
+  test "recovery records completed executor output without replaying downstream actions" do
+    node = %{
+      node_id: "recover_worker",
+      config: %{
+        "output_message_type" => "executor_done",
+        "complete_job" => true
+      }
+    }
+
+    {:ok, state} = Executor.init(node)
+
+    payload = %{
+      "agent_id" => "recover_worker",
+      "sandbox" => %{"exit_code" => 0},
+      "input" => %{"value" => 1}
+    }
+
+    recovered_state = %{state | last_output_payload: payload}
+
+    assert {:ok, ^recovered_state, actions} =
+             Executor.recover(recovered_state, %{
+               job_id: "job-recover-output",
+               node: %{node_id: "recover_worker"},
+               coordinator: self()
+             })
+
+    assert actions == [
+             {:event, :executor_output_not_replayed,
+              %{
+                "agent_id" => "recover_worker",
+                "reason" => "completed_output_already_recorded"
+              }}
+           ]
+
+    refute Enum.any?(actions, &match?({:emit, _, _, _}, &1))
+    refute Enum.any?(actions, &match?({:complete_job, _}, &1))
   end
 
   defp unique_name do

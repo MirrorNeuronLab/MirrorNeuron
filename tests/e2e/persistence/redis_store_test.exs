@@ -100,6 +100,171 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert {:error, _reason} = RedisStore.fetch_job(job_id)
   end
 
+  test "repair_recovery_indexes makes orphaned checkpoints discoverable and removes stale index entries",
+       %{namespace: namespace} do
+    job_id = "repair-job-#{System.unique_integer([:positive])}"
+    agent_id = "worker"
+    stale_job_id = "stale-job-#{System.unique_integer([:positive])}"
+    stale_agent_id = "missing-worker"
+
+    job = %{
+      "job_id" => job_id,
+      "status" => "running",
+      "graph_id" => "repair_index_test",
+      "submitted_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+    }
+
+    agent = %{
+      "agent_id" => agent_id,
+      "node_id" => agent_id,
+      "agent_type" => "executor",
+      "current_state" => %{},
+      "metadata" => %{}
+    }
+
+    assert {:ok, "OK"} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SET",
+               redis_key(namespace, ["job", job_id]),
+               Jason.encode!(job)
+             ])
+
+    assert {:ok, "OK"} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SET",
+               redis_key(namespace, ["job", job_id, "agent", agent_id]),
+               Jason.encode!(agent)
+             ])
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SADD",
+               redis_key(namespace, ["jobs"]),
+               stale_job_id
+             ])
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SADD",
+               redis_key(namespace, ["job", job_id, "agents"]),
+               stale_agent_id
+             ])
+
+    assert {:ok, jobs_before} = RedisStore.list_jobs()
+    refute Enum.any?(jobs_before, &(&1["job_id"] == job_id))
+
+    assert {:ok, agents_before} = RedisStore.list_agents(job_id)
+    refute Enum.any?(agents_before, &(&1["agent_id"] == agent_id))
+
+    assert {:ok, result} = RedisStore.repair_recovery_indexes()
+    assert result.repaired_jobs == 1
+    assert result.repaired_agents == 1
+    assert result.removed_stale_jobs == 1
+    assert result.removed_stale_agents == 1
+
+    assert {:ok, jobs_after} = RedisStore.list_jobs()
+    assert Enum.any?(jobs_after, &(&1["job_id"] == job_id))
+
+    assert {:ok, agents_after} = RedisStore.list_agents(job_id)
+    assert Enum.any?(agents_after, &(&1["agent_id"] == agent_id))
+
+    assert {:ok, 0} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SISMEMBER",
+               redis_key(namespace, ["jobs"]),
+               stale_job_id
+             ])
+
+    assert {:ok, 0} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SISMEMBER",
+               redis_key(namespace, ["job", job_id, "agents"]),
+               stale_agent_id
+             ])
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "repair_recovery_indexes removes corrupt indexed checkpoints", %{namespace: namespace} do
+    corrupt_job_id = "corrupt-job-#{System.unique_integer([:positive])}"
+    job_id = "valid-job-#{System.unique_integer([:positive])}"
+    corrupt_agent_id = "corrupt-worker"
+
+    job = %{
+      "job_id" => job_id,
+      "status" => "running",
+      "graph_id" => "corrupt_index_repair_test",
+      "submitted_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+    }
+
+    assert {:ok, "OK"} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SET",
+               redis_key(namespace, ["job", corrupt_job_id]),
+               "{not-json"
+             ])
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SADD",
+               redis_key(namespace, ["jobs"]),
+               corrupt_job_id
+             ])
+
+    assert {:ok, "OK"} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SET",
+               redis_key(namespace, ["job", job_id]),
+               Jason.encode!(job)
+             ])
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SADD",
+               redis_key(namespace, ["jobs"]),
+               job_id
+             ])
+
+    assert {:ok, "OK"} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SET",
+               redis_key(namespace, ["job", job_id, "agent", corrupt_agent_id]),
+               "{not-json"
+             ])
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SADD",
+               redis_key(namespace, ["job", job_id, "agents"]),
+               corrupt_agent_id
+             ])
+
+    assert {:ok, result} = RedisStore.repair_recovery_indexes()
+    assert result.removed_stale_jobs == 1
+    assert result.removed_stale_agents == 1
+
+    assert {:ok, jobs} = RedisStore.list_jobs()
+    refute Enum.any?(jobs, &(&1["job_id"] == corrupt_job_id))
+    assert Enum.any?(jobs, &(&1["job_id"] == job_id))
+
+    assert {:ok, agents} = RedisStore.list_agents(job_id)
+    refute Enum.any?(agents, &(&1["agent_id"] == corrupt_agent_id))
+
+    assert {:ok, 0} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SISMEMBER",
+               redis_key(namespace, ["jobs"]),
+               corrupt_job_id
+             ])
+
+    assert {:ok, 0} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SISMEMBER",
+               redis_key(namespace, ["job", job_id, "agents"]),
+               corrupt_agent_id
+             ])
+  end
+
   test "fenced leases reject stale job and agent writes" do
     job_id = "fenced-job-#{System.unique_integer([:positive])}"
     lease_name = "job:#{job_id}"
@@ -246,6 +411,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
   defp restore_env(key, value), do: Application.put_env(:mirror_neuron, key, value)
   defp restore_system_env(key, nil), do: System.delete_env(key)
   defp restore_system_env(key, value), do: System.put_env(key, value)
+  defp redis_key(namespace, parts), do: Enum.join([namespace | parts], ":")
 
   defp cleanup_namespace(namespace) do
     case Redix.command(MirrorNeuron.Redis.Connection, ["KEYS", "#{namespace}:*"]) do

@@ -1,0 +1,475 @@
+defmodule MirrorNeuron.Runtime.LocalRecovery do
+  use GenServer
+  require Logger
+
+  alias MirrorNeuron.Bundle.Archive
+  alias MirrorNeuron.JobBundle
+  alias MirrorNeuron.Persistence.RedisStore
+  alias MirrorNeuron.Runtime
+  alias MirrorNeuron.Runtime.{EventBus, JobRunner}
+
+  @active_statuses ["pending", "running", "paused"]
+  @default_startup_scan_delay_ms 500
+  @default_scan_interval_ms 5_000
+
+  def start_link(opts \\ []) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  end
+
+  def scan(opts \\ []) do
+    scan(__MODULE__, opts)
+  end
+
+  def scan(server, opts) do
+    GenServer.call(server, {:scan, opts}, 30_000)
+  end
+
+  def recover_unfinished_jobs(opts \\ []) do
+    maybe_repair_recovery_indexes()
+
+    with {:ok, jobs} <- RedisStore.list_jobs() do
+      jobs
+      |> Enum.filter(&(&1["status"] in @active_statuses))
+      |> Enum.reduce(%{checked: 0, recovered: 0, paused: 0, skipped: 0, failed: 0, jobs: []}, fn
+        job, acc ->
+          result =
+            case recover_job_map(job, opts) do
+              {:ok, value} -> value
+              {:error, reason} -> %{job_id: job["job_id"], action: :failed, reason: reason}
+            end
+
+          acc
+          |> bump(result.action)
+          |> Map.update!(:checked, &(&1 + 1))
+          |> Map.update!(:jobs, &[result | &1])
+      end)
+      |> Map.update!(:jobs, &Enum.reverse/1)
+      |> then(&{:ok, &1})
+    end
+  end
+
+  defp maybe_repair_recovery_indexes do
+    case RedisStore.repair_recovery_indexes() do
+      {:ok, result} ->
+        if recovery_index_repairs(result) > 0 do
+          Logger.info("repaired MirrorNeuron recovery indexes: #{inspect(result)}")
+        end
+
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("failed to repair MirrorNeuron recovery indexes: #{inspect(reason)}")
+        :ok
+    end
+  end
+
+  defp recovery_index_repairs(result) do
+    Map.get(result, :repaired_jobs, 0) +
+      Map.get(result, :repaired_agents, 0) +
+      Map.get(result, :removed_stale_jobs, 0) +
+      Map.get(result, :removed_stale_agents, 0)
+  end
+
+  def recover_job(job_id, opts \\ []) when is_binary(job_id) do
+    with {:ok, job} <- RedisStore.fetch_job(job_id) do
+      recover_job_map(job, opts)
+    end
+  end
+
+  @impl true
+  def init(opts) do
+    if enabled?() do
+      Process.send_after(self(), :scan, Keyword.get(opts, :startup_delay_ms, startup_delay_ms()))
+    end
+
+    {:ok, %{scan_interval_ms: Keyword.get(opts, :scan_interval_ms, scan_interval_ms())}}
+  end
+
+  @impl true
+  def handle_info(:scan, state) do
+    _ = recover_unfinished_jobs(reason: "startup_or_periodic_scan")
+    Process.send_after(self(), :scan, state.scan_interval_ms)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_call({:scan, opts}, _from, state) do
+    {:reply, recover_unfinished_jobs(opts), state}
+  end
+
+  defp recover_job_map(%{"job_id" => job_id, "status" => status} = job, opts)
+       when status in @active_statuses do
+    cond do
+      job_runner_alive?(job_id) ->
+        {:ok, %{job_id: job_id, action: :already_running, reason: "job runner is live"}}
+
+      active_lease?(job_id) and not Keyword.get(opts, :ignore_lease, false) ->
+        {:ok, %{job_id: job_id, action: :skipped, reason: "job lease is still active"}}
+
+      true ->
+        do_recover_job(job, opts)
+    end
+  end
+
+  defp recover_job_map(%{"job_id" => job_id, "status" => status}, _opts) do
+    {:ok, %{job_id: job_id, action: :skipped, reason: "job is #{status}"}}
+  end
+
+  defp do_recover_job(job, opts) do
+    job_id = job["job_id"]
+
+    with {:ok, bundle} <- load_recovery_bundle(job),
+         {:ok, agents} <- RedisStore.list_agents(job_id) do
+      case recovery_decision(job, bundle.manifest, agents, opts) do
+        {:auto, reason} ->
+          mark_recovery(job, "auto_resuming", reason, requires_review?: false)
+          start_recovered_job(job, bundle, :local_recovery_auto_resumed, reason)
+
+        {:manual, reason} ->
+          mark_recovery(job, "paused_for_review", reason,
+            requires_review?: true,
+            status: "paused"
+          )
+
+          start_recovered_job(job, bundle, :local_recovery_paused_for_review, reason)
+          |> normalize_manual_result()
+
+        {:blocked, reason} ->
+          mark_recovery(job, "paused_for_review", reason,
+            requires_review?: true,
+            status: "paused"
+          )
+
+          EventBus.publish(job_id, %{
+            type: :local_recovery_paused_for_review,
+            reason: reason,
+            blocked: true,
+            timestamp: Runtime.timestamp()
+          })
+
+          {:ok, %{job_id: job_id, action: :paused_for_review, reason: reason, blocked: true}}
+      end
+    else
+      {:error, reason} ->
+        mark_recovery(job, "paused_for_review", inspect(reason),
+          requires_review?: true,
+          status: "paused"
+        )
+
+        EventBus.publish(job_id, %{
+          type: :local_recovery_paused_for_review,
+          reason: inspect(reason),
+          blocked: true,
+          timestamp: Runtime.timestamp()
+        })
+
+        {:error, "could not prepare local recovery for #{job_id}: #{inspect(reason)}"}
+    end
+  end
+
+  defp normalize_manual_result({:ok, %{action: :started} = result}),
+    do: {:ok, %{result | action: :paused_for_review}}
+
+  defp normalize_manual_result(other), do: other
+
+  defp recovery_decision(job, manifest, agents, opts) do
+    cond do
+      corrupt_checkpoint?(agents) ->
+        {:blocked, "one or more agent checkpoints are corrupt; manual inspection is required"}
+
+      missing_required_snapshots?(job, manifest, agents) ->
+        {:manual, "running job is missing one or more durable agent snapshots"}
+
+      job["status"] == "paused" and not Keyword.get(opts, :manual_resume, false) ->
+        {:manual, "job was paused before the runtime stopped"}
+
+      Map.get(job, "recovery_policy", "local_restart") == "manual_recover" and
+          not Keyword.get(opts, :manual_resume, false) ->
+        {:manual, "workflow is configured for manual recovery"}
+
+      unsafe_active_step?(manifest, agents) ->
+        {:manual, "an in-progress or queued step may have unsafe side effects"}
+
+      true ->
+        {:auto, "all active checkpoints are safe to resume locally"}
+    end
+  end
+
+  defp start_recovered_job(job, bundle, event_type, reason) do
+    job_id = job["job_id"]
+    spec = {JobRunner, {job_id, bundle.manifest, [job_bundle: bundle, local_recovery: true]}}
+
+    case Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) do
+      {:ok, _pid} ->
+        maybe_mark_started(job, event_type, reason)
+
+        EventBus.publish(job_id, %{
+          type: event_type,
+          reason: reason,
+          timestamp: Runtime.timestamp()
+        })
+
+        {:ok, %{job_id: job_id, action: :started, reason: reason}}
+
+      {:error, {:already_started, _pid}} ->
+        {:ok, %{job_id: job_id, action: :already_running, reason: "job runner is live"}}
+
+      {:error, reason} ->
+        mark_recovery(job, "paused_for_review", inspect(reason),
+          requires_review?: true,
+          status: "paused"
+        )
+
+        {:error, "failed to start local recovery for #{job_id}: #{inspect(reason)}"}
+    end
+  end
+
+  defp maybe_mark_started(job, :local_recovery_auto_resumed, reason) do
+    mark_recovery(job, "auto_resumed", reason, requires_review?: false)
+  end
+
+  defp maybe_mark_started(_job, _event_type, _reason), do: :ok
+
+  defp load_recovery_bundle(job) do
+    manifest_ref = job["manifest_ref"] || %{}
+    fingerprint = manifest_ref["bundle_fingerprint"] || manifest_ref[:bundle_fingerprint]
+    job_path = manifest_ref["job_path"] || manifest_ref[:job_path]
+
+    cond do
+      is_binary(fingerprint) and fingerprint != "" ->
+        case Archive.load(fingerprint) do
+          {:ok, bundle} -> {:ok, bundle}
+          {:error, _reason} when is_binary(job_path) -> JobBundle.load(job_path)
+          {:error, _reason} -> load_embedded_manifest(job)
+        end
+
+      is_binary(job_path) ->
+        JobBundle.load(job_path)
+
+      true ->
+        load_embedded_manifest(job)
+    end
+  end
+
+  defp load_embedded_manifest(%{"manifest" => manifest}) when is_map(manifest) do
+    JobBundle.load(manifest)
+  end
+
+  defp load_embedded_manifest(_job), do: {:error, :missing_recovery_manifest}
+
+  defp mark_recovery(job, status, reason, opts) do
+    now = Runtime.timestamp()
+    requires_review? = Keyword.get(opts, :requires_review?, false)
+
+    recovery = %{
+      "status" => status,
+      "reason" => reason,
+      "requires_review" => requires_review?,
+      "can_resume" => requires_review?,
+      "updated_at" => now
+    }
+
+    updates =
+      %{
+        "recovery" => recovery,
+        "recovery_status" => status,
+        "recovery_reason" => reason,
+        "recovery_requires_review" => requires_review?
+      }
+      |> maybe_put_status(Keyword.get(opts, :status))
+
+    defaults = %{
+      "job_id" => job["job_id"],
+      "graph_id" => job["graph_id"] || "unknown",
+      "job_name" => job["job_name"] || job["graph_id"] || "unknown",
+      "root_agent_ids" => job["root_agent_ids"] || [],
+      "placement_policy" => job["placement_policy"] || "local",
+      "recovery_policy" => job["recovery_policy"] || "local_restart",
+      "manifest" => job["manifest"],
+      "manifest_ref" => job["manifest_ref"] || %{},
+      "submitted_at" => job["submitted_at"] || now
+    }
+
+    case RedisStore.persist_terminal_job(job["job_id"], updates, defaults) do
+      {:ok, _job} ->
+        :ok
+
+      {:error, persist_reason} ->
+        Logger.warning(
+          "failed to persist local recovery status for #{job["job_id"]}: #{inspect(persist_reason)}"
+        )
+    end
+  end
+
+  defp maybe_put_status(map, nil), do: map
+  defp maybe_put_status(map, status), do: Map.put(map, "status", status)
+
+  defp active_lease?(job_id) do
+    case RedisStore.get_lease("job:#{job_id}") do
+      {:ok, nil} -> false
+      {:ok, _lease} -> true
+      {:error, _reason} -> true
+    end
+  end
+
+  defp job_runner_alive?(job_id) do
+    case Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:job_runner, job_id}) do
+      [{pid, _meta}] -> Process.alive?(pid)
+      _ -> false
+    end
+  end
+
+  defp corrupt_checkpoint?(agents) do
+    Enum.any?(agents, fn agent ->
+      recovery_state = get_in(agent, ["metadata", "recovery_state"])
+      processed_messages = Map.get(agent, "processed_messages", 0)
+
+      cond do
+        is_binary(recovery_state) -> decode_checkpoint(recovery_state) == :error
+        processed_messages > 0 -> true
+        true -> false
+      end
+    end)
+  end
+
+  defp decode_checkpoint(encoded) do
+    with {:ok, binary} <- Base.decode64(encoded) do
+      _ = :erlang.binary_to_term(binary)
+      :ok
+    else
+      _ -> :error
+    end
+  rescue
+    _ -> :error
+  end
+
+  defp missing_required_snapshots?(%{"status" => "running"}, manifest, agents) do
+    agent_ids = agents |> Enum.map(&(&1["agent_id"] || &1["node_id"])) |> MapSet.new()
+
+    manifest.nodes
+    |> Enum.map(& &1.node_id)
+    |> Enum.any?(&(not MapSet.member?(agent_ids, &1)))
+  end
+
+  defp missing_required_snapshots?(_job, _manifest, _agents), do: false
+
+  defp unsafe_active_step?(manifest, agents) do
+    nodes_by_id = Map.new(manifest.nodes, &{&1.node_id, &1})
+
+    Enum.any?(agents, fn agent ->
+      active_snapshot?(agent) and
+        agent
+        |> agent_node(nodes_by_id)
+        |> node_requires_review?()
+    end)
+  end
+
+  defp active_snapshot?(agent) do
+    not is_nil(Map.get(agent, "inflight_message")) or
+      Map.get(agent, "mailbox_depth", 0) > 0 or
+      Map.get(agent, "pending_messages", []) != []
+  end
+
+  defp agent_node(agent, nodes_by_id) do
+    Map.get(nodes_by_id, agent["agent_id"] || agent["node_id"]) ||
+      %{agent_type: agent["agent_type"], config: %{}}
+  end
+
+  defp node_requires_review?(nil), do: true
+
+  defp node_requires_review?(node) do
+    config = Map.get(node, :config, %{})
+
+    cond do
+      truthy?(Map.get(config, "manual_review_on_recovery")) ->
+        true
+
+      truthy?(Map.get(config, "requires_approval")) ->
+        true
+
+      truthy?(Map.get(config, "unsafe")) ->
+        true
+
+      explicitly_false?(Map.get(config, "safe_to_retry")) ->
+        true
+
+      explicitly_false?(Map.get(config, "idempotent")) ->
+        true
+
+      unsafe_side_effects?(Map.get(config, "side_effects") || Map.get(config, "side_effect")) ->
+        true
+
+      node.agent_type == "executor" and not retry_safe?(config) ->
+        true
+
+      true ->
+        false
+    end
+  end
+
+  defp retry_safe?(config) do
+    truthy?(Map.get(config, "safe_to_retry")) or
+      truthy?(Map.get(config, "idempotent")) or
+      non_empty?(Map.get(config, "idempotency_key")) or
+      non_empty?(Map.get(config, "recovery_idempotency_key"))
+  end
+
+  defp unsafe_side_effects?(value)
+       when value in [true, "true", "unsafe", "external", "write", "writes"],
+       do: true
+
+  defp unsafe_side_effects?(_value), do: false
+
+  defp truthy?(value), do: value in [true, "true", "1", "yes"]
+  defp explicitly_false?(value), do: value in [false, "false", "0", "no"]
+  defp non_empty?(value) when is_binary(value), do: String.trim(value) != ""
+  defp non_empty?(_value), do: false
+
+  defp bump(acc, :started), do: Map.update!(acc, :recovered, &(&1 + 1))
+  defp bump(acc, :paused_for_review), do: Map.update!(acc, :paused, &(&1 + 1))
+  defp bump(acc, :failed), do: Map.update!(acc, :failed, &(&1 + 1))
+  defp bump(acc, _action), do: Map.update!(acc, :skipped, &(&1 + 1))
+
+  defp enabled? do
+    env_enabled?("MN_LOCAL_RECOVERY_ENABLED", :local_recovery_enabled, true)
+  end
+
+  defp startup_delay_ms do
+    config_integer(
+      "MN_LOCAL_RECOVERY_STARTUP_DELAY_MS",
+      :local_recovery_startup_delay_ms,
+      @default_startup_scan_delay_ms
+    )
+  end
+
+  defp scan_interval_ms do
+    config_integer(
+      "MN_LOCAL_RECOVERY_SCAN_INTERVAL_MS",
+      :local_recovery_scan_interval_ms,
+      @default_scan_interval_ms
+    )
+  end
+
+  defp config_integer(env_name, key, default) do
+    case System.get_env(env_name) do
+      nil -> Application.get_env(:mirror_neuron, key, default)
+      "" -> Application.get_env(:mirror_neuron, key, default)
+      value -> parse_non_negative_integer(value, default)
+    end
+  end
+
+  defp parse_non_negative_integer(value, default) do
+    case Integer.parse(to_string(value)) do
+      {parsed, ""} when parsed >= 0 -> parsed
+      _ -> default
+    end
+  end
+
+  defp env_enabled?(env_name, key, default) do
+    case System.get_env(env_name) do
+      nil -> Application.get_env(:mirror_neuron, key, default)
+      "" -> false
+      value -> value not in ["0", "false", "FALSE", "False", "no", "NO"]
+    end
+  end
+end

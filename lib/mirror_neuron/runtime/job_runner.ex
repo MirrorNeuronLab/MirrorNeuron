@@ -4,9 +4,10 @@ defmodule MirrorNeuron.Runtime.JobRunner do
 
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
-  alias MirrorNeuron.Runtime.JobCoordinator
+  alias MirrorNeuron.Runtime.{EventBus, JobCoordinator}
   alias MirrorNeuron.Runtime.Naming
 
+  @active_statuses ["pending", "running", "paused"]
   @terminal_statuses ["completed", "failed", "cancelled"]
   @lease_duration_ms 10_000
   @lease_renew_interval_ms 3_000
@@ -111,14 +112,9 @@ defmodule MirrorNeuron.Runtime.JobRunner do
   end
 
   def handle_info({:EXIT, pid, reason}, %{coordinator: pid} = state) do
-    persist_missing_terminal_state(state, reason)
+    exit_action = classify_coordinator_exit(state, reason)
 
-    stop_reason =
-      case reason do
-        :normal -> :normal
-        :shutdown -> :normal
-        other -> {:shutdown, other}
-      end
+    stop_reason = if exit_action == :restart, do: {:coordinator_exit, reason}, else: :normal
 
     {:stop, stop_reason, state}
   end
@@ -132,10 +128,23 @@ defmodule MirrorNeuron.Runtime.JobRunner do
     :ok
   end
 
-  defp persist_missing_terminal_state(state, reason) do
+  defp classify_coordinator_exit(state, reason) do
     case RedisStore.fetch_job(state.job_id) do
       {:ok, %{"status" => status}} when status in @terminal_statuses ->
-        :ok
+        :terminal
+
+      {:ok, %{"status" => status}} when status in @active_statuses and reason != :normal ->
+        Logger.warning(
+          "job coordinator for #{state.job_id} exited unexpectedly; scheduling recovery: #{inspect(reason)}"
+        )
+
+        EventBus.publish(state.job_id, %{
+          type: :job_recovery_scheduled,
+          reason: inspect(reason),
+          timestamp: Runtime.timestamp()
+        })
+
+        :restart
 
       _ ->
         Logger.warning(
@@ -150,6 +159,8 @@ defmodule MirrorNeuron.Runtime.JobRunner do
           state.lease,
           reason
         )
+
+        :failed
     end
   end
 
@@ -209,6 +220,7 @@ defmodule MirrorNeuron.Runtime.JobRunner do
         "root_agent_ids" => manifest.entrypoints,
         "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
         "recovery_policy" => Map.get(manifest.policies, "recovery_mode", "local_restart"),
+        "manifest" => MirrorNeuron.Manifest.to_map(manifest),
         "manifest_ref" => manifest_ref || Runtime.bundle_ref(manifest, bundle),
         "submitted_at" => Runtime.timestamp()
       }
@@ -242,6 +254,7 @@ defmodule MirrorNeuron.Runtime.JobRunner do
       "root_agent_ids" => manifest.entrypoints,
       "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
       "recovery_policy" => Map.get(manifest.policies, "recovery_mode", "local_restart"),
+      "manifest" => MirrorNeuron.Manifest.to_map(manifest),
       "manifest_ref" => manifest_ref,
       "submitted_at" => Runtime.timestamp()
     }

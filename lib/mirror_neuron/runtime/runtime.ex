@@ -5,7 +5,7 @@ defmodule MirrorNeuron.Runtime do
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.ContextEnginePreflight
   alias MirrorNeuron.JobId
-  alias MirrorNeuron.Runtime.{Backpressure, EventBus, JobRunner}
+  alias MirrorNeuron.Runtime.{Backpressure, EventBus, JobRunner, LocalRecovery}
 
   def start_job(manifest, opts \\ []) do
     job_id = Keyword.get(opts, :job_id, generate_job_id(manifest.graph_id))
@@ -45,7 +45,29 @@ defmodule MirrorNeuron.Runtime do
   end
 
   def pause_job(job_id), do: call_job(job_id, :pause)
-  def resume_job(job_id), do: call_job(job_id, :resume)
+
+  def resume_job(job_id) do
+    case call_job(job_id, :resume) do
+      {:error, "job " <> _ = reason} ->
+        case LocalRecovery.recover_job(job_id, manual_resume: true) do
+          {:ok, %{action: action}} when action in [:started, :already_running] ->
+            call_job(job_id, :resume)
+
+          {:ok, %{action: :paused_for_review}} ->
+            call_job(job_id, :resume)
+
+          {:ok, %{action: :skipped, reason: _skip_reason}} ->
+            {:error, reason}
+
+          {:error, recover_reason} ->
+            {:error, recover_reason}
+        end
+
+      other ->
+        other
+    end
+  end
+
   def cancel_job(job_id), do: call_job(job_id, :cancel)
 
   def cleanup_jobs(opts \\ []) do
@@ -239,6 +261,7 @@ defmodule MirrorNeuron.Runtime do
       "recovery_policy" => Map.get(manifest.policies, "recovery_mode", "local_restart"),
       "result" => nil,
       "topology" => MirrorNeuron.Manifest.topology(manifest),
+      "manifest" => MirrorNeuron.Manifest.to_map(manifest),
       "manifest_ref" => manifest_ref
     }
 

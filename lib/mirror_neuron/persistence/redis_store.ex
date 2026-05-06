@@ -11,9 +11,15 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   @default_bundle_archive_ttl_seconds 7 * 24 * 60 * 60
 
   def persist_job(job_id, job_map) do
+    encoded = Jason.encode!(job_map)
+
     with :ok <- validate_job_lease_epoch(job_id, job_map),
-         {:ok, "OK"} <- command(["SET", key("job", job_id), Jason.encode!(job_map)]),
-         {:ok, _count} <- command(["SADD", key(@jobs_set), job_id]),
+         {:ok, results} <-
+           transaction([
+             ["SET", key("job", job_id), encoded],
+             ["SADD", key(@jobs_set), job_id]
+           ]),
+         :ok <- expect_persist_job_results(results),
          :ok <- apply_job_retention(job_id, job_map),
          :ok <- wait_for_replicas() do
       {:ok, job_map}
@@ -89,7 +95,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
     with :ok <- validate_agent_lease_epoch(job_id, snapshot),
          {:ok, results} <-
-           pipeline([
+           transaction([
              ["SET", key("job", job_id, "agent", agent_id), encoded],
              ["SADD", key("job", job_id, "agents"), agent_id]
              | expire_agent_snapshot_commands(job_id, agent_id)
@@ -113,6 +119,16 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       {:ok, nil} -> {:error, "agent #{agent_id} was not found for job #{job_id}"}
       {:ok, encoded} -> Jason.decode(encoded)
       {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  def repair_recovery_indexes do
+    with {:ok, redis_keys} <- scan_keys(key("job", "*")),
+         {:ok, indexed_job_ids} <- raw_job_ids(),
+         {:ok, job_repair} <- repair_job_index(redis_keys, indexed_job_ids),
+         {:ok, agent_repair} <- repair_agent_indexes(redis_keys, indexed_job_ids),
+         :ok <- wait_for_replicas() do
+      {:ok, Map.merge(job_repair, agent_repair)}
     end
   end
 
@@ -461,6 +477,150 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     |> Enum.reject(&is_nil/1)
   end
 
+  defp repair_job_index(redis_keys, indexed_job_ids) do
+    root_job_ids =
+      redis_keys
+      |> Enum.flat_map(&root_job_id_from_key/1)
+      |> Enum.uniq()
+
+    indexed_job_ids = Enum.uniq(indexed_job_ids)
+    indexed_job_set = MapSet.new(indexed_job_ids)
+
+    repaired_jobs =
+      root_job_ids
+      |> Enum.filter(&(valid_job_key?(&1) and not MapSet.member?(indexed_job_set, &1)))
+      |> Enum.count(fn job_id ->
+        case command(["SADD", key(@jobs_set), job_id]) do
+          {:ok, count} when is_integer(count) -> count > 0
+          _ -> false
+        end
+      end)
+
+    removed_stale_jobs =
+      indexed_job_ids
+      |> Enum.reject(&valid_job_key?/1)
+      |> Enum.count(fn job_id ->
+        case command(["SREM", key(@jobs_set), job_id]) do
+          {:ok, count} when is_integer(count) -> count > 0
+          _ -> false
+        end
+      end)
+
+    {:ok, %{repaired_jobs: repaired_jobs, removed_stale_jobs: removed_stale_jobs}}
+  end
+
+  defp repair_agent_indexes(redis_keys, indexed_job_ids) do
+    agent_refs =
+      redis_keys
+      |> Enum.flat_map(&agent_ref_from_key/1)
+      |> Enum.uniq()
+
+    job_ids =
+      (indexed_job_ids ++
+         Enum.map(agent_refs, &elem(&1, 0)) ++
+         Enum.flat_map(redis_keys, &root_job_id_from_key/1) ++
+         Enum.flat_map(redis_keys, &agent_index_job_id_from_key/1))
+      |> Enum.uniq()
+
+    repaired_agents =
+      agent_refs
+      |> Enum.filter(fn {job_id, agent_id} -> valid_agent_key?(job_id, agent_id) end)
+      |> Enum.count(fn {job_id, agent_id} ->
+        case command(["SISMEMBER", key("job", job_id, "agents"), agent_id]) do
+          {:ok, 1} ->
+            false
+
+          {:ok, 0} ->
+            case command(["SADD", key("job", job_id, "agents"), agent_id]) do
+              {:ok, count} when is_integer(count) -> count > 0
+              _ -> false
+            end
+
+          _ ->
+            false
+        end
+      end)
+
+    removed_stale_agents =
+      job_ids
+      |> Enum.flat_map(fn job_id ->
+        case command(["SMEMBERS", key("job", job_id, "agents")]) do
+          {:ok, agent_ids} -> Enum.map(agent_ids, &{job_id, &1})
+          _ -> []
+        end
+      end)
+      |> Enum.reject(fn {job_id, agent_id} -> valid_agent_key?(job_id, agent_id) end)
+      |> Enum.count(fn {job_id, agent_id} ->
+        case command(["SREM", key("job", job_id, "agents"), agent_id]) do
+          {:ok, count} when is_integer(count) -> count > 0
+          _ -> false
+        end
+      end)
+
+    {:ok, %{repaired_agents: repaired_agents, removed_stale_agents: removed_stale_agents}}
+  end
+
+  defp valid_job_key?(job_id) do
+    case command(["GET", key("job", job_id)]) do
+      {:ok, encoded} when is_binary(encoded) ->
+        case Jason.decode(encoded) do
+          {:ok, job} when is_map(job) -> true
+          _ -> false
+        end
+
+      _ ->
+        false
+    end
+  end
+
+  defp valid_agent_key?(job_id, agent_id) do
+    case command(["GET", key("job", job_id, "agent", agent_id)]) do
+      {:ok, encoded} when is_binary(encoded) ->
+        case Jason.decode(encoded) do
+          {:ok, agent} when is_map(agent) -> true
+          _ -> false
+        end
+
+      _ ->
+        false
+    end
+  end
+
+  defp root_job_id_from_key(redis_key) do
+    case namespaced_key_parts(redis_key) do
+      ["job", job_id] -> [job_id]
+      _ -> []
+    end
+  end
+
+  defp agent_ref_from_key(redis_key) do
+    case namespaced_key_parts(redis_key) do
+      ["job", job_id, "agent", agent_id] -> [{job_id, agent_id}]
+      _ -> []
+    end
+  end
+
+  defp agent_index_job_id_from_key(redis_key) do
+    case namespaced_key_parts(redis_key) do
+      ["job", job_id, "agents"] -> [job_id]
+      _ -> []
+    end
+  end
+
+  defp namespaced_key_parts(redis_key) when is_binary(redis_key) do
+    prefix = namespace() <> ":"
+
+    if String.starts_with?(redis_key, prefix) do
+      redis_key
+      |> String.replace_prefix(prefix, "")
+      |> String.split(":")
+    else
+      []
+    end
+  end
+
+  defp namespaced_key_parts(_redis_key), do: []
+
   defp validate_job_lease_epoch(job_id, job_map) do
     incoming = lease_epoch(job_map)
 
@@ -731,6 +891,27 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       {:error, {:redix_exit, reason}}
   end
 
+  defp transaction(commands),
+    do: transaction(commands, redis_reconnect_attempts(), redis_reconnect_backoff_ms())
+
+  defp transaction(commands, attempts_left, backoff_ms) do
+    transaction_commands = [["MULTI"] | commands] ++ [["EXEC"]]
+
+    case safe_pipeline(MirrorNeuron.Redis.Connection, transaction_commands) do
+      {:ok, results} ->
+        parse_transaction_results(results)
+
+      {:error, reason} = error ->
+        if attempts_left > 0 and reconnectable_error?(reason) do
+          _ = MirrorNeuron.Redis.reconnect()
+          Process.sleep(backoff_ms)
+          transaction(commands, attempts_left - 1, next_reconnect_backoff(backoff_ms))
+        else
+          error
+        end
+    end
+  end
+
   defp pipeline(commands),
     do: pipeline(commands, redis_reconnect_attempts(), redis_reconnect_backoff_ms())
 
@@ -763,6 +944,40 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       {:error, {:redix_exit, reason}}
   end
 
+  defp parse_transaction_results(["OK" | queued_and_exec]) do
+    case List.last(queued_and_exec) do
+      exec_results when is_list(exec_results) ->
+        case Enum.find(Enum.drop(queued_and_exec, -1), &match?(%Redix.Error{}, &1)) do
+          nil -> {:ok, exec_results}
+          error -> {:error, format_reason(error)}
+        end
+
+      nil ->
+        {:error, "missing Redis transaction EXEC result"}
+
+      %Redix.Error{} = error ->
+        {:error, format_reason(error)}
+
+      other ->
+        {:error, format_reason(other)}
+    end
+  end
+
+  defp parse_transaction_results([%Redix.Error{} = error | _]),
+    do: {:error, format_reason(error)}
+
+  defp parse_transaction_results(other), do: {:error, format_reason(other)}
+
+  defp expect_persist_job_results(["OK", count]) when is_integer(count), do: :ok
+
+  defp expect_persist_job_results([%Redix.Error{} = error | _]),
+    do: {:error, format_reason(error)}
+
+  defp expect_persist_job_results([_set, %Redix.Error{} = error]),
+    do: {:error, format_reason(error)}
+
+  defp expect_persist_job_results(other), do: {:error, format_reason(other)}
+
   defp expect_persist_agent_results(["OK", count | _]) when is_integer(count), do: :ok
 
   defp expect_persist_agent_results([%Redix.Error{} = error | _]),
@@ -781,6 +996,31 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   defp expect_first_result([], _predicate), do: {:error, "missing Redis pipeline result"}
+
+  defp raw_job_ids do
+    case command(["SMEMBERS", key(@jobs_set)]) do
+      {:ok, job_ids} -> {:ok, job_ids}
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  defp scan_keys(pattern), do: scan_keys(pattern, "0", [])
+
+  defp scan_keys(pattern, cursor, acc) do
+    case command(["SCAN", cursor, "MATCH", pattern, "COUNT", "100"]) do
+      {:ok, [next_cursor, keys]} ->
+        next_acc = acc ++ keys
+
+        if next_cursor == "0" do
+          {:ok, next_acc}
+        else
+          scan_keys(pattern, next_cursor, next_acc)
+        end
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
+    end
+  end
 
   defp reconnectable_error?(reason), do: MirrorNeuron.Redis.reconnectable_error?(reason)
 
