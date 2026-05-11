@@ -1,7 +1,13 @@
 defmodule TestRedis do
   def run do
-    {:ok, job} = MirrorNeuron.Persistence.RedisStore.fetch_job("test-job") || {:ok, %{}}
+    job_id = "test-job"
+    {:ok, _job} = MirrorNeuron.Persistence.RedisStore.persist_job(job_id, %{"status" => "pending", "job_id" => job_id})
+    {:ok, job} = MirrorNeuron.Persistence.RedisStore.fetch_job(job_id)
     IO.inspect(job, label: "Job keys")
+
+    unless job["status"] == "pending" do
+      raise "expected pending job, got #{inspect(job)}"
+    end
   end
 end
 TestRedis.run()
