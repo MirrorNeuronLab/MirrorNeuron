@@ -134,6 +134,62 @@ defmodule MirrorNeuron.ManifestTest do
     assert Enum.find(normalized.nodes, &(&1.node_id == "router")).type == "generic"
   end
 
+  test "normalizes and validates state-driven route conditions" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "conditional-routing",
+      "entrypoints" => ["router"],
+      "nodes" => [
+        %{"node_id" => "router", "agent_type" => "router", "role" => "root"},
+        %{"node_id" => "finance", "agent_type" => "aggregator"}
+      ],
+      "edges" => [
+        %{
+          "edge_id" => "finance-route",
+          "from_node" => "router",
+          "to_node" => "finance",
+          "message_type" => "classified_request",
+          "routing_mode" => "first_match",
+          "conditions" => %{"expr" => "${payload.domain} == \"finance\""}
+        }
+      ],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, normalized} = Manifest.load(manifest)
+    edge = hd(normalized.edges)
+    assert edge.routing_mode == "first_match"
+    assert edge.conditions == %{"expr" => "${payload.domain} == \"finance\""}
+    assert hd(Manifest.topology(normalized)["edges"])["conditions"] == edge.conditions
+  end
+
+  test "rejects unsupported routing modes and invalid route conditions" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "conditional-routing",
+      "entrypoints" => ["router"],
+      "nodes" => [
+        %{"node_id" => "router", "agent_type" => "router", "role" => "root"},
+        %{"node_id" => "finance", "agent_type" => "aggregator"}
+      ],
+      "edges" => [
+        %{
+          "edge_id" => "bad-route",
+          "from_node" => "router",
+          "to_node" => "finance",
+          "message_type" => "classified_request",
+          "routing_mode" => "random",
+          "conditions" => %{"expr" => "System.halt()"}
+        }
+      ],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:error, errors} = Manifest.load(manifest)
+    assert Enum.any?(errors, &String.contains?(&1, "unsupported routing_mode"))
+    assert Enum.any?(errors, &String.contains?(&1, "invalid conditions"))
+  end
+
   test "serializes normalized manifests for durable local recovery reload" do
     manifest = %{
       "manifest_version" => "1.0",

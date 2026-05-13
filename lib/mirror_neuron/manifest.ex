@@ -15,6 +15,7 @@ defmodule MirrorNeuron.Manifest do
   ]
 
   alias MirrorNeuron.{AgentRegistry, AgentTemplates}
+  alias MirrorNeuron.Runtime.RouteCondition
 
   def load(%__MODULE__{} = manifest), do: {:ok, manifest}
 
@@ -55,7 +56,8 @@ defmodule MirrorNeuron.Manifest do
             "from_node" => edge.from_node,
             "to_node" => edge.to_node,
             "message_type" => edge.message_type,
-            "routing_mode" => edge.routing_mode
+            "routing_mode" => edge.routing_mode,
+            "conditions" => json_safe(edge.conditions)
           }
         end)
     }
@@ -179,9 +181,24 @@ defmodule MirrorNeuron.Manifest do
           is_nil(edge.message_type) or edge.message_type == "",
           "edge #{edge.edge_id || "unknown"} must define message_type"
         )
+        |> maybe_collect_error(
+          edge.routing_mode not in RouteCondition.supported_routing_modes(),
+          "edge #{edge.edge_id || "unknown"} has unsupported routing_mode #{inspect(edge.routing_mode)}"
+        )
+        |> add_condition_error(edge)
       end)
 
     add_errors(errors, edge_errors)
+  end
+
+  defp add_condition_error(errors, edge) do
+    case RouteCondition.validate(edge.conditions) do
+      :ok ->
+        errors
+
+      {:error, reason} ->
+        ["edge #{edge.edge_id || "unknown"} has invalid conditions: #{reason}" | errors]
+    end
   end
 
   defp validate_entrypoints(errors, manifest) do

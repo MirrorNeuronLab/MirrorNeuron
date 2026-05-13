@@ -8,6 +8,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.Backpressure
   alias MirrorNeuron.Runtime.Naming
+  alias MirrorNeuron.Runtime.RouteCondition
 
   @default_heartbeat_interval_ms 30_000
   @default_pending_drain_batch_size 25
@@ -247,7 +248,40 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
         edge.message_type == message_type or edge.message_type == "*"
       end)
 
-    Enum.each(matching_edges, fn edge ->
+    route_context = RouteCondition.context(incoming, payload, state.local_state)
+
+    evaluated_edges =
+      Enum.map(matching_edges, &evaluate_route_edge(&1, message_type, route_context, state))
+
+    selected_edges = select_route_edges(evaluated_edges)
+
+    if matching_edges != [] and selected_edges == [] do
+      send(state.coordinator, {
+        :agent_event,
+        state.node.node_id,
+        :route_not_matched,
+        %{
+          "from" => state.node.node_id,
+          "message_type" => message_type,
+          "candidate_count" => length(matching_edges)
+        }
+      })
+    end
+
+    Enum.each(selected_edges, fn edge ->
+      send(state.coordinator, {
+        :agent_event,
+        state.node.node_id,
+        :route_selected,
+        %{
+          "edge_id" => edge.edge_id,
+          "from" => edge.from_node,
+          "to" => edge.to_node,
+          "message_type" => message_type,
+          "routing_mode" => edge.routing_mode
+        }
+      })
+
       result =
         Runtime.deliver(
           state.job_id,
@@ -302,6 +336,38 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   defp execute_action({:complete_job, result}, _incoming, state) do
     persist_terminal_completion(state, result)
     send(state.coordinator, {:agent_completed_job, state.node.node_id, result})
+  end
+
+  defp evaluate_route_edge(edge, message_type, route_context, state) do
+    matched? = RouteCondition.matches?(edge.conditions, route_context)
+
+    send(state.coordinator, {
+      :agent_event,
+      state.node.node_id,
+      :route_evaluated,
+      %{
+        "edge_id" => edge.edge_id,
+        "from" => edge.from_node,
+        "to" => edge.to_node,
+        "message_type" => message_type,
+        "routing_mode" => edge.routing_mode,
+        "matched" => matched?
+      }
+    })
+
+    {edge, matched?}
+  end
+
+  defp select_route_edges(evaluated_edges) do
+    matching = evaluated_edges |> Enum.filter(fn {_edge, matched?} -> matched? end)
+
+    cond do
+      Enum.any?(evaluated_edges, fn {edge, _matched?} -> edge.routing_mode == "first_match" end) ->
+        matching |> Enum.take(1) |> Enum.map(fn {edge, _matched?} -> edge end)
+
+      true ->
+        Enum.map(matching, fn {edge, _matched?} -> edge end)
+    end
   end
 
   defp persist_snapshot(state) do

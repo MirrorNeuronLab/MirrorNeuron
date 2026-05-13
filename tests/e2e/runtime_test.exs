@@ -321,6 +321,28 @@ defmodule MirrorNeuron.RuntimeTest do
     end
   end
 
+  defmodule ContextRouterAgent do
+    use MirrorNeuron.AgentTemplate
+
+    @impl true
+    def init(_node), do: {:ok, %{domain: nil, confidence: 0.0}}
+
+    @impl true
+    def handle_message(message, _state, _context) do
+      payload = payload(message) || %{}
+      domain = Map.get(payload, "domain", "general")
+      confidence = Map.get(payload, "confidence", 0.0)
+      next_state = %{domain: domain, confidence: confidence}
+
+      {:ok, next_state,
+       [
+         {:emit, "classified_request", %{"domain" => domain, "confidence" => confidence}},
+         {:event, :classification_state_updated,
+          %{"domain" => domain, "confidence" => confidence}}
+       ]}
+    end
+  end
+
   setup do
     Application.ensure_all_started(:mirror_neuron)
 
@@ -414,6 +436,73 @@ defmodule MirrorNeuron.RuntimeTest do
     wait_until(fn -> agent_unregistered?(job_id, "ingress") end, 2_000)
     wait_until(fn -> agent_unregistered?(job_id, "router") end, 2_000)
     wait_until(fn -> agent_unregistered?(job_id, "sink") end, 2_000)
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "routes emitted messages by context-aware manifest edge conditions" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "context_aware_routing_test",
+      "entrypoints" => ["classifier"],
+      "initial_inputs" => %{
+        "classifier" => [%{"domain" => "finance", "confidence" => 0.94}]
+      },
+      "nodes" => [
+        %{
+          "node_id" => "classifier",
+          "agent_type" => "module",
+          "role" => "root_coordinator",
+          "config" => %{"module" => ContextRouterAgent}
+        },
+        %{
+          "node_id" => "finance_sink",
+          "agent_type" => "aggregator",
+          "config" => %{"complete_on_message" => true}
+        },
+        %{
+          "node_id" => "human_review",
+          "agent_type" => "aggregator",
+          "config" => %{"complete_on_message" => true}
+        }
+      ],
+      "edges" => [
+        %{
+          "edge_id" => "finance-route",
+          "from_node" => "classifier",
+          "to_node" => "finance_sink",
+          "message_type" => "classified_request",
+          "routing_mode" => "first_match",
+          "conditions" => %{
+            "all" => [
+              %{"expr" => "${payload.domain} == \"finance\""},
+              %{"expr" => "${state.confidence} >= 0.8"}
+            ]
+          }
+        },
+        %{
+          "edge_id" => "human-route",
+          "from_node" => "classifier",
+          "to_node" => "human_review",
+          "message_type" => "classified_request",
+          "routing_mode" => "first_match",
+          "conditions" => %{"expr" => "${state.confidence} < 0.8"}
+        }
+      ],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, job_id, job} = MirrorNeuron.run_manifest(manifest, await: true, timeout: 2_000)
+    assert job["status"] == "completed"
+    assert get_in(job, ["result", "output", "last_message", "domain"]) == "finance"
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+    assert Enum.any?(events, &(&1["type"] == "route_evaluated"))
+
+    assert Enum.any?(
+             events,
+             &(&1["type"] == "route_selected" and get_in(&1, ["payload", "to"]) == "finance_sink")
+           )
 
     RedisStore.delete_job(job_id)
   end
