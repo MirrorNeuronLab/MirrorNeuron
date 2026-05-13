@@ -115,6 +115,15 @@ If the request is about sandboxed execution:
 - inspect `lib/mirror_neuron/execution/lease_manager.ex`
 - inspect `lib/mirror_neuron/builtins/executor.ex`
 
+### OpenShell network policy notes
+
+- Keep blueprint-specific system packages in the blueprint's custom OpenShell image, not in the core Docker image.
+- When an OpenShell agent must call a private or LAN service, the policy must usually include `allowed_ips` scoped to the exact private IP/CIDR. OpenShell's SSRF protection blocks RFC1918/private upstreams by default even when the host and port match.
+- For plain HTTP services such as local Ollama on `:11434`, prefer a narrow TCP passthrough endpoint with `allowed_ips` instead of `protocol: rest` L7 rules unless the client is known to use HTTP CONNECT. If OpenShell logs `endpoint has L7 rules; use CONNECT`, the endpoint is using REST inspection with a non-CONNECT HTTP client.
+- Include the actual resolved executable path in `binaries`, not only symlinks. For example, `/usr/bin/python3` may resolve to `/usr/bin/python3.12`.
+- If the executable is launched through a wrapper such as `bash`, OpenShell may require the launcher path as well as the child binary. Check sandbox logs for `binary`, `ancestors`, and `reason` before widening policy.
+- Keep these policies least-privilege: exact host, exact port, exact `allowed_ips`, and only the launcher/binary paths needed by that agent.
+
 ## Development Workflow
 
 Typical local loop:

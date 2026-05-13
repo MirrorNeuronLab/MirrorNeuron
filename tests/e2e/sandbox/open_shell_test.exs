@@ -15,12 +15,14 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
     bundle_dir = Path.join(tmp_dir, "job_bundle")
     payloads_dir = Path.join(bundle_dir, "payloads")
     upload_dir = Path.join(payloads_dir, "bundle")
+    sandbox_image_dir = Path.join(payloads_dir, "sandbox_image")
     policy_dir = Path.join(payloads_dir, "policies")
     remote_dir = Path.join(tmp_dir, "remote_job")
     fake_cli = Path.join(tmp_dir, "fake_openshell.sh")
     args_log = Path.join(tmp_dir, "openshell_args.log")
 
     File.mkdir_p!(Path.join(upload_dir, "scripts"))
+    File.mkdir_p!(sandbox_image_dir)
     File.mkdir_p!(policy_dir)
 
     File.write!(
@@ -95,6 +97,7 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
       "sandbox_upload_path" => remote_dir,
       "workdir" => Path.join(remote_dir, "bundle"),
       "command" => ["python3", "scripts/echo_input.py"],
+      "custom_openshell_image" => "sandbox_image",
       "policy" => "policies/api-egress.yaml",
       "no_keep" => true,
       "no_auto_providers" => true,
@@ -115,6 +118,7 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
     assert result["exit_code"] == 0
     assert result["stdout"] =~ "\"seen\": \"sandbox-ok\""
     assert File.read!(args_log) =~ "--policy #{Path.join(policy_dir, "api-egress.yaml")}"
+    assert File.read!(args_log) =~ "--from #{sandbox_image_dir}"
 
     File.rm_rf!(tmp_dir)
   end

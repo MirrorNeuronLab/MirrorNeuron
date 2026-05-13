@@ -538,8 +538,49 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
         Map.get(config, :__payloads_path)
 
     config
+    |> maybe_promote_custom_openshell_image()
+    |> resolve_from_path(payloads_path)
     |> resolve_local_cli_path("policy", payloads_path)
     |> resolve_local_cli_path("ssh_key", payloads_path)
+  end
+
+  defp maybe_promote_custom_openshell_image(config) do
+    cond do
+      Map.get(config, "from") not in [nil, ""] ->
+        config
+
+      is_binary(Map.get(config, "custom_openshell_image")) ->
+        Map.put(config, "from", Map.get(config, "custom_openshell_image"))
+
+      true ->
+        config
+    end
+  end
+
+  defp resolve_from_path(config, nil), do: config
+
+  defp resolve_from_path(config, payloads_path) do
+    case Map.get(config, "from") do
+      nil ->
+        config
+
+      value when is_binary(value) ->
+        resolved =
+          if Path.type(value) == :absolute do
+            value
+          else
+            Path.expand(value, payloads_path)
+          end
+
+        if File.exists?(resolved) do
+          Map.put(config, "from", resolved)
+        else
+          config
+        end
+
+      _other ->
+        config
+    end
   end
 
   defp resolve_local_cli_path(config, _key, nil), do: config
