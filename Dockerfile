@@ -2,6 +2,7 @@ FROM elixir:1.16-slim
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
+    ca-certificates \
     git \
     make \
     g++ \
@@ -9,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     protobuf-compiler \
     curl \
     python3 \
+    python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
 ARG OPENSHELL_VERSION=v0.0.16
