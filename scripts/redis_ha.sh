@@ -22,7 +22,7 @@ REDIS_CLI="${MN_REDIS_CLI_BIN:-redis-cli}"
 REDIS_USERNAME="${MN_REDIS_USERNAME:-}"
 REDIS_PASSWORD="${MN_REDIS_PASSWORD:-}"
 SENTINEL_USERNAME="${MN_REDIS_SENTINEL_USERNAME:-}"
-SENTINEL_PASSWORD="${MN_REDIS_SENTINEL_PASSWORD:-}"
+SENTINEL_PASSWORD="${MN_REDIS_SENTINEL_PASSWORD:-$REDIS_PASSWORD}"
 PURGE_LOCAL="0"
 
 usage() {
@@ -43,8 +43,11 @@ options:
 
 Environment:
   MN_REDIS_USERNAME / MN_REDIS_PASSWORD
-  MN_REDIS_SENTINEL_USERNAME / MN_REDIS_SENTINEL_PASSWORD
+  MN_REDIS_SENTINEL_USERNAME / MN_REDIS_SENTINEL_PASSWORD (defaults to MN_REDIS_PASSWORD)
   MN_REDIS_SERVER_BIN / MN_REDIS_CLI_BIN
+
+Security:
+  join requires MN_REDIS_PASSWORD so Redis and Sentinel are not exposed without authentication.
 EOF
 }
 
@@ -118,6 +121,32 @@ need_bins() {
   fi
 }
 
+redis_conf_quote() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '"%s"' "$value"
+}
+
+require_join_credentials() {
+  if [ -z "$REDIS_PASSWORD" ]; then
+    cat >&2 <<EOF
+MN_REDIS_PASSWORD is required for Redis HA autoconfiguration.
+
+redis_ha.sh binds Redis and Sentinel for cluster peers, so it refuses to
+start unauthenticated listeners. Set MN_REDIS_PASSWORD to a strong shared
+secret before running join. Set MN_REDIS_SENTINEL_PASSWORD as well when
+Sentinel should use a different client password.
+EOF
+    exit 1
+  fi
+
+  if [ -z "$SENTINEL_PASSWORD" ]; then
+    echo "MN_REDIS_SENTINEL_PASSWORD must not be empty when running join" >&2
+    exit 1
+  fi
+}
+
 redis_auth_args() {
   if [ -n "$REDIS_USERNAME" ]; then
     printf '%s\0%s\0' --user "$REDIS_USERNAME"
@@ -188,9 +217,7 @@ ensure_local_redis() {
     --appendonly yes
   )
 
-  if [ -n "$REDIS_PASSWORD" ]; then
-    args+=(--requirepass "$REDIS_PASSWORD" --masterauth "$REDIS_PASSWORD")
-  fi
+  args+=(--requirepass "$REDIS_PASSWORD" --masterauth "$REDIS_PASSWORD")
 
   "$REDIS_SERVER" "${args[@]}"
 }
@@ -203,6 +230,9 @@ ensure_local_sentinel() {
   mkdir -p "$DATA_DIR/sentinel"
 
   local conf="$DATA_DIR/sentinel/sentinel.conf"
+  local sentinel_password_conf
+  sentinel_password_conf="$(redis_conf_quote "$SENTINEL_PASSWORD")"
+
   cat >"$conf" <<EOF
 port $SENTINEL_PORT
 bind 0.0.0.0
@@ -212,6 +242,8 @@ sentinel resolve-hostnames yes
 sentinel announce-hostnames no
 sentinel announce-ip $SELF_HOST
 sentinel announce-port $SENTINEL_PORT
+requirepass $sentinel_password_conf
+sentinel sentinel-pass $sentinel_password_conf
 EOF
 
   "$REDIS_SERVER" "$conf" --sentinel --daemonize yes
@@ -397,7 +429,10 @@ status() {
 need_bins
 
 case "$COMMAND" in
-  join) join_cluster ;;
+  join)
+    require_join_credentials
+    join_cluster
+    ;;
   leave) leave_cluster ;;
   status) status ;;
 esac
