@@ -175,13 +175,13 @@ Runtime configuration is read from environment variables in `config/runtime.exs`
 | `MN_REDIS_NAMESPACE` | `mirror_neuron` | Prefix/namespace for persisted runtime data. |
 | `MN_REDIS_DB` | `0` | Redis database number. |
 | `MN_REDIS_USERNAME` | Empty | Redis username. |
-| `MN_REDIS_PASSWORD` | Empty | Redis password. |
+| `MN_REDIS_PASSWORD` | Empty | Redis password. Required by `scripts/redis_ha.sh join` because HA autoconfiguration exposes Redis to cluster peers. |
 | `MN_REDIS_HA_MODE` | `single` | Redis mode, currently `single` or Sentinel-related configuration. |
 | `MN_REDIS_SENTINELS` | Empty | Comma-separated Sentinel endpoints. |
 | `MN_REDIS_SENTINEL_MASTER` | `mirror-neuron` | Sentinel master name. |
 | `MN_REDIS_SENTINEL_HOST_MAP` | Empty | Optional host mapping used when resolving Sentinel primary hosts. |
 | `MN_REDIS_SENTINEL_USERNAME` | Empty | Sentinel username. |
-| `MN_REDIS_SENTINEL_PASSWORD` | Empty | Sentinel password. |
+| `MN_REDIS_SENTINEL_PASSWORD` | Empty | Sentinel password. The HA helper defaults it to `MN_REDIS_PASSWORD` when unset. |
 | `MN_REDIS_WAIT_REPLICAS` | `0` | Redis write durability wait replica count. |
 | `MN_REDIS_WAIT_TIMEOUT_MS` | `100` | Redis wait timeout in milliseconds. |
 | `MN_REDIS_RECONNECT_ATTEMPTS` | `10` | Redis reconnect attempt count. |
@@ -281,7 +281,7 @@ MirrorNeuron.cancel("job-id")
 
 ### Cluster Helpers
 
-Development and smoke-test scripts are available under `scripts/`.
+Development and smoke-test scripts are available under `scripts/`. Redis HA autoconfiguration requires `MN_REDIS_PASSWORD` so Redis and Sentinel do not start as unauthenticated network listeners.
 
 ```bash
 bash scripts/cluster_cli.sh --help
