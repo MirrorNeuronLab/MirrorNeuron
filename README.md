@@ -147,7 +147,7 @@ Runtime configuration is read from environment variables in `config/runtime.exs`
 | Variable | Default | Description |
 |---|---|---|
 | `MN_ENV` | `dev` | Runtime environment. Must be `dev`, `test`, or `prod`. |
-| `MN_COOKIE` | `mirrorneuron` | Erlang distribution cookie. |
+| `MN_COOKIE` | `mirrorneuron` in local development | Erlang distribution cookie. Set a strong, non-default value before enabling distributed Erlang with `MN_NODE_NAME` or running in production. |
 | `MN_NODE_NAME` | Not set by config | Erlang node name used by release/cluster scripts. |
 | `MN_CLUSTER_NODES` | Empty | Comma-separated Erlang node names for cluster discovery. |
 | `MN_RELIABILITY_STRATEGY` | `auto` | Conservative runtime strategy resolver for new jobs. |
