@@ -66,6 +66,7 @@ message ResumeJobResponse {
 }
 
 message ClearJobsRequest {
+  string admin_token = 1;
 }
 
 message ClearJobsResponse {

@@ -299,6 +299,8 @@ MirrorNeuron Core includes protobuf definitions and generated Elixir modules for
 
 Generated modules live under `lib/mirror_neuron_grpc/`.
 
+`JobService.ClearJobs` is a destructive administrative RPC. It is denied unless the server has `MIRROR_NEURON_GRPC_ADMIN_TOKEN` set and the request includes the same value in `admin_token`.
+
 The separate REST API package is maintained in [`mn-api`](https://github.com/MirrorNeuronLab/mn-api). The Python SDK is maintained in [`mn-python-sdk`](https://github.com/MirrorNeuronLab/mn-python-sdk).
 
 ## Project Structure
