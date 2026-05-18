@@ -38,6 +38,21 @@ defmodule MirrorNeuron.JobBundle do
     end
   end
 
+  def load_filesystem_path(path) when is_binary(path) do
+    expanded = Path.expand(path)
+
+    cond do
+      File.dir?(expanded) ->
+        load_from_directory(expanded)
+
+      File.exists?(expanded) ->
+        {:error, "expected a job folder, got file #{expanded}"}
+
+      true ->
+        {:error, "job folder does not exist: #{expanded}"}
+    end
+  end
+
   defp load_from_directory(root_path) do
     manifest_path = Path.join(root_path, "manifest.json")
     payloads_path = Path.join(root_path, "payloads")

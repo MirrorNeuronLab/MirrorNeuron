@@ -258,12 +258,12 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
       is_binary(fingerprint) and fingerprint != "" ->
         case Archive.load(fingerprint) do
           {:ok, bundle} -> {:ok, bundle}
-          {:error, _reason} when is_binary(job_path) -> JobBundle.load(job_path)
+          {:error, _reason} when is_binary(job_path) -> JobBundle.load_filesystem_path(job_path)
           {:error, _reason} -> load_embedded_manifest(job)
         end
 
       is_binary(job_path) ->
-        JobBundle.load(job_path)
+        JobBundle.load_filesystem_path(job_path)
 
       true ->
         load_embedded_manifest(job)

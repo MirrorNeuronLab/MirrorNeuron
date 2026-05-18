@@ -42,6 +42,27 @@ defmodule MirrorNeuron.JobBundleTest do
     assert {:error, "unexpected byte" <> _} = JobBundle.load("invalid json string {")
   end
 
+  test "load_filesystem_path/1 rejects inline json strings" do
+    json_str = Jason.encode!(@valid_manifest_map)
+
+    assert {:error, "job folder does not exist: " <> _} = JobBundle.load_filesystem_path(json_str)
+  end
+
+  test "load_filesystem_path/1 with valid directory structure" do
+    dir = "test_bundle_dir_filesystem_only"
+    File.mkdir_p!(dir)
+    File.write!(Path.join(dir, "manifest.json"), Jason.encode!(@valid_manifest_map))
+    File.mkdir_p!(Path.join(dir, "payloads"))
+
+    on_exit(fn -> File.rm_rf!(dir) end)
+
+    assert {:ok, bundle} = JobBundle.load_filesystem_path(dir)
+    assert bundle.root_path == Path.expand(dir)
+    assert bundle.manifest_path == Path.join(Path.expand(dir), "manifest.json")
+    assert bundle.payloads_path == Path.join(Path.expand(dir), "payloads")
+    assert bundle.manifest.graph_id == "test_graph"
+  end
+
   test "load/1 with path to regular file instead of dir returns error" do
     # Create a dummy file
     path = "dummy_file.json"
