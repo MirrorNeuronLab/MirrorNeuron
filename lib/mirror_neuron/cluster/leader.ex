@@ -279,13 +279,18 @@ defmodule MirrorNeuron.Cluster.Leader do
     cond do
       is_binary(fingerprint) and fingerprint != "" ->
         case MirrorNeuron.Bundle.Archive.load(fingerprint) do
-          {:ok, bundle} -> {:ok, bundle}
-          {:error, _reason} when is_binary(job_path) -> MirrorNeuron.JobBundle.load(job_path)
-          {:error, reason} -> {:error, reason}
+          {:ok, bundle} ->
+            {:ok, bundle}
+
+          {:error, _reason} when is_binary(job_path) ->
+            MirrorNeuron.JobBundle.load_filesystem_path(job_path)
+
+          {:error, reason} ->
+            {:error, reason}
         end
 
       is_binary(job_path) ->
-        MirrorNeuron.JobBundle.load(job_path)
+        MirrorNeuron.JobBundle.load_filesystem_path(job_path)
 
       true ->
         {:error, :missing_bundle_reference}
