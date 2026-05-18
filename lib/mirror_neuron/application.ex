@@ -27,20 +27,13 @@ defmodule MirrorNeuron.Application do
 
     role = node_role()
 
-    grpc_port = String.to_integer(System.get_env("MN_GRPC_PORT", "50051"))
-    grpc_host = System.get_env("MN_CORE_HOST", "localhost")
-    grpc_bind_opts = grpc_bind_opts(grpc_host)
-
     common_children =
       [
         {Registry, keys: :duplicate, name: MirrorNeuron.Runtime.EventRegistry},
         {Cluster.Supervisor, [topologies, [name: MirrorNeuron.ClusterSupervisor]]},
         MirrorNeuron.Redis,
-        MirrorNeuron.Persistence.Retention,
-        {GRPC.Server.Supervisor,
-         [endpoint: MirrorNeuron.Grpc.Endpoint, port: grpc_port, start_server: true] ++
-           grpc_bind_opts}
-      ]
+        MirrorNeuron.Persistence.Retention
+      ] ++ grpc_child_specs()
 
     children =
       case role do
@@ -71,6 +64,22 @@ defmodule MirrorNeuron.Application do
 
   def node_role do
     System.get_env("MN_NODE_ROLE", "runtime")
+  end
+
+  @doc false
+  def grpc_child_specs do
+    if Config.boolean("MN_API_ENABLED", :api_enabled) do
+      grpc_port = String.to_integer(System.get_env("MN_GRPC_PORT", "50051"))
+      grpc_host = System.get_env("MN_CORE_HOST", "localhost")
+
+      [
+        {GRPC.Server.Supervisor,
+         [endpoint: MirrorNeuron.Grpc.Endpoint, port: grpc_port, start_server: true] ++
+           grpc_bind_opts(grpc_host)}
+      ]
+    else
+      []
+    end
   end
 
   defp grpc_bind_opts(host) when host in ["", "localhost"] do
