@@ -151,7 +151,9 @@ defmodule MirrorNeuron.Grpc.JobServer do
     end
   end
 
-  def clear_jobs(_request, _stream) do
+  def clear_jobs(request, _stream) do
+    authorize_clear_jobs!(request)
+
     case MirrorNeuron.Monitor.clear_jobs() do
       {:ok, count} ->
         %ClearJobsResponse{cleared_count: count}
@@ -160,6 +162,27 @@ defmodule MirrorNeuron.Grpc.JobServer do
         raise GRPC.RPCError, status: GRPC.Status.internal(), message: reason
     end
   end
+
+  defp authorize_clear_jobs!(request) do
+    configured_token = System.get_env("MIRROR_NEURON_GRPC_ADMIN_TOKEN")
+    request_token = Map.get(request, :admin_token, "")
+
+    unless valid_admin_token?(configured_token, request_token) do
+      raise GRPC.RPCError,
+        status: GRPC.Status.permission_denied(),
+        message: "ClearJobs requires MIRROR_NEURON_GRPC_ADMIN_TOKEN"
+    end
+
+    :ok
+  end
+
+  defp valid_admin_token?(configured_token, request_token)
+       when is_binary(configured_token) and byte_size(configured_token) > 0 and
+              is_binary(request_token) do
+    configured_token == request_token
+  end
+
+  defp valid_admin_token?(_configured_token, _request_token), do: false
 end
 
 defmodule MirrorNeuron.Grpc.ClusterServer do
