@@ -261,7 +261,7 @@ mix run --no-halt
 }
 ```
 
-The BEAM runtime keeps orchestration, leases, placement, reconnect, and manual recovery. OpenCV, ffmpeg, model runtimes, and similar heavy dependencies stay in the profile image or a prewarmed node cache.
+The BEAM runtime keeps orchestration, leases, placement, reconnect, and manual recovery. OpenCV, ffmpeg, model runtimes, and similar heavy dependencies stay in the profile image or a prewarmed node cache. When a manifest selects an execution profile, the profile owns OpenShell security settings such as image, policy, remote access, SSH key, workspace reuse, upload path, pool, GPU, and capability settings; manifest values for those fields are ignored. Relative `policy` and `ssh_key` paths in a profile are expanded on the runtime node, not against a submitted payload bundle.
 
 ### Inspect Jobs and Events
 

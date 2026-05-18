@@ -29,6 +29,7 @@ defmodule MirrorNeuron.Execution.Profile do
     "video_codecs",
     "required_capabilities"
   ]
+  @profile_local_cli_path_keys ["policy", "ssh_key"]
 
   def apply_to_config(config) when is_map(config) do
     case profile_name(config) do
@@ -38,9 +39,9 @@ defmodule MirrorNeuron.Execution.Profile do
       name ->
         case fetch(name) do
           {:ok, profile} ->
-            profile
-            |> config_from_profile()
-            |> Map.merge(stringify_map(config))
+            config
+            |> manifest_config_for_profile()
+            |> Map.merge(config_from_profile(profile))
             |> Map.put("execution_profile", name)
 
           {:error, _reason} ->
@@ -158,6 +159,25 @@ defmodule MirrorNeuron.Execution.Profile do
     |> stringify_map()
     |> normalize_openshell_aliases()
     |> Map.merge(openshell)
+    |> resolve_profile_local_cli_paths()
+  end
+
+  defp manifest_config_for_profile(config) do
+    config
+    |> stringify_map()
+    |> Map.drop(@openshell_keys)
+  end
+
+  defp resolve_profile_local_cli_paths(config) do
+    Enum.reduce(@profile_local_cli_path_keys, config, fn key, acc ->
+      case Map.get(acc, key) do
+        value when is_binary(value) and value != "" ->
+          Map.put(acc, key, Path.expand(value))
+
+        _other ->
+          acc
+      end
+    end)
   end
 
   defp normalize_openshell_aliases(config) do

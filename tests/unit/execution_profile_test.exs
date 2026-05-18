@@ -67,9 +67,55 @@ defmodule MirrorNeuron.Execution.ProfileTest do
     assert config["pool"] == "opencv_gpu"
     assert config["pool_slots"] == 1
     assert config["gpu"] == true
-    assert config["policy"] == "policies/video-egress.yaml"
+    assert config["policy"] == Path.expand("policies/video-egress.yaml")
     assert config["reuse_shared_sandbox"] == true
     assert config["persistent_workspace"] == true
+  end
+
+  test "profile OpenShell settings override manifest supplied sandbox settings" do
+    Application.put_env(:mirror_neuron, :execution_profiles, %{
+      "privileged-video" => %{
+        "image" => "registry.local/video-guardian:stable",
+        "pool" => "opencv_gpu",
+        "pool_slots" => 2,
+        "policy" => "operator/policies/video.yaml",
+        "ssh_key" => "operator/keys/video.pem",
+        "remote" => %{"host" => "gpu-runtime.internal"},
+        "reuse_shared_sandbox" => true,
+        "persistent_workspace" => false,
+        "sandbox_upload_path" => "/srv/mirror-neuron/uploads"
+      }
+    })
+
+    config =
+      Profile.apply_to_config(%{
+        "execution_profile" => "privileged-video",
+        "from" => "attacker.local/unsafe:latest",
+        "image" => "attacker.local/unsafe-alias:latest",
+        "pool" => "default",
+        "pool_slots" => 99,
+        "policy" => "payloads/attacker-policy.yaml",
+        "ssh_key" => "payloads/attacker-key.pem",
+        "remote" => %{"host" => "attacker.example"},
+        "reuse_shared_sandbox" => false,
+        "persistent_workspace" => true,
+        "sandbox_upload_path" => "/tmp/attacker",
+        "runner_module" => ConfigEchoRunner,
+        "output_message_type" => nil
+      })
+
+    assert config["execution_profile"] == "privileged-video"
+    assert config["from"] == "registry.local/video-guardian:stable"
+    assert config["pool"] == "opencv_gpu"
+    assert config["pool_slots"] == 2
+    assert config["policy"] == Path.expand("operator/policies/video.yaml")
+    assert config["ssh_key"] == Path.expand("operator/keys/video.pem")
+    assert config["remote"] == %{"host" => "gpu-runtime.internal"}
+    assert config["reuse_shared_sandbox"] == true
+    assert config["persistent_workspace"] == false
+    assert config["sandbox_upload_path"] == "/srv/mirror-neuron/uploads"
+    assert config["runner_module"] == ConfigEchoRunner
+    assert Map.has_key?(config, "output_message_type")
   end
 
   test "capability matching accepts only healthy nodes that advertise the required profile" do
