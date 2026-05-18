@@ -2,6 +2,18 @@ import Config
 
 redis_host = System.get_env("MN_REDIS_HOST", "localhost")
 
+execution_profiles =
+  case System.get_env("MN_EXECUTION_PROFILES_JSON", "") do
+    "" ->
+      %{}
+
+    raw ->
+      case Jason.decode(raw) do
+        {:ok, decoded} when is_map(decoded) -> decoded
+        _ -> %{}
+      end
+  end
+
 config :mirror_neuron,
   redis_url: System.get_env("MN_REDIS_URL", "redis://#{redis_host}:6379/0"),
   redis_namespace: System.get_env("MN_REDIS_NAMESPACE", "mirror_neuron"),
@@ -22,6 +34,15 @@ config :mirror_neuron,
     String.to_integer(System.get_env("MN_REDIS_RECONNECT_BACKOFF_MS", "250")),
   redis_reconnect_max_backoff_ms:
     String.to_integer(System.get_env("MN_REDIS_RECONNECT_MAX_BACKOFF_MS", "2000")),
+  reliability_strategy: System.get_env("MN_RELIABILITY_STRATEGY", "auto"),
+  cluster_health_stable_ms:
+    String.to_integer(System.get_env("MN_CLUSTER_HEALTH_STABLE_MS", "10000")),
+  reliability_observer_interval_ms:
+    String.to_integer(System.get_env("MN_RELIABILITY_OBSERVER_INTERVAL_MS", "5000")),
+  node_reconnect_attempts: String.to_integer(System.get_env("MN_NODE_RECONNECT_ATTEMPTS", "3")),
+  node_reconnect_backoff_ms:
+    String.to_integer(System.get_env("MN_NODE_RECONNECT_BACKOFF_MS", "1000")),
+  execution_profiles: execution_profiles,
   cookie: System.get_env("MN_COOKIE", "mirrorneuron"),
   openshell_bin: System.get_env("MN_OPENSHELL_BIN", "openshell"),
   temp_dir: System.get_env("MN_TEMP_DIR", "/tmp/mirror_neuron"),

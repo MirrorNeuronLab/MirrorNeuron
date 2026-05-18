@@ -143,7 +143,7 @@ defmodule MirrorNeuron.MonitorTest do
     RedisStore.persist_job(job_id, %{
       "job_id" => job_id,
       "graph_id" => "event_window_demo",
-      "status" => "running",
+      "status" => "completed",
       "submitted_at" => "2026-03-28T00:00:00Z",
       "updated_at" => "2026-03-28T00:00:05Z"
     })

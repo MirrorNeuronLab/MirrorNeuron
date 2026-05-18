@@ -223,7 +223,14 @@ defmodule MirrorNeuron.Cluster.Leader do
         case load_recovery_bundle(job_map) do
           {:ok, bundle} ->
             spec =
-              {MirrorNeuron.Runtime.JobRunner, {job_id, bundle.manifest, [job_bundle: bundle]}}
+              {MirrorNeuron.Runtime.JobRunner,
+               {job_id, bundle.manifest,
+                [
+                  job_bundle: bundle,
+                  requested_recovery_policy: job_map["requested_recovery_policy"],
+                  recovery_policy: job_map["recovery_policy"],
+                  reliability: job_map["reliability"]
+                ]}}
 
             case Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) do
               {:ok, _pid} ->

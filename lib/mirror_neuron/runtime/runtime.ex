@@ -5,7 +5,14 @@ defmodule MirrorNeuron.Runtime do
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.ContextEnginePreflight
   alias MirrorNeuron.JobId
-  alias MirrorNeuron.Runtime.{Backpressure, EventBus, JobRunner, LocalRecovery}
+
+  alias MirrorNeuron.Runtime.{
+    Backpressure,
+    EventBus,
+    JobRunner,
+    LocalRecovery,
+    ReliabilityStrategy
+  }
 
   def start_job(manifest, opts \\ []) do
     job_id = Keyword.get(opts, :job_id, generate_job_id(manifest.graph_id))
@@ -24,10 +31,19 @@ defmodule MirrorNeuron.Runtime do
 
   defp start_job_after_preflight(job_id, manifest, opts, bundle) do
     manifest_ref = bundle_ref(manifest, bundle)
-    opts = Keyword.put(opts, :bundle_ref, manifest_ref)
+    reliability = ReliabilityStrategy.resolve(manifest, manifest_ref: manifest_ref)
 
-    case persist_initial_job(job_id, manifest, manifest_ref) do
+    opts =
+      opts
+      |> Keyword.put(:bundle_ref, manifest_ref)
+      |> Keyword.put(:reliability, reliability)
+      |> Keyword.put(:requested_recovery_policy, reliability["requested_recovery_policy"])
+      |> Keyword.put(:recovery_policy, reliability["effective_recovery_policy"])
+
+    case persist_initial_job(job_id, manifest, manifest_ref, reliability) do
       :ok ->
+        publish_reliability_events(job_id, reliability)
+
         spec = {JobRunner, {job_id, manifest, opts}}
 
         case Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) do
@@ -35,7 +51,7 @@ defmodule MirrorNeuron.Runtime do
             {:ok, job_id, pid}
 
           {:error, reason} ->
-            persist_startup_failure(job_id, manifest, manifest_ref, reason)
+            persist_startup_failure(job_id, manifest, manifest_ref, reliability, reason)
             {:error, "failed to start job runner: #{inspect(reason)}"}
         end
 
@@ -222,7 +238,7 @@ defmodule MirrorNeuron.Runtime do
   def timestamp,
     do: DateTime.utc_now() |> DateTime.truncate(:millisecond) |> DateTime.to_iso8601()
 
-  defp persist_startup_failure(job_id, manifest, manifest_ref, reason) do
+  defp persist_startup_failure(job_id, manifest, manifest_ref, reliability, reason) do
     updates = %{
       "status" => "failed",
       "result" => %{
@@ -238,7 +254,10 @@ defmodule MirrorNeuron.Runtime do
       "required_context_engine" => required_context_engine(manifest),
       "root_agent_ids" => manifest.entrypoints,
       "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
-      "recovery_policy" => Map.get(manifest.policies, "recovery_mode", "local_restart"),
+      "requested_recovery_policy" => reliability["requested_recovery_policy"],
+      "recovery_policy" => reliability["effective_recovery_policy"],
+      "reliability_degraded" => reliability["reliability_degraded"],
+      "reliability" => reliability_map(reliability),
       "manifest_ref" => manifest_ref,
       "submitted_at" => timestamp()
     }
@@ -246,7 +265,7 @@ defmodule MirrorNeuron.Runtime do
     RedisStore.persist_terminal_job(job_id, updates, defaults)
   end
 
-  defp persist_initial_job(job_id, manifest, manifest_ref) do
+  defp persist_initial_job(job_id, manifest, manifest_ref, reliability) do
     job_map = %{
       "job_id" => job_id,
       "graph_id" => manifest.graph_id,
@@ -258,7 +277,10 @@ defmodule MirrorNeuron.Runtime do
       "updated_at" => timestamp(),
       "root_agent_ids" => manifest.entrypoints,
       "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
-      "recovery_policy" => Map.get(manifest.policies, "recovery_mode", "local_restart"),
+      "requested_recovery_policy" => reliability["requested_recovery_policy"],
+      "recovery_policy" => reliability["effective_recovery_policy"],
+      "reliability_degraded" => reliability["reliability_degraded"],
+      "reliability" => reliability_map(reliability),
       "result" => nil,
       "topology" => MirrorNeuron.Manifest.topology(manifest),
       "manifest" => MirrorNeuron.Manifest.to_map(manifest),
@@ -275,4 +297,38 @@ defmodule MirrorNeuron.Runtime do
   end
 
   defp required_context_engine(manifest), do: Map.get(manifest, :required_context_engine, false)
+
+  defp reliability_map(reliability) do
+    Map.take(reliability, [
+      "mode",
+      "effective_recovery_policy",
+      "degraded",
+      "reason",
+      "observed_nodes",
+      "observed_at"
+    ])
+  end
+
+  defp publish_reliability_events(job_id, reliability) do
+    EventBus.publish(job_id, %{
+      type: :reliability_strategy_resolved,
+      requested_recovery_policy: reliability["requested_recovery_policy"],
+      effective_recovery_policy: reliability["effective_recovery_policy"],
+      mode: reliability["mode"],
+      degraded: reliability["reliability_degraded"],
+      reason: reliability["reason"],
+      observed_nodes: reliability["observed_nodes"],
+      timestamp: timestamp()
+    })
+
+    if reliability["reliability_degraded"] do
+      EventBus.publish(job_id, %{
+        type: :job_reliability_degraded,
+        mode: reliability["mode"],
+        reason: reliability["reason"],
+        observed_nodes: reliability["observed_nodes"],
+        timestamp: timestamp()
+      })
+    end
+  end
 end

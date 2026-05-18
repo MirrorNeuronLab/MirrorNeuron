@@ -43,6 +43,8 @@ defmodule MirrorNeuron.Config do
     validate_resource_admission!()
     validate_retention!()
     validate_runtime_efficiency!()
+    validate_reliability!()
+    validate_execution_profiles!()
     validate_production_secrets!()
     :ok
   end
@@ -181,6 +183,8 @@ defmodule MirrorNeuron.Config do
     optional_positive_int!("MN_REDIS_RECONNECT_ATTEMPTS")
     optional_positive_int!("MN_REDIS_RECONNECT_BACKOFF_MS")
     optional_positive_int!("MN_REDIS_RECONNECT_MAX_BACKOFF_MS")
+    optional_positive_int!("MN_NODE_RECONNECT_ATTEMPTS")
+    optional_positive_int!("MN_NODE_RECONNECT_BACKOFF_MS")
   end
 
   defp validate_queue_limits! do
@@ -238,6 +242,39 @@ defmodule MirrorNeuron.Config do
     optional_positive_int!("MN_AGENT_SNAPSHOT_PENDING_LIMIT")
     optional_positive_int!("MN_LEASE_QUEUE_TIMEOUT_MS")
     optional_nonnegative_int!("MN_LEASE_MAX_QUEUE_LENGTH")
+  end
+
+  defp validate_reliability! do
+    strategy =
+      "MN_RELIABILITY_STRATEGY"
+      |> string(:reliability_strategy)
+      |> String.downcase()
+
+    unless strategy == "auto" do
+      raise ArgumentError, "MN_RELIABILITY_STRATEGY must be auto"
+    end
+
+    optional_nonnegative_int!("MN_CLUSTER_HEALTH_STABLE_MS")
+    optional_positive_int!("MN_RELIABILITY_OBSERVER_INTERVAL_MS")
+  end
+
+  defp validate_execution_profiles! do
+    case System.get_env("MN_EXECUTION_PROFILES_JSON") do
+      nil ->
+        :ok
+
+      "" ->
+        :ok
+
+      raw ->
+        case Jason.decode(raw) do
+          {:ok, decoded} when is_map(decoded) ->
+            :ok
+
+          _ ->
+            raise ArgumentError, "MN_EXECUTION_PROFILES_JSON must be a JSON object"
+        end
+    end
   end
 
   defp optional_positive_int!(env_name) do

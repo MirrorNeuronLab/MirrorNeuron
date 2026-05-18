@@ -1,6 +1,7 @@
 defmodule MirrorNeuron.Builtins.Executor do
   use MirrorNeuron.AgentTemplate
 
+  alias MirrorNeuron.Execution.Profile
   alias MirrorNeuron.Execution.LeaseManager
   alias MirrorNeuron.Message
   alias MirrorNeuron.Sandbox.OpenShell
@@ -23,7 +24,7 @@ defmodule MirrorNeuron.Builtins.Executor do
   def init(node) do
     {:ok,
      %{
-       config: node.config,
+       config: Profile.apply_to_config(node.config),
        runs: 0,
        agent_state: %{},
        last_output_payload: nil,
@@ -446,8 +447,11 @@ defmodule MirrorNeuron.Builtins.Executor do
     %{
       job_id: context.job_id,
       agent_id: context.node.node_id,
-      node: to_string(Node.self())
+      node: to_string(Node.self()),
+      execution_profile: Profile.profile_name(Map.get(context.node, :config, %{}))
     }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
   end
 
   defp report_event(context, event_type, payload) do

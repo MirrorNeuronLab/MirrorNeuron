@@ -48,6 +48,7 @@ defmodule MirrorNeuron.Runtime.JobRunner do
          manifest: manifest,
          bundle: Keyword.get(opts, :job_bundle),
          bundle_ref: Keyword.get(opts, :bundle_ref),
+         opts: opts,
          coordinator: pid,
          node_name: node_name,
          lease: lease,
@@ -66,6 +67,7 @@ defmodule MirrorNeuron.Runtime.JobRunner do
           Keyword.get(opts, :job_bundle),
           Keyword.get(opts, :bundle_ref),
           nil,
+          opts,
           reason
         )
 
@@ -133,6 +135,9 @@ defmodule MirrorNeuron.Runtime.JobRunner do
       {:ok, %{"status" => status}} when status in @terminal_statuses ->
         :terminal
 
+      {:ok, %{"status" => "paused"}} when reason == :normal ->
+        :paused
+
       {:ok, %{"status" => status}} when status in @active_statuses and reason != :normal ->
         Logger.warning(
           "job coordinator for #{state.job_id} exited unexpectedly; scheduling recovery: #{inspect(reason)}"
@@ -157,6 +162,7 @@ defmodule MirrorNeuron.Runtime.JobRunner do
           state.bundle,
           state.bundle_ref,
           state.lease,
+          state.opts,
           reason
         )
 
@@ -185,7 +191,7 @@ defmodule MirrorNeuron.Runtime.JobRunner do
   end
 
   defp persist_lease_owner(job_id, manifest, opts, lease) do
-    defaults = job_defaults(manifest, Keyword.get(opts, :bundle_ref), lease)
+    defaults = job_defaults(manifest, Keyword.get(opts, :bundle_ref), lease, opts)
 
     updates = %{
       "lease" => lease,
@@ -211,7 +217,9 @@ defmodule MirrorNeuron.Runtime.JobRunner do
     Process.send_after(self(), :renew_lease, @lease_renew_interval_ms)
   end
 
-  defp persist_runner_failure(job_id, manifest, bundle, manifest_ref, lease, reason) do
+  defp persist_runner_failure(job_id, manifest, bundle, manifest_ref, lease, opts, reason) do
+    reliability = reliability_from(manifest, opts)
+
     defaults =
       %{
         "graph_id" => manifest.graph_id,
@@ -219,7 +227,10 @@ defmodule MirrorNeuron.Runtime.JobRunner do
         "required_context_engine" => Map.get(manifest, :required_context_engine, false),
         "root_agent_ids" => manifest.entrypoints,
         "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
-        "recovery_policy" => Map.get(manifest.policies, "recovery_mode", "local_restart"),
+        "requested_recovery_policy" => reliability["requested_recovery_policy"],
+        "recovery_policy" => reliability["effective_recovery_policy"],
+        "reliability_degraded" => reliability["reliability_degraded"],
+        "reliability" => reliability_map(reliability),
         "manifest" => MirrorNeuron.Manifest.to_map(manifest),
         "manifest_ref" => manifest_ref || Runtime.bundle_ref(manifest, bundle),
         "submitted_at" => Runtime.timestamp()
@@ -246,14 +257,19 @@ defmodule MirrorNeuron.Runtime.JobRunner do
     end
   end
 
-  defp job_defaults(manifest, manifest_ref, lease) do
+  defp job_defaults(manifest, manifest_ref, lease, opts) do
+    reliability = reliability_from(manifest, opts)
+
     %{
       "graph_id" => manifest.graph_id,
       "job_name" => manifest.job_name,
       "required_context_engine" => Map.get(manifest, :required_context_engine, false),
       "root_agent_ids" => manifest.entrypoints,
       "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
-      "recovery_policy" => Map.get(manifest.policies, "recovery_mode", "local_restart"),
+      "requested_recovery_policy" => reliability["requested_recovery_policy"],
+      "recovery_policy" => reliability["effective_recovery_policy"],
+      "reliability_degraded" => reliability["reliability_degraded"],
+      "reliability" => reliability_map(reliability),
       "manifest" => MirrorNeuron.Manifest.to_map(manifest),
       "manifest_ref" => manifest_ref,
       "submitted_at" => Runtime.timestamp()
@@ -268,5 +284,45 @@ defmodule MirrorNeuron.Runtime.JobRunner do
     |> Map.put("lease", lease)
     |> Map.put("lease_epoch", lease["epoch"])
     |> Map.put("lease_owner", lease["owner_id"])
+  end
+
+  defp reliability_from(manifest, opts) do
+    requested =
+      Keyword.get(opts, :requested_recovery_policy) ||
+        Map.get(manifest.policies, "recovery_mode", "auto")
+
+    effective =
+      Keyword.get(opts, :recovery_policy) ||
+        if(requested == "auto", do: "local_restart", else: requested)
+
+    defaults = %{
+      "mode" => "single_node",
+      "requested_recovery_policy" => requested,
+      "effective_recovery_policy" => effective,
+      "reliability_degraded" => false,
+      "degraded" => false,
+      "reason" => "fallback runtime persistence",
+      "observed_nodes" => [to_string(Node.self())],
+      "observed_at" => Runtime.timestamp()
+    }
+
+    opts
+    |> Keyword.get(:reliability, %{})
+    |> normalize_reliability()
+    |> then(&Map.merge(defaults, &1))
+  end
+
+  defp normalize_reliability(reliability) when is_map(reliability), do: reliability
+  defp normalize_reliability(_reliability), do: %{}
+
+  defp reliability_map(reliability) do
+    Map.take(reliability, [
+      "mode",
+      "effective_recovery_policy",
+      "degraded",
+      "reason",
+      "observed_nodes",
+      "observed_at"
+    ])
   end
 end

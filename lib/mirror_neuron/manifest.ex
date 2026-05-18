@@ -232,7 +232,7 @@ defmodule MirrorNeuron.Manifest do
 
   defp validate_policies(errors, manifest) do
     supported_recovery_modes = Application.get_env(:mirror_neuron, :supported_recovery_modes, [])
-    recovery_mode = Map.get(manifest.policies, "recovery_mode", "local_restart")
+    recovery_mode = Map.get(manifest.policies, "recovery_mode", "auto")
 
     maybe_add_error(
       errors,

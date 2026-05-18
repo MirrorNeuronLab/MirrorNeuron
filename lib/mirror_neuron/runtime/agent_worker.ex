@@ -399,7 +399,10 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
         pending_messages_truncated: pending_messages_truncated?(state),
         pending_message_count: state.mailbox_depth,
         lease_epoch: state.runtime_context[:lease_epoch],
-        lease_owner: state.runtime_context[:lease_owner]
+        lease_owner: state.runtime_context[:lease_owner],
+        execution_profile:
+          get_in(state.runtime_context, [:execution_profiles, state.node.node_id]) ||
+            get_in(state.node, [:config, "execution_profile"])
       }
     }
 

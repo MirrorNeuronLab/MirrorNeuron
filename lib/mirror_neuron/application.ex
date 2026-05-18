@@ -52,6 +52,7 @@ defmodule MirrorNeuron.Application do
             [
               MirrorNeuron.Cluster.NodeMonitor,
               MirrorNeuron.Cluster.Leader,
+              MirrorNeuron.Runtime.ReliabilityObserver,
               MirrorNeuron.Execution.LeaseManager,
               {Registry, keys: :unique, name: MirrorNeuron.Sandbox.Registry},
               {DynamicSupervisor,

@@ -113,6 +113,104 @@ defmodule MirrorNeuron.Execution.LeaseManagerTest do
     assert {:ok, _second} = Task.await(waiting_task, 1_000)
   end
 
+  test "restores executor capacity when a disconnected node cannot release its lease" do
+    manager =
+      start_supervised!({LeaseManager, name: unique_name(), capacities: %{"default" => 1}})
+
+    parent = self()
+
+    owner =
+      Task.async(fn ->
+        assert {:ok, lease} = LeaseManager.acquire(manager, "default", 1, %{agent_id: "worker-1"})
+        send(parent, {:lease_acquired, lease})
+
+        receive do
+          :release -> LeaseManager.release(manager, lease["lease_id"])
+        end
+      end)
+
+    assert_receive {:lease_acquired, first}
+
+    assert %{"default" => %{"in_use" => 1, "available" => 0}} =
+             stringify_stats(LeaseManager.stats(manager))
+
+    assert :ok = LeaseManager.release_node_capacity(manager, Node.self())
+
+    assert %{"default" => %{"in_use" => 0, "available" => 1}} =
+             stringify_stats(LeaseManager.stats(manager))
+
+    assert {:ok, second} = LeaseManager.acquire(manager, "default", 1, %{agent_id: "worker-2"})
+    assert second["lease_id"] != first["lease_id"]
+
+    LeaseManager.release(manager, second["lease_id"])
+    send(owner.pid, :release)
+    assert :ok = Task.await(owner, 1_000)
+  end
+
+  test "restore capacity leaves live owners untouched" do
+    manager =
+      start_supervised!({LeaseManager, name: unique_name(), capacities: %{"default" => 1}})
+
+    assert {:ok, lease} = LeaseManager.acquire(manager, "default", 1, %{agent_id: "worker-1"})
+
+    assert :ok = LeaseManager.restore_capacity(manager)
+
+    assert %{"default" => %{"in_use" => 1, "available" => 0}} =
+             stringify_stats(LeaseManager.stats(manager))
+
+    LeaseManager.release(manager, lease["lease_id"])
+  end
+
+  test "restores capacity and grants queued work after a lease owner exits" do
+    manager =
+      start_supervised!({LeaseManager, name: unique_name(), capacities: %{"default" => 1}})
+
+    owner =
+      Task.async(fn ->
+        assert {:ok, _lease} =
+                 LeaseManager.acquire(manager, "default", 1, %{agent_id: "worker-1"})
+
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    Process.sleep(20)
+
+    parent = self()
+
+    waiting_task =
+      Task.async(fn ->
+        send(parent, :waiting_started)
+        result = LeaseManager.acquire(manager, "default", 1, %{agent_id: "worker-2"})
+        send(parent, {:queued_acquired, result})
+
+        receive do
+          :release_queued -> result
+        end
+
+        result
+      end)
+
+    assert_receive :waiting_started
+    Process.sleep(20)
+
+    assert %{"default" => %{"queued" => 1, "in_use" => 1, "available" => 0}} =
+             stringify_stats(LeaseManager.stats(manager))
+
+    send(owner.pid, :stop)
+    assert :ok = Task.await(owner, 1_000)
+
+    assert_receive {:queued_acquired, {:ok, second}}, 1_000
+
+    assert %{"default" => %{"queued" => 0, "in_use" => 1}} =
+             stringify_stats(LeaseManager.stats(manager))
+
+    LeaseManager.release(manager, second["lease_id"])
+    send(waiting_task.pid, :release_queued)
+    assert {:ok, ^second} = Task.await(waiting_task, 1_000)
+  end
+
   defp stringify_stats(stats) do
     Enum.into(stats, %{}, fn {pool, values} -> {to_string(pool), stringify_map(values)} end)
   end

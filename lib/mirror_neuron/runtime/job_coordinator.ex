@@ -2,6 +2,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   use GenServer
   require Logger
 
+  alias MirrorNeuron.Execution.Profile
   alias MirrorNeuron.Message
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
@@ -55,7 +56,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
           :mirror_neuron,
           :job_health_check_interval_ms,
           @default_health_check_interval_ms
-        )
+        ),
+      reliability: reliability_from(opts, existing_job)
     }
 
     if status == "pending" do
@@ -130,6 +132,17 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       schedule_health_check(next_state.health_check_interval_ms)
       {:noreply, next_state}
     else
+      {:error, {:execution_profile_unavailable, profile, agent_id}} ->
+        paused_state =
+          pause_for_profile_review(
+            state,
+            profile,
+            agent_id,
+            "execution profile #{profile} has no eligible runtime nodes"
+          )
+
+        {:stop, :normal, paused_state}
+
       {:error, reason} ->
         failed_state =
           finalize_job(state, "failed", %{error: reason}, :job_failed, %{reason: reason})
@@ -313,6 +326,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
         {:error, {:already_started, _pid}} ->
           {:cont, :ok}
+
+        {:error, {:no_eligible_execution_profile_nodes, profile}} ->
+          {:halt, {:error, {:execution_profile_unavailable, profile, node.node_id}}}
 
         {:error, reason} ->
           {:halt, {:error, "failed to start agent #{node.node_id}: #{inspect(reason)}"}}
@@ -509,14 +525,21 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp start_agent(state, agent_id, recovery_snapshot \\ nil, retry_count \\ 0) do
-    node = Map.fetch!(state.nodes_by_id, agent_id)
+    node =
+      state.nodes_by_id
+      |> Map.fetch!(agent_id)
+      |> apply_execution_profile()
+
     recovery_snapshot = align_recovery_snapshot_with_job_status(state, recovery_snapshot)
+    execution_profile = Profile.profile_name(node.config)
 
     spec =
-      {AgentWorker,
-       {state.job_id, node, Map.get(state.outbound_edges_by_node, agent_id, []),
-        Map.get(state.inbound_edges_by_node, agent_id, []), self(), agent_runtime_context(state),
-        recovery_snapshot}}
+      AgentWorker.child_spec(
+        {state.job_id, node, Map.get(state.outbound_edges_by_node, agent_id, []),
+         Map.get(state.inbound_edges_by_node, agent_id, []), self(), agent_runtime_context(state),
+         recovery_snapshot}
+      )
+      |> Map.put(:mirror_neuron_execution_profile, execution_profile)
 
     case Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.AgentSupervisor, spec) do
       {:error, {:already_started, _pid}} when retry_count < 10 ->
@@ -527,6 +550,12 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         other
     end
   end
+
+  defp apply_execution_profile(%{config: config} = node) do
+    %{node | config: Profile.apply_to_config(config)}
+  end
+
+  defp apply_execution_profile(node), do: node
 
   defp wait_for_agents_stopped(state, timeout_ms) do
     started_at = System.monotonic_time(:millisecond)
@@ -700,6 +729,28 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     next_state
   end
 
+  defp pause_for_profile_review(state, profile, agent_id, reason) do
+    terminate_agent_workers(state)
+
+    next_state = %{
+      state
+      | status: "paused",
+        result: %{"reason" => reason, "agent_id" => agent_id}
+    }
+
+    persist_job_with_recovery(next_state, reason)
+
+    EventBus.publish(state.job_id, %{
+      type: :job_paused_for_manual_restart,
+      agent_id: agent_id,
+      execution_profile: profile,
+      reason: reason,
+      timestamp: Runtime.timestamp()
+    })
+
+    next_state
+  end
+
   defp build_external_message(job_id, agent_id, message) do
     Message.normalize!(
       message,
@@ -726,7 +777,10 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         updated_at: Runtime.timestamp(),
         root_agent_ids: state.manifest.entrypoints,
         placement_policy: Map.get(state.manifest.policies, "placement_policy", "local"),
-        recovery_policy: Map.get(state.manifest.policies, "recovery_mode", "local_restart"),
+        requested_recovery_policy: requested_recovery_policy(state),
+        recovery_policy: effective_recovery_policy(state),
+        reliability_degraded: reliability_degraded?(state),
+        reliability: reliability_map(state),
         result: state.result,
         topology: MirrorNeuron.Manifest.topology(state.manifest),
         manifest: MirrorNeuron.Manifest.to_map(state.manifest),
@@ -741,6 +795,52 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
       {:error, reason} ->
         Logger.warning("failed to persist job #{state.job_id}: #{inspect(reason)}")
+    end
+  end
+
+  defp persist_job_with_recovery(state, reason) do
+    recovery = %{
+      "status" => "paused_for_review",
+      "reason" => reason,
+      "requires_review" => true,
+      "can_resume" => true,
+      "updated_at" => Runtime.timestamp()
+    }
+
+    job_map =
+      %{
+        job_id: state.job_id,
+        graph_id: state.manifest.graph_id,
+        job_name: state.manifest.job_name,
+        required_context_engine: Map.get(state.manifest, :required_context_engine, false),
+        status: "paused",
+        submitted_at: Map.get(state, :submitted_at, Runtime.timestamp()),
+        updated_at: Runtime.timestamp(),
+        root_agent_ids: state.manifest.entrypoints,
+        placement_policy: Map.get(state.manifest.policies, "placement_policy", "local"),
+        requested_recovery_policy: requested_recovery_policy(state),
+        recovery_policy: effective_recovery_policy(state),
+        reliability_degraded: reliability_degraded?(state),
+        result: state.result,
+        topology: MirrorNeuron.Manifest.topology(state.manifest),
+        manifest: MirrorNeuron.Manifest.to_map(state.manifest),
+        manifest_ref: manifest_ref(state),
+        recovery: recovery,
+        recovery_status: "paused_for_review",
+        recovery_reason: reason,
+        recovery_requires_review: true,
+        reliability: reliability_map(state)
+      }
+      |> maybe_put_lease(Keyword.get(state.opts, :job_lease))
+
+    case RedisStore.persist_job(state.job_id, job_map) do
+      {:ok, _job} ->
+        :ok
+
+      {:error, persist_reason} ->
+        Logger.warning(
+          "failed to persist profile recovery state for #{state.job_id}: #{inspect(persist_reason)}"
+        )
     end
   end
 
@@ -795,7 +895,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       required_context_engine: Map.get(state.manifest, :required_context_engine, false),
       entrypoints: state.manifest.entrypoints,
       placement_policy: Map.get(state.manifest.policies, "placement_policy", "local"),
-      recovery_policy: Map.get(state.manifest.policies, "recovery_mode", "local_restart"),
+      requested_recovery_policy: requested_recovery_policy(state),
+      recovery_policy: effective_recovery_policy(state),
+      reliability: reliability_map(state),
       submitted_at: state.submitted_at,
       manifest_version: state.manifest.manifest_version,
       lease_epoch: lease && lease["epoch"],
@@ -803,6 +905,10 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       backpressure_by_agent:
         Map.new(state.manifest.nodes, fn node ->
           {node.node_id, Backpressure.config(node) |> Map.to_list()}
+        end),
+      execution_profiles:
+        Map.new(state.manifest.nodes, fn node ->
+          {node.node_id, Profile.profile_name(node.config)}
         end)
     }
   end
@@ -825,6 +931,64 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     |> Map.put(:lease_epoch, lease["epoch"])
     |> Map.put(:lease_owner, lease["owner_id"])
   end
+
+  defp reliability_from(opts, existing_job) do
+    requested =
+      Keyword.get(opts, :requested_recovery_policy) ||
+        (is_map(existing_job) && existing_job["requested_recovery_policy"]) ||
+        "auto"
+
+    effective =
+      Keyword.get(opts, :recovery_policy) ||
+        (is_map(existing_job) && existing_job["recovery_policy"]) ||
+        if(requested == "auto", do: "local_restart", else: requested)
+
+    defaults = %{
+      "mode" => "single_node",
+      "requested_recovery_policy" => requested,
+      "effective_recovery_policy" => effective,
+      "degraded" => false,
+      "reason" => "legacy job without reliability metadata",
+      "observed_nodes" => [to_string(Node.self())],
+      "observed_at" => Runtime.timestamp()
+    }
+
+    opts
+    |> Keyword.get(
+      :reliability,
+      if(is_map(existing_job), do: existing_job["reliability"], else: %{})
+    )
+    |> normalize_reliability()
+    |> then(&Map.merge(defaults, &1))
+  end
+
+  defp effective_recovery_policy(state) do
+    get_in(state.reliability, ["effective_recovery_policy"]) ||
+      Keyword.get(state.opts, :recovery_policy) ||
+      Map.get(state.manifest.policies, "recovery_mode", "local_restart")
+  end
+
+  defp requested_recovery_policy(state) do
+    get_in(state.reliability, ["requested_recovery_policy"]) ||
+      Keyword.get(state.opts, :requested_recovery_policy) ||
+      Map.get(state.manifest.policies, "recovery_mode", "auto")
+  end
+
+  defp reliability_degraded?(state), do: get_in(state.reliability, ["degraded"]) == true
+
+  defp reliability_map(state) do
+    Map.take(state.reliability, [
+      "mode",
+      "effective_recovery_policy",
+      "degraded",
+      "reason",
+      "observed_nodes",
+      "observed_at"
+    ])
+  end
+
+  defp normalize_reliability(reliability) when is_map(reliability), do: reliability
+  defp normalize_reliability(_reliability), do: %{}
 
   defp node_backpressure_opts(state, agent_id) do
     state.nodes_by_id

@@ -134,6 +134,20 @@ defmodule MirrorNeuron.ManifestTest do
     assert Enum.find(normalized.nodes, &(&1.node_id == "router")).type == "generic"
   end
 
+  test "accepts auto recovery mode for adaptive runtime reliability" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "auto-recovery-mode",
+      "entrypoints" => ["router"],
+      "nodes" => [%{"node_id" => "router", "agent_type" => "router", "role" => "root"}],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "auto"}
+    }
+
+    assert {:ok, normalized} = Manifest.load(manifest)
+    assert normalized.policies["recovery_mode"] == "auto"
+  end
+
   test "normalizes and validates state-driven route conditions" do
     manifest = %{
       "manifest_version" => "1.0",

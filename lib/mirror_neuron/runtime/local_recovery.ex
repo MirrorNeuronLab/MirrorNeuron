@@ -106,6 +106,14 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
       active_lease?(job_id) and not Keyword.get(opts, :ignore_lease, false) ->
         {:ok, %{job_id: job_id, action: :skipped, reason: "job lease is still active"}}
 
+      cluster_recoverable_policy?(job) and not Keyword.get(opts, :manual_resume, false) ->
+        {:ok,
+         %{
+           job_id: job_id,
+           action: :skipped,
+           reason: "job is configured for cluster recovery"
+         }}
+
       true ->
         do_recover_job(job, opts)
     end
@@ -197,7 +205,18 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
 
   defp start_recovered_job(job, bundle, event_type, reason) do
     job_id = job["job_id"]
-    spec = {JobRunner, {job_id, bundle.manifest, [job_bundle: bundle, local_recovery: true]}}
+
+    opts =
+      [
+        job_bundle: bundle,
+        local_recovery: true,
+        requested_recovery_policy: job["requested_recovery_policy"],
+        recovery_policy: job["recovery_policy"],
+        reliability: job["reliability"]
+      ]
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+
+    spec = {JobRunner, {job_id, bundle.manifest, opts}}
 
     case Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) do
       {:ok, _pid} ->
@@ -284,7 +303,10 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
       "job_name" => job["job_name"] || job["graph_id"] || "unknown",
       "root_agent_ids" => job["root_agent_ids"] || [],
       "placement_policy" => job["placement_policy"] || "local",
+      "requested_recovery_policy" => job["requested_recovery_policy"] || "auto",
       "recovery_policy" => job["recovery_policy"] || "local_restart",
+      "reliability_degraded" => job["reliability_degraded"] || false,
+      "reliability" => job["reliability"] || legacy_reliability(job),
       "manifest" => job["manifest"],
       "manifest_ref" => job["manifest_ref"] || %{},
       "submitted_at" => job["submitted_at"] || now
@@ -303,6 +325,21 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
 
   defp maybe_put_status(map, nil), do: map
   defp maybe_put_status(map, status), do: Map.put(map, "status", status)
+
+  defp cluster_recoverable_policy?(job) do
+    Map.get(job, "recovery_policy", "local_restart") == "cluster_recover"
+  end
+
+  defp legacy_reliability(job) do
+    %{
+      "mode" => "single_node",
+      "effective_recovery_policy" => job["recovery_policy"] || "local_restart",
+      "degraded" => job["reliability_degraded"] || false,
+      "reason" => "legacy job without reliability metadata",
+      "observed_nodes" => [to_string(Node.self())],
+      "observed_at" => Runtime.timestamp()
+    }
+  end
 
   defp active_lease?(job_id) do
     case RedisStore.get_lease("job:#{job_id}") do

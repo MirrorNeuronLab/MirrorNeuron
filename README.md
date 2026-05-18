@@ -150,6 +150,15 @@ Runtime configuration is read from environment variables in `config/runtime.exs`
 | `MN_COOKIE` | `mirrorneuron` | Erlang distribution cookie. |
 | `MN_NODE_NAME` | Not set by config | Erlang node name used by release/cluster scripts. |
 | `MN_CLUSTER_NODES` | Empty | Comma-separated Erlang node names for cluster discovery. |
+| `MN_RELIABILITY_STRATEGY` | `auto` | Conservative runtime strategy resolver for new jobs. |
+| `MN_CLUSTER_HEALTH_STABLE_MS` | `10000` | Debounce window before a healthy connected cluster is trusted for multi-node recovery. |
+| `MN_RELIABILITY_OBSERVER_INTERVAL_MS` | `5000` | Interval for publishing reliability mode and job reliability notices. |
+| `MN_NODE_RECONNECT_ATTEMPTS` | `3` | Runtime node reconnect attempts before jobs are paused for manual restart. |
+| `MN_NODE_RECONNECT_BACKOFF_MS` | `1000` | Initial runtime node reconnect backoff; each retry doubles the previous delay. |
+| `MN_EXECUTION_PROFILES_JSON` | `{}` | JSON object defining profiled OpenShell executors, including image, pool, GPU need, policy, warmup command, and concurrency hints. |
+| `MN_NODE_EXECUTION_PROFILES` | Empty | Comma-separated execution profiles this runtime node may advertise after warmup. Empty means the node advertises no profiled executors. |
+| `MN_NODE_CAPABILITIES` | Empty | Comma-separated runtime capabilities such as `video-codec:h264` or `ffmpeg`. |
+| `MN_NODE_GPU` | Auto-detected | Optional override for whether this runtime node advertises GPU capacity. |
 | `MN_CORE_HOST` | `localhost` | Host/IP used by the gRPC listener. |
 | `MN_GRPC_PORT` | `50051` | gRPC port. |
 | `MN_API_ENABLED` | `true` | Enables API-related runtime config. |
@@ -218,6 +227,40 @@ MirrorNeuron.validate_manifest("path/to/manifest.json")
 ```elixir
 MirrorNeuron.run_manifest("path/to/manifest.json")
 ```
+
+### Adaptive Runtime Reliability
+
+Manifests may set `"recovery_mode": "auto"` or omit `recovery_mode`. For new jobs, the runtime resolves the requested policy into an effective policy based on observed cluster health:
+
+- Single node or uncertain/flapping cluster: `local_restart`
+- Healthy multi-node cluster with a durable bundle and eligible placement: `cluster_recover`
+- Explicit `manual_recover`: remains manual
+- Explicit `cluster_recover` on an unsafe single-node cluster: starts degraded as `local_restart`
+
+The runtime persists both `requested_recovery_policy` and effective `recovery_policy`, plus a compact `reliability` map for observability. Running job policies are not rewritten when cluster health changes; reliability events are emitted instead.
+
+### Profiled OpenShell Agents
+
+Dependency-heavy agents should reference an execution profile instead of installing native packages during each run. Configure the profile on runtime nodes, then reference it from the sandbox worker config:
+
+```bash
+MN_EXECUTION_PROFILES_JSON='{"opencv-video-guardian":{"image":"registry.local/business_facility_safety_video_guardian:2026-05","pool":"opencv_gpu","pool_slots":1,"gpu":true,"required_capabilities":["video-codec:h264"],"policy":"policies/video-egress.yaml","reuse_shared_sandbox":true,"persistent_workspace":true,"warmup_command":"python -c \"import cv2\""}}' \
+MN_NODE_EXECUTION_PROFILES=opencv-video-guardian \
+MN_NODE_CAPABILITIES=video-codec:h264,ffmpeg \
+mix run --no-halt
+```
+
+```json
+{
+  "node_id": "video_guardian",
+  "agent_type": "sandbox_worker",
+  "config": {
+    "execution_profile": "opencv-video-guardian"
+  }
+}
+```
+
+The BEAM runtime keeps orchestration, leases, placement, reconnect, and manual recovery. OpenCV, ffmpeg, model runtimes, and similar heavy dependencies stay in the profile image or a prewarmed node cache.
 
 ### Inspect Jobs and Events
 

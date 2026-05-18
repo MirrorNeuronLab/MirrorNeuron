@@ -251,6 +251,25 @@ defmodule MirrorNeuron.RuntimeTest do
     end
   end
 
+  defmodule ProfiledCompleteRunner do
+    def run(_payload, config, _opts) do
+      {:ok,
+       %{
+         "sandbox_name" => "profiled-complete",
+         "exit_code" => 0,
+         "stdout" =>
+           Jason.encode!(%{
+             "complete_job" => %{
+               "profile" => Map.get(config, "execution_profile"),
+               "image" => Map.get(config, "from")
+             }
+           }),
+         "stderr" => "",
+         "logs" => ""
+       }}
+    end
+  end
+
   defmodule ExplicitCheckpointAgent do
     use MirrorNeuron.AgentTemplate
 
@@ -436,6 +455,80 @@ defmodule MirrorNeuron.RuntimeTest do
     wait_until(fn -> agent_unregistered?(job_id, "ingress") end, 2_000)
     wait_until(fn -> agent_unregistered?(job_id, "router") end, 2_000)
     wait_until(fn -> agent_unregistered?(job_id, "sink") end, 2_000)
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "omitted recovery policy persists auto request with local effective policy on a single node" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "auto_reliability_single_node_test",
+      "entrypoints" => ["ingress"],
+      "initial_inputs" => %{"ingress" => [%{"text" => "hello"}]},
+      "nodes" => [
+        %{
+          "node_id" => "ingress",
+          "agent_type" => "router",
+          "role" => "root_coordinator",
+          "config" => %{"emit_type" => "done"}
+        },
+        %{
+          "node_id" => "sink",
+          "agent_type" => "aggregator",
+          "config" => %{"complete_on_message" => true}
+        }
+      ],
+      "edges" => [
+        %{"from_node" => "ingress", "to_node" => "sink", "message_type" => "done"}
+      ]
+    }
+
+    assert {:ok, job_id, job} = MirrorNeuron.run_manifest(manifest, await: true, timeout: 2_000)
+    assert job["status"] == "completed"
+    assert job["requested_recovery_policy"] == "auto"
+    assert job["recovery_policy"] == "local_restart"
+    assert get_in(job, ["reliability", "mode"]) == "single_node"
+    assert get_in(job, ["reliability", "effective_recovery_policy"]) == "local_restart"
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+    assert Enum.any?(events, &(&1["type"] == "reliability_strategy_resolved"))
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "explicit cluster recovery degrades to local restart on a single node and emits metadata" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "cluster_reliability_degraded_test",
+      "entrypoints" => ["ingress"],
+      "initial_inputs" => %{"ingress" => [%{"text" => "hello"}]},
+      "nodes" => [
+        %{
+          "node_id" => "ingress",
+          "agent_type" => "router",
+          "role" => "root_coordinator",
+          "config" => %{"emit_type" => "done"}
+        },
+        %{
+          "node_id" => "sink",
+          "agent_type" => "aggregator",
+          "config" => %{"complete_on_message" => true}
+        }
+      ],
+      "edges" => [
+        %{"from_node" => "ingress", "to_node" => "sink", "message_type" => "done"}
+      ],
+      "policies" => %{"recovery_mode" => "cluster_recover"}
+    }
+
+    assert {:ok, job_id, job} = MirrorNeuron.run_manifest(manifest, await: true, timeout: 2_000)
+    assert job["requested_recovery_policy"] == "cluster_recover"
+    assert job["recovery_policy"] == "local_restart"
+    assert job["reliability_degraded"] == true
+    assert get_in(job, ["reliability", "degraded"]) == true
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+    assert Enum.any?(events, &(&1["type"] == "job_reliability_degraded"))
 
     RedisStore.delete_job(job_id)
   end
@@ -1090,6 +1183,43 @@ defmodule MirrorNeuron.RuntimeTest do
     RedisStore.delete_job(job_id)
   end
 
+  test "local recovery skips jobs whose effective policy is cluster recovery" do
+    config = %{
+      "runner_module" => SafeRetryRunner,
+      "safe_to_retry" => true,
+      "output_message_type" => nil
+    }
+
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "cluster_policy_local_recovery_skip_test",
+      "entrypoints" => ["worker"],
+      "nodes" => [
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "role" => "root_coordinator",
+          "config" => config
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "cluster_recover"}
+    }
+
+    {:ok, job_id} = persist_recoverable_job(manifest, "cluster-policy")
+
+    assert {:ok, %{action: :skipped, reason: "job is configured for cluster recovery"}} =
+             MirrorNeuron.recover_job(job_id)
+
+    assert job_runner_pid(job_id, false) == nil
+
+    assert {:ok, job} = MirrorNeuron.inspect_job(job_id)
+    assert job["status"] == "running"
+    refute Map.has_key?(job, "recovery_status")
+
+    RedisStore.delete_job(job_id)
+  end
+
   test "local recovery pauses unsafe in-progress steps for manual review" do
     manifest = %{
       "manifest_version" => "1.0",
@@ -1592,6 +1722,72 @@ defmodule MirrorNeuron.RuntimeTest do
     assert (default_pool["capacity"] || default_pool[:capacity]) >= 1
   end
 
+  test "runs a dependency-heavy sandbox worker only when its execution profile is advertised" do
+    profile = "opencv-video-guardian-runtime-#{System.unique_integer([:positive])}"
+    restore_profiles = put_test_profiles(%{profile => profile_config("registry.local/video:ok")})
+
+    RedisStore.persist_node_state(to_string(Node.self()), %{
+      "status" => "healthy",
+      "profiles" => [profile],
+      "profile_health" => %{profile => %{"status" => "healthy"}},
+      "gpu" => false,
+      "capabilities" => ["video-codec:h264"]
+    })
+
+    manifest = profiled_executor_manifest("profiled_runtime_success", profile)
+
+    assert {:ok, job_id, job} = MirrorNeuron.run_manifest(manifest, await: true, timeout: 5_000)
+    assert job["status"] == "completed"
+    assert get_in(job, ["result", "output", "profile"]) == profile
+    assert get_in(job, ["result", "output", "image"]) == "registry.local/video:ok"
+
+    assert {:ok, agent} = RedisStore.fetch_agent(job_id, "video_guardian")
+    assert get_in(agent, ["metadata", "execution_profile"]) == profile
+    assert agent["assigned_node"] == to_string(Node.self())
+
+    RedisStore.delete_job(job_id)
+    restore_profiles.()
+  end
+
+  test "pauses profiled work for review when no runtime node advertises the profile" do
+    profile = "missing-opencv-profile-#{System.unique_integer([:positive])}"
+
+    restore_profiles =
+      put_test_profiles(%{profile => profile_config("registry.local/video:missing")})
+
+    RedisStore.persist_node_state(to_string(Node.self()), %{
+      "status" => "healthy",
+      "profiles" => [],
+      "profile_health" => %{},
+      "gpu" => false,
+      "capabilities" => []
+    })
+
+    manifest = profiled_executor_manifest("profiled_runtime_pauses", profile)
+
+    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest)
+
+    wait_until(fn ->
+      match?({:ok, %{"status" => "paused"}}, MirrorNeuron.inspect_job(job_id))
+    end)
+
+    assert {:ok, job} = MirrorNeuron.inspect_job(job_id)
+    assert job["status"] == "paused"
+    assert job["recovery_status"] == "paused_for_review"
+    assert job["recovery_requires_review"] == true
+    assert job["recovery_reason"] =~ "execution profile #{profile} has no eligible runtime nodes"
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+
+    assert Enum.any?(events, fn event ->
+             event["type"] == "job_paused_for_manual_restart" and
+               event["execution_profile"] == profile
+           end)
+
+    RedisStore.delete_job(job_id)
+    restore_profiles.()
+  end
+
   test "waits for all agents to register before seeding entrypoints" do
     manifest = %{
       "manifest_version" => "1.0",
@@ -1642,6 +1838,53 @@ defmodule MirrorNeuron.RuntimeTest do
     refute Enum.any?(events, &(&1["type"] == "dead_letter"))
 
     RedisStore.delete_job(job_id)
+  end
+
+  defp put_test_profiles(profiles) do
+    previous = Application.get_env(:mirror_neuron, :execution_profiles)
+    Application.put_env(:mirror_neuron, :execution_profiles, profiles)
+
+    fn ->
+      if previous == nil do
+        Application.delete_env(:mirror_neuron, :execution_profiles)
+      else
+        Application.put_env(:mirror_neuron, :execution_profiles, previous)
+      end
+    end
+  end
+
+  defp profile_config(image) do
+    %{
+      "image" => image,
+      "pool" => "default",
+      "pool_slots" => 1,
+      "required_capabilities" => ["video-codec:h264"],
+      "reuse_shared_sandbox" => true,
+      "persistent_workspace" => true
+    }
+  end
+
+  defp profiled_executor_manifest(graph_id, profile) do
+    %{
+      "manifest_version" => "1.0",
+      "graph_id" => graph_id,
+      "entrypoints" => ["video_guardian"],
+      "nodes" => [
+        %{
+          "node_id" => "video_guardian",
+          "agent_type" => "sandbox_worker",
+          "role" => "root",
+          "config" => %{
+            "execution_profile" => profile,
+            "runner_module" => "MirrorNeuron.RuntimeTest.ProfiledCompleteRunner",
+            "output_message_type" => nil
+          }
+        }
+      ],
+      "edges" => [],
+      "initial_inputs" => %{"video_guardian" => [%{"stream" => "sample"}]},
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
   end
 
   test "persists a terminal job record even if the coordinator is gone" do

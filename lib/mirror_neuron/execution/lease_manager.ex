@@ -18,6 +18,18 @@ defmodule MirrorNeuron.Execution.LeaseManager do
     GenServer.cast(server, {:release, lease_id})
   end
 
+  def release_node_capacity(node) do
+    release_node_capacity(__MODULE__, node)
+  end
+
+  def release_node_capacity(server, node) do
+    GenServer.call(server, {:release_node_capacity, normalize_node(node)})
+  end
+
+  def restore_capacity(server \\ __MODULE__) do
+    GenServer.call(server, :restore_capacity)
+  end
+
   def stats(server \\ __MODULE__) do
     GenServer.call(server, :stats)
   end
@@ -152,6 +164,24 @@ defmodule MirrorNeuron.Execution.LeaseManager do
     {:reply, stats, state}
   end
 
+  def handle_call({:release_node_capacity, node}, _from, state) do
+    next_state =
+      state
+      |> release_capacity_for_node(node)
+      |> grant_waiting()
+
+    {:reply, :ok, next_state}
+  end
+
+  def handle_call(:restore_capacity, _from, state) do
+    next_state =
+      state
+      |> release_capacity_for_dead_owners()
+      |> grant_waiting()
+
+    {:reply, :ok, next_state}
+  end
+
   @impl true
   def handle_cast({:release, lease_id}, state) do
     {:noreply, state |> release_lease(lease_id) |> grant_waiting()}
@@ -272,6 +302,48 @@ defmodule MirrorNeuron.Execution.LeaseManager do
     end
   end
 
+  defp release_capacity_for_node(state, node) do
+    lease_ids =
+      state.leases
+      |> Enum.filter(fn {_lease_id, lease} -> owner_node(lease) == node end)
+      |> Enum.map(fn {lease_id, _lease} -> lease_id end)
+
+    waiting_ids =
+      state.waiting
+      |> Enum.filter(fn {_lease_id, request} -> owner_node(request) == node end)
+      |> Enum.map(fn {lease_id, _request} -> lease_id end)
+
+    state =
+      Enum.reduce(lease_ids, state, fn lease_id, acc ->
+        release_lease(acc, lease_id)
+      end)
+
+    Enum.reduce(waiting_ids, state, fn lease_id, acc ->
+      remove_waiting(acc, lease_id)
+    end)
+  end
+
+  defp release_capacity_for_dead_owners(state) do
+    lease_ids =
+      state.leases
+      |> Enum.reject(fn {_lease_id, lease} -> owner_alive?(lease) end)
+      |> Enum.map(fn {lease_id, _lease} -> lease_id end)
+
+    waiting_ids =
+      state.waiting
+      |> Enum.reject(fn {_lease_id, request} -> owner_alive?(request) end)
+      |> Enum.map(fn {lease_id, _request} -> lease_id end)
+
+    state =
+      Enum.reduce(lease_ids, state, fn lease_id, acc ->
+        release_lease(acc, lease_id)
+      end)
+
+    Enum.reduce(waiting_ids, state, fn lease_id, acc ->
+      remove_waiting(acc, lease_id)
+    end)
+  end
+
   defp remove_waiting(state, lease_id) do
     monitor_ref = Map.get(state.lease_monitors, lease_id)
     request = Map.get(state.waiting, lease_id)
@@ -359,6 +431,16 @@ defmodule MirrorNeuron.Execution.LeaseManager do
   defp normalize_pool(pool) when is_atom(pool), do: Atom.to_string(pool)
   defp normalize_pool(pool) when is_binary(pool) and pool != "", do: pool
   defp normalize_pool(_pool), do: @default_pool
+
+  defp normalize_node(node) when is_atom(node), do: Atom.to_string(node)
+  defp normalize_node(node) when is_binary(node), do: node
+  defp normalize_node(node), do: to_string(node)
+
+  defp owner_node(%{owner: owner}) when is_pid(owner), do: owner |> node() |> Atom.to_string()
+  defp owner_node(_owner), do: nil
+
+  defp owner_alive?(%{owner: owner}) when is_pid(owner), do: Process.alive?(owner)
+  defp owner_alive?(_owner), do: false
 
   defp stringify_map(map) when is_map(map) do
     Enum.into(map, %{}, fn {key, value} ->
