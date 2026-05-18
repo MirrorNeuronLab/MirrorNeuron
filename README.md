@@ -159,7 +159,7 @@ Runtime configuration is read from environment variables in `config/runtime.exs`
 | `MN_NODE_EXECUTION_PROFILES` | Empty | Comma-separated execution profiles this runtime node may advertise after warmup. Empty means the node advertises no profiled executors. |
 | `MN_NODE_CAPABILITIES` | Empty | Comma-separated runtime capabilities such as `video-codec:h264` or `ffmpeg`. |
 | `MN_NODE_GPU` | Auto-detected | Optional override for whether this runtime node advertises GPU capacity. |
-| `MN_CORE_HOST` | `localhost` | Host/IP used by the gRPC listener. |
+| `MN_CORE_HOST` | `localhost` | Host/IP used by the gRPC listener. Empty, `localhost`, and invalid hostnames bind to `127.0.0.1`; use an IP literal such as `0.0.0.0` to listen on all interfaces. |
 | `MN_GRPC_PORT` | `50051` | gRPC port. |
 | `MN_GRPC_OPERATOR_TOKEN` | Empty | Required bearer or `x-mirror-neuron-operator-token` metadata token for gRPC operator control RPCs such as pause and resume. |
 | `MN_API_ENABLED` | `true` | Enables API-related runtime config, including the gRPC control-plane listener. Set to `false` to prevent the listener from starting. |

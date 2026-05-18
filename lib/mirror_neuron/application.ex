@@ -1,6 +1,8 @@
 defmodule MirrorNeuron.Application do
   use Application
 
+  require Logger
+
   alias MirrorNeuron.Config
 
   @impl true
@@ -82,11 +84,22 @@ defmodule MirrorNeuron.Application do
     end
   end
 
-  defp grpc_bind_opts(host) when host in ["", "localhost"] do
-    [ip: {127, 0, 0, 1}]
+  def grpc_bind_opts(host) do
+    normalized_host =
+      host
+      |> to_string()
+      |> String.trim()
+
+    case normalized_host do
+      "" ->
+        [ip: {127, 0, 0, 1}]
+
+      host ->
+        parse_grpc_bind_host(host)
+    end
   end
 
-  defp grpc_bind_opts(host) do
+  defp parse_grpc_bind_host(host) do
     case :inet.parse_address(String.to_charlist(host)) do
       {:ok, address} when tuple_size(address) == 4 ->
         [ip: address]
@@ -95,7 +108,15 @@ defmodule MirrorNeuron.Application do
         [net: :inet6, ip: address]
 
       _ ->
-        []
+        grpc_loopback_opts(host)
     end
+  end
+
+  defp grpc_loopback_opts(host) do
+    unless String.downcase(host) == "localhost" do
+      Logger.warning("Invalid MN_CORE_HOST #{inspect(host)}; binding gRPC listener to 127.0.0.1")
+    end
+
+    [ip: {127, 0, 0, 1}]
   end
 end
