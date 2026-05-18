@@ -137,6 +137,38 @@ defmodule MirrorNeuron.MonitorTest do
     RedisStore.delete_job(job_id)
   end
 
+  test "job details does not expose persisted embedded manifests" do
+    job_id = "monitor-secret-manifest-#{System.unique_integer([:positive])}"
+
+    RedisStore.persist_job(job_id, %{
+      "job_id" => job_id,
+      "graph_id" => "secret_demo",
+      "status" => "completed",
+      "submitted_at" => "2026-03-28T00:00:00Z",
+      "updated_at" => "2026-03-28T00:00:10Z",
+      "manifest" => %{
+        "metadata" => %{"api_key" => "MN_SECRET_TOKEN"},
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "config" => %{"command" => "curl -H 'Authorization: Bearer MN_SECRET_TOKEN'"},
+            "tool_bindings" => [%{"token" => "MN_SECRET_TOKEN"}]
+          }
+        ],
+        "initial_inputs" => %{"worker" => [%{"prompt" => "use MN_SECRET_TOKEN"}]}
+      },
+      "manifest_ref" => %{"graph_id" => "secret_demo"}
+    })
+
+    assert {:ok, details} = Monitor.job_details(job_id)
+
+    refute Map.has_key?(details["job"], "manifest")
+    assert details["job"]["manifest_ref"] == %{"graph_id" => "secret_demo"}
+    assert details["summary"]["job_id"] == job_id
+
+    RedisStore.delete_job(job_id)
+  end
+
   test "job details reads only the requested recent event window" do
     job_id = "monitor-event-window-#{System.unique_integer([:positive])}"
 
