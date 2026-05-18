@@ -44,7 +44,7 @@ COPY . .
 # Compile the application
 RUN mix compile
 
-EXPOSE 50051 4369 9000-9010
+EXPOSE 50051
 
 # Set the default command
-CMD ["sh", "-c", "if [ -n \"$MN_NODE_NAME\" ]; then elixir --name $MN_NODE_NAME --cookie ${MN_COOKIE:-mirrorneuron} --erl \"-kernel inet_dist_listen_min 9000 inet_dist_listen_max 9010\" -S mix run --no-halt; else mix run --no-halt; fi"]
+CMD ["sh", "-c", "if [ -n \"$MN_NODE_NAME\" ]; then if [ -z \"$MN_COOKIE\" ] || [ \"$MN_COOKIE\" = \"mirrorneuron\" ]; then echo \"MN_COOKIE must be set to a non-default secret when MN_NODE_NAME enables distributed Erlang\" >&2; exit 1; fi; exec elixir --name \"$MN_NODE_NAME\" --cookie \"$MN_COOKIE\" --erl \"-kernel inet_dist_listen_min 9000 inet_dist_listen_max 9010\" -S mix run --no-halt; else exec mix run --no-halt; fi"]
