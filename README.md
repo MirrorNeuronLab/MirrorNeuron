@@ -162,7 +162,7 @@ Runtime configuration is read from environment variables in `config/runtime.exs`
 | `MN_CORE_HOST` | `localhost` | Host/IP used by the gRPC listener. |
 | `MN_GRPC_PORT` | `50051` | gRPC port. |
 | `MN_GRPC_OPERATOR_TOKEN` | Empty | Required bearer or `x-mirror-neuron-operator-token` metadata token for gRPC operator control RPCs such as pause and resume. |
-| `MN_API_ENABLED` | `true` | Enables API-related runtime config. |
+| `MN_API_ENABLED` | `true` | Enables API-related runtime config, including the gRPC control-plane listener. Set to `false` to prevent the listener from starting. |
 | `MN_API_PORT` | `4000` | Core API config port. The separate `mn-api` package uses its own defaults. |
 | `MN_TEMP_DIR` | `/tmp/mirror_neuron` | Temporary runtime directory. |
 | `MN_OPENSHELL_BIN` | `openshell` | OpenShell executable path or command name. |
@@ -298,7 +298,7 @@ MirrorNeuron Core includes protobuf definitions and generated Elixir modules for
 - `proto/cluster.proto`
 - `proto/observability.proto`
 
-Generated modules live under `lib/mirror_neuron_grpc/`.
+Generated modules live under `lib/mirror_neuron_grpc/`. The gRPC listener is controlled by `MN_API_ENABLED` and binds to `MN_CORE_HOST`, which defaults to loopback-only `localhost`.
 
 `JobService.ClearJobs` is a destructive administrative RPC. It is denied unless the server has `MIRROR_NEURON_GRPC_ADMIN_TOKEN` set and the request includes the same value in `admin_token`.
 
