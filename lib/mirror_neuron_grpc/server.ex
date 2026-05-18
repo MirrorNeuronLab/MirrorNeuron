@@ -121,7 +121,9 @@ defmodule MirrorNeuron.Grpc.JobServer do
     end
   end
 
-  def pause_job(request, _stream) do
+  def pause_job(request, stream) do
+    MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
+
     job_id = request.job_id
 
     case MirrorNeuron.pause(job_id) do
@@ -136,7 +138,9 @@ defmodule MirrorNeuron.Grpc.JobServer do
     end
   end
 
-  def resume_job(request, _stream) do
+  def resume_job(request, stream) do
+    MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
+
     job_id = request.job_id
 
     case MirrorNeuron.resume(job_id) do
