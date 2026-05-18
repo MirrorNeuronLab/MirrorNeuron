@@ -165,7 +165,12 @@ end
 defmodule MirrorNeuron.Grpc.ClusterServer do
   use GRPC.Server, service: Mirrorneuron.Cluster.V1.ClusterService.Service
 
-  alias Mirrorneuron.Cluster.V1.{GetSystemSummaryResponse, RemoveNodeResponse}
+  alias Mirrorneuron.Cluster.V1.{
+    GetResourceResponse,
+    GetSystemSummaryResponse,
+    RemoveNodeResponse,
+    SetResourceResponse
+  }
 
   def get_system_summary(_request, _stream) do
     case MirrorNeuron.Monitor.cluster_overview() do
@@ -174,6 +179,25 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
 
       _ ->
         %GetSystemSummaryResponse{summary_json: "{}"}
+    end
+  end
+
+  def get_resource(_request, _stream) do
+    %GetResourceResponse{resource_json: Jason.encode!(MirrorNeuron.resource_list())}
+  end
+
+  def set_resource(request, _stream) do
+    with {:ok, attrs} <- Jason.decode(request.resource_json),
+         {:ok, resource} <- MirrorNeuron.resource_set(attrs) do
+      %SetResourceResponse{resource_json: Jason.encode!(resource)}
+    else
+      {:error, %Jason.DecodeError{} = error} ->
+        raise GRPC.RPCError,
+          status: :invalid_argument,
+          message: "resource body must be valid JSON: #{Exception.message(error)}"
+
+      {:error, reason} ->
+        raise GRPC.RPCError, status: :invalid_argument, message: to_string(reason)
     end
   end
 

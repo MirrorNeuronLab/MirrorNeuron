@@ -363,6 +363,26 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
+  def fetch_resource_limits do
+    case command(["GET", key("resource", "limits")]) do
+      {:ok, nil} -> {:error, "resource limits were not found"}
+      {:ok, encoded} -> Jason.decode(encoded)
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  def persist_resource_limits(limits) when is_map(limits) do
+    limits = stringify_map(limits)
+
+    with {:ok, "OK"} <- command(["SET", key("resource", "limits"), Jason.encode!(limits)]),
+         :ok <- wait_for_replicas() do
+      {:ok, limits}
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
+    end
+  end
+
   defp compact_legacy_job_ids(job_ids) do
     Enum.map(job_ids, fn job_id ->
       if JobId.legacy?(job_id), do: compact_legacy_job_id(job_id), else: job_id

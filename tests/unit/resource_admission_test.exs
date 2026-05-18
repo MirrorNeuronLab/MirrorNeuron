@@ -49,6 +49,11 @@ defmodule MirrorNeuron.ResourceAdmissionTest do
   end
 
   test "rejects jobs and logs a warning when resources are overloaded" do
+    System.put_env("MN_MAX_CPU_LOAD_RATIO", "1.5")
+    System.put_env("MN_MAX_MEMORY_USED_RATIO", "0.95")
+    System.put_env("MN_MAX_GPU_UTILIZATION_RATIO", "0.98")
+    System.put_env("MN_MAX_GPU_MEMORY_USED_RATIO", "0.98")
+
     snapshot = %{
       cpu: %{load_ratio: 2.0},
       memory: %{used_ratio: 0.99},

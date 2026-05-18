@@ -5,6 +5,7 @@ defmodule MirrorNeuron.ResourceAdmission do
 
   alias MirrorNeuron.Cluster.Hardware
   alias MirrorNeuron.Config
+  alias MirrorNeuron.Resource
 
   def check(snapshot \\ hardware_info()) do
     if enabled?() do
@@ -34,10 +35,12 @@ defmodule MirrorNeuron.ResourceAdmission do
 
   def thresholds do
     %{
-      cpu_load_ratio: float_env("MN_MAX_CPU_LOAD_RATIO", "1.5"),
-      memory_used_ratio: float_env("MN_MAX_MEMORY_USED_RATIO", "0.95"),
-      gpu_utilization_ratio: float_env("MN_MAX_GPU_UTILIZATION_RATIO", "0.98"),
-      gpu_memory_used_ratio: float_env("MN_MAX_GPU_MEMORY_USED_RATIO", "0.98")
+      cpu_load_ratio: float_env("MN_MAX_CPU_LOAD_RATIO") || Resource.limit_ratio(:cpu),
+      memory_used_ratio: float_env("MN_MAX_MEMORY_USED_RATIO") || Resource.limit_ratio(:memory),
+      gpu_utilization_ratio:
+        float_env("MN_MAX_GPU_UTILIZATION_RATIO") || Resource.limit_ratio(:gpu),
+      gpu_memory_used_ratio:
+        float_env("MN_MAX_GPU_MEMORY_USED_RATIO") || Resource.limit_ratio(:gpu)
     }
   end
 
@@ -115,13 +118,20 @@ defmodule MirrorNeuron.ResourceAdmission do
     |> Enum.join(", ")
   end
 
-  defp float_env(env_name, default) do
-    value = System.get_env(env_name, default)
+  defp float_env(env_name) do
+    case System.get_env(env_name) do
+      nil ->
+        nil
 
-    case Float.parse(value) do
-      {float, ""} -> float
-      {float, _rest} -> float
-      :error -> raise ArgumentError, "#{env_name} must be a number"
+      "" ->
+        nil
+
+      value ->
+        case Float.parse(value) do
+          {float, ""} -> float
+          {float, _rest} -> float
+          :error -> raise ArgumentError, "#{env_name} must be a number"
+        end
     end
   end
 

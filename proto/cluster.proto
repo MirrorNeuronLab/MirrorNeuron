@@ -3,6 +3,8 @@ package mirrorneuron.cluster.v1;
 
 service ClusterService {
   rpc GetSystemSummary (GetSystemSummaryRequest) returns (GetSystemSummaryResponse);
+  rpc GetResource (GetResourceRequest) returns (GetResourceResponse);
+  rpc SetResource (SetResourceRequest) returns (SetResourceResponse);
   rpc RemoveNode (RemoveNodeRequest) returns (RemoveNodeResponse);
 }
 
@@ -10,6 +12,20 @@ message GetSystemSummaryRequest {}
 
 message GetSystemSummaryResponse {
   string summary_json = 1;
+}
+
+message GetResourceRequest {}
+
+message GetResourceResponse {
+  string resource_json = 1;
+}
+
+message SetResourceRequest {
+  string resource_json = 1;
+}
+
+message SetResourceResponse {
+  string resource_json = 1;
 }
 
 message RemoveNodeRequest {

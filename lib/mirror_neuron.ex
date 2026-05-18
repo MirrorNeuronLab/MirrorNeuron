@@ -72,6 +72,8 @@ defmodule MirrorNeuron do
   def list_jobs(opts \\ []), do: Monitor.list_jobs(opts)
   def job_details(job_id, opts \\ []), do: Monitor.job_details(job_id, opts)
   def cluster_overview(opts \\ []), do: Monitor.cluster_overview(opts)
+  def resource_list, do: MirrorNeuron.Resource.list()
+  def resource_set(attrs), do: MirrorNeuron.Resource.set(attrs)
   def metrics, do: Monitor.metrics()
   def dead_letters(job_id), do: Monitor.dead_letters(job_id)
   def replay_dead_letter(job_id, index), do: Monitor.replay_dead_letter(job_id, index)
