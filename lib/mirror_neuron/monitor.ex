@@ -64,13 +64,17 @@ defmodule MirrorNeuron.Monitor do
 
       {:ok,
        %{
-         "job" => job,
+         "job" => public_job(job),
          "summary" => summary,
          "agents" => Enum.sort_by(agent_summaries, &{&1["assigned_node"], &1["agent_id"]}),
          "recent_events" => recent_events(events, event_limit),
          "sandboxes" => sandboxes
        }}
     end
+  end
+
+  defp public_job(job) do
+    Map.drop(job, ["manifest"])
   end
 
   def cluster_overview(opts \\ []) do
