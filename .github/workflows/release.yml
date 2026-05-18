@@ -24,14 +24,9 @@ jobs:
       tag_name: ${{ steps.version.outputs.tag_name }}
       version: ${{ steps.version.outputs.version }}
       is_prerelease: ${{ steps.version.outputs.is_prerelease }}
+      tag_commit: ${{ steps.verify.outputs.tag_commit }}
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
-
       - name: Validate release tag
         id: version
         shell: bash
@@ -39,11 +34,64 @@ jobs:
           INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
+
           tag="$GITHUB_REF_NAME"
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
             tag="$INPUT_TAG"
           fi
-          scripts/validate-version-tag.sh "$tag"
+
+          if [[ -z "$tag" ]]; then
+            echo "::error::Missing tag name. Expected a tag such as v1.0.1 or v1.0.1-rc.1." >&2
+            exit 1
+          fi
+
+          semver_tag_regex='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)\.(0|[1-9][0-9]*))?$'
+
+          if [[ ! "$tag" =~ $semver_tag_regex ]]; then
+            echo "::error::Invalid release tag '$tag'." >&2
+            echo "Expected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-rc.N, -beta.N, or -alpha.N." >&2
+            echo "Examples: v1.0.1, v1.1.0, v2.0.0, v1.0.1-rc.1" >&2
+            exit 1
+          fi
+
+          version="${tag#v}"
+          is_prerelease="false"
+          if [[ "$version" == *-* ]]; then
+            is_prerelease="true"
+          fi
+
+          {
+            echo "tag_name=$tag"
+            echo "version=$version"
+            echo "is_prerelease=$is_prerelease"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Validated release tag $tag (version $version, prerelease $is_prerelease)."
+
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: refs/tags/${{ steps.version.outputs.tag_name }}
+
+      - name: Verify checkout matches release tag
+        id: verify
+        shell: bash
+        env:
+          TAG_NAME: ${{ steps.version.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+
+          tag_commit="$(git rev-list -n 1 "refs/tags/$TAG_NAME")"
+          head_commit="$(git rev-parse HEAD)"
+
+          if [[ "$head_commit" != "$tag_commit" ]]; then
+            echo "::error::Checked-out commit $head_commit does not match $TAG_NAME commit $tag_commit." >&2
+            exit 1
+          fi
+
+          echo "tag_commit=$tag_commit" >> "$GITHUB_OUTPUT"
+          echo "Verified $TAG_NAME resolves to checked-out commit $head_commit."
 
   test:
     name: Test release candidate
@@ -67,7 +115,30 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ needs.validate.outputs.tag_name }}
+          ref: refs/tags/${{ needs.validate.outputs.tag_name }}
+
+      - name: Verify checkout matches validated tag commit
+        shell: bash
+        env:
+          TAG_NAME: ${{ needs.validate.outputs.tag_name }}
+          VALIDATED_TAG_COMMIT: ${{ needs.validate.outputs.tag_commit }}
+        run: |
+          set -euo pipefail
+
+          tag_commit="$(git rev-list -n 1 "refs/tags/$TAG_NAME")"
+          head_commit="$(git rev-parse HEAD)"
+
+          if [[ "$tag_commit" != "$VALIDATED_TAG_COMMIT" ]]; then
+            echo "::error::Tag $TAG_NAME resolved to $tag_commit, expected validated commit $VALIDATED_TAG_COMMIT." >&2
+            exit 1
+          fi
+
+          if [[ "$head_commit" != "$VALIDATED_TAG_COMMIT" ]]; then
+            echo "::error::Checked-out commit $head_commit does not match validated $TAG_NAME commit $VALIDATED_TAG_COMMIT." >&2
+            exit 1
+          fi
+
+          echo "Verified $TAG_NAME is checked out at validated commit $head_commit."
 
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
@@ -125,7 +196,30 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ needs.validate.outputs.tag_name }}
+          ref: refs/tags/${{ needs.validate.outputs.tag_name }}
+
+      - name: Verify checkout matches validated tag commit
+        shell: bash
+        env:
+          TAG_NAME: ${{ needs.validate.outputs.tag_name }}
+          VALIDATED_TAG_COMMIT: ${{ needs.validate.outputs.tag_commit }}
+        run: |
+          set -euo pipefail
+
+          tag_commit="$(git rev-list -n 1 "refs/tags/$TAG_NAME")"
+          head_commit="$(git rev-parse HEAD)"
+
+          if [[ "$tag_commit" != "$VALIDATED_TAG_COMMIT" ]]; then
+            echo "::error::Tag $TAG_NAME resolved to $tag_commit, expected validated commit $VALIDATED_TAG_COMMIT." >&2
+            exit 1
+          fi
+
+          if [[ "$head_commit" != "$VALIDATED_TAG_COMMIT" ]]; then
+            echo "::error::Checked-out commit $head_commit does not match validated $TAG_NAME commit $VALIDATED_TAG_COMMIT." >&2
+            exit 1
+          fi
+
+          echo "Verified $TAG_NAME is checked out at validated commit $head_commit."
 
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
@@ -191,7 +285,30 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ needs.validate.outputs.tag_name }}
+          ref: refs/tags/${{ needs.validate.outputs.tag_name }}
+
+      - name: Verify checkout matches validated tag commit
+        shell: bash
+        env:
+          TAG_NAME: ${{ needs.validate.outputs.tag_name }}
+          VALIDATED_TAG_COMMIT: ${{ needs.validate.outputs.tag_commit }}
+        run: |
+          set -euo pipefail
+
+          tag_commit="$(git rev-list -n 1 "refs/tags/$TAG_NAME")"
+          head_commit="$(git rev-parse HEAD)"
+
+          if [[ "$tag_commit" != "$VALIDATED_TAG_COMMIT" ]]; then
+            echo "::error::Tag $TAG_NAME resolved to $tag_commit, expected validated commit $VALIDATED_TAG_COMMIT." >&2
+            exit 1
+          fi
+
+          if [[ "$head_commit" != "$VALIDATED_TAG_COMMIT" ]]; then
+            echo "::error::Checked-out commit $head_commit does not match validated $TAG_NAME commit $VALIDATED_TAG_COMMIT." >&2
+            exit 1
+          fi
+
+          echo "Verified $TAG_NAME is checked out at validated commit $head_commit."
 
       - name: Download OTP release tarballs
         uses: actions/download-artifact@v4
