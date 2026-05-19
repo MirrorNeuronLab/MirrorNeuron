@@ -3,12 +3,8 @@ defmodule MirrorNeuron.Grpc.Auth do
 
   import Bitwise
 
-  @operator_token_env "MN_GRPC_OPERATOR_TOKEN"
-  @token_headers [
-    "authorization",
-    "x-mirror-neuron-operator-token",
-    "mn-operator-token"
-  ]
+  @auth_token_env "MN_GRPC_AUTH_TOKEN"
+  @token_headers ["authorization"]
 
   def authorize_operator!(stream) do
     case operator_token() do
@@ -18,13 +14,13 @@ defmodule MirrorNeuron.Grpc.Auth do
         else
           raise GRPC.RPCError,
             status: GRPC.Status.unauthenticated(),
-            message: "operator token is required for this RPC"
+            message: "gRPC auth token is required for this RPC"
         end
 
       :error ->
         raise GRPC.RPCError,
           status: GRPC.Status.unauthenticated(),
-          message: "#{@operator_token_env} must be set before operator control RPCs can be used"
+          message: "#{@auth_token_env} must be set before protected gRPC RPCs can be used"
     end
   end
 
@@ -41,7 +37,7 @@ defmodule MirrorNeuron.Grpc.Auth do
   def authorized?(_stream, _expected_token), do: false
 
   defp operator_token do
-    case System.get_env(@operator_token_env, "") |> String.trim() do
+    case System.get_env(@auth_token_env, "") |> String.trim() do
       "" -> :error
       token -> {:ok, token}
     end

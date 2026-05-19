@@ -161,7 +161,7 @@ Runtime configuration is read from environment variables in `config/runtime.exs`
 | `MN_NODE_GPU` | Auto-detected | Optional override for whether this runtime node advertises GPU capacity. |
 | `MN_CORE_HOST` | `localhost` | Host/IP used by the gRPC listener. Empty, `localhost`, and invalid hostnames bind to `127.0.0.1`; use an IP literal such as `0.0.0.0` to listen on all interfaces. |
 | `MN_GRPC_PORT` | `50051` | gRPC port. |
-| `MN_GRPC_OPERATOR_TOKEN` | Empty | Required bearer or `x-mirror-neuron-operator-token` metadata token for gRPC operator control RPCs such as pause and resume. |
+| `MN_GRPC_AUTH_TOKEN` | Empty | Required bearer token for protected gRPC RPCs such as pause, resume, and resource updates. |
 | `MN_API_ENABLED` | `true` | Enables API-related runtime config, including the gRPC control-plane listener. Set to `false` to prevent the listener from starting. |
 | `MN_API_PORT` | `4000` | Core API config port. The separate `mn-api` package uses its own defaults. |
 | `MN_TEMP_DIR` | `/tmp/mirror_neuron` | Temporary runtime directory. |

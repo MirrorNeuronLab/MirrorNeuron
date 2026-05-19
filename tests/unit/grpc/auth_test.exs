@@ -29,12 +29,6 @@ defmodule MirrorNeuron.Grpc.AuthTest do
     assert Auth.authorized?(stream, "secret-token")
   end
 
-  test "authorizes explicit operator token metadata" do
-    stream = %Stream{metadata: [{"x-mirror-neuron-operator-token", "secret-token"}]}
-
-    assert Auth.authorized?(stream, "secret-token")
-  end
-
   test "rejects missing, blank, and mismatched tokens" do
     refute Auth.authorized?(%Stream{headers: %{}}, "secret-token")
 
