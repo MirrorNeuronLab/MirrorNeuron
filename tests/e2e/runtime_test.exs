@@ -755,6 +755,48 @@ defmodule MirrorNeuron.RuntimeTest do
     RedisStore.delete_job(job_id)
   end
 
+  test "manual resume pauses and restarts a running orphaned job after local process loss" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "manual_resume_running_orphan_test",
+      "nodes" => [
+        %{
+          "node_id" => "root",
+          "agent_type" => "router",
+          "role" => "root_coordinator",
+          "config" => %{"emit_type" => "manual_result"}
+        },
+        %{
+          "node_id" => "sink",
+          "agent_type" => "aggregator",
+          "config" => %{"complete_on_message" => true}
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    wait_until(fn -> running_status?(job_id) end)
+
+    runner = job_runner_pid(job_id)
+    :ok = Horde.DynamicSupervisor.terminate_child(MirrorNeuron.Runtime.JobSupervisor, runner)
+    wait_until(fn -> job_runner_pid(job_id, false) == nil end, 2_000)
+
+    assert {:ok, %{"status" => "running"}} = MirrorNeuron.inspect_job(job_id)
+    assert {:ok, "resumed"} = MirrorNeuron.resume(job_id)
+    wait_until(fn -> running_status?(job_id) and job_runner_pid(job_id, false) != nil end, 3_000)
+
+    assert {:ok, job} = MirrorNeuron.inspect_job(job_id)
+    assert job["status"] == "running"
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+    assert Enum.any?(events, &(&1["type"] == "job_paused_for_manual_resume"))
+    assert Enum.any?(events, &(&1["type"] == "job_recovered"))
+
+    RedisStore.delete_job(job_id)
+  end
+
   test "long-running workflow resumes from checkpoint without repeating completed steps" do
     manifest = %{
       "manifest_version" => "1.0",

@@ -65,12 +65,18 @@ defmodule MirrorNeuron.Runtime do
   def resume_job(job_id) do
     case call_job(job_id, :resume) do
       {:error, "job " <> _ = reason} ->
-        case LocalRecovery.recover_job(job_id, manual_resume: true) do
+        recovery_opts =
+          case pause_orphaned_active_job_for_resume(job_id, reason) do
+            :paused -> [manual_resume: true, ignore_lease: true]
+            :unchanged -> [manual_resume: true]
+          end
+
+        case LocalRecovery.recover_job(job_id, recovery_opts) do
           {:ok, %{action: action}} when action in [:started, :already_running] ->
-            call_job(job_id, :resume)
+            resume_recovered_job(job_id)
 
           {:ok, %{action: :paused_for_review}} ->
-            call_job(job_id, :resume)
+            resume_recovered_job(job_id)
 
           {:ok, %{action: :skipped, reason: _skip_reason}} ->
             {:error, reason}
@@ -208,6 +214,99 @@ defmodule MirrorNeuron.Runtime do
           wait_until_terminal(job_id, timeout, started_at)
         end
     end
+  end
+
+  defp resume_recovered_job(job_id) do
+    case call_job(job_id, :resume) do
+      {:ok, "resumed"} ->
+        {:ok, "resumed"}
+
+      {:error, "job is not paused"} ->
+        {:ok, "resumed"}
+
+      other ->
+        other
+    end
+  end
+
+  defp pause_orphaned_active_job_for_resume(job_id, original_reason) do
+    case RedisStore.fetch_job(job_id) do
+      {:ok, %{"status" => status} = job} when status in ["pending", "running"] ->
+        if local_recovery_policy?(job) do
+          reason =
+            "job runner was missing while job was marked #{status}; " <>
+              "assuming local runtime interruption and pausing for manual resume"
+
+          case pause_job_for_manual_resume(job, reason, original_reason) do
+            :ok ->
+              release_orphaned_job_lease(job_id, job)
+              :paused
+
+            :error ->
+              :unchanged
+          end
+        else
+          :unchanged
+        end
+
+      _ ->
+        :unchanged
+    end
+  end
+
+  defp pause_job_for_manual_resume(job, reason, original_reason) do
+    now = timestamp()
+
+    recovery = %{
+      "status" => "paused_for_review",
+      "reason" => reason,
+      "requires_review" => true,
+      "can_resume" => true,
+      "updated_at" => now
+    }
+
+    updates =
+      job
+      |> Map.merge(%{
+        "status" => "paused",
+        "updated_at" => now,
+        "recovery" => recovery,
+        "recovery_status" => "paused_for_review",
+        "recovery_reason" => reason,
+        "recovery_requires_review" => true
+      })
+
+    case RedisStore.persist_job(job["job_id"], updates) do
+      {:ok, _job} ->
+        EventBus.publish(job["job_id"], %{
+          type: :job_paused_for_manual_resume,
+          reason: reason,
+          original_error: original_reason,
+          timestamp: now
+        })
+
+        :ok
+
+      {:error, persist_reason} ->
+        Logger.warning(
+          "failed to pause orphaned job #{job["job_id"]} for manual resume: #{inspect(persist_reason)}"
+        )
+
+        :error
+    end
+  end
+
+  defp release_orphaned_job_lease(job_id, job) do
+    owner = job["lease_owner"] || get_in(job, ["lease", "owner_id"])
+    epoch = job["lease_epoch"] || get_in(job, ["lease", "epoch"])
+
+    if is_binary(owner) and not is_nil(epoch) do
+      _ = RedisStore.release_fenced_lease("job:#{job_id}", owner, epoch)
+    end
+  end
+
+  defp local_recovery_policy?(job) do
+    Map.get(job, "recovery_policy", "local_restart") != "cluster_recover"
   end
 
   @doc false

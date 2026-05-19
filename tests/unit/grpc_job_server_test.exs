@@ -3,16 +3,17 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
   alias MirrorNeuron.Grpc.JobServer
   alias Mirrorneuron.Job.V1.ClearJobsRequest
+  @admin_token_env "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN"
 
   setup do
-    old_token = System.get_env("MIRROR_NEURON_GRPC_ADMIN_TOKEN")
-    System.delete_env("MIRROR_NEURON_GRPC_ADMIN_TOKEN")
+    old_token = System.get_env(@admin_token_env)
+    System.delete_env(@admin_token_env)
 
     on_exit(fn ->
       if is_nil(old_token) do
-        System.delete_env("MIRROR_NEURON_GRPC_ADMIN_TOKEN")
+        System.delete_env(@admin_token_env)
       else
-        System.put_env("MIRROR_NEURON_GRPC_ADMIN_TOKEN", old_token)
+        System.put_env(@admin_token_env, old_token)
       end
     end)
   end
@@ -23,6 +24,6 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
         JobServer.clear_jobs(%ClearJobsRequest{}, nil)
       end
 
-    assert Exception.message(error) =~ "ClearJobs requires MIRROR_NEURON_GRPC_ADMIN_TOKEN"
+    assert Exception.message(error) =~ "ClearJobs requires #{@admin_token_env}"
   end
 end

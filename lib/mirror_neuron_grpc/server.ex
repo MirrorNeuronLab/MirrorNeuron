@@ -1,6 +1,8 @@
 defmodule MirrorNeuron.Grpc.JobServer do
   use GRPC.Server, service: Mirrorneuron.Job.V1.JobService.Service
 
+  @admin_token_env "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN"
+
   alias Mirrorneuron.Job.V1.{
     SubmitJobResponse,
     GetJobResponse,
@@ -168,13 +170,13 @@ defmodule MirrorNeuron.Grpc.JobServer do
   end
 
   defp authorize_clear_jobs!(request) do
-    configured_token = System.get_env("MIRROR_NEURON_GRPC_ADMIN_TOKEN")
+    configured_token = System.get_env(@admin_token_env)
     request_token = Map.get(request, :admin_token, "")
 
     unless valid_admin_token?(configured_token, request_token) do
       raise GRPC.RPCError,
         status: GRPC.Status.permission_denied(),
-        message: "ClearJobs requires MIRROR_NEURON_GRPC_ADMIN_TOKEN"
+        message: "ClearJobs requires #{@admin_token_env}"
     end
 
     :ok
