@@ -642,6 +642,36 @@ defmodule MirrorNeuron.RuntimeTest do
     RedisStore.delete_job(job_id)
   end
 
+  test "resume is idempotent for an already running job" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "resume_running_idempotent_test",
+      "nodes" => [
+        %{
+          "node_id" => "root",
+          "agent_type" => "router",
+          "role" => "root_coordinator",
+          "config" => %{"emit_type" => "manual_result"}
+        },
+        %{
+          "node_id" => "sink",
+          "agent_type" => "aggregator",
+          "config" => %{"complete_on_message" => true}
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    wait_until(fn -> running_status?(job_id) end)
+
+    assert {:ok, "resumed"} = MirrorNeuron.resume(job_id)
+    assert {:ok, %{"status" => "running"}} = MirrorNeuron.inspect_job(job_id)
+
+    RedisStore.delete_job(job_id)
+  end
+
   test "recovers a paused job after coordinator restart and completes after resume" do
     manifest = %{
       "manifest_version" => "1.0",

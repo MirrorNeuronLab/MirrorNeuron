@@ -171,6 +171,10 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     {:reply, {:ok, "resumed"}, next_state}
   end
 
+  def handle_call(:resume, _from, %{status: "running"} = state) do
+    {:reply, {:ok, "resumed"}, state}
+  end
+
   def handle_call(:resume, _from, state), do: {:reply, {:error, "job is not paused"}, state}
 
   @impl true
