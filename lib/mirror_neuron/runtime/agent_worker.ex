@@ -13,6 +13,18 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   @default_heartbeat_interval_ms 30_000
   @default_pending_drain_batch_size 25
   @default_snapshot_pending_limit 100
+  @runtime_metadata_keys [
+    "paused",
+    "outbound_edges",
+    "heartbeat_interval_ms",
+    "recovery_state",
+    "backpressure",
+    "pending_messages_truncated",
+    "pending_message_count",
+    "lease_epoch",
+    "lease_owner",
+    "execution_profile"
+  ]
 
   def child_spec(
         {job_id, node, outbound_edges, inbound_edges, coordinator, runtime_context,
@@ -81,6 +93,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
           inflight_message: nil,
           heartbeat_interval_ms: heartbeat_interval_ms(),
           recovered_snapshot: recovery_snapshot,
+          checkpoint_metadata: custom_checkpoint_metadata(recovery_snapshot),
           pressure_snapshot: nil
         }
 
@@ -218,12 +231,14 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
 
     case state.module.handle_message(message, state.local_state, context) do
       {:ok, new_local_state, actions} ->
-        next_state = %{
-          state
-          | local_state: new_local_state,
-            processed_messages: state.processed_messages + 1,
-            inflight_message: nil
-        }
+        next_state =
+          %{
+            state
+            | local_state: new_local_state,
+              processed_messages: state.processed_messages + 1,
+              inflight_message: nil
+          }
+          |> merge_checkpoint_metadata(actions)
 
         Enum.each(actions, &execute_action(&1, message, next_state))
         persist_snapshot(next_state)
@@ -376,6 +391,22 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
 
     pressure = pressure_snapshot(state)
 
+    metadata =
+      Map.merge(state.checkpoint_metadata, %{
+        "paused" => state.paused?,
+        "outbound_edges" => Enum.map(state.outbound_edges, & &1.to_node),
+        "heartbeat_interval_ms" => state.heartbeat_interval_ms,
+        "recovery_state" => encoded_state,
+        "backpressure" => pressure,
+        "pending_messages_truncated" => pending_messages_truncated?(state),
+        "pending_message_count" => state.mailbox_depth,
+        "lease_epoch" => state.runtime_context[:lease_epoch],
+        "lease_owner" => state.runtime_context[:lease_owner],
+        "execution_profile" =>
+          get_in(state.runtime_context, [:execution_profiles, state.node.node_id]) ||
+            get_in(state.node, [:config, "execution_profile"])
+      })
+
     snapshot = %{
       agent_id: state.node.node_id,
       node_id: state.node.node_id,
@@ -390,20 +421,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       pending_messages: pending_messages_for_snapshot(state),
       last_heartbeat_at: Runtime.timestamp(),
       parent_job_id: state.job_id,
-      metadata: %{
-        paused: state.paused?,
-        outbound_edges: Enum.map(state.outbound_edges, & &1.to_node),
-        heartbeat_interval_ms: state.heartbeat_interval_ms,
-        recovery_state: encoded_state,
-        backpressure: pressure,
-        pending_messages_truncated: pending_messages_truncated?(state),
-        pending_message_count: state.mailbox_depth,
-        lease_epoch: state.runtime_context[:lease_epoch],
-        lease_owner: state.runtime_context[:lease_owner],
-        execution_profile:
-          get_in(state.runtime_context, [:execution_profiles, state.node.node_id]) ||
-            get_in(state.node, [:config, "execution_profile"])
-      }
+      metadata: metadata
     }
 
     case RedisStore.persist_agent(state.job_id, state.node.node_id, snapshot) do
@@ -500,6 +518,41 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
         "reason" => inspect(reason)
       }
     })
+  end
+
+  defp merge_checkpoint_metadata(state, actions) do
+    metadata =
+      Enum.reduce(actions, %{}, fn
+        {:checkpoint, snapshot}, acc when is_map(snapshot) ->
+          Map.merge(acc, custom_checkpoint_metadata(snapshot))
+
+        _action, acc ->
+          acc
+      end)
+
+    if map_size(metadata) == 0 do
+      state
+    else
+      %{state | checkpoint_metadata: Map.merge(state.checkpoint_metadata, metadata)}
+    end
+  end
+
+  defp custom_checkpoint_metadata(%{"metadata" => metadata}) when is_map(metadata) do
+    metadata
+    |> stringify_keys()
+    |> Map.drop(@runtime_metadata_keys)
+  end
+
+  defp custom_checkpoint_metadata(%{metadata: metadata}) when is_map(metadata) do
+    metadata
+    |> stringify_keys()
+    |> Map.drop(@runtime_metadata_keys)
+  end
+
+  defp custom_checkpoint_metadata(_snapshot), do: %{}
+
+  defp stringify_keys(map) do
+    Map.new(map, fn {key, value} -> {to_string(key), value} end)
   end
 
   defp persist_terminal_completion(state, result) do
