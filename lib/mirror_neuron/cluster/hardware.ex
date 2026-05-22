@@ -7,7 +7,8 @@ defmodule MirrorNeuron.Cluster.Hardware do
     %{
       cpu: cpu_info(),
       memory: memory_info(),
-      gpu: gpu_info()
+      gpu: gpu_info(),
+      disk: disk_info()
     }
   end
 
@@ -77,6 +78,18 @@ defmodule MirrorNeuron.Cluster.Hardware do
     end
   rescue
     _ -> "Not available"
+  end
+
+  defp disk_info do
+    case System.cmd("df", ["-k", "."]) do
+      {output, 0} ->
+        parse_disk_df(output)
+
+      _ ->
+        %{total_bytes: 0, total_mb: 0, available_bytes: 0, available_mb: 0}
+    end
+  rescue
+    _ -> %{total_bytes: 0, total_mb: 0, available_bytes: 0, available_mb: 0}
   end
 
   defp parse_darwin_gpu(output) do
@@ -195,6 +208,29 @@ defmodule MirrorNeuron.Cluster.Hardware do
     end)
   rescue
     _ -> String.split(output, "\n", trim: true)
+  end
+
+  defp parse_disk_df(output) do
+    output
+    |> String.split("\n", trim: true)
+    |> Enum.drop(1)
+    |> List.first()
+    |> case do
+      nil ->
+        %{total_bytes: 0, total_mb: 0, available_bytes: 0, available_mb: 0}
+
+      line ->
+        columns = String.split(line, ~r/\s+/, trim: true)
+        total_kb = columns |> Enum.at(1) |> parse_float() || 0
+        available_kb = columns |> Enum.at(3) |> parse_float() || 0
+
+        %{
+          total_bytes: trunc(total_kb * 1024),
+          total_mb: Float.round(total_kb / 1024, 2),
+          available_bytes: trunc(available_kb * 1024),
+          available_mb: Float.round(available_kb / 1024, 2)
+        }
+    end
   end
 
   defp parse_float(nil), do: nil

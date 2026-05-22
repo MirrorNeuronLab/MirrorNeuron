@@ -4,7 +4,7 @@ defmodule MirrorNeuron.Resource do
   alias MirrorNeuron.Persistence.RedisStore
 
   @allowed_percentages [25, 50, 75, 100]
-  @resource_types ["cpu", "gpu", "memory"]
+  @resource_types ["cpu", "gpu", "memory", "disk"]
 
   def list do
     limits = limits()
@@ -58,7 +58,9 @@ defmodule MirrorNeuron.Resource do
     usable = %{
       "cpu_cores" => percent_of(totals["cpu_cores"], limits["cpu"]),
       "gpu_count" => percent_of(totals["gpu_count"], limits["gpu"]),
-      "memory_gb" => percent_of(totals["memory_gb"], limits["memory"])
+      "memory_gb" => percent_of(totals["memory_gb"], limits["memory"]),
+      "disk_gb" => percent_of(totals["disk_gb"], limits["disk"]),
+      "disk_available_gb" => percent_of(totals["disk_available_gb"], limits["disk"])
     }
 
     Map.put(report, "usable", usable)
@@ -69,12 +71,15 @@ defmodule MirrorNeuron.Resource do
     cpu = map_get(hardware, "cpu") || %{}
     memory = map_get(hardware, "memory") || %{}
     gpu = map_get(hardware, "gpu")
+    disk = map_get(hardware, "disk") || %{}
 
     %{
       "name" => Map.get(node, :name) || Map.get(node, "name") || "unknown",
       "cpu_cores" => integer_value(map_get(cpu, "logical_processors")),
       "gpu_count" => gpu_count(gpu),
       "memory_gb" => memory_gb(memory),
+      "disk_gb" => disk_gb(disk),
+      "disk_available_gb" => disk_available_gb(disk),
       "gpu" => gpu_summary(gpu)
     }
   end
@@ -85,6 +90,8 @@ defmodule MirrorNeuron.Resource do
       "cpu_cores" => 0,
       "gpu_count" => 0,
       "memory_gb" => 0.0,
+      "disk_gb" => 0.0,
+      "disk_available_gb" => 0.0,
       "gpu" => []
     }
   end
@@ -93,7 +100,9 @@ defmodule MirrorNeuron.Resource do
     %{
       "cpu_cores" => Enum.sum(Enum.map(nodes, & &1["cpu_cores"])),
       "gpu_count" => Enum.sum(Enum.map(nodes, & &1["gpu_count"])),
-      "memory_gb" => round_float(Enum.sum(Enum.map(nodes, & &1["memory_gb"])))
+      "memory_gb" => round_float(Enum.sum(Enum.map(nodes, & &1["memory_gb"]))),
+      "disk_gb" => round_float(Enum.sum(Enum.map(nodes, & &1["disk_gb"]))),
+      "disk_available_gb" => round_float(Enum.sum(Enum.map(nodes, & &1["disk_available_gb"])))
     }
   end
 
@@ -105,7 +114,7 @@ defmodule MirrorNeuron.Resource do
 
         cond do
           key not in @resource_types ->
-            {:halt, {:error, "resource type must be one of cpu, gpu, or memory"}}
+            {:halt, {:error, "resource type must be one of cpu, gpu, memory, or disk"}}
 
           normalized = normalize_percentage(value) ->
             {:cont, {:ok, Map.put(acc, key, normalized)}}
@@ -118,7 +127,7 @@ defmodule MirrorNeuron.Resource do
 
     case updates do
       {:ok, values} when map_size(values) > 0 -> {:ok, values}
-      {:ok, _values} -> {:error, "at least one of cpu, gpu, or memory is required"}
+      {:ok, _values} -> {:error, "at least one of cpu, gpu, memory, or disk is required"}
       error -> error
     end
   end
@@ -195,6 +204,36 @@ defmodule MirrorNeuron.Resource do
   end
 
   defp memory_gb(_memory), do: 0.0
+
+  defp disk_gb(disk) when is_map(disk) do
+    cond do
+      bytes = map_get(disk, "total_bytes") ->
+        round_float(bytes / (1024 * 1024 * 1024))
+
+      mb = map_get(disk, "total_mb") ->
+        round_float(mb / 1024)
+
+      true ->
+        0.0
+    end
+  end
+
+  defp disk_gb(_disk), do: 0.0
+
+  defp disk_available_gb(disk) when is_map(disk) do
+    cond do
+      bytes = map_get(disk, "available_bytes") ->
+        round_float(bytes / (1024 * 1024 * 1024))
+
+      mb = map_get(disk, "available_mb") ->
+        round_float(mb / 1024)
+
+      true ->
+        disk_gb(disk)
+    end
+  end
+
+  defp disk_available_gb(_disk), do: 0.0
 
   defp percent_of(value, percent) when is_integer(value), do: floor(value * percent / 100)
   defp percent_of(value, percent) when is_float(value), do: round_float(value * percent / 100)

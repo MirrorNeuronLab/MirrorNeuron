@@ -35,6 +35,12 @@ defmodule MirrorNeuron.Grpc.JobServer do
         {:error, "resource_overloaded:" <> _ = reason} ->
           raise GRPC.RPCError, status: GRPC.Status.resource_exhausted(), message: reason
 
+        {:error, "requirements_not_met:" <> _ = reason} ->
+          raise GRPC.RPCError, status: GRPC.Status.failed_precondition(), message: reason
+
+        {:error, "input_validation_failed:" <> _ = reason} ->
+          raise GRPC.RPCError, status: GRPC.Status.invalid_argument(), message: reason
+
         {:error, reason} ->
           raise GRPC.RPCError, status: :invalid_argument, message: inspect(reason)
       end

@@ -17,6 +17,8 @@ defmodule MirrorNeuron do
     else
       with :ok <- maybe_accept_new_job(opts),
            {:ok, bundle} <- JobBundle.load(input),
+           :ok <- MirrorNeuron.BlueprintValidation.run_input_validation(bundle),
+           :ok <- MirrorNeuron.BlueprintValidation.check_requirements(bundle.manifest),
            {:ok, job_id, _pid} <-
              Runtime.start_job(bundle.manifest, Keyword.put(opts, :job_bundle, bundle)) do
         if Keyword.get(opts, :await, false) do

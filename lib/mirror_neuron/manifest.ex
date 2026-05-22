@@ -5,6 +5,8 @@ defmodule MirrorNeuron.Manifest do
     :job_name,
     :daemon,
     :required_context_engine,
+    :requirements,
+    :input_validation,
     :metadata,
     :nodes,
     :edges,
@@ -70,6 +72,8 @@ defmodule MirrorNeuron.Manifest do
       "job_name" => manifest.job_name,
       "daemon" => manifest.daemon,
       "required_context_engine" => manifest.required_context_engine,
+      "requirements" => json_safe(manifest.requirements),
+      "input_validation" => json_safe(manifest.input_validation),
       "metadata" => json_safe(manifest.metadata),
       "nodes" => Enum.map(manifest.nodes, &node_to_map/1),
       "edges" => Enum.map(manifest.edges, &edge_to_map/1),
@@ -90,6 +94,8 @@ defmodule MirrorNeuron.Manifest do
         normalize_required_context_engine(
           Map.get(raw, "requiredContextEngine", Map.get(raw, "required_context_engine", false))
         ),
+      requirements: Map.get(raw, "requirements", Map.get(raw, "requirments", %{})),
+      input_validation: Map.get(raw, "input_validation", Map.get(raw, "inputValidation", %{})),
       metadata: Map.get(raw, "metadata", %{}),
       nodes: Enum.map(Map.get(raw, "nodes", []), &normalize_node/1),
       edges: Enum.map(Map.get(raw, "edges", []), &normalize_edge/1),
@@ -114,6 +120,8 @@ defmodule MirrorNeuron.Manifest do
       |> validate_entrypoints(manifest)
       |> validate_daemon(manifest)
       |> validate_required_context_engine(manifest)
+      |> validate_requirements(manifest)
+      |> validate_input_validation(manifest)
       |> validate_policies(manifest)
 
     case errors do
@@ -255,6 +263,38 @@ defmodule MirrorNeuron.Manifest do
       not is_boolean(manifest.required_context_engine),
       "requiredContextEngine must be a boolean"
     )
+  end
+
+  defp validate_requirements(errors, manifest) do
+    errors
+    |> maybe_add_error(
+      not is_map(manifest.requirements),
+      "requirements must be an object"
+    )
+  end
+
+  defp validate_input_validation(errors, manifest) do
+    validation = manifest.input_validation
+
+    cond do
+      is_nil(validation) ->
+        errors
+
+      is_map(validation) ->
+        rules = Map.get(validation, "rules", [])
+
+        maybe_add_error(
+          errors,
+          not is_list(rules),
+          "input_validation.rules must be a list"
+        )
+
+      is_list(validation) ->
+        errors
+
+      true ->
+        ["input_validation must be an object or list" | errors]
+    end
   end
 
   defp normalize_node(raw) do
