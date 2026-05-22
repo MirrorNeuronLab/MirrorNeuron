@@ -24,6 +24,12 @@ defmodule MirrorNeuron.BlueprintValidationTest do
     assert {:error, "requirements_not_met:" <> reason} =
              BlueprintValidation.check_requirements(manifest, snapshot)
 
+    assert {:ok, report} = Jason.decode(String.trim(reason))
+    assert report["ok"] == false
+    assert Enum.any?(report["issues"], &(&1["code"] == "requirements.memory_insufficient"))
+    memory = Enum.find(report["issues"], &(&1["location"]["path"] == "memory"))
+    assert memory["expected"]["resource"] == "memory"
+    assert memory["actual"]["resource"] == "memory"
     assert reason =~ "cpu"
     assert reason =~ "gpu"
     assert reason =~ "memory"
