@@ -13,12 +13,12 @@ RUN apt-get update && apt-get install -y \
     python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
-ARG OPENSHELL_VERSION=v0.0.16
+ARG OPENSHELL_VERSION=v0.0.47
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
-      arm64) openshell_target="aarch64-unknown-linux-musl"; openshell_sha="7301b47e37f498e6535c0fa3c1f8db505d385719cbe94de10fc1dc69b83e37fb" ;; \
-      amd64) openshell_target="x86_64-unknown-linux-musl"; openshell_sha="c95ffd08705f3fce6198e5cb9992fa4e8c5eea63b581758c761db5925b92fec5" ;; \
+      arm64) openshell_target="aarch64-unknown-linux-musl"; openshell_sha="a6aa05593aa5bd6936bbb87fa3958510c1a6d82ef11b8ed8498e884de50847c0" ;; \
+      amd64) openshell_target="x86_64-unknown-linux-musl"; openshell_sha="75ea23c19c23a931ac34b274f719c60dd20c6f788f2a4551862ec17572d84c17" ;; \
       *) echo "unsupported architecture for OpenShell: $arch" >&2; exit 1 ;; \
     esac; \
     curl -fLsS -o /tmp/openshell.tar.gz \
@@ -44,7 +44,7 @@ COPY . .
 # Compile the application
 RUN mix compile
 
-EXPOSE 50051
+EXPOSE 50051 4369 4370
 
 # Set the default command
-CMD ["sh", "-c", "if [ -n \"$MN_NODE_NAME\" ]; then if [ -z \"$MN_COOKIE\" ] || [ \"$MN_COOKIE\" = \"mirrorneuron\" ]; then echo \"MN_COOKIE must be set to a non-default secret when MN_NODE_NAME enables distributed Erlang\" >&2; exit 1; fi; exec elixir --name \"$MN_NODE_NAME\" --cookie \"$MN_COOKIE\" --erl \"-kernel inet_dist_listen_min 9000 inet_dist_listen_max 9010\" -S mix run --no-halt; else exec mix run --no-halt; fi"]
+CMD ["sh", "-c", "if [ -n \"$MN_NODE_NAME\" ]; then if [ -z \"$MN_COOKIE\" ] || [ \"$MN_COOKIE\" = \"mirrorneuron\" ]; then echo \"MN_COOKIE must be set to a non-default secret when MN_NODE_NAME enables distributed Erlang\" >&2; exit 1; fi; dist_port=\"${MN_DIST_PORT:-4370}\"; exec elixir --name \"$MN_NODE_NAME\" --cookie \"$MN_COOKIE\" --erl \"-kernel inet_dist_listen_min ${dist_port} inet_dist_listen_max ${dist_port}\" -S mix run --no-halt; else exec mix run --no-halt; fi"]
