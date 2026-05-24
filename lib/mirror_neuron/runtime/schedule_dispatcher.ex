@@ -42,7 +42,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
            |> SchedulePolicy.normalize(Map.get(existing, "manifest", %{}), opts) do
       normalized
       |> Map.merge(Map.take(existing, ["schedule_id", "manifest", "bundle_ref", "source", "dispatches", "active_job_ids", "counters", "created_at"]))
-      |> RedisStore.persist_schedule(schedule_id)
+      |> then(&RedisStore.persist_schedule(schedule_id, &1))
     end
   end
 
@@ -148,7 +148,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
         "last_status_reason" => reason,
         "updated_at" => now
       })
-      |> RedisStore.persist_schedule(schedule_id)
+      |> then(&RedisStore.persist_schedule(schedule_id, &1))
     end
   end
 
@@ -190,7 +190,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
         try do
           dispatch_child(schedule, instance, lease)
         after
-          _ = RedisStore.release_fenced_lease(lease_name, owner, lease.epoch)
+          _ = RedisStore.release_fenced_lease(lease_name, owner, lease["epoch"])
         end
 
       {:error, {:locked, _lease}} ->
@@ -203,7 +203,6 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
   end
 
   defp dispatch_child(schedule, instance, lease) do
-    schedule_id = schedule["schedule_id"]
     dispatch_id = generate_dispatch_id()
     metadata = schedule_dispatch_metadata(schedule, instance, dispatch_id, lease)
 
@@ -290,7 +289,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     |> Map.update("active_job_ids", [job_id], &Enum.uniq([job_id | &1]))
     |> increment_counter("dispatched")
     |> maybe_complete_delayed()
-    |> RedisStore.persist_schedule(schedule["schedule_id"])
+    |> then(&RedisStore.persist_schedule(schedule["schedule_id"], &1))
   end
 
   defp update_after_dispatch_failure(schedule, dispatch_id, instance, reason) do
@@ -309,7 +308,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     current
     |> prepend_dispatch(dispatch)
     |> increment_counter("failed")
-    |> RedisStore.persist_schedule(schedule["schedule_id"])
+    |> then(&RedisStore.persist_schedule(schedule["schedule_id"], &1))
   end
 
   defp advance_schedule(result, schedule, now) do
@@ -330,7 +329,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
       |> Map.put("next_run_at", next_run_at)
       |> Map.put("last_missed_at", DateTime.to_iso8601(now))
       |> increment_counter("missed")
-      |> RedisStore.persist_schedule(schedule["schedule_id"])
+      |> then(&RedisStore.persist_schedule(schedule["schedule_id"], &1))
 
     %{checked: 1, dispatched: 0, skipped: 0, failed: 0, missed: 1, blocked: 0}
   end
@@ -340,7 +339,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
       schedule
       |> Map.put("last_blocked_reason", reason)
       |> Map.put("updated_at", Runtime.timestamp())
-      |> RedisStore.persist_schedule(schedule["schedule_id"])
+      |> then(&RedisStore.persist_schedule(schedule["schedule_id"], &1))
 
     %{checked: 1, dispatched: 0, skipped: 0, failed: 0, missed: 0, blocked: 1}
   end
@@ -385,7 +384,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
       schedule
       |> Map.put("dispatches", updated_dispatches)
       |> Map.update("active_job_ids", [], &List.delete(&1, job_id))
-      |> RedisStore.persist_schedule(schedule["schedule_id"])
+      |> then(&RedisStore.persist_schedule(schedule["schedule_id"], &1))
 
     %{checked: 1, dispatched: 0, skipped: 0, failed: 0, missed: 0, blocked: 0, windows_closed: 1}
   end

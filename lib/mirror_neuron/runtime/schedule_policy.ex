@@ -7,9 +7,11 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
   @supported_missed_policies ["skip", "catchup_one", "catchup_all"]
   @supported_end_actions ["cancel", "none"]
 
-  def normalize(nil, manifest \\ nil, opts \\ []), do: normalize(%{}, manifest, opts)
+  def normalize(schedule, manifest \\ nil, opts \\ [])
 
-  def normalize(schedule, manifest \\ nil, opts \\ []) when is_map(schedule) do
+  def normalize(nil, manifest, opts), do: normalize(%{}, manifest, opts)
+
+  def normalize(schedule, manifest, opts) when is_map(schedule) do
     raw = stringify(schedule)
     kind = infer_kind(raw)
     enabled = bool(Map.get(raw, "enabled", true))
@@ -121,7 +123,7 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
     Map.get(schedule, "kind") == "event" and
       Map.get(schedule, "enabled", true) and
       Map.get(schedule, "status", "active") == "active" and
-      event_type_matches?(Map.get(trigger, "event_type"), Map.get(event, "event_type")) and
+      event_type_matches(Map.get(trigger, "event_type"), Map.get(event, "event_type")) and
       Enum.all?(filters, fn {path, expected} ->
         actual =
           case to_string(path) do
@@ -470,7 +472,7 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
   defp bool(value) when is_binary(value), do: String.downcase(value) in ["1", "true", "yes", "on"]
   defp bool(_value), do: false
 
-  defp positive_int(value, default) when is_integer(value) and value > 0, do: value
+  defp positive_int(value, _default) when is_integer(value) and value > 0, do: value
   defp positive_int(value, default) when is_binary(value) do
     case Integer.parse(value) do
       {parsed, ""} when parsed > 0 -> parsed
