@@ -5,7 +5,7 @@ defmodule MirrorNeuron.Cluster.NodeState do
   alias MirrorNeuron.Persistence.RedisStore
 
   @active_statuses ["healthy", "joining"]
-  @inactive_statuses ["draining", "offline", "quarantined"]
+  @inactive_statuses ["disconnected", "draining", "offline", "quarantined"]
 
   def mark(node, status, attrs \\ %{}) do
     node_name = to_string(node)

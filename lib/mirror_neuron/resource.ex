@@ -24,6 +24,7 @@ defmodule MirrorNeuron.Resource do
     with {:ok, updates} <- normalize_limits(attrs),
          next_limits <- Map.merge(limits(), updates),
          {:ok, persisted} <- store().persist_resource_limits(next_limits) do
+      wake_blocked_recovery_evals()
       {:ok, Map.put(list(), "limits", persisted) |> put_usable_totals()}
     end
   end
@@ -265,5 +266,17 @@ defmodule MirrorNeuron.Resource do
 
   defp nodes_provider do
     Application.get_env(:mirror_neuron, :resource_nodes_provider, __MODULE__)
+  end
+
+  defp wake_blocked_recovery_evals do
+    if Process.whereis(MirrorNeuron.Redis.Connection) do
+      _ = MirrorNeuron.Cluster.Reconciler.wake_blocked_evals(reason: "resource limits changed")
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  catch
+    _kind, _reason -> :ok
   end
 end

@@ -10,10 +10,22 @@ defmodule MirrorNeuron.Cluster.Reconciler do
   alias MirrorNeuron.Scheduler
 
   @active_statuses ["pending", "running", "paused"]
-  @empty_result %{checked: 0, recovered: 0, paused: 0, skipped: 0, failed: 0, jobs: []}
+  @active_node_statuses ["healthy", "joining"]
+  @eval_retry_statuses ["pending", "blocked"]
+  @empty_result %{
+    checked: 0,
+    recovered: 0,
+    paused: 0,
+    blocked: 0,
+    skipped: 0,
+    failed: 0,
+    jobs: []
+  }
 
   def reconcile_node(node, opts \\ []) do
     node_name = node_name(node)
+
+    opts = Keyword.put_new(opts, :trigger, "node_down")
 
     with {:ok, jobs} <- redis_store(opts).list_jobs() do
       result =
@@ -21,7 +33,7 @@ defmodule MirrorNeuron.Cluster.Reconciler do
         |> Enum.filter(&(Map.get(&1, "status") in @active_statuses))
         |> Enum.reduce(@empty_result, fn job, acc ->
           if affected_by_node?(job, node_name) do
-            record(acc, reconcile_affected_job(job, node_name, opts))
+            record(acc, enqueue_or_run_affected_job(job, node_name, opts))
           else
             record(acc, skipped(job, "job is not affected by #{node_name}"))
           end
@@ -33,6 +45,7 @@ defmodule MirrorNeuron.Cluster.Reconciler do
 
   def sweep_orphaned_jobs(owner_node \\ nil, opts \\ []) do
     owner_node = if is_nil(owner_node), do: nil, else: node_name(owner_node)
+    opts = Keyword.put_new(opts, :trigger, "lease_lost")
 
     with {:ok, jobs} <- redis_store(opts).list_jobs() do
       result =
@@ -40,11 +53,371 @@ defmodule MirrorNeuron.Cluster.Reconciler do
         |> Enum.filter(&(Map.get(&1, "status") in @active_statuses))
         |> Enum.filter(fn job -> is_nil(owner_node) or lease_owner(job) == owner_node end)
         |> Enum.reduce(@empty_result, fn job, acc ->
-          record(acc, reconcile_orphaned_job(job, opts))
+          record(acc, enqueue_or_run_orphaned_job(job, opts))
         end)
 
       {:ok, finalize_result(result)}
     end
+  end
+
+  def process_due_evals(opts \\ []) do
+    with {:ok, evals} <- list_recovery_evals(opts) do
+      result =
+        evals
+        |> Enum.filter(&due_eval?/1)
+        |> Enum.reduce(@empty_result, fn eval, acc ->
+          record(acc, process_recovery_eval(eval, opts))
+        end)
+
+      {:ok, finalize_result(result)}
+    end
+  end
+
+  def wake_blocked_evals(opts \\ []) do
+    reason = Keyword.get(opts, :reason, "cluster capacity changed")
+
+    with {:ok, evals} <- list_recovery_evals(opts) do
+      evals
+      |> Enum.filter(&(Map.get(&1, "status") == "blocked"))
+      |> Enum.each(fn eval ->
+        _ =
+          update_recovery_eval(
+            Map.fetch!(eval, "eval_id"),
+            %{
+              "status" => "pending",
+              "wait_until" => nil,
+              "wake_reason" => reason,
+              "updated_at" => Runtime.timestamp()
+            },
+            opts
+          )
+      end)
+
+      process_due_evals(opts)
+    end
+  end
+
+  defp enqueue_or_run_affected_job(job, failed_node, opts) do
+    if dry_run?(opts) or Keyword.has_key?(opts, :eval) do
+      reconcile_affected_job(job, failed_node, opts)
+    else
+      affected_agents = Scheduler.affected_agent_ids(Map.get(job, "scheduler", %{}), failed_node)
+      reason = Keyword.get(opts, :reason, "node #{failed_node} is unavailable")
+
+      enqueue_and_process_eval(
+        job,
+        Keyword.fetch!(opts, :trigger),
+        failed_node,
+        affected_agents,
+        reason,
+        opts
+      )
+    end
+  end
+
+  defp enqueue_or_run_orphaned_job(job, opts) do
+    if dry_run?(opts) or Keyword.has_key?(opts, :eval) do
+      reconcile_orphaned_job(job, opts)
+    else
+      failed_node = lease_owner(job)
+      reason = Keyword.get(opts, :reason, "lost job lease")
+      enqueue_and_process_eval(job, Keyword.fetch!(opts, :trigger), failed_node, [], reason, opts)
+    end
+  end
+
+  defp enqueue_and_process_eval(job, trigger, failed_node, affected_agents, reason, opts) do
+    trigger = to_string(trigger)
+
+    case find_active_eval(job["job_id"], trigger, failed_node, opts) do
+      %{"status" => "running"} = eval ->
+        skipped(job, "recovery eval #{eval["eval_id"]} is already running")
+
+      %{"status" => "blocked"} = eval ->
+        if due_eval?(eval) or Keyword.get(opts, :force, false) do
+          eval
+          |> Map.put("status", "pending")
+          |> Map.put("updated_at", Runtime.timestamp())
+          |> persist_recovery_eval(opts)
+          |> case do
+            {:ok, persisted} ->
+              maybe_process_eval(persisted, opts)
+
+            {:error, persist_reason} ->
+              failed(job, "could not persist recovery eval: #{inspect(persist_reason)}")
+          end
+        else
+          blocked(job, Map.get(eval, "block_reason") || reason, %{
+            eval_id: eval["eval_id"],
+            wait_until: Map.get(eval, "wait_until"),
+            failed_node: failed_node,
+            affected_agents: affected_agents
+          })
+        end
+
+      existing when is_map(existing) ->
+        eval =
+          existing
+          |> Map.merge(%{
+            "trigger" => trigger,
+            "reason" => reason,
+            "failed_node" => failed_node,
+            "affected_agents" => affected_agents,
+            "job" => job,
+            "status" => "pending",
+            "updated_at" => Runtime.timestamp()
+          })
+
+        with {:ok, persisted} <- persist_recovery_eval(eval, opts) do
+          maybe_process_eval(persisted, opts)
+        else
+          {:error, persist_reason} ->
+            failed(job, "could not persist recovery eval: #{inspect(persist_reason)}")
+        end
+
+      nil ->
+        eval = new_recovery_eval(job, trigger, failed_node, affected_agents, reason)
+
+        with {:ok, persisted} <- persist_recovery_eval(eval, opts) do
+          maybe_process_eval(persisted, opts)
+        else
+          {:error, persist_reason} ->
+            failed(job, "could not persist recovery eval: #{inspect(persist_reason)}")
+        end
+    end
+  end
+
+  defp maybe_process_eval(eval, opts) do
+    if Keyword.get(opts, :defer, false) do
+      skipped(eval_job(eval), "queued recovery eval #{eval["eval_id"]}")
+    else
+      process_recovery_eval(eval, opts)
+    end
+  end
+
+  defp process_recovery_eval(%{"status" => status} = eval, opts)
+       when status in @eval_retry_statuses do
+    if due_eval?(eval) or Keyword.get(opts, :force, false) do
+      do_process_recovery_eval(eval, opts)
+    else
+      blocked(eval_job(eval), Map.get(eval, "block_reason") || "recovery eval is waiting", %{
+        eval_id: eval["eval_id"],
+        wait_until: Map.get(eval, "wait_until"),
+        failed_node: Map.get(eval, "failed_node"),
+        affected_agents: Map.get(eval, "affected_agents", [])
+      })
+    end
+  end
+
+  defp process_recovery_eval(eval, _opts) do
+    skipped(eval_job(eval), "recovery eval #{eval["eval_id"]} is #{eval["status"]}")
+  end
+
+  defp do_process_recovery_eval(eval, opts) do
+    attempt = recovery_eval_attempt(eval) + 1
+    running_at = Runtime.timestamp()
+
+    running_eval =
+      eval
+      |> Map.put("status", "running")
+      |> Map.put("attempt", attempt)
+      |> Map.put("started_at", running_at)
+      |> Map.put("updated_at", running_at)
+      |> Map.put("history", append_eval_history(eval, "running", "attempt #{attempt} started"))
+
+    _ = persist_recovery_eval(running_eval, opts)
+
+    result =
+      case fetch_eval_job(running_eval, opts) do
+        {:ok, job} ->
+          run_recovery_eval(running_eval, job, opts)
+
+        {:error, reason} ->
+          failed(eval_job(running_eval), "could not load recovery eval job: #{inspect(reason)}")
+      end
+
+    finalize_recovery_eval(running_eval, result, opts)
+    result
+  end
+
+  defp run_recovery_eval(eval, job, opts) do
+    eval_opts =
+      opts
+      |> Keyword.put(:eval, eval)
+      |> Keyword.put(:reason, Map.get(eval, "reason") || Keyword.get(opts, :reason))
+
+    case Map.get(eval, "trigger") do
+      "lease_lost" ->
+        reconcile_orphaned_job(job, eval_opts)
+
+      _trigger ->
+        reconcile_affected_job(job, Map.get(eval, "failed_node"), eval_opts)
+    end
+  end
+
+  defp finalize_recovery_eval(eval, result, opts) do
+    now = Runtime.timestamp()
+    {status, wait_until} = eval_status_for_result(eval, result, opts)
+
+    updates =
+      %{
+        "status" => status,
+        "result" => stringify_result(result),
+        "block_reason" => if(status == "blocked", do: result.reason, else: nil),
+        "wait_until" => wait_until,
+        "completed_at" => if(status in ["complete", "failed"], do: now, else: nil),
+        "updated_at" => now,
+        "history" => append_eval_history(eval, status, result.reason)
+      }
+
+    _ = update_recovery_eval(eval["eval_id"], updates, opts)
+    :ok
+  end
+
+  defp eval_status_for_result(_eval, %{action: :recovered}, _opts), do: {"complete", nil}
+  defp eval_status_for_result(_eval, %{action: :paused_for_review}, _opts), do: {"complete", nil}
+  defp eval_status_for_result(_eval, %{action: :skipped}, _opts), do: {"complete", nil}
+  defp eval_status_for_result(_eval, %{action: :failed}, _opts), do: {"failed", nil}
+
+  defp eval_status_for_result(eval, %{action: :blocked, wait_until: wait_until}, opts),
+    do: {"blocked", wait_until || retry_wait_until(eval, opts)}
+
+  defp eval_status_for_result(eval, %{action: :blocked}, opts),
+    do: {"blocked", retry_wait_until(eval, opts)}
+
+  defp eval_status_for_result(_eval, _result, _opts), do: {"failed", nil}
+
+  defp new_recovery_eval(job, trigger, failed_node, affected_agents, reason) do
+    now = Runtime.timestamp()
+    job_id = job["job_id"]
+
+    %{
+      "eval_id" => "rec-#{job_id}-#{System.unique_integer([:positive, :monotonic])}",
+      "job_id" => job_id,
+      "trigger" => trigger,
+      "status" => "pending",
+      "reason" => reason,
+      "failed_node" => failed_node,
+      "affected_agents" => affected_agents,
+      "attempt" => 0,
+      "job" => job,
+      "created_at" => now,
+      "updated_at" => now,
+      "history" => []
+    }
+  end
+
+  defp find_active_eval(job_id, trigger, failed_node, opts) do
+    with {:ok, evals} <- list_recovery_evals(opts) do
+      Enum.find(evals, fn eval ->
+        Map.get(eval, "job_id") == job_id and
+          Map.get(eval, "trigger") == to_string(trigger) and
+          Map.get(eval, "failed_node") == failed_node and
+          Map.get(eval, "status") in ["pending", "running", "blocked"]
+      end)
+    else
+      _ -> nil
+    end
+  end
+
+  defp list_recovery_evals(opts) do
+    store = redis_store(opts)
+
+    if function_exported?(store, :list_recovery_evals, 0) do
+      store.list_recovery_evals()
+    else
+      {:ok, []}
+    end
+  end
+
+  defp persist_recovery_eval(%{"eval_id" => eval_id} = eval, opts) do
+    store = redis_store(opts)
+
+    if function_exported?(store, :persist_recovery_eval, 2) do
+      store.persist_recovery_eval(eval_id, eval)
+    else
+      {:ok, eval}
+    end
+  end
+
+  defp update_recovery_eval(eval_id, updates, opts) do
+    store = redis_store(opts)
+
+    if function_exported?(store, :update_recovery_eval, 2) do
+      store.update_recovery_eval(eval_id, updates)
+    else
+      {:ok, updates}
+    end
+  end
+
+  defp fetch_eval_job(eval, opts) do
+    store = redis_store(opts)
+    job_id = Map.get(eval, "job_id")
+
+    cond do
+      function_exported?(store, :fetch_job, 1) ->
+        store.fetch_job(job_id)
+
+      is_map(Map.get(eval, "job")) ->
+        {:ok, Map.get(eval, "job")}
+
+      true ->
+        {:error, :missing_eval_job}
+    end
+  end
+
+  defp eval_job(eval), do: Map.get(eval, "job") || %{"job_id" => Map.get(eval, "job_id")}
+
+  defp due_eval?(eval) do
+    Map.get(eval, "status") in @eval_retry_statuses and wait_due?(Map.get(eval, "wait_until"))
+  end
+
+  defp wait_due?(nil), do: true
+  defp wait_due?(""), do: true
+
+  defp wait_due?(wait_until) when is_binary(wait_until) do
+    case DateTime.from_iso8601(wait_until) do
+      {:ok, dt, _offset} -> DateTime.compare(dt, DateTime.utc_now()) != :gt
+      _ -> true
+    end
+  end
+
+  defp wait_due?(_wait_until), do: true
+
+  defp recovery_eval_attempt(eval), do: integer_value(Map.get(eval, "attempt"), 0)
+
+  defp append_eval_history(eval, status, reason) do
+    entry = %{
+      "status" => status,
+      "reason" => reason,
+      "timestamp" => Runtime.timestamp()
+    }
+
+    eval
+    |> Map.get("history", [])
+    |> List.wrap()
+    |> Kernel.++([entry])
+    |> Enum.take(-20)
+  end
+
+  defp retry_wait_until(eval, opts) do
+    attempt = max(recovery_eval_attempt(eval), 1)
+
+    base =
+      Keyword.get(
+        opts,
+        :retry_base_ms,
+        config_positive_integer("MN_RECOVERY_EVAL_RETRY_BASE_MS", 5_000)
+      )
+
+    max_delay =
+      Keyword.get(
+        opts,
+        :retry_max_ms,
+        config_positive_integer("MN_RECOVERY_EVAL_RETRY_MAX_MS", 60_000)
+      )
+
+    delay = min(max_delay, trunc(base * :math.pow(2, attempt - 1)))
+    iso_after(delay)
   end
 
   defp reconcile_affected_job(job, failed_node, opts) do
@@ -55,6 +428,9 @@ defmodule MirrorNeuron.Cluster.Reconciler do
     cond do
       not cluster_recoverable?(job) ->
         pause_for_review(job, reason, failed_node, affected_agents, opts)
+
+      disconnected_grace_active?(failed_node, opts) ->
+        wait_for_disconnected_node(job, failed_node, affected_agents, reason, opts)
 
       owner_match? ->
         recover_whole_job(job, failed_node, reason, opts)
@@ -77,16 +453,20 @@ defmodule MirrorNeuron.Cluster.Reconciler do
     case redis_store(opts).get_lease("job:#{job_id}") do
       {:ok, nil} ->
         if safe_to_sweep?(job) do
-          if cluster_recoverable?(job) do
-            recover_whole_job(job, lease_owner(job), reason, opts)
+          if cluster_recoverable?(job) and disconnected_grace_active?(lease_owner(job), opts) do
+            wait_for_disconnected_node(job, lease_owner(job), [], reason, opts)
           else
-            pause_for_review(
-              job,
-              "job is not configured for cluster recovery",
-              lease_owner(job),
-              [],
-              opts
-            )
+            if cluster_recoverable?(job) do
+              recover_whole_job(job, lease_owner(job), reason, opts)
+            else
+              pause_for_review(
+                job,
+                "job is not configured for cluster recovery",
+                lease_owner(job),
+                [],
+                opts
+              )
+            end
           end
         else
           skipped(job, "job is too recent to sweep")
@@ -135,14 +515,15 @@ defmodule MirrorNeuron.Cluster.Reconciler do
          {:auto, _safety_reason} <-
            RecoverySafety.decision(job, bundle.manifest, agents, agent_ids: affected_agents),
          {:ok, partial_plan} <-
-           Scheduler.plan(
+           recovery_scheduler_plan(
              bundle.manifest,
              scheduler_opts(opts,
                exclude_nodes: [failed_node],
                ignore_job_ids: [job_id],
                only_agent_ids: affected_agents
              )
-           ) do
+           ),
+         :ok <- validate_recovery_plan(partial_plan, failed_node, opts) do
       scheduler_plan = Scheduler.merge_plan(Map.get(job, "scheduler", %{}), partial_plan)
 
       if dry_run?(opts) do
@@ -189,6 +570,9 @@ defmodule MirrorNeuron.Cluster.Reconciler do
       {:blocked, safety_reason} ->
         pause_for_review(job, safety_reason, failed_node, affected_agents, opts)
 
+      {:placement_blocked, placement_reason} ->
+        block_recovery(job, placement_reason, failed_node, affected_agents, opts)
+
       {:error, reason} ->
         pause_for_review(job, inspect(reason), failed_node, affected_agents, opts)
     end
@@ -210,13 +594,14 @@ defmodule MirrorNeuron.Cluster.Reconciler do
          {:ok, agents} <- redis_store(opts).list_agents(job_id),
          {:auto, _safety_reason} <- RecoverySafety.decision(job, bundle.manifest, agents),
          {:ok, scheduler_plan} <-
-           Scheduler.plan(
+           recovery_scheduler_plan(
              bundle.manifest,
              scheduler_opts(opts,
                exclude_nodes: List.wrap(failed_node),
                ignore_job_ids: [job_id]
              )
-           ) do
+           ),
+         :ok <- validate_recovery_plan(scheduler_plan, failed_node, opts) do
       if dry_run?(opts) do
         recovered(job, "would restart job", %{mode: "job", scheduler: scheduler_plan})
       else
@@ -253,6 +638,9 @@ defmodule MirrorNeuron.Cluster.Reconciler do
       {:blocked, safety_reason} ->
         pause_for_review(job, safety_reason, failed_node, [], opts)
 
+      {:placement_blocked, placement_reason} ->
+        block_recovery(job, placement_reason, failed_node, [], opts)
+
       {:error, reason} ->
         pause_for_review(job, inspect(reason), failed_node, [], opts)
     end
@@ -279,13 +667,68 @@ defmodule MirrorNeuron.Cluster.Reconciler do
     end
   end
 
+  defp block_recovery(job, reason, failed_node, affected_agents, opts, block_opts \\ []) do
+    wait_until =
+      Keyword.get(block_opts, :wait_until) ||
+        retry_wait_until(Keyword.get(opts, :eval, %{}), opts)
+
+    status = Keyword.get(block_opts, :status, "blocked_no_placement")
+
+    if dry_run?(opts) do
+      blocked(job, reason, %{
+        failed_node: failed_node,
+        affected_agents: affected_agents,
+        wait_until: wait_until
+      })
+    else
+      mark_recovery(job, status, reason, failed_node, affected_agents, opts,
+        wait_until: wait_until,
+        requires_review?: false
+      )
+
+      publish(job["job_id"], opts, %{
+        type: :job_recovery_blocked,
+        reason: reason,
+        failed_node: failed_node,
+        affected_agents: affected_agents,
+        wait_until: wait_until,
+        timestamp: Runtime.timestamp()
+      })
+
+      blocked(job, reason, %{
+        failed_node: failed_node,
+        affected_agents: affected_agents,
+        wait_until: wait_until
+      })
+    end
+  end
+
+  defp wait_for_disconnected_node(job, failed_node, affected_agents, reason, opts) do
+    wait_until =
+      disconnected_wait_until(failed_node, opts) ||
+        retry_wait_until(Keyword.get(opts, :eval, %{}), opts)
+
+    wait_reason =
+      "node #{failed_node} is inside its disconnect grace window; waiting before relocating work"
+
+    block_recovery(job, wait_reason, failed_node, affected_agents, opts,
+      status: "waiting_for_node",
+      wait_until: wait_until,
+      reason: reason
+    )
+  end
+
   defp wait_for_node_scoped_recovery(job, failed_node, affected_agents, reason, opts) do
     wait_reason =
       "#{job_type(job)} allocations are scoped to their original runtime node; " <>
         "waiting for #{failed_node} to recover instead of relocating them"
 
     unless dry_run?(opts) do
-      mark_recovery(job, "waiting_for_node", wait_reason, failed_node, affected_agents, opts)
+      wait_until = retry_wait_until(Keyword.get(opts, :eval, %{}), opts)
+
+      mark_recovery(job, "waiting_for_node", wait_reason, failed_node, affected_agents, opts,
+        wait_until: wait_until
+      )
 
       publish(job["job_id"], opts, %{
         type: :job_node_scoped_recovery_waiting,
@@ -293,26 +736,39 @@ defmodule MirrorNeuron.Cluster.Reconciler do
         detail: wait_reason,
         failed_node: failed_node,
         affected_agents: affected_agents,
+        wait_until: wait_until,
         timestamp: Runtime.timestamp()
       })
     end
 
-    skipped(job, wait_reason)
+    blocked(job, wait_reason, %{
+      failed_node: failed_node,
+      affected_agents: affected_agents,
+      wait_until: retry_wait_until(Keyword.get(opts, :eval, %{}), opts)
+    })
   end
 
   defp mark_recovery(job, status, reason, failed_node, affected_agents, opts, mark_opts \\ []) do
     now = Runtime.timestamp()
     requires_review? = Keyword.get(mark_opts, :requires_review?, false)
+    eval = Keyword.get(opts, :eval, %{})
+    wait_until = Keyword.get(mark_opts, :wait_until)
 
-    recovery = %{
-      "status" => status,
-      "reason" => reason,
-      "requires_review" => requires_review?,
-      "can_resume" => requires_review?,
-      "failed_node" => failed_node,
-      "affected_agents" => affected_agents,
-      "updated_at" => now
-    }
+    recovery =
+      %{
+        "status" => status,
+        "reason" => reason,
+        "requires_review" => requires_review?,
+        "can_resume" => requires_review?,
+        "failed_node" => failed_node,
+        "affected_agents" => affected_agents,
+        "wait_until" => wait_until,
+        "eval_id" => Map.get(eval, "eval_id"),
+        "attempt" => Map.get(eval, "attempt"),
+        "updated_at" => now
+      }
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+      |> Map.new()
 
     updates =
       %{
@@ -322,6 +778,7 @@ defmodule MirrorNeuron.Cluster.Reconciler do
         "recovery_requires_review" => requires_review?
       }
       |> maybe_put("status", Keyword.get(mark_opts, :status))
+      |> maybe_put("recovery_wait_until", wait_until)
 
     defaults = job_defaults(job, now)
 
@@ -334,6 +791,149 @@ defmodule MirrorNeuron.Cluster.Reconciler do
           "failed to persist reconciliation status for #{job["job_id"]}: #{inspect(persist_reason)}"
         )
     end
+  end
+
+  defp recovery_scheduler_plan(manifest, opts) do
+    case Scheduler.plan(manifest, opts) do
+      {:ok, plan} -> {:ok, plan}
+      {:error, reason} -> {:placement_blocked, format_reason(reason)}
+    end
+  end
+
+  defp validate_recovery_plan(%{"placements" => placements}, failed_node, opts)
+       when is_list(placements) do
+    nodes_by_name =
+      opts
+      |> validation_nodes()
+      |> Enum.into(%{}, fn node -> {validation_node_name(node), node} end)
+      |> Map.reject(fn {name, _node} -> is_nil(name) end)
+
+    if map_size(nodes_by_name) == 0 do
+      :ok
+    else
+      placements
+      |> Enum.reduce_while(:ok, fn placement, :ok ->
+        target = Map.get(placement, "node")
+        node = Map.get(nodes_by_name, target)
+        status = validation_node_status(node)
+
+        cond do
+          is_nil(target) ->
+            {:halt, {:placement_blocked, "scheduler placement is missing a target node"}}
+
+          not is_nil(failed_node) and target == failed_node ->
+            {:halt,
+             {:placement_blocked, "final validation rejected placement on failed node #{target}"}}
+
+          is_nil(node) ->
+            {:halt,
+             {:placement_blocked, "target node #{target} is not visible during final validation"}}
+
+          status not in @active_node_statuses ->
+            {:halt,
+             {:placement_blocked,
+              "target node #{target} is #{status || "unknown"} during final validation"}}
+
+          true ->
+            {:cont, :ok}
+        end
+      end)
+    end
+  end
+
+  defp validate_recovery_plan(_plan, _failed_node, _opts),
+    do: {:placement_blocked, "scheduler plan is missing placements"}
+
+  defp validation_nodes(opts) do
+    scheduler_opts = Keyword.get(opts, :scheduler_opts, [])
+
+    nodes =
+      Keyword.get(opts, :validation_nodes) ||
+        Keyword.get(scheduler_opts, :nodes) ||
+        default_validation_nodes()
+
+    nodes
+    |> List.wrap()
+    |> Enum.filter(&is_map/1)
+  end
+
+  defp default_validation_nodes do
+    case MirrorNeuron.inspect_nodes() do
+      nodes when is_list(nodes) -> nodes
+      _ -> []
+    end
+  rescue
+    _ -> []
+  catch
+    _kind, _reason -> []
+  end
+
+  defp validation_node_name(node) do
+    Map.get(node, "name") || Map.get(node, :name) || Map.get(node, "node") || Map.get(node, :node)
+  end
+
+  defp validation_node_status(nil), do: nil
+
+  defp validation_node_status(node),
+    do: Map.get(node, "status") || Map.get(node, :status) || "healthy"
+
+  defp disconnected_grace_active?(nil, _opts), do: false
+
+  defp disconnected_grace_active?(node, opts) do
+    node_status = Keyword.get(opts, :node_status)
+    wait_until = disconnected_wait_until(node, opts)
+
+    cond do
+      node_status == "disconnected" ->
+        is_nil(wait_until) or not wait_due?(wait_until)
+
+      true ->
+        case fetch_node_state(node, opts) do
+          {:ok, %{"status" => "disconnected"} = state} ->
+            state_wait_until =
+              Map.get(state, "disconnect_expires_at") ||
+                Map.get(state, "wait_until") ||
+                Map.get(state, "recovery_wait_until")
+
+            is_nil(state_wait_until) or not wait_due?(state_wait_until)
+
+          _ ->
+            false
+        end
+    end
+  end
+
+  defp disconnected_wait_until(node, opts) do
+    Keyword.get(opts, :wait_until) ||
+      Keyword.get(opts, :disconnect_expires_at) ||
+      case fetch_node_state(node, opts) do
+        {:ok, state} ->
+          Map.get(state, "disconnect_expires_at") ||
+            Map.get(state, "wait_until") ||
+            Map.get(state, "recovery_wait_until")
+
+        _ ->
+          nil
+      end
+  end
+
+  defp fetch_node_state(node, opts) do
+    store = redis_store(opts)
+
+    cond do
+      function_exported?(store, :fetch_node_state, 1) ->
+        store.fetch_node_state(node_name(node))
+
+      Keyword.has_key?(opts, :redis_store) ->
+        {:error, :node_state_unavailable}
+
+      true ->
+        MirrorNeuron.Cluster.NodeState.fetch(node)
+    end
+  rescue
+    _ -> {:error, :node_state_unavailable}
+  catch
+    _kind, _reason -> {:error, :node_state_unavailable}
   end
 
   defp start_job_runner(job_id, bundle, job, scheduler_plan, opts) do
@@ -466,6 +1066,9 @@ defmodule MirrorNeuron.Cluster.Reconciler do
   defp skipped(job, reason), do: %{job_id: job["job_id"], action: :skipped, reason: reason}
   defp failed(job, reason), do: %{job_id: job["job_id"], action: :failed, reason: reason}
 
+  defp blocked(job, reason, extra),
+    do: Map.merge(%{job_id: job["job_id"], action: :blocked, reason: reason}, extra)
+
   defp paused(job, reason, extra),
     do: Map.merge(%{job_id: job["job_id"], action: :paused_for_review, reason: reason}, extra)
 
@@ -481,6 +1084,7 @@ defmodule MirrorNeuron.Cluster.Reconciler do
 
   defp bump(acc, :recovered), do: Map.update!(acc, :recovered, &(&1 + 1))
   defp bump(acc, :paused_for_review), do: Map.update!(acc, :paused, &(&1 + 1))
+  defp bump(acc, :blocked), do: Map.update!(acc, :blocked, &(&1 + 1))
   defp bump(acc, :failed), do: Map.update!(acc, :failed, &(&1 + 1))
   defp bump(acc, _action), do: Map.update!(acc, :skipped, &(&1 + 1))
 
@@ -495,6 +1099,41 @@ defmodule MirrorNeuron.Cluster.Reconciler do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp iso_after(delay_ms) do
+    DateTime.utc_now()
+    |> DateTime.add(delay_ms, :millisecond)
+    |> DateTime.to_iso8601()
+  end
+
+  defp config_positive_integer(env_name, default) do
+    case System.get_env(env_name) do
+      nil -> default
+      "" -> default
+      value -> integer_value(value, default)
+    end
+  end
+
+  defp integer_value(value, _default) when is_integer(value) and value >= 0, do: value
+
+  defp integer_value(value, default) when is_binary(value) do
+    case Integer.parse(value) do
+      {parsed, ""} when parsed >= 0 -> parsed
+      _ -> default
+    end
+  end
+
+  defp integer_value(_value, default), do: default
+
+  defp format_reason(reason) when is_binary(reason), do: reason
+  defp format_reason(reason), do: inspect(reason)
+
+  defp stringify_result(result) when is_map(result) do
+    Enum.into(result, %{}, fn {key, value} -> {to_string(key), stringify_result(value)} end)
+  end
+
+  defp stringify_result(values) when is_list(values), do: Enum.map(values, &stringify_result/1)
+  defp stringify_result(value), do: value
 
   defp node_name(node) when is_atom(node), do: Atom.to_string(node)
   defp node_name(node) when is_binary(node), do: node

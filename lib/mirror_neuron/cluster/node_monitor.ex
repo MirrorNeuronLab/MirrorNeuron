@@ -8,6 +8,7 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
 
   @default_reconnect_attempts 3
   @default_reconnect_backoff_ms 1_000
+  @default_disconnect_grace_ms 30_000
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -23,6 +24,7 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
     {:ok,
      %{
        reconnecting: %{},
+       disconnecting: %{},
        connect: Keyword.get(opts, :connect, &Node.connect/1),
        lease_manager_module:
          Keyword.get(opts, :lease_manager_module, MirrorNeuron.Execution.LeaseManager),
@@ -46,6 +48,13 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
              "MN_NODE_RECONNECT_BACKOFF_MS",
              :node_reconnect_backoff_ms,
              @default_reconnect_backoff_ms
+           ),
+       disconnect_grace_ms:
+         Keyword.get(opts, :disconnect_grace_ms) ||
+           config_non_negative_integer(
+             "MN_NODE_DISCONNECT_GRACE_MS",
+             :node_disconnect_grace_ms,
+             @default_disconnect_grace_ms
            )
      }}
   end
@@ -58,9 +67,11 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
       node
       |> node_name()
       |> cancel_reconnect(state)
+      |> cancel_disconnect(node_name(node))
 
     restore_executor_capacity(state)
     state.node_state.mark(node, "healthy")
+    wake_blocked_evals(node, state)
     Logger.notice("Node reconnected: #{node}")
     {:noreply, state}
   end
@@ -83,6 +94,18 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
     end
   end
 
+  def handle_info({:disconnect_grace_expired, node, wait_until}, state) do
+    name = node_name(node)
+
+    case Map.get(state.disconnecting, name) do
+      %{wait_until: ^wait_until} ->
+        {:noreply, complete_disconnect(node, state)}
+
+      _stale_or_cancelled ->
+        {:noreply, state}
+    end
+  end
+
   def handle_info(_msg, state), do: {:noreply, state}
 
   defp reconnect_node(node, attempt, state) do
@@ -90,6 +113,7 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
       Logger.notice("Node reconnected after #{attempt} attempt(s): #{node}")
       restore_executor_capacity(state)
       state.node_state.mark(node, "healthy")
+      wake_blocked_evals(node, state)
       {:noreply, cancel_reconnect(node_name(node), state)}
     else
       if attempt >= state.reconnect_attempts do
@@ -105,10 +129,40 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
 
     Logger.warning("#{reason}: #{node}")
     release_executor_capacity(node, state)
-    reconcile_node(node, reason, state)
-    state.node_state.mark(node, "offline")
+
+    state =
+      node
+      |> node_name()
+      |> cancel_reconnect(state)
+
+    if state.disconnect_grace_ms > 0 do
+      wait_until = iso_after(state.disconnect_grace_ms)
+
+      state.node_state.mark(node, "disconnected", %{
+        "reason" => reason,
+        "disconnect_expires_at" => wait_until,
+        "lost_after_ms" => state.disconnect_grace_ms
+      })
+
+      reconcile_node(node, reason, state, node_status: "disconnected", wait_until: wait_until)
+      schedule_disconnect_grace(node, wait_until, state)
+    else
+      state.node_state.mark(node, "offline")
+      reconcile_node(node, reason, state, node_status: "offline")
+      state.leader.node_down(node)
+      state
+    end
+  end
+
+  defp complete_disconnect(node, state) do
+    reason = "node disconnect grace expired"
+
+    Logger.warning("#{reason}: #{node}")
+    state.node_state.mark(node, "offline", %{"reason" => reason})
+    reconcile_node(node, reason, state, node_status: "offline", force: true)
     state.leader.node_down(node)
-    cancel_reconnect(node_name(node), state)
+
+    cancel_disconnect(state, node_name(node))
   end
 
   defp schedule_reconnect(node, attempt, state) do
@@ -124,6 +178,24 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
     })
   end
 
+  defp schedule_disconnect_grace(node, wait_until, state) do
+    name = node_name(node)
+    state = cancel_disconnect(state, name)
+
+    timer_ref =
+      Process.send_after(
+        self(),
+        {:disconnect_grace_expired, node, wait_until},
+        state.disconnect_grace_ms
+      )
+
+    put_in(state.disconnecting[name], %{
+      node: node,
+      wait_until: wait_until,
+      timer_ref: timer_ref
+    })
+  end
+
   defp cancel_reconnect(name, state) do
     case Map.pop(state.reconnecting, name) do
       {%{timer_ref: timer_ref}, reconnecting} ->
@@ -131,6 +203,17 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
         %{state | reconnecting: reconnecting}
 
       {nil, _reconnecting} ->
+        state
+    end
+  end
+
+  defp cancel_disconnect(state, name) do
+    case Map.pop(state.disconnecting, name) do
+      {%{timer_ref: timer_ref}, disconnecting} ->
+        Process.cancel_timer(timer_ref)
+        %{state | disconnecting: disconnecting}
+
+      {nil, _disconnecting} ->
         state
     end
   end
@@ -151,12 +234,16 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
     end
   end
 
-  defp reconcile_node(node, reason, state) do
-    case state.reconciler.reconcile_node(node,
-           reason: reason,
-           redis_store: state.redis_store,
-           event_bus: state.event_bus
-         ) do
+  defp reconcile_node(node, reason, state, extra_opts) do
+    opts =
+      [
+        reason: reason,
+        redis_store: state.redis_store,
+        event_bus: state.event_bus
+      ]
+      |> Keyword.merge(extra_opts)
+
+    case state.reconciler.reconcile_node(node, opts) do
       {:ok, result} ->
         Logger.info("reconciled jobs for unavailable node #{node}: #{inspect(result)}")
 
@@ -167,11 +254,32 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
     end
   end
 
+  defp wake_blocked_evals(node, state) do
+    if function_exported?(state.reconciler, :wake_blocked_evals, 1) do
+      _ =
+        state.reconciler.wake_blocked_evals(
+          reason: "node #{node} is healthy",
+          redis_store: state.redis_store,
+          event_bus: state.event_bus
+        )
+    end
+
+    :ok
+  end
+
   defp config_positive_integer(env_name, key, default) do
     case System.get_env(env_name) do
       nil -> Application.get_env(:mirror_neuron, key, default)
       "" -> Application.get_env(:mirror_neuron, key, default)
       value -> normalize_positive_integer(value, default)
+    end
+  end
+
+  defp config_non_negative_integer(env_name, key, default) do
+    case System.get_env(env_name) do
+      nil -> Application.get_env(:mirror_neuron, key, default)
+      "" -> Application.get_env(:mirror_neuron, key, default)
+      value -> normalize_non_negative_integer(value, default)
     end
   end
 
@@ -186,6 +294,24 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
   end
 
   defp normalize_positive_integer(_value, default), do: default
+
+  defp normalize_non_negative_integer(value, _default) when is_integer(value) and value >= 0,
+    do: value
+
+  defp normalize_non_negative_integer(value, default) when is_binary(value) do
+    case Integer.parse(value) do
+      {parsed, ""} when parsed >= 0 -> parsed
+      _ -> default
+    end
+  end
+
+  defp normalize_non_negative_integer(_value, default), do: default
+
+  defp iso_after(delay_ms) do
+    DateTime.utc_now()
+    |> DateTime.add(delay_ms, :millisecond)
+    |> DateTime.to_iso8601()
+  end
 
   defp server_alive?(server) when is_atom(server), do: not is_nil(Process.whereis(server))
   defp server_alive?(server) when is_pid(server), do: Process.alive?(server)

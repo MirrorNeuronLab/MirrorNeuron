@@ -96,7 +96,9 @@ defmodule MirrorNeuron.Cluster.Leader do
   @impl true
   def handle_call(:sweep_now, _from, state) do
     result =
-      if state.is_leader, do: sweep_orphaned_jobs(), else: %{checked: 0, recovered: 0, failed: 0}
+      if state.is_leader,
+        do: sweep_orphaned_jobs(),
+        else: %{checked: 0, recovered: 0, failed: 0, blocked: 0}
 
     {:reply, {:ok, result}, state}
   end
@@ -134,13 +136,25 @@ defmodule MirrorNeuron.Cluster.Leader do
         do: "node #{owner_node} lost its job lease",
         else: "lost job lease"
 
-    case Reconciler.sweep_orphaned_jobs(owner_node, reason: reason) do
-      {:ok, result} ->
-        Map.take(result, [:checked, :recovered, :failed, :paused, :skipped])
+    due_result =
+      case Reconciler.process_due_evals() do
+        {:ok, result} ->
+          Map.take(result, [:checked, :recovered, :failed, :paused, :blocked, :skipped])
 
-      {:error, _reason} ->
-        %{checked: 0, recovered: 0, failed: 0, paused: 0, skipped: 0}
-    end
+        {:error, _reason} ->
+          %{checked: 0, recovered: 0, failed: 0, paused: 0, blocked: 0, skipped: 0}
+      end
+
+    sweep_result =
+      case Reconciler.sweep_orphaned_jobs(owner_node, reason: reason) do
+        {:ok, result} ->
+          Map.take(result, [:checked, :recovered, :failed, :paused, :blocked, :skipped])
+
+        {:error, _reason} ->
+          %{checked: 0, recovered: 0, failed: 0, paused: 0, blocked: 0, skipped: 0}
+      end
+
+    Map.merge(due_result, sweep_result, fn _key, left, right -> left + right end)
   end
 
   defp schedule_sweep(state) do

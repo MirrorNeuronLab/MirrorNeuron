@@ -363,6 +363,73 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
+  def persist_recovery_eval(eval_id, eval_map) do
+    eval =
+      eval_map
+      |> stringify_map()
+      |> Map.put("eval_id", eval_id)
+      |> Map.put_new("created_at", timestamp())
+      |> Map.put("updated_at", timestamp())
+
+    with {:ok, results} <-
+           transaction([
+             ["SET", key("recovery", "eval", eval_id), Jason.encode!(eval)],
+             ["SADD", key("recovery", "evals"), eval_id]
+           ]),
+         :ok <- expect_persist_job_results(results),
+         :ok <- wait_for_replicas() do
+      {:ok, eval}
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
+    end
+  end
+
+  def fetch_recovery_eval(eval_id) do
+    case command(["GET", key("recovery", "eval", eval_id)]) do
+      {:ok, nil} -> {:error, "recovery eval #{eval_id} was not found"}
+      {:ok, encoded} -> Jason.decode(encoded)
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  def list_recovery_evals do
+    case command(["SMEMBERS", key("recovery", "evals")]) do
+      {:ok, eval_ids} ->
+        evals =
+          eval_ids
+          |> Enum.map(fn eval_id ->
+            case fetch_recovery_eval(eval_id) do
+              {:ok, eval} -> eval
+              {:error, _reason} -> nil
+            end
+          end)
+          |> Enum.reject(&is_nil/1)
+          |> Enum.sort_by(&Map.get(&1, "created_at", ""))
+
+        {:ok, evals}
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
+    end
+  end
+
+  def update_recovery_eval(eval_id, updates) do
+    existing =
+      case fetch_recovery_eval(eval_id) do
+        {:ok, eval} when is_map(eval) -> eval
+        _ -> %{"eval_id" => eval_id}
+      end
+
+    eval =
+      existing
+      |> Map.merge(stringify_map(updates))
+      |> Map.put("eval_id", eval_id)
+      |> Map.put("updated_at", timestamp())
+
+    persist_recovery_eval(eval_id, eval)
+  end
+
   def fetch_resource_limits do
     case command(["GET", key("resource", "limits")]) do
       {:ok, nil} -> {:error, "resource limits were not found"}

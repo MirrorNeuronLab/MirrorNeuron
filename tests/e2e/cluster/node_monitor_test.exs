@@ -36,6 +36,11 @@ defmodule MirrorNeuron.Cluster.NodeMonitorTest do
       send(Process.whereis(:node_monitor_test_pid), {:reconcile_node, node, opts})
       {:ok, %{checked: 2, recovered: 0, paused: 2, skipped: 0, failed: 0, jobs: []}}
     end
+
+    def wake_blocked_evals(opts) do
+      send(Process.whereis(:node_monitor_test_pid), {:wake_blocked_evals, opts})
+      {:ok, %{checked: 0, recovered: 0, paused: 0, blocked: 0, skipped: 0, failed: 0, jobs: []}}
+    end
   end
 
   defmodule RedisStoreStub do
@@ -267,6 +272,45 @@ defmodule MirrorNeuron.Cluster.NodeMonitorTest do
     assert :ok = Task.await(owner, 1_000)
   end
 
+  test "failed reconnect enters disconnected grace before offline recovery" do
+    manager =
+      start_supervised!({LeaseManager, name: unique_name(), capacities: %{"default" => 1}})
+
+    monitor =
+      start_monitor(
+        lease_manager_server: manager,
+        reconnect_attempts: 1,
+        reconnect_backoff_ms: 5,
+        disconnect_grace_ms: 50,
+        connect: fn node ->
+          send(parent_pid(), {:connect_attempted, node})
+          false
+        end
+      )
+
+    send(monitor, {:nodedown, Node.self()})
+    assert_receive {:node_state_marked, _node, "reconnecting", %{}}
+    assert_receive {:connect_attempted, _node}, 500
+
+    assert_receive {:node_state_marked, node, "disconnected", attrs}, 500
+    assert node == Node.self()
+    assert attrs["reason"] == "node reconnect failed after 1 attempts"
+    assert attrs["disconnect_expires_at"]
+    assert attrs["lost_after_ms"] == 50
+
+    assert_receive {:reconcile_node, ^node, disconnected_opts}, 500
+    assert disconnected_opts[:node_status] == "disconnected"
+    assert disconnected_opts[:wait_until] == attrs["disconnect_expires_at"]
+    refute_received {:leader_node_down, ^node}
+
+    assert_receive {:node_state_marked, ^node, "offline", offline_attrs}, 500
+    assert offline_attrs["reason"] == "node disconnect grace expired"
+    assert_receive {:reconcile_node, ^node, offline_opts}, 500
+    assert offline_opts[:node_status] == "offline"
+    assert offline_opts[:force] == true
+    assert_receive {:leader_node_down, ^node}, 500
+  end
+
   defp start_monitor(opts) do
     start_supervised!(
       {NodeMonitor,
@@ -276,10 +320,11 @@ defmodule MirrorNeuron.Cluster.NodeMonitorTest do
            monitor_nodes: false,
            reconnect_attempts: 3,
            reconnect_backoff_ms: 1,
-          node_state: NodeStateStub,
-          leader: LeaderStub,
-          reconciler: ReconcilerStub,
-          redis_store: RedisStoreStub,
+           disconnect_grace_ms: 0,
+           node_state: NodeStateStub,
+           leader: LeaderStub,
+           reconciler: ReconcilerStub,
+           redis_store: RedisStoreStub,
            event_bus: EventBusStub
          ],
          opts

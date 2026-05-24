@@ -373,6 +373,37 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert Enum.any?(states, &(&1["node"] == "node-a@test"))
   end
 
+  test "recovery evals can be persisted, listed, and updated" do
+    eval_id = "eval-#{System.unique_integer([:positive])}"
+
+    assert {:ok, eval} =
+             RedisStore.persist_recovery_eval(eval_id, %{
+               "job_id" => "job-a",
+               "trigger" => "node_down",
+               "status" => "pending",
+               "attempt" => 0,
+               "affected_agents" => ["worker"]
+             })
+
+    assert eval["eval_id"] == eval_id
+    assert eval["status"] == "pending"
+
+    assert {:ok, fetched} = RedisStore.fetch_recovery_eval(eval_id)
+    assert fetched["affected_agents"] == ["worker"]
+
+    assert {:ok, evals} = RedisStore.list_recovery_evals()
+    assert Enum.any?(evals, &(&1["eval_id"] == eval_id))
+
+    assert {:ok, updated} =
+             RedisStore.update_recovery_eval(eval_id, %{
+               "status" => "blocked",
+               "wait_until" => "2030-01-01T00:00:00Z"
+             })
+
+    assert updated["status"] == "blocked"
+    assert updated["wait_until"] == "2030-01-01T00:00:00Z"
+  end
+
   test "bundle archive store reuses an existing fingerprint archive" do
     tmp_dir =
       Path.join(
