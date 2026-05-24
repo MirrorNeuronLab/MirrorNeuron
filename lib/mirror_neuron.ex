@@ -42,6 +42,158 @@ defmodule MirrorNeuron do
     end
   end
 
+  def deploy_manifest(input, opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :deploy_manifest, [input, opts])
+    else
+      MirrorNeuron.Runtime.DeploymentController.deploy_manifest(input, opts)
+    end
+  end
+
+  def update_deployment(deployment_key, input, opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :update_deployment, [deployment_key, input, opts])
+    else
+      MirrorNeuron.Runtime.DeploymentController.update_deployment(deployment_key, input, opts)
+    end
+  end
+
+  def promote_deployment(id_or_key, opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :promote_deployment, [id_or_key, opts])
+    else
+      MirrorNeuron.Runtime.DeploymentController.promote_deployment(id_or_key, opts)
+    end
+  end
+
+  def rollback_deployment(id_or_key, opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :rollback_deployment, [id_or_key, opts])
+    else
+      MirrorNeuron.Runtime.DeploymentController.rollback_deployment(id_or_key, opts)
+    end
+  end
+
+  def get_deployment(id_or_key) do
+    if control_node?() do
+      Control.call(__MODULE__, :get_deployment, [id_or_key])
+    else
+      MirrorNeuron.Runtime.DeploymentController.get_deployment(id_or_key)
+    end
+  end
+
+  def list_deployments(opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :list_deployments, [opts])
+    else
+      MirrorNeuron.Runtime.DeploymentController.list_deployments(opts)
+    end
+  end
+
+  def pause_deployment(id_or_key, opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :pause_deployment, [id_or_key, opts])
+    else
+      MirrorNeuron.Runtime.DeploymentController.pause_deployment(id_or_key, opts)
+    end
+  end
+
+  def resume_deployment(id_or_key, opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :resume_deployment, [id_or_key, opts])
+    else
+      MirrorNeuron.Runtime.DeploymentController.resume_deployment(id_or_key, opts)
+    end
+  end
+
+  def fail_deployment(id_or_key, opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :fail_deployment, [id_or_key, opts])
+    else
+      MirrorNeuron.Runtime.DeploymentController.fail_deployment(id_or_key, opts)
+    end
+  end
+
+  def create_schedule(input, schedule \\ %{}, opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :create_schedule, [input, schedule, opts])
+    else
+      MirrorNeuron.Runtime.ScheduleDispatcher.create_schedule(input, schedule, opts)
+    end
+  end
+
+  def update_schedule(schedule_id, attrs, opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :update_schedule, [schedule_id, attrs, opts])
+    else
+      MirrorNeuron.Runtime.ScheduleDispatcher.update_schedule(schedule_id, attrs, opts)
+    end
+  end
+
+  def pause_schedule(schedule_id, opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :pause_schedule, [schedule_id, opts])
+    else
+      MirrorNeuron.Runtime.ScheduleDispatcher.pause_schedule(schedule_id, opts)
+    end
+  end
+
+  def resume_schedule(schedule_id, opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :resume_schedule, [schedule_id, opts])
+    else
+      MirrorNeuron.Runtime.ScheduleDispatcher.resume_schedule(schedule_id, opts)
+    end
+  end
+
+  def delete_schedule(schedule_id, opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :delete_schedule, [schedule_id, opts])
+    else
+      MirrorNeuron.Runtime.ScheduleDispatcher.delete_schedule(schedule_id, opts)
+    end
+  end
+
+  def get_schedule(schedule_id) do
+    if control_node?() do
+      Control.call(__MODULE__, :get_schedule, [schedule_id])
+    else
+      MirrorNeuron.Runtime.ScheduleDispatcher.get_schedule(schedule_id)
+    end
+  end
+
+  def list_schedules(opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :list_schedules, [opts])
+    else
+      MirrorNeuron.Runtime.ScheduleDispatcher.list_schedules(opts)
+    end
+  end
+
+  def dispatch_schedule(schedule_id, payload \\ %{}, opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :dispatch_schedule, [schedule_id, payload, opts])
+    else
+      MirrorNeuron.Runtime.ScheduleDispatcher.dispatch_schedule(schedule_id, payload, opts)
+    end
+  end
+
+  def emit_trigger_event(event_type, payload \\ %{}, opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :emit_trigger_event, [event_type, payload, opts])
+    else
+      MirrorNeuron.Runtime.ScheduleDispatcher.emit_event(event_type, payload, opts)
+    end
+  end
+
+  def list_trigger_events(opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :list_trigger_events, [opts])
+    else
+      MirrorNeuron.Runtime.ScheduleDispatcher.list_events(opts)
+    end
+  end
+
   def wait_for_job(job_id, timeout \\ :infinity) do
     case RedisStore.fetch_job(job_id) do
       {:ok, %{"status" => status} = job} when status in ["completed", "failed", "cancelled"] ->

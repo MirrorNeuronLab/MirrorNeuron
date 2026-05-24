@@ -68,6 +68,31 @@ defmodule MirrorNeuron.ServiceRegistry do
   def deregister_agent(job_id, agent_id),
     do: RedisStore.delete_service_instances(job_id: job_id, agent_id: agent_id)
 
+  def promote_deployment(deployment_key, version) do
+    with {:ok, services} <- RedisStore.list_service_instances() do
+      services
+      |> Enum.filter(fn service ->
+        Map.get(service, "deployment_key") == deployment_key and
+          to_string(Map.get(service, "deployment_version")) == to_string(version)
+      end)
+      |> Enum.reduce_while({:ok, []}, fn service, {:ok, acc} ->
+        promoted =
+          service
+          |> Map.put("deployment_role", "primary")
+          |> Map.put("status", Map.get(service, "status", "passing"))
+
+        case register(promoted) do
+          {:ok, updated} -> {:cont, {:ok, [updated | acc]}}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+      |> case do
+        {:ok, updated} -> {:ok, Enum.reverse(updated)}
+        error -> error
+      end
+    end
+  end
+
   def requirements_satisfied_on_node?(requirements, node_name, opts \\ []) do
     requirements
     |> List.wrap()
@@ -111,8 +136,10 @@ defmodule MirrorNeuron.ServiceRegistry do
     job_id = option_string(opts, :job_id)
     agent_id = option_string(opts, :agent_id)
     status = option_string(opts, :status)
+    role = option_string(opts, :deployment_role) || option_string(opts, :role)
     tags = opts |> Keyword.get(:tags, []) |> List.wrap() |> Enum.map(&to_string/1)
     passing_only = Keyword.get(opts, :passing_only, false)
+    include_candidates = Keyword.get(opts, :include_candidates, false)
 
     Enum.filter(services, fn service ->
       (is_nil(name) or Map.get(service, "name") == name) and
@@ -120,9 +147,16 @@ defmodule MirrorNeuron.ServiceRegistry do
         (is_nil(job_id) or Map.get(service, "job_id") == job_id) and
         (is_nil(agent_id) or Map.get(service, "agent_id") == agent_id) and
         (is_nil(status) or Map.get(service, "status") == status) and
+        (is_nil(role) or Map.get(service, "deployment_role") == role) and
         (not passing_only or Map.get(service, "status") == "passing") and
+        candidate_visible?(service, include_candidates, role) and
         tags_subset?(tags, Map.get(service, "tags", []))
     end)
+  end
+
+  defp candidate_visible?(service, include_candidates, role) do
+    service_role = Map.get(service, "deployment_role")
+    include_candidates or not is_nil(role) or service_role in [nil, "", "primary"]
   end
 
   defp option_string(opts, key) do

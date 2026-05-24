@@ -9,6 +9,10 @@ defmodule MirrorNeuron.Manifest do
     :input_validation,
     :services,
     :required_services,
+    :deployment,
+    :schedule,
+    :triggers,
+    :parameterized,
     :metadata,
     :nodes,
     :edges,
@@ -20,7 +24,7 @@ defmodule MirrorNeuron.Manifest do
 
   alias MirrorNeuron.{AgentRegistry, AgentTemplates, ResourceSpec}
   alias MirrorNeuron.ServiceSpec
-  alias MirrorNeuron.Runtime.{LifecyclePolicy, RouteCondition}
+  alias MirrorNeuron.Runtime.{DeploymentPolicy, LifecyclePolicy, RouteCondition, SchedulePolicy}
 
   def load(%__MODULE__{} = manifest), do: {:ok, manifest}
 
@@ -79,6 +83,10 @@ defmodule MirrorNeuron.Manifest do
       "input_validation" => json_safe(manifest.input_validation),
       "services" => json_safe(manifest.services),
       "required_services" => json_safe(manifest.required_services),
+      "deployment" => json_safe(manifest.deployment),
+      "schedule" => json_safe(manifest.schedule),
+      "triggers" => json_safe(manifest.triggers),
+      "parameterized" => json_safe(manifest.parameterized),
       "metadata" => json_safe(manifest.metadata),
       "nodes" => Enum.map(manifest.nodes, &node_to_map/1),
       "edges" => Enum.map(manifest.edges, &edge_to_map/1),
@@ -106,6 +114,10 @@ defmodule MirrorNeuron.Manifest do
         ServiceSpec.normalize_required_services(
           Map.get(raw, "required_services", Map.get(raw, "requiredServices", []))
         ),
+      deployment: normalize_deployment(Map.get(raw, "deployment", %{})),
+      schedule: normalize_schedule(Map.get(raw, "schedule", %{})),
+      triggers: normalize_triggers(Map.get(raw, "triggers", [])),
+      parameterized: normalize_parameterized(Map.get(raw, "parameterized", %{})),
       metadata: Map.get(raw, "metadata", %{}),
       nodes: Enum.map(Map.get(raw, "nodes", []), &normalize_node/1),
       edges: Enum.map(Map.get(raw, "edges", []), &normalize_edge/1),
@@ -145,6 +157,8 @@ defmodule MirrorNeuron.Manifest do
       |> validate_requirements(manifest)
       |> validate_input_validation(manifest)
       |> validate_services(manifest)
+      |> validate_deployment(manifest)
+      |> validate_schedule(manifest)
       |> validate_policies(manifest)
 
     case errors do
@@ -367,6 +381,35 @@ defmodule MirrorNeuron.Manifest do
     add_errors(errors, ServiceSpec.validate_manifest(manifest))
   end
 
+  defp validate_deployment(errors, manifest) do
+    add_errors(errors, DeploymentPolicy.validate_manifest(manifest))
+  end
+
+  defp validate_schedule(errors, manifest) do
+    schedule_errors =
+      case manifest.schedule do
+        schedule when schedule in [%{}, nil] ->
+          []
+
+        schedule ->
+          case SchedulePolicy.normalize(schedule, manifest) do
+            {:ok, _normalized} -> []
+            {:error, errors} -> Enum.map(errors, &"schedule: #{&1}")
+          end
+      end
+
+    trigger_errors =
+      manifest.triggers
+      |> Enum.flat_map(fn trigger ->
+        case SchedulePolicy.normalize(Map.merge(trigger, %{"kind" => "event"}), manifest) do
+          {:ok, _normalized} -> []
+          {:error, errors} -> Enum.map(errors, &"trigger #{trigger["name"] || trigger["event_type"] || "unknown"}: #{&1}")
+        end
+      end)
+
+    add_errors(errors, schedule_errors ++ trigger_errors)
+  end
+
   defp normalize_node(raw) do
     %{
       node_id: Map.get(raw, "node_id"),
@@ -461,6 +504,21 @@ defmodule MirrorNeuron.Manifest do
   end
 
   defp normalize_reload(_), do: %{mode: "manual", interval_seconds: 60}
+
+  defp normalize_deployment(deployment) when is_map(deployment), do: json_safe(deployment)
+  defp normalize_deployment(_deployment), do: %{}
+
+  defp normalize_schedule(schedule) when is_map(schedule), do: json_safe(schedule)
+  defp normalize_schedule(_schedule), do: %{}
+
+  defp normalize_triggers(triggers) when is_list(triggers),
+    do: Enum.map(triggers, &json_safe/1) |> Enum.filter(&is_map/1)
+
+  defp normalize_triggers(trigger) when is_map(trigger), do: [json_safe(trigger)]
+  defp normalize_triggers(_triggers), do: []
+
+  defp normalize_parameterized(parameterized) when is_map(parameterized), do: json_safe(parameterized)
+  defp normalize_parameterized(_parameterized), do: %{}
 
   defp normalize_type(nil), do: "batch"
   defp normalize_type(value) when is_binary(value), do: String.downcase(value)

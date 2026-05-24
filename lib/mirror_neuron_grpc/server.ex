@@ -30,7 +30,9 @@ defmodule MirrorNeuron.Grpc.JobServer do
     CancelJobResponse,
     PauseJobResponse,
     ResumeJobResponse,
-    ClearJobsResponse
+    ClearJobsResponse,
+    DeploymentResponse,
+    ScheduleResponse
   }
 
   def submit_job(request, _stream) do
@@ -209,6 +211,190 @@ defmodule MirrorNeuron.Grpc.JobServer do
     end
   end
 
+  def deploy_job(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("DeployJob")
+
+    with {:ok, tmp_dir} <- request_bundle_dir(request.manifest_json, request.payloads),
+         {:ok, result} <-
+           MirrorNeuron.deploy_manifest(tmp_dir,
+             deployment_key: blank_to_nil(request.deployment_key),
+             update_policy: decode_json_map(request.update_policy_json),
+             wait: request.wait
+           ) do
+      %DeploymentResponse{result_json: Jason.encode!(result)}
+    else
+      {:error, reason} ->
+        raise GRPC.RPCError, status: :invalid_argument, message: inspect(reason)
+    end
+  end
+
+  def update_deployment(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("UpdateDeployment")
+
+    with {:ok, tmp_dir} <- request_bundle_dir(request.manifest_json, request.payloads),
+         {:ok, result} <-
+           MirrorNeuron.update_deployment(request.deployment_key, tmp_dir,
+             update_policy: decode_json_map(request.update_policy_json),
+             wait: request.wait
+           ) do
+      %DeploymentResponse{result_json: Jason.encode!(result)}
+    else
+      {:error, reason} ->
+        raise GRPC.RPCError, status: :invalid_argument, message: inspect(reason)
+    end
+  end
+
+  def get_deployment(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("GetDeployment")
+
+    case MirrorNeuron.get_deployment(request.id_or_key) do
+      {:ok, result} -> %DeploymentResponse{result_json: Jason.encode!(result)}
+      {:error, reason} -> raise GRPC.RPCError, status: :not_found, message: inspect(reason)
+    end
+  end
+
+  def list_deployments(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("ListDeployments")
+
+    opts =
+      request.query_json
+      |> decode_json_map()
+      |> keyword_opts()
+
+    case MirrorNeuron.list_deployments(opts) do
+      {:ok, result} -> %DeploymentResponse{result_json: Jason.encode!(%{"data" => result})}
+      {:error, reason} -> raise GRPC.RPCError, status: :internal, message: inspect(reason)
+    end
+  end
+
+  def promote_deployment(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("PromoteDeployment")
+    deployment_action_response(MirrorNeuron.promote_deployment(request.id_or_key))
+  end
+
+  def rollback_deployment(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("RollbackDeployment")
+
+    opts =
+      []
+      |> maybe_put_opt(:version, request.version)
+      |> maybe_put_opt(:tag, request.tag)
+      |> maybe_put_opt(:reason, request.reason)
+
+    deployment_action_response(MirrorNeuron.rollback_deployment(request.id_or_key, opts))
+  end
+
+  def pause_deployment(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("PauseDeployment")
+
+    deployment_action_response(
+      MirrorNeuron.pause_deployment(request.id_or_key, reason: request.reason)
+    )
+  end
+
+  def resume_deployment(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("ResumeDeployment")
+
+    deployment_action_response(
+      MirrorNeuron.resume_deployment(request.id_or_key, reason: request.reason)
+    )
+  end
+
+  def fail_deployment(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("FailDeployment")
+
+    deployment_action_response(
+      MirrorNeuron.fail_deployment(request.id_or_key, reason: request.reason)
+    )
+  end
+
+  def create_schedule(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("CreateSchedule")
+
+    with {:ok, tmp_dir} <- request_bundle_dir(request.manifest_json, request.payloads),
+         {:ok, schedule} <-
+           MirrorNeuron.create_schedule(tmp_dir, decode_json_map(request.schedule_json),
+             source: decode_json_map(request.source_json)
+           ) do
+      schedule_response(schedule)
+    else
+      {:error, reason} -> raise GRPC.RPCError, status: :invalid_argument, message: inspect(reason)
+    end
+  end
+
+  def update_schedule(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("UpdateSchedule")
+    schedule_action_response(MirrorNeuron.update_schedule(request.schedule_id, decode_json_map(request.attrs_json)))
+  end
+
+  def get_schedule(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("GetSchedule")
+    schedule_action_response(MirrorNeuron.get_schedule(request.schedule_id))
+  end
+
+  def list_schedules(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("ListSchedules")
+
+    opts =
+      request.query_json
+      |> decode_json_map()
+      |> schedule_keyword_opts()
+
+    case MirrorNeuron.list_schedules(opts) do
+      {:ok, schedules} -> schedule_response(%{"data" => schedules})
+      {:error, reason} -> raise GRPC.RPCError, status: :internal, message: inspect(reason)
+    end
+  end
+
+  def pause_schedule(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("PauseSchedule")
+    schedule_action_response(MirrorNeuron.pause_schedule(request.schedule_id, reason: request.reason))
+  end
+
+  def resume_schedule(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("ResumeSchedule")
+    schedule_action_response(MirrorNeuron.resume_schedule(request.schedule_id, reason: request.reason))
+  end
+
+  def delete_schedule(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("DeleteSchedule")
+
+    case MirrorNeuron.delete_schedule(request.schedule_id, reason: request.reason) do
+      :ok -> schedule_response(%{"schedule_id" => request.schedule_id, "status" => "deleted"})
+      {:ok, result} -> schedule_response(result)
+      {:error, reason} -> raise GRPC.RPCError, status: :invalid_argument, message: inspect(reason)
+    end
+  end
+
+  def dispatch_schedule(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("DispatchSchedule")
+
+    schedule_action_response(
+      MirrorNeuron.dispatch_schedule(request.schedule_id, decode_json_map(request.payload_json),
+        reason: request.reason
+      )
+    )
+  end
+
+  def emit_trigger_event(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("EmitTriggerEvent")
+
+    schedule_action_response(
+      MirrorNeuron.emit_trigger_event(request.event_type, decode_json_map(request.payload_json),
+        source: blank_to_nil(request.source) || "api"
+      )
+    )
+  end
+
+  def list_trigger_events(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("ListTriggerEvents")
+
+    case MirrorNeuron.list_trigger_events(limit: request.limit) do
+      {:ok, events} -> schedule_response(%{"data" => events})
+      {:error, reason} -> raise GRPC.RPCError, status: :internal, message: inspect(reason)
+    end
+  end
+
   defp authorize_clear_jobs!(request) do
     configured_token = System.get_env(@admin_token_env)
     request_token = Map.get(request, :admin_token, "")
@@ -221,6 +407,71 @@ defmodule MirrorNeuron.Grpc.JobServer do
 
     :ok
   end
+
+  defp request_bundle_dir(manifest_json, payloads) do
+    bundle_id = "bundle_#{System.unique_integer([:positive])}"
+    tmp_dir = Path.join(System.tmp_dir!(), bundle_id)
+    payloads_dir = Path.join(tmp_dir, "payloads")
+
+    File.mkdir_p!(payloads_dir)
+    File.write!(Path.join(tmp_dir, "manifest.json"), manifest_json)
+
+    with :ok <- write_payloads(payloads_dir, payloads) do
+      {:ok, tmp_dir}
+    end
+  end
+
+  defp deployment_action_response({:ok, result}) do
+    %DeploymentResponse{result_json: Jason.encode!(result)}
+  end
+
+  defp deployment_action_response({:error, reason}) do
+    raise GRPC.RPCError, status: :invalid_argument, message: inspect(reason)
+  end
+
+  defp schedule_action_response({:ok, result}), do: schedule_response(result)
+
+  defp schedule_action_response({:error, reason}) do
+    raise GRPC.RPCError, status: :invalid_argument, message: inspect(reason)
+  end
+
+  defp schedule_response(result), do: %ScheduleResponse{result_json: Jason.encode!(result)}
+
+  defp decode_json_map(nil), do: %{}
+  defp decode_json_map(""), do: %{}
+
+  defp decode_json_map(json) do
+    case Jason.decode(json) do
+      {:ok, map} when is_map(map) -> map
+      _ -> %{}
+    end
+  end
+
+  defp keyword_opts(map) when is_map(map) do
+    map
+    |> Enum.flat_map(fn
+      {"deployment_key", value} -> [deployment_key: value]
+      {"status", value} -> [status: value]
+      _other -> []
+    end)
+  end
+
+  defp schedule_keyword_opts(map) when is_map(map) do
+    map
+    |> Enum.flat_map(fn
+      {"kind", value} -> [kind: value]
+      {"status", value} -> [status: value]
+      {"enabled", value} when is_boolean(value) -> [enabled: value]
+      _other -> []
+    end)
+  end
+
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(value), do: value
+
+  defp maybe_put_opt(opts, _key, nil), do: opts
+  defp maybe_put_opt(opts, _key, ""), do: opts
+  defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
 
   defp valid_admin_token?(configured_token, request_token)
        when is_binary(configured_token) and byte_size(configured_token) > 0 and

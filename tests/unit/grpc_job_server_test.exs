@@ -11,7 +11,13 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     SetNodeMaintenanceRequest
   }
 
-  alias Mirrorneuron.Job.V1.{ClearJobsRequest, SubmitJobRequest}
+  alias Mirrorneuron.Job.V1.{
+    ClearJobsRequest,
+    GetDeploymentRequest,
+    ListDeploymentsRequest,
+    SubmitJobRequest
+  }
+
   @admin_token_env "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN"
   @operator_token_env "MN_GRPC_AUTH_TOKEN"
 
@@ -62,6 +68,35 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       end
 
     assert Exception.message(error) =~ "SubmitJob is disabled"
+  end
+
+  test "network-only mode rejects deployment RPCs" do
+    System.put_env("MN_NETWORK_ONLY", "true")
+
+    error =
+      assert_raise GRPC.RPCError, fn ->
+        JobServer.get_deployment(%GetDeploymentRequest{id_or_key: "agent-api"}, nil)
+      end
+
+    assert Exception.message(error) =~ "GetDeployment is disabled"
+  end
+
+  test "deployment status RPCs return JSON-safe results" do
+    deployment_id = "dep-grpc-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _deployment} =
+             MirrorNeuron.Persistence.RedisStore.persist_deployment(deployment_id, %{
+               "deployment_key" => "grpc-deploy",
+               "status" => "successful",
+               "current_version" => "1"
+             })
+
+    response = JobServer.get_deployment(%GetDeploymentRequest{id_or_key: "grpc-deploy"}, nil)
+    assert %{"deployment_key" => "grpc-deploy"} = Jason.decode!(response.result_json)
+
+    list_response = JobServer.list_deployments(%ListDeploymentsRequest{query_json: "{}"}, nil)
+    assert %{"data" => deployments} = Jason.decode!(list_response.result_json)
+    assert Enum.any?(deployments, &(&1["deployment_key"] == "grpc-deploy"))
   end
 
   test "network-only mode rejects destructive admin RPCs before token checks" do

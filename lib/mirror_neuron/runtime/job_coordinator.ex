@@ -57,6 +57,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       pressure: %{},
       policy_state: policy_state_from(existing_job),
       pending_policy_timers: %{},
+      deployment_context: deployment_context_from(opts, existing_job),
       health_check_interval_ms:
         Application.get_env(
           :mirror_neuron,
@@ -309,6 +310,80 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   def handle_call({:reschedule_agents, _agent_ids, _scheduler_plan, _reason}, _from, state) do
+    {:reply, {:error, "job is #{state.status}"}, state}
+  end
+
+  @impl true
+  def handle_call(
+        {:deploy_agents, agent_ids, target_manifest, scheduler_plan, deployment_context},
+        _from,
+        state
+      )
+      when state.status in ["running", "paused"] do
+    affected_agent_ids = normalize_agent_ids(agent_ids, state)
+
+    cond do
+      affected_agent_ids == [] ->
+        {:reply, {:error, :no_matching_agents}, state}
+
+      not compatible_runtime_topology?(state, target_manifest, scheduler_plan) ->
+        {:reply, {:error, "deployment target topology is not compatible with this job"}, state}
+
+      true ->
+        next_state =
+          state
+          |> cancel_policy_timers_for(affected_agent_ids)
+          |> put_deployment_target(target_manifest, scheduler_plan, deployment_context)
+
+        EventBus.publish(state.job_id, %{
+          type: :deployment_agent_update_started,
+          deployment_id: Map.get(deployment_context, "deployment_id"),
+          deployment_key: Map.get(deployment_context, "deployment_key"),
+          deployment_version: Map.get(deployment_context, "deployment_version"),
+          deployment_role: Map.get(deployment_context, "deployment_role"),
+          affected_agents: affected_agent_ids,
+          timestamp: Runtime.timestamp()
+        })
+
+        terminate_agent_workers(next_state, affected_agent_ids)
+
+        with :ok <- wait_for_agents_stopped(next_state, 5_000, affected_agent_ids),
+             {:ok, deployed_state} <- deploy_agents_now(next_state, affected_agent_ids),
+             :ok <- register_job_services(deployed_state) do
+          persist_job(deployed_state)
+
+          EventBus.publish(state.job_id, %{
+            type: :deployment_agent_update_completed,
+            deployment_id: Map.get(deployment_context, "deployment_id"),
+            deployment_key: Map.get(deployment_context, "deployment_key"),
+            deployment_version: Map.get(deployment_context, "deployment_version"),
+            deployment_role: Map.get(deployment_context, "deployment_role"),
+            affected_agents: affected_agent_ids,
+            timestamp: Runtime.timestamp()
+          })
+
+          {:reply,
+           {:ok,
+            %{
+              affected_agents: affected_agent_ids,
+              deployment: deployment_context,
+              scheduler: scheduler_plan
+            }}, deployed_state}
+        else
+          {:error, failed_reason, failed_state} ->
+            {:reply, {:error, failed_reason}, failed_state}
+
+          {:error, failed_reason} ->
+            {:reply, {:error, failed_reason}, next_state}
+        end
+    end
+  end
+
+  def handle_call(
+        {:deploy_agents, _agent_ids, _target_manifest, _scheduler_plan, _context},
+        _from,
+        state
+      ) do
     {:reply, {:error, "job is #{state.status}"}, state}
   end
 
@@ -962,6 +1037,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp register_services(_state, []), do: :ok
 
   defp register_services(state, services) do
+    services = Enum.map(services, &put_service_deployment_context(&1, state.deployment_context))
+
     case ServiceRegistry.register_many(services) do
       {:ok, registered} ->
         Enum.each(registered, fn service ->
@@ -982,6 +1059,17 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         {:error, "failed to register services: #{inspect(reason)}"}
     end
   end
+
+  defp put_service_deployment_context(service, context)
+       when is_map(context) and map_size(context) > 0 do
+    service
+    |> Map.put("deployment_id", Map.get(context, "deployment_id"))
+    |> Map.put("deployment_key", Map.get(context, "deployment_key"))
+    |> Map.put("deployment_version", Map.get(context, "deployment_version"))
+    |> Map.put("deployment_role", Map.get(context, "deployment_role", "primary"))
+  end
+
+  defp put_service_deployment_context(service, _context), do: service
 
   defp wait_for_agents_ready(state, timeout_ms \\ 20_000) do
     started_at = System.monotonic_time(:millisecond)
@@ -1015,6 +1103,26 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
           {:ok, next_state} -> {:cont, {:ok, next_state}}
           {:error, reason, next_state} -> {:halt, {:error, reason, next_state}}
         end
+      end
+    end)
+  end
+
+  defp deploy_agents_now(state, agent_ids) do
+    Enum.reduce_while(agent_ids, {:ok, state}, fn agent_id, {:ok, acc_state} ->
+      case start_agent(acc_state, agent_id, nil) do
+        {:ok, _pid} ->
+          with :ok <- wait_for_agent_ready(acc_state, agent_id, 30_000),
+               :ok <- register_agent_services(acc_state, agent_id) do
+            {:cont, {:ok, mark_policy_idle(acc_state, agent_id)}}
+          else
+            {:error, reason} -> {:halt, {:error, reason, acc_state}}
+          end
+
+        {:error, {:already_started, _pid}} ->
+          {:cont, {:ok, acc_state}}
+
+        {:error, reason} ->
+          {:halt, {:error, "failed to deploy agent #{agent_id}: #{inspect(reason)}", acc_state}}
       end
     end)
   end
@@ -1290,6 +1398,33 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     }
   end
 
+  defp compatible_runtime_topology?(state, target_manifest, scheduler_plan) do
+    topology = build_runtime_topology(target_manifest, scheduler_plan)
+    MapSet.new(topology.agent_ids) == MapSet.new(state.agent_ids)
+  end
+
+  defp put_deployment_target(state, target_manifest, scheduler_plan, deployment_context) do
+    topology = build_runtime_topology(target_manifest, scheduler_plan)
+
+    %{
+      state
+      | manifest: target_manifest,
+        runtime_nodes: topology.nodes,
+        runtime_edges: topology.edges,
+        runtime_entrypoints: topology.entrypoints,
+        agent_ids: topology.agent_ids,
+        source_agent_ids: topology.source_agent_ids,
+        system_targets: topology.system_targets,
+        agents_by_system_target: topology.agents_by_system_target,
+        nodes_by_id: Map.new(topology.nodes, &{&1.node_id, &1}),
+        outbound_edges_by_node: Enum.group_by(topology.edges, & &1.from_node),
+        inbound_edges_by_node: Enum.group_by(topology.edges, & &1.to_node),
+        downstream_by_node: build_downstream_index(topology.edges),
+        deployment_context: stringify_map(deployment_context)
+    }
+    |> put_scheduler_plan(scheduler_plan)
+  end
+
   defp runtime_topology(state) do
     %{
       "nodes" =>
@@ -1355,6 +1490,16 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       job_type(state),
       effective_recovery_policy(state)
     )
+  end
+
+  defp deployment_context_from(opts, existing_job) do
+    Keyword.get(opts, :deployment_context) ||
+      (is_map(existing_job) && Map.get(existing_job, "deployment")) ||
+      %{}
+  end
+
+  defp deployment_job_fields(state) do
+    state.deployment_context || %{}
   end
 
   defp policy_state_from(nil), do: %{"agents" => %{}}
@@ -1426,6 +1571,14 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp cancel_policy_timers(state) do
     Enum.each(state.pending_policy_timers, fn {_key, ref} -> Process.cancel_timer(ref) end)
     %{state | pending_policy_timers: %{}}
+  end
+
+  defp cancel_policy_timers_for(state, agent_ids) do
+    Enum.reduce(agent_ids, state, fn agent_id, acc ->
+      acc
+      |> clear_policy_timer({:restart, agent_id})
+      |> clear_policy_timer({:reschedule, agent_id})
+    end)
   end
 
   defp completed_agents_from(nil), do: MapSet.new()
@@ -1720,6 +1873,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         restart_policy: job_restart_policy(state),
         reschedule_policy: job_reschedule_policy(state),
         policy_state: state.policy_state,
+        deployment: deployment_job_fields(state),
         result: state.result,
         topology: MirrorNeuron.Manifest.topology(state.manifest),
         runtime_topology: runtime_topology(state),
@@ -1775,7 +1929,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         reliability: reliability_map(state),
         restart_policy: job_restart_policy(state),
         reschedule_policy: job_reschedule_policy(state),
-        policy_state: state.policy_state
+        policy_state: state.policy_state,
+        deployment: deployment_job_fields(state)
       }
       |> maybe_put_lease(Keyword.get(state.opts, :job_lease))
 
@@ -1849,6 +2004,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       restart_policy: job_restart_policy(state),
       reschedule_policy: job_reschedule_policy(state),
       policy_state: state.policy_state,
+      deployment: deployment_job_fields(state),
       submitted_at: state.submitted_at,
       manifest_version: state.manifest.manifest_version,
       lease_epoch: lease && lease["epoch"],
@@ -1991,4 +2147,17 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   defp stringify(value) when is_binary(value), do: value
   defp stringify(value), do: inspect(value)
+
+  defp stringify_map(map) when is_map(map) do
+    Enum.into(map, %{}, fn {key, value} ->
+      key = if is_atom(key), do: Atom.to_string(key), else: key
+      {key, stringify_value(value)}
+    end)
+  end
+
+  defp stringify_map(_value), do: %{}
+
+  defp stringify_value(value) when is_map(value), do: stringify_map(value)
+  defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
+  defp stringify_value(value), do: value
 end

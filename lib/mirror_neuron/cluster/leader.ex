@@ -4,6 +4,7 @@ defmodule MirrorNeuron.Cluster.Leader do
 
   alias MirrorNeuron.Cluster.{NodeDrainer, Reconciler}
   alias MirrorNeuron.Persistence.RedisStore
+  alias MirrorNeuron.Runtime.ScheduleDispatcher
 
   @lease_duration_ms 10_000
   @refresh_interval_ms 3_000
@@ -161,6 +162,22 @@ defmodule MirrorNeuron.Cluster.Leader do
           %{checked: 0, recovered: 0, failed: 0, paused: 0, blocked: 0, skipped: 0}
       end
 
+    schedule_result =
+      case ScheduleDispatcher.process_due_schedules() do
+        {:ok, result} ->
+          %{
+            checked: Map.get(result, :checked, 0),
+            recovered: Map.get(result, :dispatched, 0),
+            failed: Map.get(result, :failed, 0),
+            paused: 0,
+            blocked: Map.get(result, :blocked, 0),
+            skipped: Map.get(result, :skipped, 0) + Map.get(result, :missed, 0)
+          }
+
+        {:error, _reason} ->
+          %{checked: 0, recovered: 0, failed: 0, paused: 0, blocked: 0, skipped: 0}
+      end
+
     sweep_result =
       case Reconciler.sweep_orphaned_jobs(owner_node, reason: reason) do
         {:ok, result} ->
@@ -172,6 +189,7 @@ defmodule MirrorNeuron.Cluster.Leader do
 
     due_result
     |> Map.merge(drain_result, fn _key, left, right -> left + right end)
+    |> Map.merge(schedule_result, fn _key, left, right -> left + right end)
     |> Map.merge(sweep_result, fn _key, left, right -> left + right end)
   end
 

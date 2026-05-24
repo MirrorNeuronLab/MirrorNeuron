@@ -9,6 +9,25 @@ service JobService {
   rpc PauseJob (PauseJobRequest) returns (PauseJobResponse);
   rpc ResumeJob (ResumeJobRequest) returns (ResumeJobResponse);
   rpc ClearJobs (ClearJobsRequest) returns (ClearJobsResponse);
+  rpc DeployJob (DeployJobRequest) returns (DeploymentResponse);
+  rpc UpdateDeployment (UpdateDeploymentRequest) returns (DeploymentResponse);
+  rpc GetDeployment (GetDeploymentRequest) returns (DeploymentResponse);
+  rpc ListDeployments (ListDeploymentsRequest) returns (DeploymentResponse);
+  rpc PromoteDeployment (PromoteDeploymentRequest) returns (DeploymentResponse);
+  rpc RollbackDeployment (RollbackDeploymentRequest) returns (DeploymentResponse);
+  rpc PauseDeployment (DeploymentActionRequest) returns (DeploymentResponse);
+  rpc ResumeDeployment (DeploymentActionRequest) returns (DeploymentResponse);
+  rpc FailDeployment (DeploymentActionRequest) returns (DeploymentResponse);
+  rpc CreateSchedule (CreateScheduleRequest) returns (ScheduleResponse);
+  rpc UpdateSchedule (ScheduleActionRequest) returns (ScheduleResponse);
+  rpc GetSchedule (GetScheduleRequest) returns (ScheduleResponse);
+  rpc ListSchedules (ListSchedulesRequest) returns (ScheduleResponse);
+  rpc PauseSchedule (ScheduleActionRequest) returns (ScheduleResponse);
+  rpc ResumeSchedule (ScheduleActionRequest) returns (ScheduleResponse);
+  rpc DeleteSchedule (ScheduleActionRequest) returns (ScheduleResponse);
+  rpc DispatchSchedule (DispatchScheduleRequest) returns (ScheduleResponse);
+  rpc EmitTriggerEvent (EmitTriggerEventRequest) returns (ScheduleResponse);
+  rpc ListTriggerEvents (ListTriggerEventsRequest) returns (ScheduleResponse);
 }
 
 message SubmitJobRequest {
@@ -71,4 +90,89 @@ message ClearJobsRequest {
 
 message ClearJobsResponse {
   int32 cleared_count = 1;
+}
+
+message DeployJobRequest {
+  string manifest_json = 1;
+  map<string, bytes> payloads = 2;
+  string deployment_key = 3;
+  string update_policy_json = 4;
+  bool wait = 5;
+}
+
+message UpdateDeploymentRequest {
+  string deployment_key = 1;
+  string manifest_json = 2;
+  map<string, bytes> payloads = 3;
+  string update_policy_json = 4;
+  bool wait = 5;
+}
+
+message GetDeploymentRequest {
+  string id_or_key = 1;
+}
+
+message ListDeploymentsRequest {
+  string query_json = 1;
+}
+
+message PromoteDeploymentRequest {
+  string id_or_key = 1;
+}
+
+message RollbackDeploymentRequest {
+  string id_or_key = 1;
+  string version = 2;
+  string tag = 3;
+  string reason = 4;
+}
+
+message DeploymentActionRequest {
+  string id_or_key = 1;
+  string reason = 2;
+}
+
+message DeploymentResponse {
+  string result_json = 1;
+}
+
+message CreateScheduleRequest {
+  string manifest_json = 1;
+  map<string, bytes> payloads = 2;
+  string schedule_json = 3;
+  string source_json = 4;
+}
+
+message ScheduleActionRequest {
+  string schedule_id = 1;
+  string attrs_json = 2;
+  string reason = 3;
+}
+
+message GetScheduleRequest {
+  string schedule_id = 1;
+}
+
+message ListSchedulesRequest {
+  string query_json = 1;
+}
+
+message DispatchScheduleRequest {
+  string schedule_id = 1;
+  string payload_json = 2;
+  string reason = 3;
+}
+
+message EmitTriggerEventRequest {
+  string event_type = 1;
+  string payload_json = 2;
+  string source = 3;
+}
+
+message ListTriggerEventsRequest {
+  int32 limit = 1;
+}
+
+message ScheduleResponse {
+  string result_json = 1;
 }

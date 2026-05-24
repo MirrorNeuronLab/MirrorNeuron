@@ -176,6 +176,260 @@ defmodule Mirrorneuron.Job.V1.ClearJobsResponse do
   field(:cleared_count, 1, type: :int32, json_name: "clearedCount")
 end
 
+defmodule Mirrorneuron.Job.V1.DeployJobRequest.PayloadsEntry do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.DeployJobRequest.PayloadsEntry",
+    map: true,
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:key, 1, type: :string)
+  field(:value, 2, type: :bytes)
+end
+
+defmodule Mirrorneuron.Job.V1.DeployJobRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.DeployJobRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:manifest_json, 1, type: :string, json_name: "manifestJson")
+
+  field(:payloads, 2,
+    repeated: true,
+    type: Mirrorneuron.Job.V1.DeployJobRequest.PayloadsEntry,
+    map: true
+  )
+
+  field(:deployment_key, 3, type: :string, json_name: "deploymentKey")
+  field(:update_policy_json, 4, type: :string, json_name: "updatePolicyJson")
+  field(:wait, 5, type: :bool)
+end
+
+defmodule Mirrorneuron.Job.V1.UpdateDeploymentRequest.PayloadsEntry do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.UpdateDeploymentRequest.PayloadsEntry",
+    map: true,
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:key, 1, type: :string)
+  field(:value, 2, type: :bytes)
+end
+
+defmodule Mirrorneuron.Job.V1.UpdateDeploymentRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.UpdateDeploymentRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:deployment_key, 1, type: :string, json_name: "deploymentKey")
+  field(:manifest_json, 2, type: :string, json_name: "manifestJson")
+
+  field(:payloads, 3,
+    repeated: true,
+    type: Mirrorneuron.Job.V1.UpdateDeploymentRequest.PayloadsEntry,
+    map: true
+  )
+
+  field(:update_policy_json, 4, type: :string, json_name: "updatePolicyJson")
+  field(:wait, 5, type: :bool)
+end
+
+defmodule Mirrorneuron.Job.V1.GetDeploymentRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.GetDeploymentRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:id_or_key, 1, type: :string, json_name: "idOrKey")
+end
+
+defmodule Mirrorneuron.Job.V1.ListDeploymentsRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.ListDeploymentsRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:query_json, 1, type: :string, json_name: "queryJson")
+end
+
+defmodule Mirrorneuron.Job.V1.PromoteDeploymentRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.PromoteDeploymentRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:id_or_key, 1, type: :string, json_name: "idOrKey")
+end
+
+defmodule Mirrorneuron.Job.V1.RollbackDeploymentRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.RollbackDeploymentRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:id_or_key, 1, type: :string, json_name: "idOrKey")
+  field(:version, 2, type: :string)
+  field(:tag, 3, type: :string)
+  field(:reason, 4, type: :string)
+end
+
+defmodule Mirrorneuron.Job.V1.DeploymentActionRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.DeploymentActionRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:id_or_key, 1, type: :string, json_name: "idOrKey")
+  field(:reason, 2, type: :string)
+end
+
+defmodule Mirrorneuron.Job.V1.DeploymentResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.DeploymentResponse",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:result_json, 1, type: :string, json_name: "resultJson")
+end
+
+defmodule Mirrorneuron.Job.V1.CreateScheduleRequest.PayloadsEntry do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.CreateScheduleRequest.PayloadsEntry",
+    map: true,
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:key, 1, type: :string)
+  field(:value, 2, type: :bytes)
+end
+
+defmodule Mirrorneuron.Job.V1.CreateScheduleRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.CreateScheduleRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:manifest_json, 1, type: :string, json_name: "manifestJson")
+
+  field(:payloads, 2,
+    repeated: true,
+    type: Mirrorneuron.Job.V1.CreateScheduleRequest.PayloadsEntry,
+    map: true
+  )
+
+  field(:schedule_json, 3, type: :string, json_name: "scheduleJson")
+  field(:source_json, 4, type: :string, json_name: "sourceJson")
+end
+
+defmodule Mirrorneuron.Job.V1.ScheduleActionRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.ScheduleActionRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:schedule_id, 1, type: :string, json_name: "scheduleId")
+  field(:attrs_json, 2, type: :string, json_name: "attrsJson")
+  field(:reason, 3, type: :string)
+end
+
+defmodule Mirrorneuron.Job.V1.GetScheduleRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.GetScheduleRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:schedule_id, 1, type: :string, json_name: "scheduleId")
+end
+
+defmodule Mirrorneuron.Job.V1.ListSchedulesRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.ListSchedulesRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:query_json, 1, type: :string, json_name: "queryJson")
+end
+
+defmodule Mirrorneuron.Job.V1.DispatchScheduleRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.DispatchScheduleRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:schedule_id, 1, type: :string, json_name: "scheduleId")
+  field(:payload_json, 2, type: :string, json_name: "payloadJson")
+  field(:reason, 3, type: :string)
+end
+
+defmodule Mirrorneuron.Job.V1.EmitTriggerEventRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.EmitTriggerEventRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:event_type, 1, type: :string, json_name: "eventType")
+  field(:payload_json, 2, type: :string, json_name: "payloadJson")
+  field(:source, 3, type: :string)
+end
+
+defmodule Mirrorneuron.Job.V1.ListTriggerEventsRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.ListTriggerEventsRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:limit, 1, type: :int32)
+end
+
+defmodule Mirrorneuron.Job.V1.ScheduleResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.ScheduleResponse",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:result_json, 1, type: :string, json_name: "resultJson")
+end
+
 defmodule Mirrorneuron.Job.V1.JobService.Service do
   @moduledoc false
 
@@ -194,6 +448,112 @@ defmodule Mirrorneuron.Job.V1.JobService.Service do
   rpc(:ResumeJob, Mirrorneuron.Job.V1.ResumeJobRequest, Mirrorneuron.Job.V1.ResumeJobResponse)
 
   rpc(:ClearJobs, Mirrorneuron.Job.V1.ClearJobsRequest, Mirrorneuron.Job.V1.ClearJobsResponse)
+
+  rpc(:DeployJob, Mirrorneuron.Job.V1.DeployJobRequest, Mirrorneuron.Job.V1.DeploymentResponse)
+
+  rpc(
+    :UpdateDeployment,
+    Mirrorneuron.Job.V1.UpdateDeploymentRequest,
+    Mirrorneuron.Job.V1.DeploymentResponse
+  )
+
+  rpc(
+    :GetDeployment,
+    Mirrorneuron.Job.V1.GetDeploymentRequest,
+    Mirrorneuron.Job.V1.DeploymentResponse
+  )
+
+  rpc(
+    :ListDeployments,
+    Mirrorneuron.Job.V1.ListDeploymentsRequest,
+    Mirrorneuron.Job.V1.DeploymentResponse
+  )
+
+  rpc(
+    :PromoteDeployment,
+    Mirrorneuron.Job.V1.PromoteDeploymentRequest,
+    Mirrorneuron.Job.V1.DeploymentResponse
+  )
+
+  rpc(
+    :RollbackDeployment,
+    Mirrorneuron.Job.V1.RollbackDeploymentRequest,
+    Mirrorneuron.Job.V1.DeploymentResponse
+  )
+
+  rpc(
+    :PauseDeployment,
+    Mirrorneuron.Job.V1.DeploymentActionRequest,
+    Mirrorneuron.Job.V1.DeploymentResponse
+  )
+
+  rpc(
+    :ResumeDeployment,
+    Mirrorneuron.Job.V1.DeploymentActionRequest,
+    Mirrorneuron.Job.V1.DeploymentResponse
+  )
+
+  rpc(
+    :FailDeployment,
+    Mirrorneuron.Job.V1.DeploymentActionRequest,
+    Mirrorneuron.Job.V1.DeploymentResponse
+  )
+
+  rpc(
+    :CreateSchedule,
+    Mirrorneuron.Job.V1.CreateScheduleRequest,
+    Mirrorneuron.Job.V1.ScheduleResponse
+  )
+
+  rpc(
+    :UpdateSchedule,
+    Mirrorneuron.Job.V1.ScheduleActionRequest,
+    Mirrorneuron.Job.V1.ScheduleResponse
+  )
+
+  rpc(:GetSchedule, Mirrorneuron.Job.V1.GetScheduleRequest, Mirrorneuron.Job.V1.ScheduleResponse)
+
+  rpc(
+    :ListSchedules,
+    Mirrorneuron.Job.V1.ListSchedulesRequest,
+    Mirrorneuron.Job.V1.ScheduleResponse
+  )
+
+  rpc(
+    :PauseSchedule,
+    Mirrorneuron.Job.V1.ScheduleActionRequest,
+    Mirrorneuron.Job.V1.ScheduleResponse
+  )
+
+  rpc(
+    :ResumeSchedule,
+    Mirrorneuron.Job.V1.ScheduleActionRequest,
+    Mirrorneuron.Job.V1.ScheduleResponse
+  )
+
+  rpc(
+    :DeleteSchedule,
+    Mirrorneuron.Job.V1.ScheduleActionRequest,
+    Mirrorneuron.Job.V1.ScheduleResponse
+  )
+
+  rpc(
+    :DispatchSchedule,
+    Mirrorneuron.Job.V1.DispatchScheduleRequest,
+    Mirrorneuron.Job.V1.ScheduleResponse
+  )
+
+  rpc(
+    :EmitTriggerEvent,
+    Mirrorneuron.Job.V1.EmitTriggerEventRequest,
+    Mirrorneuron.Job.V1.ScheduleResponse
+  )
+
+  rpc(
+    :ListTriggerEvents,
+    Mirrorneuron.Job.V1.ListTriggerEventsRequest,
+    Mirrorneuron.Job.V1.ScheduleResponse
+  )
 end
 
 defmodule Mirrorneuron.Job.V1.JobService.Stub do

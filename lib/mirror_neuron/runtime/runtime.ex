@@ -71,7 +71,8 @@ defmodule MirrorNeuron.Runtime do
            |> Keyword.put(:scheduler_plan, scheduler_plan)
            |> Keyword.put(:requested_recovery_policy, reliability["requested_recovery_policy"])
            |> Keyword.put(:recovery_policy, reliability["effective_recovery_policy"]),
-         :ok <- persist_initial_job(job_id, manifest, manifest_ref, reliability, scheduler_plan) do
+         :ok <-
+           persist_initial_job(job_id, manifest, manifest_ref, reliability, scheduler_plan, opts) do
       publish_reliability_events(job_id, reliability)
 
       spec = {JobRunner, {job_id, manifest, opts}}
@@ -155,6 +156,10 @@ defmodule MirrorNeuron.Runtime do
 
   def send_message(job_id, agent_id, message) when is_map(message) do
     call_job(job_id, {:send_message, agent_id, message})
+  end
+
+  def deploy_agents(job_id, agent_ids, manifest, scheduler_plan, deployment_context) do
+    call_job(job_id, {:deploy_agents, agent_ids, manifest, scheduler_plan, deployment_context})
   end
 
   def pressure(job_id), do: call_job(job_id, :pressure)
@@ -536,7 +541,14 @@ defmodule MirrorNeuron.Runtime do
     |> Map.merge(policy_fields(manifest, reliability, scheduler_plan))
   end
 
-  defp persist_initial_job(job_id, manifest, manifest_ref, reliability, scheduler_plan) do
+  defp persist_initial_job(
+         job_id,
+         manifest,
+         manifest_ref,
+         reliability,
+         scheduler_plan,
+         opts \\ []
+       ) do
     job_map =
       %{
         "job_id" => job_id,
@@ -558,7 +570,8 @@ defmodule MirrorNeuron.Runtime do
         "result" => nil,
         "topology" => MirrorNeuron.Manifest.topology(manifest),
         "manifest" => MirrorNeuron.Manifest.to_map(manifest),
-        "manifest_ref" => manifest_ref
+        "manifest_ref" => manifest_ref,
+        "deployment" => stringify_map(Keyword.get(opts, :deployment_context, %{}))
       }
       |> Map.merge(policy_fields(manifest, reliability, scheduler_plan))
 
@@ -617,4 +630,17 @@ defmodule MirrorNeuron.Runtime do
       })
     end
   end
+
+  defp stringify_map(map) when is_map(map) do
+    Enum.into(map, %{}, fn {key, value} ->
+      key = if is_atom(key), do: Atom.to_string(key), else: key
+      {key, stringify_value(value)}
+    end)
+  end
+
+  defp stringify_map(_value), do: %{}
+
+  defp stringify_value(value) when is_map(value), do: stringify_map(value)
+  defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
+  defp stringify_value(value), do: value
 end

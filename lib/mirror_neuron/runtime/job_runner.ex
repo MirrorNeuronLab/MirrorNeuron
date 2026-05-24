@@ -235,6 +235,7 @@ defmodule MirrorNeuron.Runtime.JobRunner do
         "reliability" => reliability_map(reliability),
         "manifest" => MirrorNeuron.Manifest.to_map(manifest),
         "manifest_ref" => manifest_ref || Runtime.bundle_ref(manifest, bundle),
+        "deployment" => stringify_map(Keyword.get(opts, :deployment_context, %{})),
         "submitted_at" => Runtime.timestamp()
       }
       |> Map.merge(policy_fields(manifest, reliability, scheduler_plan(manifest, opts)))
@@ -277,6 +278,7 @@ defmodule MirrorNeuron.Runtime.JobRunner do
       "reliability" => reliability_map(reliability),
       "manifest" => MirrorNeuron.Manifest.to_map(manifest),
       "manifest_ref" => manifest_ref,
+      "deployment" => stringify_map(Keyword.get(opts, :deployment_context, %{})),
       "submitted_at" => Runtime.timestamp()
     }
     |> Map.merge(policy_fields(manifest, reliability, scheduler_plan(manifest, opts)))
@@ -352,4 +354,17 @@ defmodule MirrorNeuron.Runtime.JobRunner do
 
     Map.put(policies, "policy_state", %{"agents" => %{}})
   end
+
+  defp stringify_map(map) when is_map(map) do
+    Enum.into(map, %{}, fn {key, value} ->
+      key = if is_atom(key), do: Atom.to_string(key), else: key
+      {key, stringify_value(value)}
+    end)
+  end
+
+  defp stringify_map(_value), do: %{}
+
+  defp stringify_value(value) when is_map(value), do: stringify_map(value)
+  defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
+  defp stringify_value(value), do: value
 end

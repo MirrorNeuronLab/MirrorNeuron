@@ -3,6 +3,10 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   alias MirrorNeuron.JobId
 
   @jobs_set "jobs"
+  @deployments_set "deployments"
+  @schedules_set "schedules"
+  @schedule_due_zset "schedule:due"
+  @trigger_events_list "trigger:events"
   @terminal_statuses ["completed", "failed", "cancelled"]
   @default_terminal_job_ttl_seconds 7 * 24 * 60 * 60
   @default_event_ttl_seconds 7 * 24 * 60 * 60
@@ -62,6 +66,246 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   def list_jobs do
     with {:ok, job_ids} <- list_job_ids() do
       fetch_jobs(job_ids)
+    end
+  end
+
+  def persist_schedule(schedule_id, schedule_map) do
+    schedule =
+      schedule_map
+      |> stringify_map()
+      |> Map.put("schedule_id", schedule_id)
+      |> Map.put_new("created_at", timestamp())
+      |> Map.put("updated_at", timestamp())
+
+    commands =
+      [
+        ["SET", key("schedule", schedule_id), Jason.encode!(schedule)],
+        ["SADD", key(@schedules_set), schedule_id],
+        ["ZREM", key(@schedule_due_zset), schedule_id]
+      ] ++ schedule_due_commands(schedule)
+
+    with {:ok, results} <- transaction(commands),
+         :ok <- expect_first_result(results, fn value -> value == "OK" end),
+         :ok <- wait_for_replicas() do
+      {:ok, schedule}
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
+    end
+  end
+
+  def fetch_schedule(schedule_id) do
+    case command(["GET", key("schedule", schedule_id)]) do
+      {:ok, nil} -> {:error, "schedule #{schedule_id} was not found"}
+      {:ok, contents} -> Jason.decode(contents)
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  def list_schedules do
+    with {:ok, schedule_ids} <- command(["SMEMBERS", key(@schedules_set)]) do
+      schedule_ids
+      |> Enum.sort()
+      |> Enum.map(&fetch_schedule/1)
+      |> Enum.filter(&match?({:ok, _}, &1))
+      |> Enum.map(fn {:ok, schedule} -> schedule end)
+      |> then(&{:ok, &1})
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  def list_due_schedules(now_iso) do
+    score = schedule_score(now_iso)
+
+    with {:ok, schedule_ids} <-
+           command(["ZRANGEBYSCORE", key(@schedule_due_zset), "-inf", to_string(score)]) do
+      schedule_ids
+      |> Enum.sort()
+      |> Enum.map(&fetch_schedule/1)
+      |> Enum.filter(&match?({:ok, _}, &1))
+      |> Enum.map(fn {:ok, schedule} -> schedule end)
+      |> then(&{:ok, &1})
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  def delete_schedule(schedule_id) do
+    with {:ok, _results} <-
+           transaction([
+             ["DEL", key("schedule", schedule_id)],
+             ["SREM", key(@schedules_set), schedule_id],
+             ["ZREM", key(@schedule_due_zset), schedule_id]
+           ]),
+         :ok <- wait_for_replicas() do
+      :ok
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
+    end
+  end
+
+  def append_trigger_event(event_id, event_map) do
+    event =
+      event_map
+      |> stringify_map()
+      |> Map.put("event_id", event_id)
+      |> Map.put_new("created_at", timestamp())
+
+    encoded = Jason.encode!(event)
+
+    with {:ok, _results} <-
+           transaction([
+             ["SET", key("trigger", "event", event_id), encoded],
+             ["LPUSH", key(@trigger_events_list), encoded],
+             ["LTRIM", key(@trigger_events_list), "0", "999"]
+           ]),
+         :ok <- wait_for_replicas() do
+      {:ok, event}
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
+    end
+  end
+
+  def list_trigger_events(limit \\ 100) do
+    stop = max(limit, 1) - 1
+
+    case command(["LRANGE", key(@trigger_events_list), "0", to_string(stop)]) do
+      {:ok, items} -> {:ok, decode_json_items(items)}
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  def persist_deployment(deployment_id, deployment_map) do
+    deployment =
+      deployment_map
+      |> stringify_map()
+      |> Map.put("deployment_id", deployment_id)
+      |> Map.put_new("created_at", timestamp())
+      |> Map.put("updated_at", timestamp())
+
+    deployment_key = Map.get(deployment, "deployment_key")
+
+    commands =
+      [
+        ["SET", key("deployment", deployment_id), Jason.encode!(deployment)],
+        ["SADD", key(@deployments_set), deployment_id]
+      ] ++ deployment_index_commands(deployment_key, deployment_id)
+
+    with {:ok, results} <- transaction(commands),
+         :ok <- expect_first_result(results, fn value -> value == "OK" end),
+         :ok <- wait_for_replicas() do
+      {:ok, deployment}
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
+    end
+  end
+
+  def fetch_deployment(deployment_id) do
+    case command(["GET", key("deployment", deployment_id)]) do
+      {:ok, nil} -> {:error, "deployment #{deployment_id} was not found"}
+      {:ok, contents} -> Jason.decode(contents)
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  def fetch_deployment_by_key(deployment_key) do
+    case command(["GET", key("deployment", "key", deployment_key, "current")]) do
+      {:ok, nil} -> {:error, "deployment #{deployment_key} was not found"}
+      {:ok, deployment_id} -> fetch_deployment(deployment_id)
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  def fetch_deployment_ref(id_or_key) do
+    case fetch_deployment(id_or_key) do
+      {:ok, deployment} ->
+        {:ok, deployment}
+
+      {:error, _reason} ->
+        fetch_deployment_by_key(id_or_key)
+    end
+  end
+
+  def list_deployments do
+    with {:ok, deployment_ids} <- command(["SMEMBERS", key(@deployments_set)]) do
+      deployments =
+        deployment_ids
+        |> Enum.sort()
+        |> Enum.map(fn deployment_id ->
+          case fetch_deployment(deployment_id) do
+            {:ok, deployment} -> deployment
+            {:error, _reason} -> nil
+          end
+        end)
+        |> Enum.reject(&is_nil/1)
+
+      {:ok, deployments}
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  def persist_job_version(deployment_key, version, version_map) do
+    version_id = to_string(version)
+
+    version_record =
+      version_map
+      |> stringify_map()
+      |> Map.put("deployment_key", deployment_key)
+      |> Map.put("version", version_id)
+      |> Map.put_new("created_at", timestamp())
+      |> Map.put("updated_at", timestamp())
+
+    commands = [
+      [
+        "SET",
+        key("deployment", "key", deployment_key, "version", version_id),
+        Jason.encode!(version_record)
+      ],
+      ["SADD", key("deployment", "key", deployment_key, "versions"), version_id]
+    ]
+
+    with {:ok, results} <- transaction(commands),
+         :ok <- expect_first_result(results, fn value -> value == "OK" end),
+         :ok <- wait_for_replicas() do
+      {:ok, version_record}
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
+    end
+  end
+
+  def fetch_job_version(deployment_key, version) do
+    version_id = to_string(version)
+
+    case command(["GET", key("deployment", "key", deployment_key, "version", version_id)]) do
+      {:ok, nil} -> {:error, "deployment #{deployment_key} version #{version_id} was not found"}
+      {:ok, contents} -> Jason.decode(contents)
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  def list_job_versions(deployment_key) do
+    with {:ok, versions} <-
+           command(["SMEMBERS", key("deployment", "key", deployment_key, "versions")]) do
+      records =
+        versions
+        |> Enum.sort_by(&version_sort_value/1)
+        |> Enum.map(fn version ->
+          case fetch_job_version(deployment_key, version) do
+            {:ok, record} -> record
+            {:error, _reason} -> nil
+          end
+        end)
+        |> Enum.reject(&is_nil/1)
+
+      {:ok, records}
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
     end
   end
 
@@ -626,6 +870,39 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     |> maybe_service_index(operation, service, instance_id, "job_id", ["service", "job"])
     |> maybe_service_index(operation, service, instance_id, "node", ["service", "node"])
     |> maybe_service_index(operation, service, instance_id, "agent_id", ["service", "agent"])
+  end
+
+  defp schedule_due_commands(%{"enabled" => true, "status" => status, "next_run_at" => next_run_at} = schedule)
+       when status in ["active", "running"] and is_binary(next_run_at) do
+    [["ZADD", key(@schedule_due_zset), to_string(schedule_score(next_run_at)), schedule["schedule_id"]]]
+  end
+
+  defp schedule_due_commands(_schedule), do: []
+
+  defp schedule_score(iso_datetime) when is_binary(iso_datetime) do
+    case DateTime.from_iso8601(iso_datetime) do
+      {:ok, datetime, _offset} -> DateTime.to_unix(datetime, :millisecond)
+      _ -> 0
+    end
+  end
+
+  defp schedule_score(_value), do: 0
+
+  defp deployment_index_commands(nil, _deployment_id), do: []
+  defp deployment_index_commands("", _deployment_id), do: []
+
+  defp deployment_index_commands(deployment_key, deployment_id) do
+    [
+      ["SET", key("deployment", "key", deployment_key, "current"), deployment_id],
+      ["SADD", key("deployment", "key", deployment_key, "deployments"), deployment_id]
+    ]
+  end
+
+  defp version_sort_value(version) do
+    case Integer.parse(to_string(version)) do
+      {integer, ""} -> integer
+      _ -> 0
+    end
   end
 
   defp maybe_service_index(commands, operation, service, instance_id, field, key_parts) do
@@ -1275,6 +1552,9 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   defp key(part1, part2, part3, part4),
     do: Enum.join([namespace(), part1, part2, part3, part4], ":")
+
+  defp key(part1, part2, part3, part4, part5),
+    do: Enum.join([namespace(), part1, part2, part3, part4, part5], ":")
 
   defp channel(part1, part2), do: Enum.join([namespace(), "channel", part1, part2], ":")
 

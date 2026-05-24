@@ -55,6 +55,57 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     RedisStore.delete_job(job_id)
   end
 
+  test "persists deployments and immutable version records" do
+    deployment_id = "dep-test-#{System.unique_integer([:positive])}"
+    deployment_key = "agent-api"
+
+    assert {:ok, deployment} =
+             RedisStore.persist_deployment(deployment_id, %{
+               "deployment_key" => deployment_key,
+               "status" => "successful",
+               "current_version" => "1"
+             })
+
+    assert deployment["deployment_id"] == deployment_id
+    assert {:ok, fetched} = RedisStore.fetch_deployment(deployment_id)
+    assert fetched["deployment_key"] == deployment_key
+    assert {:ok, fetched_by_key} = RedisStore.fetch_deployment_by_key(deployment_key)
+    assert fetched_by_key["deployment_id"] == deployment_id
+
+    assert {:ok, version} =
+             RedisStore.persist_job_version(deployment_key, "1", %{
+               "job_id" => "job-1",
+               "manifest" => %{"graph_id" => "agent-api"},
+               "stable" => true
+             })
+
+    assert version["version"] == "1"
+    assert {:ok, fetched_version} = RedisStore.fetch_job_version(deployment_key, "1")
+    assert fetched_version["job_id"] == "job-1"
+    assert {:ok, [listed_version]} = RedisStore.list_job_versions(deployment_key)
+    assert listed_version["stable"] == true
+  end
+
+  test "service discovery hides deployment candidates until promoted" do
+    assert {:ok, _service} =
+             ServiceRegistry.register(%{
+               "id" => "svc-candidate",
+               "name" => "agent-api",
+               "status" => "passing",
+               "deployment_key" => "agent-api",
+               "deployment_version" => "2",
+               "deployment_role" => "canary"
+             })
+
+    assert {:ok, []} = ServiceRegistry.resolve("agent-api")
+    assert {:ok, [candidate]} = ServiceRegistry.resolve("agent-api", include_candidates: true)
+    assert candidate["deployment_role"] == "canary"
+
+    assert {:ok, [_promoted]} = ServiceRegistry.promote_deployment("agent-api", "2")
+    assert {:ok, [primary]} = ServiceRegistry.resolve("agent-api")
+    assert primary["deployment_role"] == "primary"
+  end
+
   test "read_events can fetch a bounded recent window" do
     job_id = "event-window-#{System.unique_integer([:positive])}"
 
