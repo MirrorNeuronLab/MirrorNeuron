@@ -152,6 +152,7 @@ defmodule MirrorNeuron.Bundle.Archive do
   defp restore_to_cache(fingerprint, %{"files" => files}) when is_list(files) do
     root = cache_path(fingerprint)
     File.mkdir_p!(root)
+    File.mkdir_p!(Path.join(root, "payloads"))
 
     Enum.each(files, fn %{"path" => relative_path, "data" => encoded} ->
       if safe_relative_path?(relative_path) do
