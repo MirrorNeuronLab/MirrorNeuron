@@ -814,6 +814,10 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         Process.sleep(100)
         start_agent(state, agent_id, recovery_snapshot, retry_count + 1)
 
+      {:error, {:target_node_unavailable, _target_node}} when retry_count < 50 ->
+        Process.sleep(200)
+        start_agent(state, agent_id, recovery_snapshot, retry_count + 1)
+
       other ->
         other
     end

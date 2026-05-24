@@ -332,10 +332,21 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
 
   defp job_runner_alive?(job_id) do
     case Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:job_runner, job_id}) do
-      [{pid, _meta}] -> Process.alive?(pid)
+      [{pid, _meta}] -> pid_alive?(pid)
       _ -> false
     end
   end
+
+  defp pid_alive?(pid) when is_pid(pid) and node(pid) == node(), do: Process.alive?(pid)
+
+  defp pid_alive?(pid) when is_pid(pid) do
+    case :rpc.call(node(pid), Process, :alive?, [pid], 5_000) do
+      true -> true
+      _ -> false
+    end
+  end
+
+  defp pid_alive?(_pid), do: false
 
   defp bump(acc, :started), do: Map.update!(acc, :recovered, &(&1 + 1))
   defp bump(acc, :paused_for_review), do: Map.update!(acc, :paused, &(&1 + 1))

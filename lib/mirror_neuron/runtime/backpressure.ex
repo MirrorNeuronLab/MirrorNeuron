@@ -107,13 +107,21 @@ defmodule MirrorNeuron.Runtime.Backpressure do
   end
 
   def process_queue_depth(pid, internal_depth \\ 0) when is_pid(pid) do
-    mailbox_depth =
-      case Process.info(pid, :message_queue_len) do
-        {:message_queue_len, value} when is_integer(value) -> value
-        _ -> 0
-      end
+    mailbox_queue_depth(pid) + max(as_int(internal_depth, 0), 0)
+  end
 
-    mailbox_depth + max(as_int(internal_depth, 0), 0)
+  defp mailbox_queue_depth(pid) when node(pid) == node() do
+    case Process.info(pid, :message_queue_len) do
+      {:message_queue_len, value} when is_integer(value) -> value
+      _ -> 0
+    end
+  end
+
+  defp mailbox_queue_depth(pid) do
+    case :rpc.call(node(pid), Process, :info, [pid, :message_queue_len], 5_000) do
+      {:message_queue_len, value} when is_integer(value) -> value
+      _ -> 0
+    end
   end
 
   defp raw_config(%{config: config}) when is_map(config), do: raw_config(config)
