@@ -55,6 +55,7 @@ defmodule MirrorNeuron.Application do
               MirrorNeuron.DistributedRegistry,
               MirrorNeuron.Runtime.JobSupervisor,
               MirrorNeuron.Runtime.AgentSupervisor,
+              {Task.Supervisor, name: MirrorNeuron.Runtime.RecoveryTaskSupervisor},
               MirrorNeuron.Bundle.Manager,
               MirrorNeuron.Runtime.LocalRecovery,
               MirrorNeuron.Bundle.Scanner

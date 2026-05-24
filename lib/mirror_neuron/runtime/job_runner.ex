@@ -4,7 +4,7 @@ defmodule MirrorNeuron.Runtime.JobRunner do
 
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
-  alias MirrorNeuron.Runtime.{EventBus, JobCoordinator}
+  alias MirrorNeuron.Runtime.{EventBus, JobCoordinator, LifecyclePolicy}
   alias MirrorNeuron.Runtime.Naming
 
   @active_statuses ["pending", "running", "paused"]
@@ -237,6 +237,7 @@ defmodule MirrorNeuron.Runtime.JobRunner do
         "manifest_ref" => manifest_ref || Runtime.bundle_ref(manifest, bundle),
         "submitted_at" => Runtime.timestamp()
       }
+      |> Map.merge(policy_fields(manifest, reliability, scheduler_plan(manifest, opts)))
       |> maybe_put_lease(lease)
 
     updates = %{
@@ -278,6 +279,7 @@ defmodule MirrorNeuron.Runtime.JobRunner do
       "manifest_ref" => manifest_ref,
       "submitted_at" => Runtime.timestamp()
     }
+    |> Map.merge(policy_fields(manifest, reliability, scheduler_plan(manifest, opts)))
     |> maybe_put_lease(lease)
   end
 
@@ -338,5 +340,16 @@ defmodule MirrorNeuron.Runtime.JobRunner do
       "observed_nodes",
       "observed_at"
     ])
+  end
+
+  defp policy_fields(manifest, reliability, scheduler_plan) do
+    policies =
+      LifecyclePolicy.normalize(
+        manifest,
+        scheduler_plan["job_type"],
+        reliability["effective_recovery_policy"]
+      )
+
+    Map.put(policies, "policy_state", %{"agents" => %{}})
   end
 end

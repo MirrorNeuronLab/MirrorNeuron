@@ -17,7 +17,7 @@ defmodule MirrorNeuron.Manifest do
   ]
 
   alias MirrorNeuron.{AgentRegistry, AgentTemplates}
-  alias MirrorNeuron.Runtime.RouteCondition
+  alias MirrorNeuron.Runtime.{LifecyclePolicy, RouteCondition}
 
   def load(%__MODULE__{} = manifest), do: {:ok, manifest}
 
@@ -249,6 +249,7 @@ defmodule MirrorNeuron.Manifest do
     )
     |> validate_scheduler_policy(manifest)
     |> validate_node_scheduling(manifest)
+    |> add_errors(LifecyclePolicy.validate_manifest(manifest))
   end
 
   defp validate_scheduler_policy(errors, manifest) do
@@ -350,7 +351,8 @@ defmodule MirrorNeuron.Manifest do
       tool_bindings: Map.get(raw, "tool_bindings", []),
       retry_policy: Map.get(raw, "retry_policy", %{}),
       checkpoint_policy: Map.get(raw, "checkpoint_policy", %{}),
-      spawn_policy: Map.get(raw, "spawn_policy", %{})
+      spawn_policy: Map.get(raw, "spawn_policy", %{}),
+      policies: Map.get(raw, "policies", %{})
     }
   end
 
@@ -366,7 +368,8 @@ defmodule MirrorNeuron.Manifest do
       "tool_bindings" => json_safe(node.tool_bindings),
       "retry_policy" => json_safe(node.retry_policy),
       "checkpoint_policy" => json_safe(node.checkpoint_policy),
-      "spawn_policy" => json_safe(node.spawn_policy)
+      "spawn_policy" => json_safe(node.spawn_policy),
+      "policies" => json_safe(Map.get(node, :policies, %{}))
     }
   end
 

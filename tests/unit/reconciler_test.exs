@@ -129,6 +129,8 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
     assert result.recovered == 1
     assert_receive {:coordinator_rescheduled, ["worker"], scheduler_plan, _reason}
     assert [%{"agent_id" => "worker", "node" => "large@lab"}] = scheduler_plan["placements"]
+    assert_receive {:job_persisted, "agent-job", %{"policy_state" => policy_state}, _}
+    assert get_in(policy_state, ["agents", "worker", "reschedule_attempts"]) == 1
     assert_receive {:job_persisted, "agent-job", %{"recovery_status" => "rescheduling"}, _}
     assert_receive {:job_persisted, "agent-job", %{"recovery_status" => "rescheduled"}, _}
     assert {:ok, [eval]} = RedisStoreStub.list_recovery_evals()
@@ -271,10 +273,73 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
     assert_receive {:job_persisted, "blocked-job", updates, _}
     assert updates["recovery_status"] == "blocked_no_placement"
     assert updates["recovery_wait_until"]
+    refute_received {:job_persisted, "blocked-job", %{"policy_state" => _policy_state}, _}
     assert {:ok, [eval]} = RedisStoreStub.list_recovery_evals()
     assert eval["status"] == "blocked"
     assert eval["attempt"] == 1
     refute_received {:coordinator_rescheduled, _, _, _}
+  end
+
+  test "pauses when reschedule policy is disabled" do
+    {:ok, bundle} = JobBundle.load(manifest())
+
+    job =
+      running_job("policy-disabled")
+      |> Map.put("reschedule_policy", %{
+        "type" => "reschedule",
+        "enabled" => true,
+        "attempts" => 0,
+        "interval_ms" => 86_400_000,
+        "delay_ms" => 5_000,
+        "delay_function" => "constant",
+        "max_delay_ms" => 5_000,
+        "unlimited" => false
+      })
+
+    RedisStoreStub.put_jobs([job])
+    RedisStoreStub.put_agents("policy-disabled", [agent_snapshot("worker")])
+    {:ok, coordinator} = CoordinatorStub.start_link(self())
+
+    assert {:ok, result} =
+             Reconciler.reconcile_node("small@lab",
+               redis_store: RedisStoreStub,
+               event_bus: EventBusStub,
+               bundle_loader: fn _job -> {:ok, bundle} end,
+               lookup_coordinator: fn "policy-disabled" -> {:ok, coordinator} end,
+               scheduler_opts: [nodes: [small_node(), large_node()], jobs: [job]]
+             )
+
+    assert result.paused == 1
+    assert_receive {:job_persisted, "policy-disabled", updates, _}
+    assert updates["status"] == "paused"
+    assert updates["recovery_reason"] =~ "reschedule policy blocked"
+    refute_received {:coordinator_rescheduled, _, _, _}
+  end
+
+  test "internal reschedule_agents recovers a specific agent after restart exhaustion" do
+    {:ok, bundle} = JobBundle.load(manifest())
+    job = running_job("restart-exhausted")
+    RedisStoreStub.put_jobs([job])
+    RedisStoreStub.put_agents("restart-exhausted", [agent_snapshot("worker")])
+    {:ok, coordinator} = CoordinatorStub.start_link(self())
+
+    assert {:ok, result} =
+             Reconciler.reschedule_agents("restart-exhausted", ["worker"],
+               redis_store: RedisStoreStub,
+               event_bus: EventBusStub,
+               bundle_loader: fn _job -> {:ok, bundle} end,
+               lookup_coordinator: fn "restart-exhausted" -> {:ok, coordinator} end,
+               scheduler_opts: [nodes: [small_node(), large_node()], jobs: [job]],
+               reason: "restart attempts exhausted"
+             )
+
+    assert result.recovered == 1
+    assert_receive {:coordinator_rescheduled, ["worker"], scheduler_plan, reason}
+    assert reason == "restart attempts exhausted"
+    assert [%{"agent_id" => "worker", "node" => "large@lab"}] = scheduler_plan["placements"]
+    assert {:ok, [eval]} = RedisStoreStub.list_recovery_evals()
+    assert eval["trigger"] == "restart_exhausted"
+    assert eval["status"] == "complete"
   end
 
   test "blocks recovery when final plan validation sees stale target node" do

@@ -7,11 +7,10 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Scheduler
-  alias MirrorNeuron.Runtime.{AgentWorker, Backpressure, EventBus, Naming}
+  alias MirrorNeuron.Runtime.{AgentWorker, Backpressure, EventBus, LifecyclePolicy, Naming}
   alias MirrorNeuron.Sandbox.JobSandbox
 
   @default_health_check_interval_ms 2_000
-  @default_max_agent_restart_attempts 3
 
   def start_link({job_id, manifest, opts}) do
     GenServer.start_link(__MODULE__, {job_id, manifest, opts}, name: Naming.via_job(job_id))
@@ -55,13 +54,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       completed_agents: completed_agents_from(existing_job),
       completed_system_targets: completed_system_targets_from(existing_job),
       pressure: %{},
-      agent_restart_attempts: %{},
-      max_agent_restart_attempts:
-        Map.get(
-          manifest.policies,
-          "max_agent_restart_attempts",
-          @default_max_agent_restart_attempts
-        ),
+      policy_state: policy_state_from(existing_job),
+      pending_policy_timers: %{},
       health_check_interval_ms:
         Application.get_env(
           :mirror_neuron,
@@ -248,7 +242,14 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     if affected_agent_ids == [] do
       {:reply, {:error, :no_matching_agents}, state}
     else
-      next_state = put_scheduler_plan(state, scheduler_plan)
+      next_state =
+        affected_agent_ids
+        |> Enum.reduce(state, fn agent_id, acc ->
+          acc
+          |> clear_policy_timer({:restart, agent_id})
+          |> clear_policy_timer({:reschedule, agent_id})
+        end)
+        |> put_scheduler_plan(scheduler_plan)
 
       EventBus.publish(state.job_id, %{
         type: :job_agent_reschedule_started,
@@ -271,6 +272,11 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
       with :ok <- wait_for_agents_stopped(next_state, 5_000, affected_agent_ids),
            {:ok, recovered_state} <- recover_agents(next_state, affected_agent_ids) do
+        recovered_state =
+          Enum.reduce(affected_agent_ids, recovered_state, fn agent_id, acc ->
+            mark_policy_idle(acc, agent_id)
+          end)
+
         persist_job(recovered_state)
 
         Enum.each(affected_agent_ids, fn agent_id ->
@@ -389,11 +395,52 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     end
   end
 
+  def handle_info({:policy_restart, agent_id, reason}, state) do
+    next_state = clear_policy_timer(state, {:restart, agent_id})
+
+    case restart_agents_now(next_state, [agent_id], reason) do
+      {:ok, recovered_state} ->
+        recovered_state = mark_policy_idle(recovered_state, agent_id)
+        persist_job(recovered_state)
+        {:noreply, recovered_state}
+
+      {:error, failed_reason, failed_state} ->
+        case schedule_agent_restarts(failed_state, [agent_id], failed_reason) do
+          {:ok, retry_state} ->
+            {:noreply, retry_state}
+
+          {:error, final_reason, final_state} ->
+            failed_state =
+              finalize_job(
+                final_state,
+                "failed",
+                %{agent_id: agent_id, error: final_reason},
+                :job_failed,
+                %{agent_id: agent_id, reason: final_reason}
+              )
+
+            {:stop, {:shutdown, final_reason}, failed_state}
+        end
+    end
+  end
+
+  def handle_info({:policy_reschedule, agent_ids, reason}, state) do
+    affected_agent_ids = normalize_agent_ids(agent_ids, state)
+
+    next_state =
+      Enum.reduce(affected_agent_ids, state, fn agent_id, acc ->
+        clear_policy_timer(acc, {:reschedule, agent_id})
+      end)
+
+    start_reschedule_task(next_state, affected_agent_ids, reason)
+    {:noreply, next_state}
+  end
+
   def handle_info(:health_check, %{status: status} = state)
       when status in ["running", "paused"] do
     state = refresh_pressure(state)
 
-    case recover_missing_agents(state) do
+    case schedule_missing_agents(state) do
       {:ok, next_state} ->
         schedule_health_check(next_state.health_check_interval_ms)
         {:noreply, next_state}
@@ -422,21 +469,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       timestamp: Runtime.timestamp()
     })
 
-    case restart_agents(state, [agent_id], "service agent completed") do
-      {:ok, next_state} ->
-        {:noreply, next_state}
-
-      {:error, reason, next_state} ->
-        EventBus.publish(state.job_id, %{
-          type: :service_agent_restart_failed,
-          agent_id: agent_id,
-          reason: reason,
-          timestamp: Runtime.timestamp()
-        })
-
-        schedule_health_check(next_state.health_check_interval_ms)
-        {:noreply, next_state}
-    end
+    terminate_agent_workers(state, [agent_id])
+    {:ok, next_state} = schedule_agent_restarts(state, [agent_id], "service agent completed")
+    {:noreply, next_state}
   end
 
   defp restart_system_target(state, agent_id, result) do
@@ -451,22 +486,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       timestamp: Runtime.timestamp()
     })
 
-    case restart_agents(state, agent_ids, "system target completed") do
-      {:ok, next_state} ->
-        {:noreply, next_state}
-
-      {:error, reason, next_state} ->
-        EventBus.publish(state.job_id, %{
-          type: :system_target_restart_failed,
-          agent_id: agent_id,
-          system_target: target,
-          reason: reason,
-          timestamp: Runtime.timestamp()
-        })
-
-        schedule_health_check(next_state.health_check_interval_ms)
-        {:noreply, next_state}
-    end
+    terminate_agent_workers(state, agent_ids)
+    {:ok, next_state} = schedule_agent_restarts(state, agent_ids, "system target completed")
+    {:noreply, next_state}
   end
 
   defp complete_sysbatch_target(state, agent_id, result) do
@@ -508,36 +530,11 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp restart_failed_agent(state, agent_id, reason) do
-    EventBus.publish(state.job_id, %{
-      type: :agent_restart_scheduled,
-      agent_id: agent_id,
-      reason: inspect(reason),
-      job_type: job_type(state),
-      timestamp: Runtime.timestamp()
-    })
-
-    case restart_agents(state, [agent_id], inspect(reason)) do
-      {:ok, next_state} ->
-        {:ok, next_state}
-
-      {:error, failed_reason, next_state} ->
-        if job_type(state) in ["service", "system"] do
-          EventBus.publish(state.job_id, %{
-            type: :agent_restart_deferred,
-            agent_id: agent_id,
-            reason: failed_reason,
-            timestamp: Runtime.timestamp()
-          })
-
-          schedule_health_check(next_state.health_check_interval_ms)
-          {:ok, next_state}
-        else
-          {:error, failed_reason, next_state}
-        end
-    end
+    terminate_agent_workers(state, [agent_id])
+    schedule_agent_restarts(state, [agent_id], inspect(reason))
   end
 
-  defp restart_agents(state, agent_ids, reason) do
+  defp restart_agents_now(state, agent_ids, reason) do
     agent_ids = normalize_agent_ids(agent_ids, state)
     terminate_agent_workers(state, agent_ids)
 
@@ -557,6 +554,231 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       {:error, failed_reason, failed_state} -> {:error, failed_reason, failed_state}
       {:error, failed_reason} -> {:error, failed_reason, state}
     end
+  end
+
+  defp schedule_missing_agents(state) do
+    Enum.reduce_while(state.agent_ids, {:ok, state}, fn agent_id, {:ok, acc_state} ->
+      cond do
+        agent_completed?(acc_state, agent_id) ->
+          {:cont, {:ok, acc_state}}
+
+        agent_ready?(acc_state, agent_id) ->
+          {:cont, {:ok, acc_state}}
+
+        pending_policy_action?(acc_state, agent_id) ->
+          {:cont, {:ok, acc_state}}
+
+        true ->
+          case schedule_agent_restarts(acc_state, [agent_id], "agent missing during health check") do
+            {:ok, next_state} -> {:cont, {:ok, next_state}}
+            {:error, reason, next_state} -> {:halt, {:error, reason, next_state}}
+          end
+      end
+    end)
+  end
+
+  defp schedule_agent_restarts(state, agent_ids, reason) do
+    agent_ids = normalize_agent_ids(agent_ids, state)
+
+    Enum.reduce_while(agent_ids, {:ok, state}, fn agent_id, {:ok, acc_state} ->
+      policy = restart_policy(acc_state, agent_id)
+      history = policy_history(acc_state, agent_id, "restart")
+
+      case LifecyclePolicy.attempt_decision(policy, history) do
+        {:allowed, decision} ->
+          next_state = schedule_restart_attempt(acc_state, agent_id, reason, policy, decision)
+          {:cont, {:ok, next_state}}
+
+        {:exhausted, exhaustion} ->
+          case handle_restart_exhausted(acc_state, agent_id, reason, policy, exhaustion) do
+            {:ok, next_state} -> {:cont, {:ok, next_state}}
+            {:error, failed_reason, next_state} -> {:halt, {:error, failed_reason, next_state}}
+          end
+      end
+    end)
+  end
+
+  defp schedule_restart_attempt(state, agent_id, reason, policy, decision) do
+    delay_ms = Map.get(decision, "delay_ms", 0)
+    next_eligible_at = LifecyclePolicy.iso_after(delay_ms)
+
+    history =
+      LifecyclePolicy.append_history(
+        policy_history(state, agent_id, "restart"),
+        "restart",
+        reason
+      )
+
+    next_state =
+      state
+      |> put_policy_history(agent_id, "restart", history)
+      |> put_policy_agent_fields(agent_id, %{
+        "last_reason" => stringify(reason),
+        "next_action" => "restart",
+        "next_eligible_at" => next_eligible_at,
+        "exhausted_reason" => nil,
+        "restart_attempts" => LifecyclePolicy.active_attempt_count(policy, history)
+      })
+      |> schedule_policy_timer(
+        {:restart, agent_id},
+        {:policy_restart, agent_id, reason},
+        delay_ms
+      )
+
+    persist_job(next_state)
+
+    EventBus.publish(state.job_id, %{
+      type: :agent_restart_scheduled,
+      agent_id: agent_id,
+      reason: stringify(reason),
+      job_type: job_type(state),
+      attempt: decision["attempt"],
+      delay_ms: delay_ms,
+      next_eligible_at: next_eligible_at,
+      restart_policy: policy,
+      timestamp: Runtime.timestamp()
+    })
+
+    next_state
+  end
+
+  defp handle_restart_exhausted(
+         state,
+         agent_id,
+         reason,
+         %{"mode" => "delay"} = policy,
+         exhaustion
+       ) do
+    wait_ms = Map.get(exhaustion, "wait_ms") || 0
+    wait_until = Map.get(exhaustion, "wait_until") || LifecyclePolicy.iso_after(wait_ms)
+
+    next_state =
+      state
+      |> put_policy_agent_fields(agent_id, %{
+        "last_reason" => stringify(reason),
+        "next_action" => "restart",
+        "next_eligible_at" => wait_until,
+        "exhausted_reason" => exhaustion["reason"],
+        "restart_attempts" =>
+          LifecyclePolicy.active_attempt_count(policy, policy_history(state, agent_id, "restart"))
+      })
+      |> schedule_policy_timer({:restart, agent_id}, {:policy_restart, agent_id, reason}, wait_ms)
+
+    persist_job(next_state)
+
+    EventBus.publish(state.job_id, %{
+      type: :agent_restart_deferred,
+      agent_id: agent_id,
+      reason: stringify(reason),
+      exhausted_reason: exhaustion["reason"],
+      retry_at: wait_until,
+      delay_ms: wait_ms,
+      timestamp: Runtime.timestamp()
+    })
+
+    {:ok, next_state}
+  end
+
+  defp handle_restart_exhausted(state, agent_id, reason, _policy, exhaustion) do
+    effective_policy = effective_recovery_policy(state)
+
+    cond do
+      effective_policy == "manual_recover" ->
+        {:ok, pause_for_policy_review(state, agent_id, "manual recovery policy requires review")}
+
+      effective_policy == "cluster_recover" ->
+        schedule_agent_reschedule(state, agent_id, reason, exhaustion)
+
+      job_type(state) in ["service", "system"] ->
+        {:ok,
+         pause_for_policy_review(
+           state,
+           agent_id,
+           "restart attempts exhausted and cluster recovery is not active"
+         )}
+
+      true ->
+        {:error, "agent #{agent_id} restart attempts exhausted: #{exhaustion["reason"]}", state}
+    end
+  end
+
+  defp schedule_agent_reschedule(state, agent_id, reason, restart_exhaustion) do
+    policy = reschedule_policy(state, agent_id)
+    history = policy_history(state, agent_id, "reschedule")
+
+    case LifecyclePolicy.attempt_decision(policy, history) do
+      {:allowed, decision} ->
+        delay_ms = Map.get(decision, "delay_ms", 0)
+        next_eligible_at = LifecyclePolicy.iso_after(delay_ms)
+
+        history =
+          LifecyclePolicy.append_history(
+            history,
+            "reschedule",
+            "#{stringify(reason)} after restart exhaustion"
+          )
+
+        next_state =
+          state
+          |> put_policy_history(agent_id, "reschedule", history)
+          |> put_policy_agent_fields(agent_id, %{
+            "last_reason" => stringify(reason),
+            "next_action" => "reschedule",
+            "next_eligible_at" => next_eligible_at,
+            "exhausted_reason" => restart_exhaustion["reason"],
+            "reschedule_attempts" => LifecyclePolicy.active_attempt_count(policy, history)
+          })
+          |> schedule_policy_timer(
+            {:reschedule, agent_id},
+            {:policy_reschedule, [agent_id], stringify(reason)},
+            delay_ms
+          )
+
+        persist_job(next_state)
+
+        EventBus.publish(state.job_id, %{
+          type: :agent_reschedule_scheduled,
+          agent_id: agent_id,
+          reason: stringify(reason),
+          restart_exhausted_reason: restart_exhaustion["reason"],
+          delay_ms: delay_ms,
+          next_eligible_at: next_eligible_at,
+          reschedule_policy: policy,
+          timestamp: Runtime.timestamp()
+        })
+
+        {:ok, next_state}
+
+      {:exhausted, reschedule_exhaustion} ->
+        reason =
+          "agent #{agent_id} restart exhausted and reschedule unavailable: " <>
+            reschedule_exhaustion["reason"]
+
+        if job_type(state) in ["service", "system"] do
+          {:ok, pause_for_policy_review(state, agent_id, reason)}
+        else
+          {:error, reason, state}
+        end
+    end
+  end
+
+  defp start_reschedule_task(state, [], _reason), do: state
+
+  defp start_reschedule_task(state, affected_agent_ids, reason) do
+    task = fn ->
+      MirrorNeuron.Cluster.Reconciler.reschedule_agents(
+        state.job_id,
+        affected_agent_ids,
+        reason: reason
+      )
+    end
+
+    case Process.whereis(MirrorNeuron.Runtime.RecoveryTaskSupervisor) do
+      nil -> Task.start(task)
+      _pid -> Task.Supervisor.start_child(MirrorNeuron.Runtime.RecoveryTaskSupervisor, task)
+    end
+
+    state
   end
 
   defp start_agents(state) do
@@ -733,58 +955,52 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp recover_agent(state, agent_id) do
-    attempts = Map.get(state.agent_restart_attempts, agent_id, 0)
+    recovery_snapshot =
+      case RedisStore.fetch_agent(state.job_id, agent_id) do
+        {:ok, snapshot} -> snapshot
+        _ -> nil
+      end
 
-    if restart_attempts_exhausted?(state, attempts) do
-      {:error,
-       "agent #{agent_id} exceeded restart attempts (#{state.max_agent_restart_attempts})", state}
-    else
-      recovery_snapshot =
-        case RedisStore.fetch_agent(state.job_id, agent_id) do
-          {:ok, snapshot} -> snapshot
-          _ -> nil
+    attempt =
+      max(
+        LifecyclePolicy.active_attempt_count(
+          restart_policy(state, agent_id),
+          policy_history(state, agent_id, "restart")
+        ),
+        1
+      )
+
+    EventBus.publish(state.job_id, %{
+      type: :agent_recovery_started,
+      agent_id: agent_id,
+      attempt: attempt,
+      timestamp: Runtime.timestamp()
+    })
+
+    case start_agent(state, agent_id, recovery_snapshot) do
+      {:ok, _pid} ->
+        wait_result = wait_for_agent_ready(state, agent_id, 30_000)
+
+        case wait_result do
+          :ok ->
+            EventBus.publish(state.job_id, %{
+              type: :agent_recovered,
+              agent_id: agent_id,
+              attempt: attempt,
+              timestamp: Runtime.timestamp()
+            })
+
+            {:ok, mark_policy_idle(state, agent_id)}
+
+          {:error, reason} ->
+            {:error, reason, state}
         end
 
-      EventBus.publish(state.job_id, %{
-        type: :agent_recovery_started,
-        agent_id: agent_id,
-        attempt: attempts + 1,
-        timestamp: Runtime.timestamp()
-      })
+      {:error, {:already_started, _pid}} ->
+        {:ok, state}
 
-      case start_agent(state, agent_id, recovery_snapshot) do
-        {:ok, _pid} ->
-          wait_result = wait_for_agent_ready(state, agent_id, 30_000)
-
-          case wait_result do
-            :ok ->
-              EventBus.publish(state.job_id, %{
-                type: :agent_recovered,
-                agent_id: agent_id,
-                attempt: attempts + 1,
-                timestamp: Runtime.timestamp()
-              })
-
-              {:ok, put_in(state.agent_restart_attempts[agent_id], attempts + 1)}
-
-            {:error, reason} ->
-              {:error, reason, state}
-          end
-
-        {:error, {:already_started, _pid}} ->
-          {:ok, state}
-
-        {:error, reason} ->
-          {:error, "failed to recover agent #{agent_id}: #{inspect(reason)}", state}
-      end
-    end
-  end
-
-  defp restart_attempts_exhausted?(state, attempts) do
-    if job_type(state) in ["service", "system"] do
-      false
-    else
-      attempts >= state.max_agent_restart_attempts
+      {:error, reason} ->
+        {:error, "failed to recover agent #{agent_id}: #{inspect(reason)}", state}
     end
   end
 
@@ -1036,6 +1252,111 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   defp job_type(state), do: scheduler_plan(state)["job_type"] || "batch"
 
+  defp restart_policy(state, agent_id) do
+    LifecyclePolicy.restart_policy(
+      state.manifest,
+      job_type(state),
+      effective_recovery_policy(state),
+      Map.get(state.source_agent_ids, agent_id, agent_id)
+    )
+  end
+
+  defp reschedule_policy(state, agent_id) do
+    LifecyclePolicy.reschedule_policy(
+      state.manifest,
+      job_type(state),
+      effective_recovery_policy(state),
+      Map.get(state.source_agent_ids, agent_id, agent_id)
+    )
+  end
+
+  defp job_restart_policy(state) do
+    LifecyclePolicy.restart_policy(
+      state.manifest,
+      job_type(state),
+      effective_recovery_policy(state)
+    )
+  end
+
+  defp job_reschedule_policy(state) do
+    LifecyclePolicy.reschedule_policy(
+      state.manifest,
+      job_type(state),
+      effective_recovery_policy(state)
+    )
+  end
+
+  defp policy_state_from(nil), do: %{"agents" => %{}}
+
+  defp policy_state_from(job) when is_map(job) do
+    case Map.get(job, "policy_state") do
+      policy_state when is_map(policy_state) ->
+        Map.put_new(policy_state, "agents", %{})
+
+      _ ->
+        %{"agents" => %{}}
+    end
+  end
+
+  defp policy_history(state, agent_id, kind) do
+    get_in(state.policy_state, ["agents", agent_id, "#{kind}_history"]) || []
+  end
+
+  defp put_policy_history(state, agent_id, kind, history) do
+    put_policy_agent_fields(state, agent_id, %{"#{kind}_history" => history})
+  end
+
+  defp put_policy_agent_fields(state, agent_id, fields) do
+    agents = Map.get(state.policy_state, "agents", %{})
+    existing = Map.get(agents, agent_id, %{})
+
+    policy_state =
+      state.policy_state
+      |> Map.put("agents", Map.put(agents, agent_id, Map.merge(existing, fields)))
+      |> Map.put("updated_at", Runtime.timestamp())
+
+    %{state | policy_state: policy_state}
+  end
+
+  defp mark_policy_idle(state, agent_id) do
+    state
+    |> clear_policy_timer({:restart, agent_id})
+    |> clear_policy_timer({:reschedule, agent_id})
+    |> put_policy_agent_fields(agent_id, %{
+      "next_action" => nil,
+      "next_eligible_at" => nil,
+      "exhausted_reason" => nil,
+      "last_success_at" => Runtime.timestamp()
+    })
+  end
+
+  defp pending_policy_action?(state, agent_id) do
+    agent_state = get_in(state.policy_state, ["agents", agent_id]) || %{}
+    not is_nil(Map.get(agent_state, "next_action"))
+  end
+
+  defp schedule_policy_timer(state, key, message, delay_ms) do
+    state = clear_policy_timer(state, key)
+    ref = Process.send_after(self(), message, max(delay_ms, 0))
+    %{state | pending_policy_timers: Map.put(state.pending_policy_timers, key, ref)}
+  end
+
+  defp clear_policy_timer(state, key) do
+    case Map.pop(state.pending_policy_timers, key) do
+      {nil, _timers} ->
+        state
+
+      {ref, timers} ->
+        Process.cancel_timer(ref)
+        %{state | pending_policy_timers: timers}
+    end
+  end
+
+  defp cancel_policy_timers(state) do
+    Enum.each(state.pending_policy_timers, fn {_key, ref} -> Process.cancel_timer(ref) end)
+    %{state | pending_policy_timers: %{}}
+  end
+
   defp completed_agents_from(nil), do: MapSet.new()
 
   defp completed_agents_from(job) when is_map(job) do
@@ -1221,6 +1542,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp finalize_job(state, status, result, event_type, event_fields) do
+    state = cancel_policy_timers(state)
     terminate_agent_workers(state)
 
     next_state = %{state | status: status, result: result}
@@ -1236,7 +1558,38 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     next_state
   end
 
+  defp pause_for_policy_review(state, agent_id, reason) do
+    state = cancel_policy_timers(state)
+    terminate_agent_workers(state)
+
+    next_state =
+      state
+      |> put_policy_agent_fields(agent_id, %{
+        "last_reason" => reason,
+        "next_action" => nil,
+        "next_eligible_at" => nil,
+        "exhausted_reason" => reason,
+        "requires_review" => true
+      })
+      |> Map.merge(%{
+        status: "paused",
+        result: %{"reason" => reason, "agent_id" => agent_id}
+      })
+
+    persist_job_with_recovery(next_state, reason)
+
+    EventBus.publish(state.job_id, %{
+      type: :job_paused_for_manual_restart,
+      agent_id: agent_id,
+      reason: reason,
+      timestamp: Runtime.timestamp()
+    })
+
+    next_state
+  end
+
   defp pause_for_profile_review(state, profile, agent_id, reason) do
+    state = cancel_policy_timers(state)
     terminate_agent_workers(state)
 
     next_state = %{
@@ -1290,6 +1643,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         recovery_policy: effective_recovery_policy(state),
         reliability_degraded: reliability_degraded?(state),
         reliability: reliability_map(state),
+        restart_policy: job_restart_policy(state),
+        reschedule_policy: job_reschedule_policy(state),
+        policy_state: state.policy_state,
         result: state.result,
         topology: MirrorNeuron.Manifest.topology(state.manifest),
         runtime_topology: runtime_topology(state),
@@ -1342,7 +1698,10 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         recovery_status: "paused_for_review",
         recovery_reason: reason,
         recovery_requires_review: true,
-        reliability: reliability_map(state)
+        reliability: reliability_map(state),
+        restart_policy: job_restart_policy(state),
+        reschedule_policy: job_reschedule_policy(state),
+        policy_state: state.policy_state
       }
       |> maybe_put_lease(Keyword.get(state.opts, :job_lease))
 
@@ -1413,6 +1772,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       requested_recovery_policy: requested_recovery_policy(state),
       recovery_policy: effective_recovery_policy(state),
       reliability: reliability_map(state),
+      restart_policy: job_restart_policy(state),
+      reschedule_policy: job_reschedule_policy(state),
+      policy_state: state.policy_state,
       submitted_at: state.submitted_at,
       manifest_version: state.manifest.manifest_version,
       lease_epoch: lease && lease["epoch"],
@@ -1523,7 +1885,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp reliability_degraded?(state), do: get_in(state.reliability, ["degraded"]) == true
 
   defp reliability_map(state) do
-    Map.take(state.reliability, [
+    state.reliability
+    |> Map.take([
       "mode",
       "effective_recovery_policy",
       "degraded",
@@ -1531,6 +1894,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       "observed_nodes",
       "observed_at"
     ])
+    |> Map.put("restart_policy", job_restart_policy(state))
+    |> Map.put("reschedule_policy", job_reschedule_policy(state))
+    |> Map.put("policy_state", state.policy_state)
   end
 
   defp normalize_reliability(reliability) when is_map(reliability), do: reliability
@@ -1548,4 +1914,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     |> :crypto.strong_rand_bytes()
     |> Base.url_encode64(padding: false)
   end
+
+  defp stringify(value) when is_binary(value), do: value
+  defp stringify(value), do: inspect(value)
 end

@@ -238,6 +238,83 @@ defmodule MirrorNeuron.ManifestTest do
     assert worker.config["idempotency_key"] == "job:worker:input"
   end
 
+  test "serializes lifecycle policies at job and node level" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "policy-roundtrip",
+      "entrypoints" => ["worker"],
+      "nodes" => [
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "role" => "root",
+          "policies" => %{
+            "restart" => %{"attempts" => 1, "delay_ms" => 50},
+            "reschedule" => %{"attempts" => 0}
+          }
+        }
+      ],
+      "edges" => [],
+      "policies" => %{
+        "recovery_mode" => "cluster_recover",
+        "restart" => %{
+          "attempts" => 3,
+          "interval_ms" => 600_000,
+          "delay_ms" => 1_000,
+          "delay_function" => "exponential",
+          "max_delay_ms" => 30_000,
+          "mode" => "fail"
+        },
+        "reschedule" => %{
+          "attempts" => 1,
+          "interval_ms" => 86_400_000,
+          "delay_ms" => 5_000,
+          "delay_function" => "constant",
+          "max_delay_ms" => 5_000,
+          "unlimited" => false
+        }
+      }
+    }
+
+    assert {:ok, normalized} = Manifest.load(manifest)
+    durable = Manifest.to_map(normalized)
+
+    assert durable["policies"]["restart"]["attempts"] == 3
+    assert durable["nodes"] |> hd() |> get_in(["policies", "restart", "attempts"]) == 1
+    assert {:ok, _reloaded} = Manifest.load(durable)
+  end
+
+  test "rejects invalid lifecycle policies" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "bad-policy",
+      "entrypoints" => ["worker"],
+      "nodes" => [
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "role" => "root",
+          "policies" => %{"reschedule" => %{"unlimited" => "yes"}}
+        }
+      ],
+      "edges" => [],
+      "policies" => %{
+        "recovery_mode" => "local_restart",
+        "restart" => %{
+          "attempts" => -1,
+          "mode" => "always",
+          "delay_function" => "random"
+        }
+      }
+    }
+
+    assert {:error, errors} = Manifest.load(manifest)
+    assert Enum.any?(errors, &String.contains?(&1, "policies.restart.attempts"))
+    assert Enum.any?(errors, &String.contains?(&1, "policies.restart.mode"))
+    assert Enum.any?(errors, &String.contains?(&1, "policies.restart.delay_function"))
+    assert Enum.any?(errors, &String.contains?(&1, "nodes.worker.policies.reschedule.unlimited"))
+  end
+
   test "defaults requiredContextEngine to false" do
     manifest = %{
       "manifest_version" => "1.0",

@@ -2210,6 +2210,65 @@ defmodule MirrorNeuron.RuntimeTest do
     RedisStore.delete_job(job_id)
   end
 
+  test "batch job fails after restart policy attempts are exhausted" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "batch_restart_policy_exhaustion",
+      "entrypoints" => ["root"],
+      "initial_inputs" => %{"root" => [%{"work" => "fail after retry"}]},
+      "nodes" => [
+        %{
+          "node_id" => "root",
+          "agent_type" => "router",
+          "role" => "root_coordinator",
+          "config" => %{"emit_type" => "do_work"}
+        },
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "config" => %{
+            "runner_module" => LongSleepRunner,
+            "output_message_type" => nil
+          }
+        }
+      ],
+      "edges" => [
+        %{"from_node" => "root", "to_node" => "worker", "message_type" => "do_work"}
+      ],
+      "policies" => %{
+        "recovery_mode" => "local_restart",
+        "restart" => %{
+          "attempts" => 1,
+          "interval_ms" => 60_000,
+          "delay_ms" => 1,
+          "delay_function" => "constant",
+          "max_delay_ms" => 1,
+          "mode" => "fail"
+        },
+        "reschedule" => %{"attempts" => 0}
+      }
+    }
+
+    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    wait_until(fn -> running_status?(job_id) end, 2_000)
+
+    for _ <- 1..2 do
+      wait_until(fn -> worker_pid(job_id) end, 3_000)
+
+      [{pid, _}] =
+        Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:agent, job_id, "worker"})
+
+      Process.exit(pid, :kill)
+      Process.sleep(100)
+    end
+
+    assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 8_000)
+    assert job["status"] == "failed"
+    assert get_in(job, ["policy_state", "agents", "worker", "restart_attempts"]) == 1
+
+    RedisStore.delete_job(job_id)
+  end
+
   test "long-lived jobs do not fail when recovery attempts exceed the normal cap" do
     :ok = CrashTwiceCounter.init()
 
@@ -2240,7 +2299,14 @@ defmodule MirrorNeuron.RuntimeTest do
       ],
       "policies" => %{
         "recovery_mode" => "local_restart",
-        "max_agent_restart_attempts" => 1
+        "restart" => %{
+          "attempts" => 1,
+          "interval_ms" => 100,
+          "delay_ms" => 1,
+          "delay_function" => "constant",
+          "max_delay_ms" => 1,
+          "mode" => "delay"
+        }
       }
     }
 
@@ -2278,6 +2344,7 @@ defmodule MirrorNeuron.RuntimeTest do
         Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:agent, job_id, "worker"})
 
       Process.exit(pid, :kill)
+      Process.sleep(150)
     end
 
     assert {:ok, events} = MirrorNeuron.events(job_id)
@@ -2305,6 +2372,13 @@ defmodule MirrorNeuron.RuntimeTest do
       {:ok, %{"status" => "running"}} -> true
       _ -> false
     end
+  end
+
+  defp worker_pid(job_id) do
+    match?(
+      [{_pid, _}],
+      Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:agent, job_id, "worker"})
+    )
   end
 
   defp job_coordinator_pid(job_id) do

@@ -11,6 +11,7 @@ defmodule MirrorNeuron.Runtime do
     Backpressure,
     EventBus,
     JobRunner,
+    LifecyclePolicy,
     LocalRecovery,
     ReliabilityStrategy
   }
@@ -388,21 +389,23 @@ defmodule MirrorNeuron.Runtime do
       }
     }
 
-    defaults = %{
-      "graph_id" => manifest.graph_id,
-      "job_name" => manifest.job_name,
-      "required_context_engine" => required_context_engine(manifest),
-      "root_agent_ids" => manifest.entrypoints,
-      "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
-      "job_type" => scheduler_plan["job_type"],
-      "scheduler" => scheduler_plan,
-      "requested_recovery_policy" => reliability["requested_recovery_policy"],
-      "recovery_policy" => reliability["effective_recovery_policy"],
-      "reliability_degraded" => reliability["reliability_degraded"],
-      "reliability" => reliability_map(reliability),
-      "manifest_ref" => manifest_ref,
-      "submitted_at" => timestamp()
-    }
+    defaults =
+      %{
+        "graph_id" => manifest.graph_id,
+        "job_name" => manifest.job_name,
+        "required_context_engine" => required_context_engine(manifest),
+        "root_agent_ids" => manifest.entrypoints,
+        "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
+        "job_type" => scheduler_plan["job_type"],
+        "scheduler" => scheduler_plan,
+        "requested_recovery_policy" => reliability["requested_recovery_policy"],
+        "recovery_policy" => reliability["effective_recovery_policy"],
+        "reliability_degraded" => reliability["reliability_degraded"],
+        "reliability" => reliability_map(reliability),
+        "manifest_ref" => manifest_ref,
+        "submitted_at" => timestamp()
+      }
+      |> Map.merge(policy_fields(manifest, reliability, scheduler_plan))
 
     RedisStore.persist_terminal_job(job_id, updates, defaults)
   end
@@ -527,31 +530,34 @@ defmodule MirrorNeuron.Runtime do
       "manifest_ref" => manifest_ref,
       "submitted_at" => timestamp()
     }
+    |> Map.merge(policy_fields(manifest, reliability, scheduler_plan))
   end
 
   defp persist_initial_job(job_id, manifest, manifest_ref, reliability, scheduler_plan) do
-    job_map = %{
-      "job_id" => job_id,
-      "graph_id" => manifest.graph_id,
-      "job_name" => manifest.job_name,
-      "daemon" => manifest.daemon,
-      "required_context_engine" => required_context_engine(manifest),
-      "status" => "pending",
-      "submitted_at" => timestamp(),
-      "updated_at" => timestamp(),
-      "root_agent_ids" => manifest.entrypoints,
-      "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
-      "job_type" => scheduler_plan["job_type"],
-      "scheduler" => scheduler_plan,
-      "requested_recovery_policy" => reliability["requested_recovery_policy"],
-      "recovery_policy" => reliability["effective_recovery_policy"],
-      "reliability_degraded" => reliability["reliability_degraded"],
-      "reliability" => reliability_map(reliability),
-      "result" => nil,
-      "topology" => MirrorNeuron.Manifest.topology(manifest),
-      "manifest" => MirrorNeuron.Manifest.to_map(manifest),
-      "manifest_ref" => manifest_ref
-    }
+    job_map =
+      %{
+        "job_id" => job_id,
+        "graph_id" => manifest.graph_id,
+        "job_name" => manifest.job_name,
+        "daemon" => manifest.daemon,
+        "required_context_engine" => required_context_engine(manifest),
+        "status" => "pending",
+        "submitted_at" => timestamp(),
+        "updated_at" => timestamp(),
+        "root_agent_ids" => manifest.entrypoints,
+        "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
+        "job_type" => scheduler_plan["job_type"],
+        "scheduler" => scheduler_plan,
+        "requested_recovery_policy" => reliability["requested_recovery_policy"],
+        "recovery_policy" => reliability["effective_recovery_policy"],
+        "reliability_degraded" => reliability["reliability_degraded"],
+        "reliability" => reliability_map(reliability),
+        "result" => nil,
+        "topology" => MirrorNeuron.Manifest.topology(manifest),
+        "manifest" => MirrorNeuron.Manifest.to_map(manifest),
+        "manifest_ref" => manifest_ref
+      }
+      |> Map.merge(policy_fields(manifest, reliability, scheduler_plan))
 
     case RedisStore.persist_job(job_id, job_map) do
       {:ok, _job} ->
@@ -573,6 +579,17 @@ defmodule MirrorNeuron.Runtime do
       "observed_nodes",
       "observed_at"
     ])
+  end
+
+  defp policy_fields(manifest, reliability, scheduler_plan) do
+    policies =
+      LifecyclePolicy.normalize(
+        manifest,
+        scheduler_plan["job_type"],
+        reliability["effective_recovery_policy"]
+      )
+
+    Map.put(policies, "policy_state", %{"agents" => %{}})
   end
 
   defp publish_reliability_events(job_id, reliability) do

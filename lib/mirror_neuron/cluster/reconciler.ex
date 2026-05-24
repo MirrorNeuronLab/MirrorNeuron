@@ -6,7 +6,7 @@ defmodule MirrorNeuron.Cluster.Reconciler do
   alias MirrorNeuron.Bundle.Archive
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
-  alias MirrorNeuron.Runtime.{EventBus, JobRunner, RecoverySafety}
+  alias MirrorNeuron.Runtime.{EventBus, JobRunner, LifecyclePolicy, RecoverySafety}
   alias MirrorNeuron.Scheduler
 
   @active_statuses ["pending", "running", "paused"]
@@ -40,6 +40,40 @@ defmodule MirrorNeuron.Cluster.Reconciler do
         end)
 
       {:ok, finalize_result(result)}
+    end
+  end
+
+  def reschedule_agents(job_id, agent_ids, opts \\ []) do
+    opts = Keyword.put_new(opts, :trigger, "restart_exhausted")
+
+    with {:ok, job} <- redis_store(opts).fetch_job(job_id) do
+      affected_agents = List.wrap(agent_ids) |> Enum.map(&to_string/1) |> Enum.uniq()
+      failed_nodes = current_target_nodes(job, affected_agents)
+      reason = Keyword.get(opts, :reason, "restart policy exhausted")
+
+      result =
+        cond do
+          Map.get(job, "status") not in @active_statuses ->
+            skipped(job, "job is #{Map.get(job, "status")}")
+
+          affected_agents == [] ->
+            skipped(job, "no affected agents requested")
+
+          dry_run?(opts) or Keyword.has_key?(opts, :eval) ->
+            recover_agents_or_fallback(job, failed_nodes, affected_agents, reason, opts)
+
+          true ->
+            enqueue_and_process_eval(
+              job,
+              Keyword.fetch!(opts, :trigger),
+              failed_nodes,
+              affected_agents,
+              reason,
+              opts
+            )
+        end
+
+      {:ok, finalize_result(record(@empty_result, result))}
     end
   end
 
@@ -248,6 +282,15 @@ defmodule MirrorNeuron.Cluster.Reconciler do
     case Map.get(eval, "trigger") do
       "lease_lost" ->
         reconcile_orphaned_job(job, eval_opts)
+
+      "restart_exhausted" ->
+        recover_agents_or_fallback(
+          job,
+          Map.get(eval, "failed_node"),
+          Map.get(eval, "affected_agents", []),
+          Map.get(eval, "reason") || "restart policy exhausted",
+          eval_opts
+        )
 
       _trigger ->
         reconcile_affected_job(job, Map.get(eval, "failed_node"), eval_opts)
@@ -514,11 +557,12 @@ defmodule MirrorNeuron.Cluster.Reconciler do
          {:ok, agents} <- redis_store(opts).list_agents(job_id),
          {:auto, _safety_reason} <-
            RecoverySafety.decision(job, bundle.manifest, agents, agent_ids: affected_agents),
+         :ok <- ensure_reschedule_policy_allows(job, affected_agents, opts),
          {:ok, partial_plan} <-
            recovery_scheduler_plan(
              bundle.manifest,
              scheduler_opts(opts,
-               exclude_nodes: [failed_node],
+               exclude_nodes: List.wrap(failed_node),
                ignore_job_ids: [job_id],
                only_agent_ids: affected_agents
              )
@@ -533,6 +577,7 @@ defmodule MirrorNeuron.Cluster.Reconciler do
           scheduler: scheduler_plan
         })
       else
+        :ok = record_reschedule_policy_attempt(job, affected_agents, reason, opts)
         mark_recovery(job, "rescheduling", reason, failed_node, affected_agents, opts)
 
         case GenServer.call(
@@ -573,6 +618,9 @@ defmodule MirrorNeuron.Cluster.Reconciler do
       {:placement_blocked, placement_reason} ->
         block_recovery(job, placement_reason, failed_node, affected_agents, opts)
 
+      {:policy_blocked, policy_reason} ->
+        pause_for_review(job, policy_reason, failed_node, affected_agents, opts)
+
       {:error, reason} ->
         pause_for_review(job, inspect(reason), failed_node, affected_agents, opts)
     end
@@ -593,6 +641,7 @@ defmodule MirrorNeuron.Cluster.Reconciler do
     with {:ok, bundle} <- load_recovery_bundle(job, opts),
          {:ok, agents} <- redis_store(opts).list_agents(job_id),
          {:auto, _safety_reason} <- RecoverySafety.decision(job, bundle.manifest, agents),
+         :ok <- ensure_reschedule_policy_allows(job, whole_job_policy_agents(job), opts),
          {:ok, scheduler_plan} <-
            recovery_scheduler_plan(
              bundle.manifest,
@@ -605,6 +654,7 @@ defmodule MirrorNeuron.Cluster.Reconciler do
       if dry_run?(opts) do
         recovered(job, "would restart job", %{mode: "job", scheduler: scheduler_plan})
       else
+        :ok = record_reschedule_policy_attempt(job, whole_job_policy_agents(job), reason, opts)
         mark_recovery(job, "rescheduling", reason, failed_node, [], opts)
         release_job_lease(job_id, job, opts)
 
@@ -640,6 +690,9 @@ defmodule MirrorNeuron.Cluster.Reconciler do
 
       {:placement_blocked, placement_reason} ->
         block_recovery(job, placement_reason, failed_node, [], opts)
+
+      {:policy_blocked, policy_reason} ->
+        pause_for_review(job, policy_reason, failed_node, [], opts)
 
       {:error, reason} ->
         pause_for_review(job, inspect(reason), failed_node, [], opts)
@@ -821,7 +874,7 @@ defmodule MirrorNeuron.Cluster.Reconciler do
           is_nil(target) ->
             {:halt, {:placement_blocked, "scheduler placement is missing a target node"}}
 
-          not is_nil(failed_node) and target == failed_node ->
+          target in List.wrap(failed_node) ->
             {:halt,
              {:placement_blocked, "final validation rejected placement on failed node #{target}"}}
 
@@ -1016,6 +1069,124 @@ defmodule MirrorNeuron.Cluster.Reconciler do
     end
   end
 
+  defp ensure_reschedule_policy_allows(job, agent_ids, opts) do
+    if Keyword.get(opts, :skip_reschedule_policy, false) do
+      :ok
+    else
+      agent_ids = normalize_policy_agent_ids(agent_ids)
+
+      Enum.reduce_while(agent_ids, :ok, fn agent_id, :ok ->
+        policy = LifecyclePolicy.reschedule_policy_from_job(job, agent_id)
+        history = policy_history(job, agent_id, "reschedule")
+
+        case LifecyclePolicy.attempt_decision(policy, history) do
+          {:allowed, _decision} ->
+            {:cont, :ok}
+
+          {:exhausted, exhaustion} ->
+            {:halt,
+             {:policy_blocked,
+              "reschedule policy blocked #{agent_id}: #{Map.get(exhaustion, "reason")}"}}
+        end
+      end)
+    end
+  end
+
+  defp record_reschedule_policy_attempt(job, agent_ids, reason, opts) do
+    if dry_run?(opts) do
+      :ok
+    else
+      agent_ids = normalize_policy_agent_ids(agent_ids)
+
+      next_policy_state =
+        Enum.reduce(agent_ids, Map.get(job, "policy_state", %{"agents" => %{}}), fn agent_id,
+                                                                                    policy_state ->
+          policy = LifecyclePolicy.reschedule_policy_from_job(job, agent_id)
+          history = policy_history(%{"policy_state" => policy_state}, agent_id, "reschedule")
+
+          history =
+            LifecyclePolicy.append_history(
+              history,
+              "reschedule",
+              reason || "cluster reconciliation"
+            )
+
+          put_policy_agent_fields(policy_state, agent_id, %{
+            "reschedule_history" => history,
+            "reschedule_attempts" => LifecyclePolicy.active_attempt_count(policy, history),
+            "last_reason" => reason,
+            "next_action" => "reschedule",
+            "next_eligible_at" => Runtime.timestamp(),
+            "updated_at" => Runtime.timestamp()
+          })
+        end)
+
+      defaults = job_defaults(job, Runtime.timestamp())
+
+      case redis_store(opts).persist_terminal_job(
+             job["job_id"],
+             %{"policy_state" => next_policy_state},
+             defaults
+           ) do
+        {:ok, _job} ->
+          :ok
+
+        {:error, persist_reason} ->
+          Logger.warning(
+            "failed to persist reschedule policy attempt for #{job["job_id"]}: #{inspect(persist_reason)}"
+          )
+
+          :ok
+      end
+    end
+  end
+
+  defp normalize_policy_agent_ids([]), do: ["__job__"]
+
+  defp normalize_policy_agent_ids(agent_ids) do
+    agent_ids
+    |> List.wrap()
+    |> Enum.map(&to_string/1)
+    |> Enum.reject(&(&1 == ""))
+    |> case do
+      [] -> ["__job__"]
+      ids -> Enum.uniq(ids)
+    end
+  end
+
+  defp policy_history(job, agent_id, kind) do
+    get_in(job, ["policy_state", "agents", agent_id, "#{kind}_history"]) || []
+  end
+
+  defp put_policy_agent_fields(policy_state, agent_id, fields) do
+    policy_state = Map.put_new(policy_state || %{}, "agents", %{})
+    agents = Map.get(policy_state, "agents", %{})
+    current = Map.get(agents, agent_id, %{})
+
+    policy_state
+    |> Map.put("agents", Map.put(agents, agent_id, Map.merge(current, fields)))
+    |> Map.put("updated_at", Runtime.timestamp())
+  end
+
+  defp whole_job_policy_agents(job) do
+    job
+    |> get_in(["scheduler", "placements"])
+    |> List.wrap()
+    |> Enum.map(&Map.get(&1, "agent_id"))
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> ["__job__"]
+      ids -> ids
+    end
+  end
+
+  defp current_target_nodes(job, agent_ids) do
+    agent_ids
+    |> Enum.map(&Scheduler.target_node(Map.get(job, "scheduler", %{}), &1))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
   defp affected_by_node?(job, node) do
     lease_owner(job) == node or
       Scheduler.affected_agent_ids(Map.get(job, "scheduler", %{}), node) != []
@@ -1040,6 +1211,9 @@ defmodule MirrorNeuron.Cluster.Reconciler do
       "requested_recovery_policy" => job["requested_recovery_policy"] || "auto",
       "recovery_policy" => job["recovery_policy"] || "local_restart",
       "reliability" => job["reliability"] || %{},
+      "restart_policy" => job["restart_policy"],
+      "reschedule_policy" => job["reschedule_policy"],
+      "policy_state" => job["policy_state"] || %{"agents" => %{}},
       "manifest" => job["manifest"],
       "manifest_ref" => job["manifest_ref"] || %{},
       "submitted_at" => job["submitted_at"] || now
