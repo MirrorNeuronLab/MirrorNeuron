@@ -5,6 +5,7 @@ defmodule MirrorNeuron.Runtime do
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.ContextEnginePreflight
   alias MirrorNeuron.JobId
+  alias MirrorNeuron.Scheduler
 
   alias MirrorNeuron.Runtime.{
     Backpressure,
@@ -33,30 +34,41 @@ defmodule MirrorNeuron.Runtime do
     manifest_ref = bundle_ref(manifest, bundle)
     reliability = ReliabilityStrategy.resolve(manifest, manifest_ref: manifest_ref)
 
-    opts =
-      opts
-      |> Keyword.put(:bundle_ref, manifest_ref)
-      |> Keyword.put(:reliability, reliability)
-      |> Keyword.put(:requested_recovery_policy, reliability["requested_recovery_policy"])
-      |> Keyword.put(:recovery_policy, reliability["effective_recovery_policy"])
+    with {:ok, scheduler_plan} <- Scheduler.plan(manifest, opts),
+         opts <-
+           opts
+           |> Keyword.put(:bundle_ref, manifest_ref)
+           |> Keyword.put(:reliability, reliability)
+           |> Keyword.put(:scheduler_plan, scheduler_plan)
+           |> Keyword.put(:requested_recovery_policy, reliability["requested_recovery_policy"])
+           |> Keyword.put(:recovery_policy, reliability["effective_recovery_policy"]),
+         :ok <- persist_initial_job(job_id, manifest, manifest_ref, reliability, scheduler_plan) do
+      publish_reliability_events(job_id, reliability)
 
-    case persist_initial_job(job_id, manifest, manifest_ref, reliability) do
+      spec = {JobRunner, {job_id, manifest, opts}}
+
+      case Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) do
+        {:ok, pid} ->
+          {:ok, job_id, pid}
+
+        {:error, reason} ->
+          persist_startup_failure(
+            job_id,
+            manifest,
+            manifest_ref,
+            reliability,
+            scheduler_plan,
+            reason
+          )
+
+          {:error, "failed to start job runner: #{inspect(reason)}"}
+      end
+    else
       :ok ->
-        publish_reliability_events(job_id, reliability)
-
-        spec = {JobRunner, {job_id, manifest, opts}}
-
-        case Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) do
-          {:ok, pid} ->
-            {:ok, job_id, pid}
-
-          {:error, reason} ->
-            persist_startup_failure(job_id, manifest, manifest_ref, reliability, reason)
-            {:error, "failed to start job runner: #{inspect(reason)}"}
-        end
+        {:error, "failed to persist initial job"}
 
       {:error, reason} ->
-        {:error, "failed to persist initial job: #{inspect(reason)}"}
+        {:error, reason}
     end
   end
 
@@ -337,7 +349,14 @@ defmodule MirrorNeuron.Runtime do
   def timestamp,
     do: DateTime.utc_now() |> DateTime.truncate(:millisecond) |> DateTime.to_iso8601()
 
-  defp persist_startup_failure(job_id, manifest, manifest_ref, reliability, reason) do
+  defp persist_startup_failure(
+         job_id,
+         manifest,
+         manifest_ref,
+         reliability,
+         scheduler_plan,
+         reason
+       ) do
     updates = %{
       "status" => "failed",
       "result" => %{
@@ -353,6 +372,8 @@ defmodule MirrorNeuron.Runtime do
       "required_context_engine" => required_context_engine(manifest),
       "root_agent_ids" => manifest.entrypoints,
       "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
+      "job_type" => scheduler_plan["job_type"],
+      "scheduler" => scheduler_plan,
       "requested_recovery_policy" => reliability["requested_recovery_policy"],
       "recovery_policy" => reliability["effective_recovery_policy"],
       "reliability_degraded" => reliability["reliability_degraded"],
@@ -364,7 +385,7 @@ defmodule MirrorNeuron.Runtime do
     RedisStore.persist_terminal_job(job_id, updates, defaults)
   end
 
-  defp persist_initial_job(job_id, manifest, manifest_ref, reliability) do
+  defp persist_initial_job(job_id, manifest, manifest_ref, reliability, scheduler_plan) do
     job_map = %{
       "job_id" => job_id,
       "graph_id" => manifest.graph_id,
@@ -376,6 +397,8 @@ defmodule MirrorNeuron.Runtime do
       "updated_at" => timestamp(),
       "root_agent_ids" => manifest.entrypoints,
       "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
+      "job_type" => scheduler_plan["job_type"],
+      "scheduler" => scheduler_plan,
       "requested_recovery_policy" => reliability["requested_recovery_policy"],
       "recovery_policy" => reliability["effective_recovery_policy"],
       "reliability_degraded" => reliability["reliability_degraded"],

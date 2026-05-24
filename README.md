@@ -45,6 +45,7 @@ MirrorNeuron Core is an Elixir/OTP runtime for durable, message-driven AI workfl
 | Cluster coordination | Available | Uses Erlang distribution plus `libcluster` and Horde. |
 | Redis high availability helpers | Available | Includes scripts and config for Redis Sentinel development workflows. |
 | gRPC services | Available | Job, cluster, and observability protobuf services are included. |
+| Resource-aware scheduling | Preview | Plans service/batch agents onto eligible nodes using CPU, memory, disk, GPU, constraints, and execution profiles. |
 | REST API, CLI, Web UI, SDK | External components | Provided by separate ecosystem repositories. |
 
 ## Demo
@@ -201,6 +202,35 @@ Runtime configuration is read from environment variables in `config/runtime.exs`
 | `MN_MAX_GPU_MEMORY_USED_RATIO` | See source defaults | Maximum allowed GPU memory usage ratio. |
 
 Some resource-admission defaults are defined outside `runtime.exs`; check `lib/mirror_neuron/config.ex` and `lib/mirror_neuron/resource_admission.ex` before changing production thresholds.
+
+### Scheduler Preview
+
+MirrorNeuron can plan service and batch workflow agents onto eligible runtime nodes before starting a job. Node-level `resources` and `constraints` may be declared in the manifest, and `policies.scheduler.strategy` can be `binpack` or `spread`.
+
+```json
+{
+  "policies": {
+    "job_type": "batch",
+    "scheduler": { "strategy": "binpack" }
+  },
+  "nodes": [
+    {
+      "node_id": "worker",
+      "agent_type": "executor",
+      "resources": {
+        "cpu_cores": 2,
+        "memory_mb": 4096,
+        "gpu_count": 1
+      },
+      "constraints": [
+        { "attribute": "capabilities", "operator": "contains", "value": "cuda" }
+      ]
+    }
+  ]
+}
+```
+
+The public Elixir API exposes `MirrorNeuron.plan_manifest/2` for dry-run placement planning. Submitted jobs persist their scheduler plan under the job's `scheduler` field so API and monitoring clients can inspect where agents were intended to run.
 
 ## Usage
 

@@ -242,11 +242,52 @@ defmodule MirrorNeuron.Manifest do
     supported_recovery_modes = Application.get_env(:mirror_neuron, :supported_recovery_modes, [])
     recovery_mode = Map.get(manifest.policies, "recovery_mode", "auto")
 
-    maybe_add_error(
-      errors,
+    errors
+    |> maybe_add_error(
       recovery_mode not in supported_recovery_modes,
       "unsupported recovery_mode #{inspect(recovery_mode)}"
     )
+    |> validate_scheduler_policy(manifest)
+    |> validate_node_scheduling(manifest)
+  end
+
+  defp validate_scheduler_policy(errors, manifest) do
+    job_type =
+      Map.get(manifest.policies, "job_type") ||
+        get_in(manifest.policies, ["scheduler", "job_type"])
+
+    strategy =
+      Map.get(manifest.policies, "scheduler_strategy") ||
+        get_in(manifest.policies, ["scheduler", "strategy"])
+
+    errors
+    |> maybe_add_error(
+      not is_nil(job_type) and
+        String.downcase(to_string(job_type)) not in MirrorNeuron.Scheduler.supported_job_types(),
+      "unsupported job_type #{inspect(job_type)}"
+    )
+    |> maybe_add_error(
+      not is_nil(strategy) and
+        String.downcase(to_string(strategy)) not in MirrorNeuron.Scheduler.supported_strategies(),
+      "unsupported scheduler strategy #{inspect(strategy)}"
+    )
+  end
+
+  defp validate_node_scheduling(errors, manifest) do
+    scheduling_errors =
+      Enum.flat_map(manifest.nodes, fn node ->
+        []
+        |> maybe_collect_error(
+          not is_map(node.resources),
+          "resources for node #{node.node_id} must be an object"
+        )
+        |> maybe_collect_error(
+          not (is_list(node.constraints) or is_map(node.constraints)),
+          "constraints for node #{node.node_id} must be a list or object"
+        )
+      end)
+
+    add_errors(errors, scheduling_errors)
   end
 
   defp validate_daemon(errors, manifest) do
@@ -304,6 +345,8 @@ defmodule MirrorNeuron.Manifest do
       type: AgentTemplates.canonical_type(Map.get(raw, "type")),
       role: Map.get(raw, "role"),
       config: Map.get(raw, "config", %{}),
+      resources: Map.get(raw, "resources", get_in(raw, ["config", "resources"]) || %{}),
+      constraints: Map.get(raw, "constraints", get_in(raw, ["config", "constraints"]) || []),
       tool_bindings: Map.get(raw, "tool_bindings", []),
       retry_policy: Map.get(raw, "retry_policy", %{}),
       checkpoint_policy: Map.get(raw, "checkpoint_policy", %{}),
@@ -318,6 +361,8 @@ defmodule MirrorNeuron.Manifest do
       "type" => node.type,
       "role" => node.role,
       "config" => json_safe(node.config),
+      "resources" => json_safe(node.resources),
+      "constraints" => json_safe(node.constraints),
       "tool_bindings" => json_safe(node.tool_bindings),
       "retry_policy" => json_safe(node.retry_policy),
       "checkpoint_policy" => json_safe(node.checkpoint_policy),

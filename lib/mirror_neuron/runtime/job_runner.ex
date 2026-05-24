@@ -227,6 +227,8 @@ defmodule MirrorNeuron.Runtime.JobRunner do
         "required_context_engine" => Map.get(manifest, :required_context_engine, false),
         "root_agent_ids" => manifest.entrypoints,
         "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
+        "job_type" => scheduler_plan(manifest, opts)["job_type"],
+        "scheduler" => scheduler_plan(manifest, opts),
         "requested_recovery_policy" => reliability["requested_recovery_policy"],
         "recovery_policy" => reliability["effective_recovery_policy"],
         "reliability_degraded" => reliability["reliability_degraded"],
@@ -266,6 +268,8 @@ defmodule MirrorNeuron.Runtime.JobRunner do
       "required_context_engine" => Map.get(manifest, :required_context_engine, false),
       "root_agent_ids" => manifest.entrypoints,
       "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
+      "job_type" => scheduler_plan(manifest, opts)["job_type"],
+      "scheduler" => scheduler_plan(manifest, opts),
       "requested_recovery_policy" => reliability["requested_recovery_policy"],
       "recovery_policy" => reliability["effective_recovery_policy"],
       "reliability_degraded" => reliability["reliability_degraded"],
@@ -314,6 +318,16 @@ defmodule MirrorNeuron.Runtime.JobRunner do
 
   defp normalize_reliability(reliability) when is_map(reliability), do: reliability
   defp normalize_reliability(_reliability), do: %{}
+
+  defp scheduler_plan(manifest, opts) do
+    Keyword.get(opts, :scheduler_plan) ||
+      %{
+        "status" => "unknown",
+        "job_type" => if(manifest.daemon, do: "service", else: "batch"),
+        "strategy" => "unknown",
+        "placements" => []
+      }
+  end
 
   defp reliability_map(reliability) do
     Map.take(reliability, [

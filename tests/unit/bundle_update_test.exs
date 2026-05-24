@@ -86,6 +86,8 @@ defmodule MirrorNeuron.BundleUpdateTest do
                role: "root",
                type: "generic",
                config: %{},
+               resources: %{},
+               constraints: [],
                checkpoint_policy: %{},
                retry_policy: %{},
                spawn_policy: %{},

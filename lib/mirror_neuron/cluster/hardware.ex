@@ -5,10 +5,21 @@ defmodule MirrorNeuron.Cluster.Hardware do
 
   def info do
     %{
+      platform: platform_info(),
       cpu: cpu_info(),
       memory: memory_info(),
       gpu: gpu_info(),
       disk: disk_info()
+    }
+  end
+
+  defp platform_info do
+    {family, name} = :os.type()
+
+    %{
+      family: to_string(family),
+      os: to_string(name),
+      node: to_string(Node.self())
     }
   end
 

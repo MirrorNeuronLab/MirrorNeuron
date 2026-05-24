@@ -6,6 +6,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   alias MirrorNeuron.Message
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
+  alias MirrorNeuron.Scheduler
   alias MirrorNeuron.Runtime.{AgentWorker, Backpressure, EventBus, Naming}
   alias MirrorNeuron.Sandbox.JobSandbox
 
@@ -544,6 +545,10 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
          recovery_snapshot}
       )
       |> Map.put(:mirror_neuron_execution_profile, execution_profile)
+      |> Map.put(
+        :mirror_neuron_target_node,
+        Scheduler.target_node(scheduler_plan(state), agent_id)
+      )
 
     case Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.AgentSupervisor, spec) do
       {:error, {:already_started, _pid}} when retry_count < 10 ->
@@ -781,6 +786,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         updated_at: Runtime.timestamp(),
         root_agent_ids: state.manifest.entrypoints,
         placement_policy: Map.get(state.manifest.policies, "placement_policy", "local"),
+        job_type: scheduler_plan(state)["job_type"],
+        scheduler: scheduler_plan(state),
         requested_recovery_policy: requested_recovery_policy(state),
         recovery_policy: effective_recovery_policy(state),
         reliability_degraded: reliability_degraded?(state),
@@ -822,6 +829,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         updated_at: Runtime.timestamp(),
         root_agent_ids: state.manifest.entrypoints,
         placement_policy: Map.get(state.manifest.policies, "placement_policy", "local"),
+        job_type: scheduler_plan(state)["job_type"],
+        scheduler: scheduler_plan(state),
         requested_recovery_policy: requested_recovery_policy(state),
         recovery_policy: effective_recovery_policy(state),
         reliability_degraded: reliability_degraded?(state),
@@ -899,6 +908,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       required_context_engine: Map.get(state.manifest, :required_context_engine, false),
       entrypoints: state.manifest.entrypoints,
       placement_policy: Map.get(state.manifest.policies, "placement_policy", "local"),
+      job_type: scheduler_plan(state)["job_type"],
+      scheduler: scheduler_plan(state),
       requested_recovery_policy: requested_recovery_policy(state),
       recovery_policy: effective_recovery_policy(state),
       reliability: reliability_map(state),
@@ -924,6 +935,16 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         manifest_version: state.manifest.manifest_version,
         manifest_path: state.bundle && state.bundle.manifest_path,
         job_path: state.bundle && state.bundle.root_path
+      }
+  end
+
+  defp scheduler_plan(state) do
+    Keyword.get(state.opts, :scheduler_plan) ||
+      %{
+        "status" => "unknown",
+        "job_type" => if(state.manifest.daemon, do: "service", else: "batch"),
+        "strategy" => "unknown",
+        "placements" => []
       }
   end
 

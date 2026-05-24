@@ -11,6 +11,13 @@ defmodule MirrorNeuron do
     end
   end
 
+  def plan_manifest(input, opts \\ []) do
+    with {:ok, bundle} <- JobBundle.load(input),
+         :ok <- MirrorNeuron.BlueprintValidation.check_requirements(bundle.manifest) do
+      MirrorNeuron.Scheduler.plan(bundle.manifest, opts)
+    end
+  end
+
   def run_manifest(input, opts \\ []) do
     if control_node?() do
       Control.call(__MODULE__, :run_manifest, [input, opts])

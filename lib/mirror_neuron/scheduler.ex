@@ -1,0 +1,768 @@
+defmodule MirrorNeuron.Scheduler do
+  @moduledoc false
+
+  alias MirrorNeuron.Cluster.{Hardware, NodeState}
+  alias MirrorNeuron.Manifest
+  alias MirrorNeuron.Persistence.RedisStore
+  alias MirrorNeuron.Resource
+
+  @active_node_statuses ["healthy", "joining"]
+  @active_job_statuses ["pending", "validated", "scheduled", "running", "paused"]
+  @supported_job_types ["service", "batch"]
+  @supported_strategies ["binpack", "spread"]
+  @resource_keys ["cpu_cores", "memory_mb", "disk_mb", "gpu_count"]
+
+  def supported_job_types, do: @supported_job_types
+  def supported_strategies, do: @supported_strategies
+
+  def plan(%Manifest{} = manifest, opts \\ []) do
+    if Keyword.get(opts, :scheduler, true) do
+      do_plan(manifest, opts)
+    else
+      {:ok, disabled_plan(manifest)}
+    end
+  end
+
+  def target_node(%{"placements" => placements}, agent_id) when is_list(placements) do
+    placements
+    |> Enum.find(&(Map.get(&1, "agent_id") == agent_id))
+    |> case do
+      %{"node" => node} -> node
+      _ -> nil
+    end
+  end
+
+  def target_node(_plan, _agent_id), do: nil
+
+  def job_type(%Manifest{} = manifest), do: normalize_job_type(manifest)
+  def strategy(%Manifest{} = manifest), do: normalize_strategy(manifest)
+
+  defp do_plan(manifest, opts) do
+    with {:ok, job_type} <- normalize_job_type(manifest),
+         {:ok, strategy} <- normalize_strategy(manifest),
+         {:ok, demands} <- workload_demands(manifest),
+         lookup_node_state <-
+           Keyword.get(opts, :lookup_node_state, not Keyword.has_key?(opts, :nodes)),
+         nodes <-
+           opts
+           |> Keyword.get_lazy(:nodes, &default_nodes/0)
+           |> normalize_nodes(lookup_node_state),
+         :ok <- ensure_nodes(nodes),
+         usage <- opts |> Keyword.get_lazy(:jobs, &active_jobs/0) |> usage_from_jobs(),
+         {:ok, placements, _usage} <- place_demands(demands, nodes, usage, strategy) do
+      {:ok,
+       %{
+         "status" => "planned",
+         "job_type" => job_type,
+         "strategy" => strategy,
+         "mode" => if(length(nodes) > 1, do: "cluster", else: "single_node"),
+         "placement_count" => length(placements),
+         "placements" => placements,
+         "requirements" => requirements_summary(demands),
+         "generated_at" => MirrorNeuron.Runtime.timestamp()
+       }}
+    else
+      {:error, reason} -> {:error, "placement_failed: #{reason}"}
+    end
+  end
+
+  defp disabled_plan(manifest) do
+    {:ok, job_type} = normalize_job_type(manifest)
+
+    %{
+      "status" => "disabled",
+      "job_type" => job_type,
+      "strategy" => "none",
+      "mode" => "local",
+      "placement_count" => 0,
+      "placements" => [],
+      "requirements" => %{},
+      "generated_at" => MirrorNeuron.Runtime.timestamp()
+    }
+  end
+
+  defp normalize_job_type(manifest) do
+    type =
+      manifest.policies
+      |> policy_value("job_type", get_in(manifest.policies || %{}, ["scheduler", "job_type"]))
+      |> case do
+        nil -> if(manifest.daemon, do: "service", else: "batch")
+        value -> value
+      end
+      |> to_string()
+      |> String.downcase()
+
+    if type in @supported_job_types do
+      {:ok, type}
+    else
+      {:error, "unsupported job_type #{inspect(type)}"}
+    end
+  end
+
+  defp normalize_strategy(manifest) do
+    strategy =
+      manifest.policies
+      |> policy_value(
+        "scheduler_strategy",
+        get_in(manifest.policies || %{}, ["scheduler", "strategy"])
+      )
+      |> case do
+        nil -> "binpack"
+        value -> value
+      end
+      |> to_string()
+      |> String.downcase()
+
+    if strategy in @supported_strategies do
+      {:ok, strategy}
+    else
+      {:error, "unsupported scheduler strategy #{inspect(strategy)}"}
+    end
+  end
+
+  defp policy_value(nil, _key, default), do: default
+
+  defp policy_value(policies, key, default) when is_map(policies),
+    do: Map.get(policies, key, default)
+
+  defp policy_value(_policies, _key, default), do: default
+
+  defp workload_demands(manifest) do
+    global_constraints = scheduler_constraints(manifest.policies)
+
+    demands =
+      Enum.map(manifest.nodes, fn node ->
+        %{
+          "agent_id" => node.node_id,
+          "agent_type" => node.agent_type,
+          "resources" => resources_for_node(node),
+          "constraints" => global_constraints ++ constraints_for_node(node),
+          "profile" => execution_profile(node)
+        }
+      end)
+
+    {:ok, demands}
+  end
+
+  defp scheduler_constraints(policies) when is_map(policies) do
+    []
+    |> Kernel.++(normalize_constraints(Map.get(policies, "constraints", [])))
+    |> Kernel.++(normalize_constraints(get_in(policies, ["scheduler", "constraints"]) || []))
+  end
+
+  defp scheduler_constraints(_policies), do: []
+
+  defp resources_for_node(node) do
+    explicit =
+      Map.get(node, :resources) ||
+        Map.get(node, "resources") ||
+        get_in(node, [:config, "resources"]) ||
+        get_in(node, ["config", "resources"]) ||
+        %{}
+
+    explicit
+    |> normalize_resources()
+    |> add_profile_gpu_need(node)
+  end
+
+  defp constraints_for_node(node) do
+    constraints =
+      Map.get(node, :constraints) ||
+        Map.get(node, "constraints") ||
+        get_in(node, [:config, "constraints"]) ||
+        get_in(node, ["config", "constraints"]) ||
+        []
+
+    normalize_constraints(constraints)
+  end
+
+  defp execution_profile(node) do
+    MirrorNeuron.Execution.Profile.profile_name(
+      Map.get(node, :config) || Map.get(node, "config") || %{}
+    )
+  end
+
+  defp add_profile_gpu_need(resources, node) do
+    case execution_profile(node) do
+      nil ->
+        resources
+
+      profile_name ->
+        case MirrorNeuron.Execution.Profile.fetch(profile_name) do
+          {:ok, %{"gpu" => gpu?}}
+          when gpu? in [true, "true", "TRUE", "True", "1", 1, "yes", "on"] ->
+            Map.update!(resources, "gpu_count", &max(&1, 1))
+
+          _ ->
+            resources
+        end
+    end
+  end
+
+  defp normalize_resources(resources) when is_map(resources) do
+    %{
+      "cpu_cores" =>
+        first_number(resources, ["cpu_cores", "cores"]) ||
+          cpu_value(first_number(resources, ["cpu", "cpu_millis", "cpu_mcores"])) ||
+          0.0,
+      "memory_mb" =>
+        first_number(resources, ["memory_mb", "memory"]) ||
+          gb_to_mb(first_number(resources, ["memory_gb"])) ||
+          0.0,
+      "disk_mb" =>
+        first_number(resources, ["disk_mb", "disk"]) ||
+          gb_to_mb(first_number(resources, ["disk_gb"])) ||
+          0.0,
+      "gpu_count" =>
+        first_number(resources, ["gpu_count", "gpus", "gpu"]) ||
+          gpu_devices(resources) ||
+          0
+    }
+  end
+
+  defp normalize_resources(_resources), do: empty_resources()
+
+  defp empty_resources, do: Map.new(@resource_keys, &{&1, 0})
+
+  defp cpu_value(nil), do: nil
+  defp cpu_value(value) when value > 64, do: Float.round(value / 1000, 3)
+  defp cpu_value(value), do: value
+
+  defp gb_to_mb(nil), do: nil
+  defp gb_to_mb(value), do: value * 1024
+
+  defp gpu_devices(%{"devices" => devices}), do: gpu_devices(devices)
+  defp gpu_devices(%{devices: devices}), do: gpu_devices(devices)
+
+  defp gpu_devices(devices) when is_list(devices) do
+    devices
+    |> Enum.filter(fn device ->
+      name =
+        Map.get(device, "name") ||
+          Map.get(device, :name) ||
+          Map.get(device, "type") ||
+          Map.get(device, :type) ||
+          ""
+
+      String.contains?(String.downcase(to_string(name)), "gpu")
+    end)
+    |> Enum.map(&(first_number(&1, ["count"]) || 1))
+    |> Enum.sum()
+  end
+
+  defp gpu_devices(_devices), do: nil
+
+  defp normalize_constraints(constraints) when is_list(constraints) do
+    Enum.map(constraints, &normalize_constraint/1)
+  end
+
+  defp normalize_constraints(constraint) when is_map(constraint),
+    do: [normalize_constraint(constraint)]
+
+  defp normalize_constraints(_constraints), do: []
+
+  defp normalize_constraint(constraint) when is_map(constraint) do
+    %{
+      "attribute" =>
+        Map.get(constraint, "attribute") ||
+          Map.get(constraint, :attribute) ||
+          Map.get(constraint, "target") ||
+          Map.get(constraint, :target) ||
+          Map.get(constraint, "l_target") ||
+          Map.get(constraint, :l_target),
+      "operator" =>
+        Map.get(constraint, "operator") ||
+          Map.get(constraint, :operator) ||
+          Map.get(constraint, "operand") ||
+          Map.get(constraint, :operand) ||
+          "==",
+      "value" =>
+        Map.get(constraint, "value") ||
+          Map.get(constraint, :value) ||
+          Map.get(constraint, "r_target") ||
+          Map.get(constraint, :r_target)
+    }
+  end
+
+  defp normalize_constraint(value) when is_binary(value) do
+    %{"attribute" => "capabilities", "operator" => "contains", "value" => value}
+  end
+
+  defp normalize_constraint(value) do
+    %{"attribute" => "capabilities", "operator" => "contains", "value" => to_string(value)}
+  end
+
+  defp default_nodes do
+    case MirrorNeuron.inspect_nodes() do
+      nodes when is_list(nodes) and nodes != [] ->
+        nodes
+
+      _ ->
+        [%{"name" => to_string(Node.self()), "hardware" => Hardware.info()}]
+    end
+  rescue
+    _ -> [%{"name" => to_string(Node.self()), "hardware" => Hardware.info()}]
+  end
+
+  defp normalize_nodes(nodes, lookup_node_state) do
+    nodes
+    |> List.wrap()
+    |> Enum.map(&normalize_node(&1, lookup_node_state))
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp normalize_node(node, lookup_node_state) when is_map(node) do
+    name = map_get(node, "name") || map_get(node, "node") || to_string(Node.self())
+    stored = if lookup_node_state, do: stored_node_state(name), else: %{}
+    hardware = map_get(node, "hardware") || map_get(stored, "hardware") || local_hardware(name)
+    status = map_get(node, "status") || map_get(stored, "status") || "healthy"
+
+    %{
+      "name" => name,
+      "status" => status,
+      "hardware" => stringify_map(hardware),
+      "profiles" => list_value(map_get(node, "profiles") || map_get(stored, "profiles")),
+      "capabilities" =>
+        list_value(map_get(node, "capabilities") || map_get(stored, "capabilities")),
+      "gpu" => truthy?(map_get(node, "gpu") || map_get(stored, "gpu")) || gpu_count(hardware) > 0,
+      "node_role" => map_get(node, "node_role") || map_get(stored, "node_role") || "runtime",
+      "capacity" => node_capacity(hardware)
+    }
+  end
+
+  defp normalize_node(_node, _lookup_node_state), do: nil
+
+  defp stored_node_state(name) do
+    case NodeState.fetch(name) do
+      {:ok, state} when is_map(state) -> state
+      _ -> %{}
+    end
+  rescue
+    _ -> %{}
+  end
+
+  defp local_hardware(name) do
+    if name == to_string(Node.self()), do: Hardware.info(), else: %{}
+  rescue
+    _ -> %{}
+  end
+
+  defp ensure_nodes([]), do: {:error, "no runtime nodes are available"}
+
+  defp ensure_nodes(nodes) do
+    if Enum.any?(nodes, &(Map.get(&1, "status") in @active_node_statuses)) do
+      :ok
+    else
+      {:error, "no healthy runtime nodes are available"}
+    end
+  end
+
+  defp active_jobs do
+    case RedisStore.list_jobs() do
+      {:ok, jobs} -> jobs
+      {:error, _reason} -> []
+    end
+  rescue
+    _ -> []
+  end
+
+  defp usage_from_jobs(jobs) do
+    jobs
+    |> List.wrap()
+    |> Enum.filter(&(Map.get(&1, "status") in @active_job_statuses))
+    |> Enum.flat_map(&(get_in(&1, ["scheduler", "placements"]) || []))
+    |> Enum.reduce(%{}, fn placement, acc ->
+      node = Map.get(placement, "node")
+      resources = normalize_resources(Map.get(placement, "resources", %{}))
+
+      if is_binary(node) do
+        Map.update(acc, node, resources, &add_resources(&1, resources))
+      else
+        acc
+      end
+    end)
+  end
+
+  defp place_demands(demands, nodes, usage, strategy) do
+    Enum.reduce_while(demands, {:ok, [], usage}, fn demand, {:ok, placements, usage_acc} ->
+      case choose_node(demand, nodes, usage_acc, strategy) do
+        {:ok, node, score} ->
+          next_usage =
+            Map.update(
+              usage_acc,
+              node["name"],
+              demand["resources"],
+              &add_resources(&1, demand["resources"])
+            )
+
+          placement = %{
+            "agent_id" => demand["agent_id"],
+            "agent_type" => demand["agent_type"],
+            "node" => node["name"],
+            "resources" => demand["resources"],
+            "constraints" => demand["constraints"],
+            "score" => Float.round(score, 4)
+          }
+
+          {:cont, {:ok, [placement | placements], next_usage}}
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, placements, usage_acc} -> {:ok, Enum.reverse(placements), usage_acc}
+      error -> error
+    end
+  end
+
+  defp choose_node(demand, nodes, usage, strategy) do
+    candidates =
+      nodes
+      |> Enum.filter(&(Map.get(&1, "status") in @active_node_statuses))
+      |> Enum.filter(&profile_match?(demand["profile"], &1))
+      |> Enum.filter(&constraints_match?(demand["constraints"], &1))
+      |> Enum.filter(
+        &capacity_available?(
+          &1,
+          Map.get(usage, &1["name"], empty_resources()),
+          demand["resources"]
+        )
+      )
+
+    case candidates do
+      [] ->
+        {:error, no_candidate_reason(demand, nodes, usage)}
+
+      candidates ->
+        {node, score} =
+          candidates
+          |> Enum.map(
+            &{&1,
+             score_node(
+               &1,
+               Map.get(usage, &1["name"], empty_resources()),
+               demand["resources"],
+               strategy
+             )}
+          )
+          |> Enum.max_by(fn {_node, score} -> score end)
+
+        {:ok, node, score}
+    end
+  end
+
+  defp no_candidate_reason(demand, nodes, usage) do
+    reasons =
+      nodes
+      |> Enum.map(fn node ->
+        cond do
+          Map.get(node, "status") not in @active_node_statuses ->
+            "#{node["name"]}: status #{inspect(node["status"])}"
+
+          not profile_match?(demand["profile"], node) ->
+            "#{node["name"]}: execution profile not available"
+
+          not constraints_match?(demand["constraints"], node) ->
+            "#{node["name"]}: constraints not matched"
+
+          not capacity_available?(
+            node,
+            Map.get(usage, node["name"], empty_resources()),
+            demand["resources"]
+          ) ->
+            "#{node["name"]}: insufficient resources"
+
+          true ->
+            "#{node["name"]}: unavailable"
+        end
+      end)
+
+    "agent #{demand["agent_id"]} has no eligible node (#{Enum.join(reasons, "; ")})"
+  end
+
+  defp capacity_available?(node, used, ask) do
+    capacity = node["capacity"] || empty_resources()
+
+    Enum.all?(@resource_keys, fn key ->
+      Map.get(used, key, 0) + Map.get(ask, key, 0) <= Map.get(capacity, key, 0)
+    end)
+  end
+
+  defp score_node(node, used, ask, "spread") do
+    capacity = node["capacity"] || empty_resources()
+
+    @resource_keys
+    |> Enum.map(&resource_ratio(capacity, used, ask, &1))
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> 1.0
+      ratios -> 1.0 - Enum.sum(ratios) / length(ratios)
+    end
+  end
+
+  defp score_node(node, used, ask, _binpack) do
+    capacity = node["capacity"] || empty_resources()
+
+    @resource_keys
+    |> Enum.map(&resource_ratio(capacity, used, ask, &1))
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> 0.0
+      ratios -> Enum.sum(ratios) / length(ratios)
+    end
+  end
+
+  defp resource_ratio(capacity, used, ask, key) do
+    total = Map.get(capacity, key, 0)
+
+    if total > 0 do
+      (Map.get(used, key, 0) + Map.get(ask, key, 0)) / total
+    else
+      nil
+    end
+  end
+
+  defp constraints_match?(constraints, node) do
+    Enum.all?(constraints, &constraint_match?(&1, node))
+  end
+
+  defp constraint_match?(
+         %{"attribute" => attribute, "operator" => operator, "value" => value},
+         node
+       ) do
+    current = node_attribute(node, attribute)
+
+    case normalize_operator(operator) do
+      "==" -> to_string(current) == to_string(value)
+      "!=" -> to_string(current) != to_string(value)
+      "contains" -> to_string(value) in list_value(current)
+      "contains_all" -> Enum.all?(list_value(value), &(&1 in list_value(current)))
+      "contains_any" -> Enum.any?(list_value(value), &(&1 in list_value(current)))
+      "in" -> to_string(current) in list_value(value)
+      "exists" -> not is_nil(current)
+      "not_exists" -> is_nil(current)
+      _ -> false
+    end
+  end
+
+  defp constraint_match?(_constraint, _node), do: true
+
+  defp profile_match?(nil, _node), do: true
+
+  defp profile_match?(profile, node) do
+    MirrorNeuron.Execution.Profile.eligible_node?(profile, %{
+      "node" => node["name"],
+      "status" => node["status"],
+      "profiles" => node["profiles"],
+      "capabilities" => node["capabilities"],
+      "gpu" => node["gpu"]
+    })
+  end
+
+  defp normalize_operator(operator) do
+    case operator |> to_string() |> String.downcase() do
+      "=" -> "=="
+      "==" -> "=="
+      "is" -> "=="
+      "!=" -> "!="
+      "not" -> "!="
+      "set_contains" -> "contains"
+      "contains" -> "contains"
+      "set_contains_all" -> "contains_all"
+      "contains_all" -> "contains_all"
+      "set_contains_any" -> "contains_any"
+      "contains_any" -> "contains_any"
+      "in" -> "in"
+      "is_set" -> "exists"
+      "exists" -> "exists"
+      "is_not_set" -> "not_exists"
+      "not_exists" -> "not_exists"
+      other -> other
+    end
+  end
+
+  defp node_attribute(node, attribute) do
+    case attribute |> to_string() |> String.trim("${}") do
+      value when value in ["node", "node.name", "node.unique.name"] ->
+        node["name"]
+
+      value when value in ["status", "node.status"] ->
+        node["status"]
+
+      value when value in ["node_role", "role", "node.role"] ->
+        node["node_role"]
+
+      value when value in ["gpu", "node.gpu"] ->
+        node["gpu"]
+
+      value when value in ["profiles", "profile", "execution_profile"] ->
+        node["profiles"]
+
+      value when value in ["capabilities", "capability"] ->
+        node["capabilities"]
+
+      value when value in ["os", "platform.os"] ->
+        get_in(node, ["hardware", "platform", "os"]) ||
+          get_in(node, ["hardware", "platform", "family"])
+
+      value when value in ["arch", "architecture", "cpu.arch"] ->
+        get_in(node, ["hardware", "cpu", "architecture"])
+
+      path ->
+        get_path(node, String.split(path, "."))
+    end
+  end
+
+  defp node_capacity(hardware) do
+    hardware = stringify_map(hardware)
+    cpu = number_value(get_in(hardware, ["cpu", "logical_processors"])) || 0
+    memory = memory_capacity_mb(get_in(hardware, ["memory"]) || %{})
+    disk = disk_capacity_mb(get_in(hardware, ["disk"]) || %{})
+    gpu = gpu_count(get_in(hardware, ["gpu"]))
+
+    %{
+      "cpu_cores" => Float.round(cpu * Resource.limit_ratio(:cpu), 3),
+      "memory_mb" => Float.round(memory * Resource.limit_ratio(:memory), 3),
+      "disk_mb" => Float.round(disk * Resource.limit_ratio(:disk), 3),
+      "gpu_count" => floor(gpu * Resource.limit_ratio(:gpu))
+    }
+  end
+
+  defp memory_capacity_mb(memory) do
+    available = number_value(map_get(memory, "available_mb"))
+    total = number_value(map_get(memory, "total_mb"))
+
+    bytes =
+      number_value(map_get(memory, "available_bytes")) ||
+        number_value(map_get(memory, "total_bytes"))
+
+    cond do
+      is_number(available) and available > 0 -> available
+      is_number(total) and total > 0 -> total
+      is_number(bytes) and bytes > 0 -> bytes / (1024 * 1024)
+      true -> 0
+    end
+  end
+
+  defp disk_capacity_mb(disk) do
+    available = number_value(map_get(disk, "available_mb"))
+    total = number_value(map_get(disk, "total_mb"))
+
+    bytes =
+      number_value(map_get(disk, "available_bytes")) || number_value(map_get(disk, "total_bytes"))
+
+    cond do
+      is_number(available) and available > 0 -> available
+      is_number(total) and total > 0 -> total
+      is_number(bytes) and bytes > 0 -> bytes / (1024 * 1024)
+      true -> 0
+    end
+  end
+
+  defp requirements_summary(demands) do
+    demands
+    |> Enum.map(& &1["resources"])
+    |> Enum.reduce(empty_resources(), &add_resources/2)
+  end
+
+  defp add_resources(left, right) do
+    Map.new(@resource_keys, fn key ->
+      {key, (Map.get(left, key, 0) || 0) + (Map.get(right, key, 0) || 0)}
+    end)
+  end
+
+  defp first_number(map, keys) when is_map(map) do
+    Enum.find_value(keys, fn key ->
+      map_get(map, key) |> number_value()
+    end)
+  end
+
+  defp first_number(_map, _keys), do: nil
+
+  defp number_value(value) when is_integer(value), do: value
+  defp number_value(value) when is_float(value), do: value
+
+  defp number_value(value) when is_binary(value) do
+    case Float.parse(String.trim(value)) do
+      {number, ""} -> number
+      {number, _rest} -> number
+      :error -> nil
+    end
+  end
+
+  defp number_value(_value), do: nil
+
+  defp gpu_count(gpus) when is_list(gpus), do: length(gpus)
+
+  defp gpu_count(gpu) when is_binary(gpu) do
+    if unknown_gpu?(gpu), do: 0, else: 1
+  end
+
+  defp gpu_count(gpu) when is_map(gpu), do: 1
+  defp gpu_count(_gpu), do: 0
+
+  defp unknown_gpu?(gpu) do
+    normalized = String.downcase(gpu)
+
+    Enum.any?(["unknown", "none", "unsupported", "not available"], fn marker ->
+      String.contains?(normalized, marker)
+    end)
+  end
+
+  defp map_get(map, key) when is_map(map) and is_atom(key) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  end
+
+  defp map_get(map, key) when is_map(map) and is_binary(key) do
+    Map.get(map, key) || existing_atom_value(map, key)
+  end
+
+  defp map_get(_map, _key), do: nil
+
+  defp existing_atom_value(map, key) do
+    Map.get(map, String.to_existing_atom(key))
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp list_value(value) when is_list(value), do: Enum.map(value, &to_string/1)
+
+  defp list_value(value) when is_binary(value) do
+    value
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp list_value(value) when is_nil(value), do: []
+  defp list_value(value), do: [to_string(value)]
+
+  defp truthy?(value) when value in [true, "true", "TRUE", "True", "1", 1, "yes", "on"],
+    do: true
+
+  defp truthy?(_value), do: false
+
+  defp stringify_map(map) when is_map(map) do
+    Enum.into(map, %{}, fn {key, value} ->
+      key = if is_atom(key), do: Atom.to_string(key), else: key
+      {key, stringify_value(value)}
+    end)
+  end
+
+  defp stringify_map(_value), do: %{}
+
+  defp stringify_value(value) when is_map(value), do: stringify_map(value)
+  defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
+  defp stringify_value(value), do: value
+
+  defp get_path(value, []), do: value
+
+  defp get_path(map, [part | rest]) when is_map(map) do
+    map
+    |> map_get(part)
+    |> get_path(rest)
+  end
+
+  defp get_path(_value, _parts), do: nil
+end

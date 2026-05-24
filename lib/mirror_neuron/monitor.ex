@@ -17,10 +17,12 @@ defmodule MirrorNeuron.Monitor do
       "graph_id" => Map.get(job, "graph_id"),
       "job_name" => Map.get(job, "job_name"),
       "status" => Map.get(job, "status"),
+      "job_type" => Map.get(job, "job_type"),
       "live?" => basic_job_live?(job),
       "submitted_at" => Map.get(job, "submitted_at"),
       "updated_at" => Map.get(job, "updated_at"),
       "placement_policy" => Map.get(job, "placement_policy"),
+      "scheduler" => scheduler_summary(job),
       "requested_recovery_policy" => Map.get(job, "requested_recovery_policy"),
       "recovery_policy" => Map.get(job, "recovery_policy"),
       "reliability" => Map.get(job, "reliability"),
@@ -224,10 +226,12 @@ defmodule MirrorNeuron.Monitor do
       "graph_id" => Map.get(job, "graph_id"),
       "job_name" => Map.get(job, "job_name"),
       "status" => Map.get(job, "status"),
+      "job_type" => Map.get(job, "job_type"),
       "live?" => job_live?(job, agents),
       "submitted_at" => Map.get(job, "submitted_at"),
       "updated_at" => Map.get(job, "updated_at"),
       "placement_policy" => Map.get(job, "placement_policy"),
+      "scheduler" => scheduler_summary(job),
       "requested_recovery_policy" => Map.get(job, "requested_recovery_policy"),
       "recovery_policy" => Map.get(job, "recovery_policy"),
       "reliability" => Map.get(job, "reliability"),
@@ -273,6 +277,25 @@ defmodule MirrorNeuron.Monitor do
         "updated_at" => Map.get(job, "updated_at")
       }
   end
+
+  defp scheduler_summary(%{"scheduler" => scheduler}) when is_map(scheduler) do
+    %{
+      "status" => Map.get(scheduler, "status"),
+      "job_type" => Map.get(scheduler, "job_type"),
+      "strategy" => Map.get(scheduler, "strategy"),
+      "mode" => Map.get(scheduler, "mode"),
+      "placement_count" => Map.get(scheduler, "placement_count", 0),
+      "nodes" =>
+        scheduler
+        |> Map.get("placements", [])
+        |> Enum.map(&Map.get(&1, "node"))
+        |> Enum.reject(&is_nil/1)
+        |> Enum.uniq()
+        |> Enum.sort()
+    }
+  end
+
+  defp scheduler_summary(_job), do: nil
 
   defp recent_events(events, limit) when is_integer(limit) and limit > 0 do
     events
