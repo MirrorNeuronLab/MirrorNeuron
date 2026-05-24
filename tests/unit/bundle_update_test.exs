@@ -92,7 +92,9 @@ defmodule MirrorNeuron.BundleUpdateTest do
                checkpoint_policy: %{},
                retry_policy: %{},
                spawn_policy: %{},
-               tool_bindings: []
+               tool_bindings: [],
+               services: [],
+               requires_services: []
              }
            ]
 

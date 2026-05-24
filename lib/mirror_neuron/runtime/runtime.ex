@@ -20,14 +20,17 @@ defmodule MirrorNeuron.Runtime do
     job_id = Keyword.get(opts, :job_id, generate_job_id(manifest.graph_id))
     bundle = Keyword.get(opts, :job_bundle)
 
-    case ContextEnginePreflight.ensure_available(
-           Map.get(manifest, :required_context_engine, false)
-         ) do
-      :ok ->
-        start_job_after_preflight(job_id, manifest, opts, bundle)
+    service_preflight =
+      MirrorNeuron.ServicePreflight.run(bundle || %MirrorNeuron.JobBundle{manifest: manifest})
 
-      {:error, reason} ->
-        {:error, reason}
+    with :ok <- service_preflight,
+         :ok <-
+           ContextEnginePreflight.ensure_available(
+             Map.get(manifest, :required_context_engine, false)
+           ) do
+      start_job_after_preflight(job_id, manifest, opts, bundle)
+    else
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -475,7 +478,7 @@ defmodule MirrorNeuron.Runtime do
     job_type =
       case Scheduler.job_type(manifest) do
         {:ok, type} -> type
-        {:error, _reason} -> manifest.type || if(manifest.daemon, do: "service", else: "batch")
+        {:error, _reason} -> manifest.type || "batch"
       end
 
     %{
@@ -540,7 +543,6 @@ defmodule MirrorNeuron.Runtime do
         "graph_id" => manifest.graph_id,
         "job_name" => manifest.job_name,
         "type" => manifest.type,
-        "daemon" => manifest.daemon,
         "required_context_engine" => required_context_engine(manifest),
         "status" => "pending",
         "submitted_at" => timestamp(),

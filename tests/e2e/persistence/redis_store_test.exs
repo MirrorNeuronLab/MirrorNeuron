@@ -5,6 +5,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
   alias MirrorNeuron.JobBundle
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime.EventBus
+  alias MirrorNeuron.ServiceRegistry
 
   setup do
     Application.ensure_all_started(:mirror_neuron)
@@ -81,6 +82,54 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
              RedisStore.read_events(job_id)
 
     RedisStore.delete_job(job_id)
+  end
+
+  test "service registry persists, resolves passing instances, and deregisters by agent" do
+    job_id = "service-registry-#{System.unique_integer([:positive])}"
+
+    passing = %{
+      "id" => "#{job_id}:worker:ollama",
+      "name" => "ollama",
+      "job_id" => job_id,
+      "agent_id" => "worker",
+      "node" => "gpu@lab",
+      "address" => "127.0.0.1",
+      "port" => 11_434,
+      "tags" => ["gpu"],
+      "status" => "passing"
+    }
+
+    critical =
+      passing
+      |> Map.put("id", "#{job_id}:other:ollama")
+      |> Map.put("agent_id", "other")
+      |> Map.put("node", "cpu@lab")
+      |> Map.put("status", "critical")
+
+    assert {:ok, _} = ServiceRegistry.register(passing)
+    assert {:ok, _} = ServiceRegistry.register(critical)
+
+    assert {:ok, [resolved]} = ServiceRegistry.resolve("ollama", tags: ["gpu"])
+    assert resolved["id"] == passing["id"]
+    assert resolved["status"] == "passing"
+
+    assert {:ok, all} = ServiceRegistry.list(name: "ollama", passing_only: false)
+    assert Enum.count(all, &(&1["job_id"] == job_id)) == 2
+
+    assert ServiceRegistry.requirements_satisfied_on_node?(
+             [%{"name" => "ollama", "tags" => ["gpu"]}],
+             "gpu@lab"
+           )
+
+    refute ServiceRegistry.requirements_satisfied_on_node?(
+             [%{"name" => "ollama", "tags" => ["gpu"]}],
+             "cpu@lab"
+           )
+
+    assert :ok = ServiceRegistry.deregister_agent(job_id, "worker")
+    assert {:ok, []} = ServiceRegistry.resolve("ollama", tags: ["gpu"])
+
+    assert :ok = ServiceRegistry.deregister_job(job_id)
   end
 
   test "retention sweep deletes expired terminal jobs and stale job ids" do

@@ -13,6 +13,7 @@ defmodule MirrorNeuron do
 
   def plan_manifest(input, opts \\ []) do
     with {:ok, bundle} <- JobBundle.load(input),
+         :ok <- MirrorNeuron.ServicePreflight.run(bundle),
          :ok <- MirrorNeuron.BlueprintValidation.check_requirements(bundle.manifest) do
       MirrorNeuron.Scheduler.plan(bundle.manifest, opts)
     end
@@ -24,6 +25,7 @@ defmodule MirrorNeuron do
     else
       with :ok <- maybe_accept_new_job(opts),
            {:ok, bundle} <- JobBundle.load(input),
+           :ok <- MirrorNeuron.ServicePreflight.run(bundle),
            :ok <- MirrorNeuron.BlueprintValidation.run_input_validation(bundle),
            :ok <- MirrorNeuron.BlueprintValidation.check_requirements(bundle.manifest),
            {:ok, job_id, _pid} <-
@@ -115,6 +117,30 @@ defmodule MirrorNeuron do
       Control.call(__MODULE__, :node_drain_status, [node_name])
     else
       MirrorNeuron.Cluster.NodeDrainer.node_drain_status(node_name)
+    end
+  end
+
+  def list_services(opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :list_services, [opts])
+    else
+      MirrorNeuron.ServiceRegistry.list(opts)
+    end
+  end
+
+  def resolve_service(name, opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :resolve_service, [name, opts])
+    else
+      MirrorNeuron.ServiceRegistry.resolve(name, opts)
+    end
+  end
+
+  def check_services(services, opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :check_services, [services, opts])
+    else
+      MirrorNeuron.ServicePreflight.check_services(services, opts)
     end
   end
 

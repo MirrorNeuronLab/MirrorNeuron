@@ -5,6 +5,7 @@ defmodule MirrorNeuron.RuntimeTest do
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.AgentWorker
+  alias MirrorNeuron.ServiceRegistry
 
   defmodule StreamProducerRunner do
     def run(_payload, _config, opts) do
@@ -270,6 +271,27 @@ defmodule MirrorNeuron.RuntimeTest do
     end
   end
 
+  defmodule AllocationEchoRunner do
+    def run(_payload, config, _opts) do
+      environment = Map.get(config, "environment", %{})
+
+      {:ok,
+       %{
+         "sandbox_name" => "allocation-echo",
+         "exit_code" => 0,
+         "stdout" =>
+           Jason.encode!(%{
+             "complete_job" => %{
+               "allocation" => Map.get(config, "__mirror_neuron_allocation"),
+               "env" => environment
+             }
+           }),
+         "stderr" => "",
+         "logs" => ""
+       }}
+    end
+  end
+
   defmodule ExplicitCheckpointAgent do
     use MirrorNeuron.AgentTemplate
 
@@ -457,6 +479,92 @@ defmodule MirrorNeuron.RuntimeTest do
     wait_until(fn -> agent_unregistered?(job_id, "sink") end, 2_000)
 
     RedisStore.delete_job(job_id)
+  end
+
+  test "passes scheduler allocation metadata into executor runtime environment" do
+    node_name = to_string(Node.self())
+    volume_root = Path.join(System.tmp_dir!(), "mn-allocation-volume")
+    File.mkdir_p!(volume_root)
+
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "allocation_env_runtime_test",
+      "entrypoints" => ["worker"],
+      "initial_inputs" => %{"worker" => [%{"start" => true}]},
+      "nodes" => [
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "role" => "root_coordinator",
+          "config" => %{
+            "runner_module" => AllocationEchoRunner,
+            "output_message_type" => nil
+          },
+          "resources" => %{
+            "devices" => [%{"kind" => "gpu", "driver" => "cuda", "min_memory_mb" => 1024}],
+            "ports" => [%{"label" => "api", "port" => 18_080, "protocol" => "tcp"}],
+            "volumes" => [
+              %{
+                "name" => "models",
+                "source" => volume_root,
+                "target" => "/models",
+                "mode" => "ro"
+              }
+            ]
+          }
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    fake_node = %{
+      "name" => node_name,
+      "status" => "healthy",
+      "runtime_drivers" => ["host_local"],
+      "host_paths" => [System.tmp_dir!()],
+      "hardware" => %{
+        "platform" => %{"os" => "linux"},
+        "cpu" => %{"logical_processors" => 8},
+        "memory" => %{"available_mb" => 16_384},
+        "disk" => %{"available_mb" => 100_000},
+        "gpu" => [
+          %{
+            "id" => "GPU-runtime",
+            "index" => 0,
+            "name" => "NVIDIA Runtime GPU",
+            "kind" => "gpu",
+            "type" => "nvidia/gpu",
+            "vendor" => "nvidia",
+            "driver" => "cuda",
+            "memory_total_mb" => 8192,
+            "memory_free_mb" => 4096,
+            "capabilities" => ["gpu", "cuda", "nvidia"]
+          }
+        ]
+      }
+    }
+
+    assert {:ok, job_id, job} =
+             MirrorNeuron.run_manifest(manifest,
+               nodes: [fake_node],
+               lookup_node_state: false,
+               await: true,
+               timeout: 2_000
+             )
+
+    assert job["status"] == "completed"
+
+    assert get_in(job, ["result", "output", "allocation", "devices", Access.at(0), "id"]) ==
+             "GPU-runtime"
+
+    assert get_in(job, ["result", "output", "env", "MN_ALLOCATED_DEVICE_IDS"]) == "GPU-runtime"
+    assert get_in(job, ["result", "output", "env", "CUDA_VISIBLE_DEVICES"]) == "0"
+    assert get_in(job, ["result", "output", "env", "MN_PORT_API"]) == "18080"
+    assert get_in(job, ["result", "output", "env", "MN_VOLUME_MODELS"]) == volume_root
+
+    RedisStore.delete_job(job_id)
+    File.rm_rf(volume_root)
   end
 
   test "omitted recovery policy persists auto request with local effective policy on a single node" do
@@ -1549,6 +1657,59 @@ defmodule MirrorNeuron.RuntimeTest do
     RedisStore.delete_job(job_id)
   end
 
+  test "service jobs register and deregister declared service instances" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "service_registry_runtime_test",
+      "type" => "service",
+      "entrypoints" => ["worker"],
+      "nodes" => [
+        %{
+          "node_id" => "worker",
+          "agent_type" => "router",
+          "role" => "root_coordinator",
+          "services" => [
+            %{
+              "name" => "agent-api",
+              "address" => "127.0.0.1",
+              "port" => 18_080,
+              "tags" => ["runtime-test"]
+            }
+          ]
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    wait_until(fn -> running_status?(job_id) end, 2_000)
+
+    wait_until(
+      fn ->
+        {:ok, services} = ServiceRegistry.resolve("agent-api", job_id: job_id)
+        Enum.any?(services, &(&1["agent_id"] == "worker" and &1["status"] == "passing"))
+      end,
+      2_000
+    )
+
+    assert {:ok, [service]} = ServiceRegistry.resolve("agent-api", job_id: job_id)
+    assert service["node"] == to_string(Node.self())
+    assert service["tags"] == ["runtime-test"]
+
+    assert {:ok, "cancelled"} = MirrorNeuron.cancel(job_id)
+
+    wait_until(
+      fn ->
+        {:ok, services} = ServiceRegistry.list(job_id: job_id, passing_only: false)
+        services == []
+      end,
+      2_000
+    )
+
+    RedisStore.delete_job(job_id)
+  end
+
   test "sysbatch jobs complete after every eligible system target finishes once" do
     manifest = %{
       "manifest_version" => "1.0",
@@ -1642,7 +1803,7 @@ defmodule MirrorNeuron.RuntimeTest do
   test "can cancel a long-lived job and it disappears from the live list" do
     manifest = %{
       "manifest_version" => "1.0",
-      "graph_id" => "cancel_daemon_test",
+      "graph_id" => "cancel_service_test",
       "nodes" => [
         %{
           "node_id" => "root",
@@ -1787,7 +1948,7 @@ defmodule MirrorNeuron.RuntimeTest do
     manifest = %{
       "manifest_version" => "1.0",
       "graph_id" => "stream_live_backpressure_runtime_test",
-      "daemon" => true,
+      "type" => "service",
       "entrypoints" => ["slow_consumer"],
       "initial_inputs" => %{
         "slow_consumer" => [%{"value" => "warmup"}]
@@ -2274,8 +2435,8 @@ defmodule MirrorNeuron.RuntimeTest do
 
     manifest = %{
       "manifest_version" => "1.0",
-      "graph_id" => "daemon_agent_recovery_test",
-      "daemon" => true,
+      "graph_id" => "service_agent_recovery_test",
+      "type" => "service",
       "entrypoints" => ["root"],
       "initial_inputs" => %{"root" => [%{"work" => "keep recovering"}]},
       "nodes" => [
@@ -2445,7 +2606,7 @@ defmodule MirrorNeuron.RuntimeTest do
           "job_id" => job_id,
           "graph_id" => bundle.manifest.graph_id,
           "job_name" => bundle.manifest.job_name,
-          "daemon" => bundle.manifest.daemon,
+          "type" => bundle.manifest.type,
           "required_context_engine" => bundle.manifest.required_context_engine,
           "status" => "running",
           "submitted_at" => Runtime.timestamp(),

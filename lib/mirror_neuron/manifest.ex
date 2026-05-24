@@ -4,10 +4,11 @@ defmodule MirrorNeuron.Manifest do
     :graph_id,
     :job_name,
     :type,
-    :daemon,
     :required_context_engine,
     :requirements,
     :input_validation,
+    :services,
+    :required_services,
     :metadata,
     :nodes,
     :edges,
@@ -17,7 +18,8 @@ defmodule MirrorNeuron.Manifest do
     :reload
   ]
 
-  alias MirrorNeuron.{AgentRegistry, AgentTemplates}
+  alias MirrorNeuron.{AgentRegistry, AgentTemplates, ResourceSpec}
+  alias MirrorNeuron.ServiceSpec
   alias MirrorNeuron.Runtime.{LifecyclePolicy, RouteCondition}
 
   def load(%__MODULE__{} = manifest), do: {:ok, manifest}
@@ -72,10 +74,11 @@ defmodule MirrorNeuron.Manifest do
       "type" => manifest.type,
       "graph_id" => manifest.graph_id,
       "job_name" => manifest.job_name,
-      "daemon" => manifest.daemon,
       "required_context_engine" => manifest.required_context_engine,
       "requirements" => json_safe(manifest.requirements),
       "input_validation" => json_safe(manifest.input_validation),
+      "services" => json_safe(manifest.services),
+      "required_services" => json_safe(manifest.required_services),
       "metadata" => json_safe(manifest.metadata),
       "nodes" => Enum.map(manifest.nodes, &node_to_map/1),
       "edges" => Enum.map(manifest.edges, &edge_to_map/1),
@@ -87,21 +90,22 @@ defmodule MirrorNeuron.Manifest do
   end
 
   defp normalize_and_validate(raw) do
-    raw_daemon = Map.get(raw, "daemon", :unset)
-    manifest_type = normalize_type(Map.get(raw, "type"), raw_daemon)
-
     manifest = %__MODULE__{
       manifest_version: Map.get(raw, "manifest_version"),
-      type: manifest_type,
+      type: normalize_type(Map.get(raw, "type")),
       graph_id: Map.get(raw, "graph_id"),
       job_name: Map.get(raw, "job_name") || Map.get(raw, "graph_id"),
-      daemon: normalize_daemon(raw_daemon, manifest_type),
       required_context_engine:
         normalize_required_context_engine(
           Map.get(raw, "requiredContextEngine", Map.get(raw, "required_context_engine", false))
         ),
       requirements: Map.get(raw, "requirements", Map.get(raw, "requirments", %{})),
       input_validation: Map.get(raw, "input_validation", Map.get(raw, "inputValidation", %{})),
+      services: ServiceSpec.normalize_services(Map.get(raw, "services", [])),
+      required_services:
+        ServiceSpec.normalize_required_services(
+          Map.get(raw, "required_services", Map.get(raw, "requiredServices", []))
+        ),
       metadata: Map.get(raw, "metadata", %{}),
       nodes: Enum.map(Map.get(raw, "nodes", []), &normalize_node/1),
       edges: Enum.map(Map.get(raw, "edges", []), &normalize_edge/1),
@@ -111,10 +115,22 @@ defmodule MirrorNeuron.Manifest do
       reload: normalize_reload(Map.get(raw, "reload", %{}))
     }
 
-    case validate(manifest) do
-      :ok -> {:ok, manifest}
-      {:error, errors} -> {:error, errors}
+    legacy_errors = legacy_manifest_errors(raw)
+
+    case {legacy_errors, validate(manifest)} do
+      {[], :ok} -> {:ok, manifest}
+      {errors, :ok} -> {:error, Enum.reverse(errors)}
+      {[], {:error, errors}} -> {:error, errors}
+      {legacy_errors, {:error, errors}} -> {:error, errors ++ Enum.reverse(legacy_errors)}
     end
+  end
+
+  defp legacy_manifest_errors(raw) do
+    []
+    |> maybe_collect_error(
+      Map.has_key?(raw, "daemon"),
+      "daemon is no longer supported; use type service"
+    )
   end
 
   def validate(%__MODULE__{} = manifest) do
@@ -125,10 +141,10 @@ defmodule MirrorNeuron.Manifest do
       |> validate_edges(manifest)
       |> validate_entrypoints(manifest)
       |> validate_type(manifest)
-      |> validate_daemon(manifest)
       |> validate_required_context_engine(manifest)
       |> validate_requirements(manifest)
       |> validate_input_validation(manifest)
+      |> validate_services(manifest)
       |> validate_policies(manifest)
 
     case errors do
@@ -256,6 +272,7 @@ defmodule MirrorNeuron.Manifest do
     )
     |> validate_scheduler_policy(manifest)
     |> validate_node_scheduling(manifest)
+    |> add_errors(ResourceSpec.validate_manifest(manifest))
     |> add_errors(LifecyclePolicy.validate_manifest(manifest))
   end
 
@@ -306,14 +323,6 @@ defmodule MirrorNeuron.Manifest do
     )
   end
 
-  defp validate_daemon(errors, manifest) do
-    maybe_add_error(
-      errors,
-      not is_boolean(manifest.daemon),
-      "daemon must be a boolean"
-    )
-  end
-
   defp validate_required_context_engine(errors, manifest) do
     maybe_add_error(
       errors,
@@ -354,6 +363,10 @@ defmodule MirrorNeuron.Manifest do
     end
   end
 
+  defp validate_services(errors, manifest) do
+    add_errors(errors, ServiceSpec.validate_manifest(manifest))
+  end
+
   defp normalize_node(raw) do
     %{
       node_id: Map.get(raw, "node_id"),
@@ -367,7 +380,12 @@ defmodule MirrorNeuron.Manifest do
       retry_policy: Map.get(raw, "retry_policy", %{}),
       checkpoint_policy: Map.get(raw, "checkpoint_policy", %{}),
       spawn_policy: Map.get(raw, "spawn_policy", %{}),
-      policies: Map.get(raw, "policies", %{})
+      policies: Map.get(raw, "policies", %{}),
+      services: ServiceSpec.normalize_services(Map.get(raw, "services", [])),
+      requires_services:
+        ServiceSpec.normalize_requires_services(
+          Map.get(raw, "requires_services", Map.get(raw, "requiresServices", []))
+        )
     }
   end
 
@@ -384,7 +402,9 @@ defmodule MirrorNeuron.Manifest do
       "retry_policy" => json_safe(node.retry_policy),
       "checkpoint_policy" => json_safe(node.checkpoint_policy),
       "spawn_policy" => json_safe(node.spawn_policy),
-      "policies" => json_safe(Map.get(node, :policies, %{}))
+      "policies" => json_safe(Map.get(node, :policies, %{})),
+      "services" => json_safe(Map.get(node, :services, [])),
+      "requires_services" => json_safe(Map.get(node, :requires_services, []))
     }
   end
 
@@ -442,16 +462,9 @@ defmodule MirrorNeuron.Manifest do
 
   defp normalize_reload(_), do: %{mode: "manual", interval_seconds: 60}
 
-  defp normalize_type(nil, true), do: "service"
-  defp normalize_type(nil, _daemon), do: "batch"
-  defp normalize_type(value, _daemon) when is_binary(value), do: String.downcase(value)
-  defp normalize_type(value, _daemon), do: value
-
-  defp normalize_daemon(:unset, "service"), do: true
-  defp normalize_daemon(:unset, _type), do: false
-  defp normalize_daemon(value, _type) when is_boolean(value), do: value
-  defp normalize_daemon(_value, "service"), do: true
-  defp normalize_daemon(value, _type), do: value
+  defp normalize_type(nil), do: "batch"
+  defp normalize_type(value) when is_binary(value), do: String.downcase(value)
+  defp normalize_type(value), do: value
 
   defp normalize_required_context_engine(value) when is_boolean(value), do: value
   defp normalize_required_context_engine(value), do: value

@@ -90,6 +90,8 @@ defmodule MirrorNeuron.ResourceTest do
     assert report["totals"] == %{
              "cpu_cores" => 12,
              "gpu_count" => 2,
+             "gpu_memory_total_mb" => 0.0,
+             "gpu_memory_free_mb" => 0.0,
              "memory_gb" => 24.0,
              "disk_gb" => 150.0,
              "disk_available_gb" => 110.0
@@ -101,6 +103,8 @@ defmodule MirrorNeuron.ResourceTest do
     assert report["usable"] == %{
              "cpu_cores" => 12,
              "gpu_count" => 2,
+             "gpu_memory_total_mb" => 0.0,
+             "gpu_memory_free_mb" => 0.0,
              "memory_gb" => 24.0,
              "disk_gb" => 150.0,
              "disk_available_gb" => 110.0
@@ -115,6 +119,8 @@ defmodule MirrorNeuron.ResourceTest do
     assert draining["status"] == "draining"
     assert draining["scheduling_eligible"] == false
     assert draining["drain"] == %{"status" => "blocked_no_placement", "reason" => "kernel update"}
+    assert length(draining["devices"]) == 2
+    assert "host_local" in draining["runtime_drivers"]
   end
 
   test "keeps single-node resources while exposing combined totals" do
@@ -129,6 +135,8 @@ defmodule MirrorNeuron.ResourceTest do
     assert report["combined"] == %{
              "cpu_cores" => 8,
              "gpu_count" => 1,
+             "gpu_memory_total_mb" => 0.0,
+             "gpu_memory_free_mb" => 0.0,
              "memory_gb" => 16.0,
              "disk_gb" => 100.0,
              "disk_available_gb" => 80.0
@@ -145,6 +153,8 @@ defmodule MirrorNeuron.ResourceTest do
     assert report["usable"] == %{
              "cpu_cores" => 6,
              "gpu_count" => 0,
+             "gpu_memory_total_mb" => 0.0,
+             "gpu_memory_free_mb" => 0.0,
              "memory_gb" => 18.0,
              "disk_gb" => 75.0,
              "disk_available_gb" => 55.0

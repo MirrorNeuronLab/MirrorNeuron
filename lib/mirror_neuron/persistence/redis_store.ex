@@ -133,6 +133,8 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   def delete_job(job_id) do
+    _ = delete_service_instances(job_id: job_id)
+
     with {:ok, agent_ids} <- command(["SMEMBERS", key("job", job_id, "agents")]) do
       keys =
         [
@@ -255,6 +257,75 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
       {:error, reason} ->
         {:error, format_reason(reason)}
+    end
+  end
+
+  def persist_service_instance(instance_id, service_map) do
+    service =
+      service_map
+      |> stringify_map()
+      |> Map.put("id", instance_id)
+      |> Map.put_new("created_at", timestamp())
+      |> Map.put("updated_at", timestamp())
+
+    commands =
+      [
+        ["SET", key("service", "instance", instance_id), Jason.encode!(service)],
+        ["SADD", key("service", "instances"), instance_id]
+      ] ++ service_index_commands("SADD", service, instance_id)
+
+    with {:ok, results} <- transaction(commands),
+         :ok <- expect_first_result(results, fn value -> value == "OK" end),
+         :ok <- wait_for_replicas() do
+      {:ok, service}
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
+    end
+  end
+
+  def fetch_service_instance(instance_id) do
+    case command(["GET", key("service", "instance", instance_id)]) do
+      {:ok, nil} -> {:error, "service instance #{instance_id} was not found"}
+      {:ok, encoded} -> Jason.decode(encoded)
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  def list_service_instances(_opts \\ []) do
+    case command(["SMEMBERS", key("service", "instances")]) do
+      {:ok, ids} -> fetch_service_instances(Enum.sort(ids))
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  def delete_service_instance(instance_id) do
+    case fetch_service_instance(instance_id) do
+      {:ok, service} ->
+        commands =
+          [
+            ["DEL", key("service", "instance", instance_id)],
+            ["SREM", key("service", "instances"), instance_id]
+          ] ++ service_index_commands("SREM", service, instance_id)
+
+        _ = transaction(commands)
+        _ = wait_for_replicas()
+        :ok
+
+      {:error, _reason} ->
+        :ok
+    end
+  end
+
+  def delete_service_instances(opts) when is_list(opts) do
+    with {:ok, services} <- list_service_instances() do
+      services
+      |> Enum.filter(&service_matches_opts?(&1, opts))
+      |> Enum.each(fn service -> delete_service_instance(service["id"]) end)
+
+      :ok
+    else
+      {:error, _reason} -> :ok
     end
   end
 
@@ -536,6 +607,48 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       {:ok, encoded_jobs} -> {:ok, decode_json_items(encoded_jobs)}
       {:error, reason} -> {:error, format_reason(reason)}
     end
+  end
+
+  defp fetch_service_instances([]), do: {:ok, []}
+
+  defp fetch_service_instances(instance_ids) do
+    keys = Enum.map(instance_ids, &key("service", "instance", &1))
+
+    case command(["MGET" | keys]) do
+      {:ok, encoded_services} -> {:ok, decode_json_items(encoded_services)}
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  defp service_index_commands(operation, service, instance_id) do
+    []
+    |> maybe_service_index(operation, service, instance_id, "name", ["service", "name"])
+    |> maybe_service_index(operation, service, instance_id, "job_id", ["service", "job"])
+    |> maybe_service_index(operation, service, instance_id, "node", ["service", "node"])
+    |> maybe_service_index(operation, service, instance_id, "agent_id", ["service", "agent"])
+  end
+
+  defp maybe_service_index(commands, operation, service, instance_id, field, key_parts) do
+    case Map.get(service, field) do
+      value when is_binary(value) and value != "" ->
+        [service_index_command(operation, key_parts, value, instance_id) | commands]
+
+      _ ->
+        commands
+    end
+  end
+
+  defp service_index_command(operation, ["service", index], value, instance_id),
+    do: [operation, key("service", index, value), instance_id]
+
+  defp service_matches_opts?(service, opts) do
+    Enum.all?(opts, fn
+      {:job_id, value} -> Map.get(service, "job_id") == to_string(value)
+      {:agent_id, value} -> Map.get(service, "agent_id") == to_string(value)
+      {:node, value} -> Map.get(service, "node") == to_string(value)
+      {:name, value} -> Map.get(service, "name") == to_string(value)
+      _other -> true
+    end)
   end
 
   defp fetch_agents(_job_id, []), do: {:ok, []}

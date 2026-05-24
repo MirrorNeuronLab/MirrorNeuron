@@ -13,6 +13,9 @@ service ClusterService {
   rpc CancelNodeDrain (CancelNodeDrainRequest) returns (CancelNodeDrainResponse);
   rpc SetNodeMaintenance (SetNodeMaintenanceRequest) returns (SetNodeMaintenanceResponse);
   rpc GetNodeDrainStatus (GetNodeDrainStatusRequest) returns (GetNodeDrainStatusResponse);
+  rpc ListServices (ListServicesRequest) returns (ListServicesResponse);
+  rpc ResolveService (ResolveServiceRequest) returns (ResolveServiceResponse);
+  rpc CheckServices (CheckServicesRequest) returns (CheckServicesResponse);
 }
 
 message NetworkHandshakeRequest {
@@ -119,5 +122,30 @@ message GetNodeDrainStatusRequest {
 }
 
 message GetNodeDrainStatusResponse {
+  string result_json = 1;
+}
+
+message ListServicesRequest {
+  string query_json = 1;
+}
+
+message ListServicesResponse {
+  string result_json = 1;
+}
+
+message ResolveServiceRequest {
+  string name = 1;
+  string query_json = 2;
+}
+
+message ResolveServiceResponse {
+  string result_json = 1;
+}
+
+message CheckServicesRequest {
+  string services_json = 1;
+}
+
+message CheckServicesResponse {
   string result_json = 1;
 }

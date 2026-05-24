@@ -55,6 +55,29 @@ defmodule MirrorNeuron.SchedulerTest do
     assert [%{"agent_id" => "worker", "node" => "small@lab"}] = plan["placements"]
   end
 
+  test "manifest type service is the default scheduler job type" do
+    {:ok, manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "service-default",
+        "type" => "service",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{"cpu_cores" => 1, "memory_mb" => 512}
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    assert {:ok, plan} = Scheduler.plan(manifest, nodes: [small_node()], jobs: [])
+    assert plan["job_type"] == "service"
+  end
+
   test "constraints and GPU requirements filter candidate nodes" do
     {:ok, manifest} =
       Manifest.load(%{
@@ -423,6 +446,277 @@ defmodule MirrorNeuron.SchedulerTest do
     assert reason =~ "insufficient resources"
   end
 
+  test "node-scoped service requirements filter candidate nodes" do
+    {:ok, manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "service-aware-placement",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "requires_services" => [%{"name" => "ollama", "tags" => ["gpu"]}]
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "cluster_recover"}
+      })
+
+    services = [
+      %{
+        "id" => "svc-1",
+        "name" => "ollama",
+        "node" => "gpu@lab",
+        "status" => "passing",
+        "tags" => ["gpu"]
+      }
+    ]
+
+    assert {:ok, plan} =
+             Scheduler.plan(manifest,
+               nodes: [small_node(), gpu_node()],
+               jobs: [],
+               service_instances: services
+             )
+
+    assert [%{"agent_id" => "worker", "node" => "gpu@lab"}] = plan["placements"]
+  end
+
+  test "node-scoped service requirements fail when no healthy service matches" do
+    {:ok, manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "service-blocked-placement",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "requires_services" => [%{"name" => "vector-db"}]
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "cluster_recover"}
+      })
+
+    assert {:error, "placement_failed: " <> reason} =
+             Scheduler.plan(manifest,
+               nodes: [small_node(), gpu_node()],
+               jobs: [],
+               service_instances: [
+                 %{
+                   "id" => "svc-1",
+                   "name" => "vector-db",
+                   "node" => "gpu@lab",
+                   "status" => "critical"
+                 }
+               ]
+             )
+
+    assert reason =~ "required services not available"
+  end
+
+  test "CUDA and Metal device requests only place on matching device drivers" do
+    {:ok, cuda_manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "cuda-device",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{
+              "devices" => [
+                %{"kind" => "gpu", "driver" => "cuda", "min_memory_mb" => 16_000}
+              ]
+            }
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    assert {:ok, cuda_plan} =
+             Scheduler.plan(cuda_manifest, nodes: [metal_node(), cuda_node()], jobs: [])
+
+    assert [%{"node" => "cuda@lab", "allocations" => %{"devices" => [cuda_device]}}] =
+             cuda_plan["placements"]
+
+    assert cuda_device["id"] == "cuda-0"
+    assert cuda_device["driver"] == "cuda"
+
+    {:ok, metal_manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "metal-device",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{"devices" => [%{"kind" => "gpu", "driver" => "metal"}]}
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    assert {:ok, metal_plan} =
+             Scheduler.plan(metal_manifest, nodes: [cuda_node(), metal_node()], jobs: [])
+
+    assert [%{"node" => "metal@lab", "allocations" => %{"devices" => [metal_device]}}] =
+             metal_plan["placements"]
+
+    assert metal_device["driver"] == "metal"
+  end
+
+  test "vendor-qualified GPU device type avoids mismatched advertised vendors" do
+    {:ok, manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "vendor-device-type",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{"devices" => [%{"type" => "nvidia/gpu"}]}
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    assert {:ok, plan} = Scheduler.plan(manifest, nodes: [metal_node(), cuda_node()], jobs: [])
+    assert [%{"node" => "cuda@lab"}] = plan["placements"]
+  end
+
+  test "allocated device ids and explicit ports are exclusive across active placements" do
+    {:ok, manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "exclusive-allocation",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{
+              "devices" => [%{"kind" => "gpu", "driver" => "cuda"}],
+              "ports" => [%{"label" => "api", "port" => 8080, "protocol" => "tcp"}]
+            }
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    jobs = [
+      %{
+        "job_id" => "existing",
+        "status" => "running",
+        "scheduler" => %{
+          "placements" => [
+            %{
+              "agent_id" => "existing",
+              "node" => "cuda@lab",
+              "resources" => %{"gpu_count" => 1},
+              "allocations" => %{
+                "devices" => [%{"id" => "cuda-0", "driver" => "cuda"}],
+                "ports" => [%{"label" => "api", "port" => 8080, "protocol" => "tcp"}]
+              }
+            }
+          ]
+        }
+      }
+    ]
+
+    assert {:ok, plan} =
+             Scheduler.plan(manifest, nodes: [cuda_node(), cuda_node("cuda-2@lab")], jobs: jobs)
+
+    assert [%{"node" => "cuda-2@lab"}] = plan["placements"]
+
+    {:ok, device_manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "exclusive-device",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{"devices" => [%{"kind" => "gpu", "driver" => "cuda"}]}
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    assert {:ok, device_plan} = Scheduler.plan(device_manifest, nodes: [cuda_node()], jobs: jobs)
+    assert [%{"allocations" => %{"devices" => [%{"id" => "cuda-1"}]}}] = device_plan["placements"]
+  end
+
+  test "host volumes and runtime drivers filter candidate nodes" do
+    {:ok, manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "volume-driver",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{
+              "runtime_driver" => "openshell",
+              "volumes" => [
+                %{
+                  "name" => "models",
+                  "source" => "/srv/models",
+                  "target" => "/models",
+                  "mode" => "ro",
+                  "type" => "host"
+                }
+              ]
+            }
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    assert {:ok, plan} =
+             Scheduler.plan(manifest,
+               nodes: [
+                 Map.put(large_node(), "runtime_drivers", ["host_local"]),
+                 large_node()
+                 |> Map.put("name", "openshell@lab")
+                 |> Map.put("runtime_drivers", ["host_local", "openshell"])
+                 |> Map.put("host_paths", ["/srv"])
+               ],
+               jobs: []
+             )
+
+    assert [
+             %{
+               "node" => "openshell@lab",
+               "allocations" => %{
+                 "runtime_driver" => "openshell",
+                 "volumes" => [%{"name" => "models", "source" => "/srv/models"}]
+               }
+             }
+           ] = plan["placements"]
+  end
+
   test "manifests serialize scheduler resources and constraints" do
     {:ok, manifest} =
       Manifest.load(%{
@@ -507,6 +801,76 @@ defmodule MirrorNeuron.SchedulerTest do
         "memory" => %{"available_mb" => 65_536},
         "disk" => %{"available_mb" => 500_000},
         "gpu" => [%{"name" => "GPU 1"}, %{"name" => "GPU 2"}]
+      }
+    }
+  end
+
+  defp cuda_node(name \\ "cuda@lab") do
+    %{
+      "name" => name,
+      "status" => "healthy",
+      "capabilities" => ["cuda", "llm"],
+      "runtime_drivers" => ["host_local"],
+      "hardware" => %{
+        "platform" => %{"os" => "linux"},
+        "cpu" => %{"logical_processors" => 16},
+        "memory" => %{"available_mb" => 65_536},
+        "disk" => %{"available_mb" => 500_000},
+        "gpu" => [
+          %{
+            "id" => "cuda-0",
+            "index" => 0,
+            "name" => "NVIDIA RTX 4090",
+            "kind" => "gpu",
+            "type" => "nvidia/gpu",
+            "vendor" => "nvidia",
+            "driver" => "cuda",
+            "memory_total_mb" => 24_576,
+            "memory_free_mb" => 20_000,
+            "capabilities" => ["gpu", "cuda", "nvidia"]
+          },
+          %{
+            "id" => "cuda-1",
+            "index" => 1,
+            "name" => "NVIDIA RTX 3090",
+            "kind" => "gpu",
+            "type" => "nvidia/gpu",
+            "vendor" => "nvidia",
+            "driver" => "cuda",
+            "memory_total_mb" => 24_576,
+            "memory_free_mb" => 12_000,
+            "capabilities" => ["gpu", "cuda", "nvidia"]
+          }
+        ]
+      }
+    }
+  end
+
+  defp metal_node do
+    %{
+      "name" => "metal@lab",
+      "status" => "healthy",
+      "capabilities" => ["metal", "llm"],
+      "runtime_drivers" => ["host_local"],
+      "hardware" => %{
+        "platform" => %{"os" => "darwin"},
+        "cpu" => %{"logical_processors" => 12},
+        "memory" => %{"available_mb" => 32_768},
+        "disk" => %{"available_mb" => 300_000},
+        "gpu" => [
+          %{
+            "id" => "metal-0",
+            "index" => 0,
+            "name" => "Apple M2 Max",
+            "kind" => "gpu",
+            "type" => "apple/gpu",
+            "vendor" => "apple",
+            "driver" => "metal",
+            "memory_total_mb" => 32_768,
+            "memory_free_mb" => 20_000,
+            "capabilities" => ["gpu", "apple", "metal"]
+          }
+        ]
       }
     }
   end

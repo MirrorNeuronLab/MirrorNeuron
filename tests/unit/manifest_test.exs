@@ -128,11 +128,66 @@ defmodule MirrorNeuron.ManifestTest do
 
     assert {:ok, normalized} = Manifest.load(manifest)
     assert normalized.graph_id == "simple"
-    assert normalized.daemon == false
     assert normalized.type == "batch"
     assert normalized.required_context_engine == true
     assert normalized.entrypoints == ["router"]
     assert Enum.find(normalized.nodes, &(&1.node_id == "router")).type == "generic"
+  end
+
+  test "accepts service declarations and required service checks" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "services",
+      "entrypoints" => ["worker"],
+      "required_services" => [
+        %{
+          "name" => "ollama",
+          "origin" => "external",
+          "checks" => [
+            %{
+              "name" => "health",
+              "type" => "http",
+              "url" => "${config.llm.api_base}/api/tags",
+              "timeout_ms" => 1000
+            }
+          ]
+        }
+      ],
+      "nodes" => [
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "role" => "root",
+          "services" => [%{"name" => "agent-api", "port" => 8080}],
+          "requires_services" => [%{"name" => "ollama"}]
+        }
+      ],
+      "edges" => []
+    }
+
+    assert {:ok, normalized} = Manifest.load(manifest)
+    assert [%{"name" => "ollama"}] = normalized.required_services
+    assert [%{"name" => "agent-api", "port" => 8080}] = hd(normalized.nodes).services
+
+    serialized = Manifest.to_map(normalized)
+    assert get_in(serialized, ["nodes", Access.at(0), "requires_services", Access.at(0), "name"]) == "ollama"
+  end
+
+  test "rejects malformed service declarations" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "bad-services",
+      "entrypoints" => ["worker"],
+      "required_services" => [
+        %{"name" => "bad service", "checks" => [%{"type" => "smtp"}]}
+      ],
+      "nodes" => [%{"node_id" => "worker", "agent_type" => "executor", "role" => "root"}],
+      "edges" => []
+    }
+
+    assert {:error, errors} = Manifest.load(manifest)
+    assert Enum.any?(errors, &String.contains?(&1, "required_services.0.name"))
+    assert Enum.any?(errors, &String.contains?(&1, "checks.0.type"))
   end
 
   test "accepts auto recovery mode for adaptive runtime reliability" do
@@ -345,7 +400,7 @@ defmodule MirrorNeuron.ManifestTest do
     assert "requiredContextEngine must be a boolean" in errors
   end
 
-  test "accepts explicit daemon manifests" do
+  test "rejects legacy daemon manifests" do
     manifest = %{
       "manifest_version" => "1.0",
       "graph_id" => "long-lived",
@@ -358,12 +413,11 @@ defmodule MirrorNeuron.ManifestTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:ok, normalized} = Manifest.load(manifest)
-    assert normalized.daemon == true
-    assert normalized.type == "service"
+    assert {:error, errors} = Manifest.load(manifest)
+    assert Enum.any?(errors, &String.contains?(&1, "daemon is no longer supported"))
   end
 
-  test "accepts explicit service type as the new daemon-compatible spelling" do
+  test "accepts explicit service type" do
     manifest = %{
       "manifest_version" => "1.0",
       "graph_id" => "service-type",
@@ -378,25 +432,30 @@ defmodule MirrorNeuron.ManifestTest do
 
     assert {:ok, normalized} = Manifest.load(manifest)
     assert normalized.type == "service"
-    assert normalized.daemon == true
-    assert Manifest.to_map(normalized)["daemon"] == true
   end
 
-  test "rejects non-boolean daemon values" do
-    manifest = %{
-      "manifest_version" => "1.0",
-      "graph_id" => "invalid-long-lived",
-      "daemon" => "yes",
-      "entrypoints" => ["streamer"],
-      "nodes" => [
-        %{"node_id" => "streamer", "agent_type" => "module", "type" => "stream", "role" => "root"}
-      ],
-      "edges" => [],
-      "policies" => %{"recovery_mode" => "local_restart"}
-    }
+  test "rejects unsupported service type values" do
+    for unsupported_type <- ["daemon", "deamon"] do
+      manifest = %{
+        "manifest_version" => "1.0",
+        "graph_id" => "invalid-long-lived",
+        "type" => unsupported_type,
+        "entrypoints" => ["streamer"],
+        "nodes" => [
+          %{
+            "node_id" => "streamer",
+            "agent_type" => "module",
+            "type" => "stream",
+            "role" => "root"
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      }
 
-    assert {:error, errors} = Manifest.load(manifest)
-    assert Enum.any?(errors, &String.contains?(&1, "daemon must be a boolean"))
+      assert {:error, errors} = Manifest.load(manifest)
+      assert Enum.any?(errors, &String.contains?(&1, "type must be service or omitted for batch"))
+    end
   end
 
   test "accepts supported template types" do

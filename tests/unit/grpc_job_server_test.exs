@@ -5,6 +5,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
   alias MirrorNeuron.Grpc.JobServer
 
   alias Mirrorneuron.Cluster.V1.{
+    CheckServicesRequest,
     DrainNodeRequest,
     NetworkHandshakeRequest,
     SetNodeMaintenanceRequest
@@ -12,9 +13,11 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
   alias Mirrorneuron.Job.V1.{ClearJobsRequest, SubmitJobRequest}
   @admin_token_env "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN"
+  @operator_token_env "MN_GRPC_AUTH_TOKEN"
 
   setup do
     old_token = System.get_env(@admin_token_env)
+    old_operator_token = System.get_env(@operator_token_env)
     old_network_only = System.get_env("MN_NETWORK_ONLY")
     old_network_token = System.get_env("MN_NETWORK_JOIN_TOKEN")
     old_advertise_host = System.get_env("MN_NETWORK_ADVERTISE_HOST")
@@ -29,6 +32,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
     on_exit(fn ->
       restore_env(@admin_token_env, old_token)
+      restore_env(@operator_token_env, old_operator_token)
       restore_env("MN_NETWORK_ONLY", old_network_only)
       restore_env("MN_NETWORK_JOIN_TOKEN", old_network_token)
       restore_env("MN_NETWORK_ADVERTISE_HOST", old_advertise_host)
@@ -123,6 +127,53 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert Exception.message(error) =~ "valid MN_NETWORK_JOIN_TOKEN is required"
   end
 
+  test "check services RPC runs generic direct checks and returns a validation report" do
+    System.put_env(@operator_token_env, "operator-token")
+    port = start_tcp_server()
+
+    response =
+      ClusterServer.check_services(
+        %CheckServicesRequest{
+          services_json:
+            Jason.encode!([
+              %{
+                "name" => "agent-api",
+                "address" => "127.0.0.1",
+                "port" => port,
+                "checks" => [%{"name" => "tcp", "type" => "tcp", "timeout_ms" => 1_000}]
+              }
+            ])
+        },
+        %{headers: %{"authorization" => "Bearer operator-token"}}
+      )
+
+    assert %{"ok" => true, "results" => [%{"name" => "agent-api"}]} =
+             Jason.decode!(response.result_json)
+  end
+
   defp restore_env(name, nil), do: System.delete_env(name)
   defp restore_env(name, value), do: System.put_env(name, value)
+
+  defp start_tcp_server do
+    {:ok, listen_socket} =
+      :gen_tcp.listen(0, [
+        :binary,
+        packet: :raw,
+        active: false,
+        reuseaddr: true,
+        ip: {127, 0, 0, 1}
+      ])
+
+    {:ok, {{127, 0, 0, 1}, port}} = :inet.sockname(listen_socket)
+
+    spawn_link(fn ->
+      with {:ok, socket} <- :gen_tcp.accept(listen_socket, 5_000) do
+        :gen_tcp.close(socket)
+      end
+
+      :gen_tcp.close(listen_socket)
+    end)
+
+    port
+  end
 end

@@ -6,6 +6,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   alias MirrorNeuron.Message
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
+  alias MirrorNeuron.{ServiceRegistry, ServiceSpec}
   alias MirrorNeuron.Scheduler
   alias MirrorNeuron.Runtime.{AgentWorker, Backpressure, EventBus, LifecyclePolicy, Naming}
   alias MirrorNeuron.Sandbox.JobSandbox
@@ -80,7 +81,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     terminate_agent_workers(state)
 
     with :ok <- wait_for_agents_stopped(state, 5_000),
-         {:ok, next_state} <- recover_missing_agents(state) do
+         {:ok, next_state} <- recover_missing_agents(state),
+         :ok <- register_job_services(next_state) do
       persist_job(next_state)
 
       EventBus.publish(state.job_id, %{
@@ -130,6 +132,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
     with :ok <- start_agents(state),
          :ok <- wait_for_agents_ready(state),
+         :ok <- register_runtime_services(state),
          :ok <- seed_entrypoints(state) do
       next_state = %{state | status: "running"}
       persist_job(next_state)
@@ -920,6 +923,66 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     end)
   end
 
+  defp register_runtime_services(state) do
+    with :ok <- register_job_services(state) do
+      Enum.reduce_while(state.agent_ids, :ok, fn agent_id, :ok ->
+        case register_agent_services(state, agent_id) do
+          :ok -> {:cont, :ok}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+    end
+  end
+
+  defp register_job_services(state) do
+    services =
+      ServiceSpec.service_instances_for_job(state.manifest, state.job_id,
+        bundle_root: state.bundle && state.bundle.root_path
+      )
+
+    register_services(state, services)
+  end
+
+  defp register_agent_services(state, agent_id) do
+    node = Map.fetch!(state.nodes_by_id, agent_id)
+    target_node = Scheduler.target_node(scheduler_plan(state), agent_id) || to_string(Node.self())
+
+    services =
+      ServiceSpec.service_instances_for_agent(
+        state.manifest,
+        state.job_id,
+        node,
+        target_node,
+        bundle_root: state.bundle && state.bundle.root_path
+      )
+
+    register_services(state, services)
+  end
+
+  defp register_services(_state, []), do: :ok
+
+  defp register_services(state, services) do
+    case ServiceRegistry.register_many(services) do
+      {:ok, registered} ->
+        Enum.each(registered, fn service ->
+          EventBus.publish(state.job_id, %{
+            type: :service_registered,
+            service_id: Map.get(service, "id"),
+            service_name: Map.get(service, "name"),
+            agent_id: Map.get(service, "agent_id"),
+            node: Map.get(service, "node"),
+            status: Map.get(service, "status"),
+            timestamp: Runtime.timestamp()
+          })
+        end)
+
+        :ok
+
+      {:error, reason} ->
+        {:error, "failed to register services: #{inspect(reason)}"}
+    end
+  end
+
   defp wait_for_agents_ready(state, timeout_ms \\ 20_000) do
     started_at = System.monotonic_time(:millisecond)
     do_wait_for_agents_ready(state, started_at, timeout_ms)
@@ -985,14 +1048,20 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
         case wait_result do
           :ok ->
-            EventBus.publish(state.job_id, %{
-              type: :agent_recovered,
-              agent_id: agent_id,
-              attempt: attempt,
-              timestamp: Runtime.timestamp()
-            })
+            case register_agent_services(state, agent_id) do
+              :ok ->
+                EventBus.publish(state.job_id, %{
+                  type: :agent_recovered,
+                  agent_id: agent_id,
+                  attempt: attempt,
+                  timestamp: Runtime.timestamp()
+                })
 
-            {:ok, mark_policy_idle(state, agent_id)}
+                {:ok, mark_policy_idle(state, agent_id)}
+
+              {:error, reason} ->
+                {:error, reason, state}
+            end
 
           {:error, reason} ->
             {:error, reason, state}
@@ -1517,6 +1586,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   defp terminate_agent_workers(state, agent_ids) do
     Enum.each(agent_ids, fn agent_id ->
+      ServiceRegistry.deregister_agent(state.job_id, agent_id)
+
       case Horde.Registry.lookup(
              MirrorNeuron.DistributedRegistry,
              {:agent, state.job_id, agent_id}
@@ -1546,6 +1617,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp finalize_job(state, status, result, event_type, event_fields) do
     state = cancel_policy_timers(state)
     terminate_agent_workers(state)
+    ServiceRegistry.deregister_job(state.job_id)
 
     next_state = %{state | status: status, result: result}
     persist_job(next_state)

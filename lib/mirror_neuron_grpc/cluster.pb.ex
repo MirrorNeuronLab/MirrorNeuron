@@ -259,6 +259,73 @@ defmodule Mirrorneuron.Cluster.V1.GetNodeDrainStatusResponse do
   field(:result_json, 1, type: :string, json_name: "resultJson")
 end
 
+defmodule Mirrorneuron.Cluster.V1.ListServicesRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.ListServicesRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:query_json, 1, type: :string, json_name: "queryJson")
+end
+
+defmodule Mirrorneuron.Cluster.V1.ListServicesResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.ListServicesResponse",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:result_json, 1, type: :string, json_name: "resultJson")
+end
+
+defmodule Mirrorneuron.Cluster.V1.ResolveServiceRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.ResolveServiceRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:name, 1, type: :string)
+  field(:query_json, 2, type: :string, json_name: "queryJson")
+end
+
+defmodule Mirrorneuron.Cluster.V1.ResolveServiceResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.ResolveServiceResponse",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:result_json, 1, type: :string, json_name: "resultJson")
+end
+
+defmodule Mirrorneuron.Cluster.V1.CheckServicesRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.CheckServicesRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:services_json, 1, type: :string, json_name: "servicesJson")
+end
+
+defmodule Mirrorneuron.Cluster.V1.CheckServicesResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.CheckServicesResponse",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:result_json, 1, type: :string, json_name: "resultJson")
+end
+
 defmodule Mirrorneuron.Cluster.V1.ClusterService.Service do
   @moduledoc false
 
@@ -330,6 +397,24 @@ defmodule Mirrorneuron.Cluster.V1.ClusterService.Service do
     :GetNodeDrainStatus,
     Mirrorneuron.Cluster.V1.GetNodeDrainStatusRequest,
     Mirrorneuron.Cluster.V1.GetNodeDrainStatusResponse
+  )
+
+  rpc(
+    :ListServices,
+    Mirrorneuron.Cluster.V1.ListServicesRequest,
+    Mirrorneuron.Cluster.V1.ListServicesResponse
+  )
+
+  rpc(
+    :ResolveService,
+    Mirrorneuron.Cluster.V1.ResolveServiceRequest,
+    Mirrorneuron.Cluster.V1.ResolveServiceResponse
+  )
+
+  rpc(
+    :CheckServices,
+    Mirrorneuron.Cluster.V1.CheckServicesRequest,
+    Mirrorneuron.Cluster.V1.CheckServicesResponse
   )
 end
 

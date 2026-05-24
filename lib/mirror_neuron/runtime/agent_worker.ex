@@ -5,10 +5,12 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   alias MirrorNeuron.AgentRegistry
   alias MirrorNeuron.Message
   alias MirrorNeuron.Persistence.RedisStore
+  alias MirrorNeuron.ResourceSpec
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.Backpressure
   alias MirrorNeuron.Runtime.Naming
   alias MirrorNeuron.Runtime.RouteCondition
+  alias MirrorNeuron.Scheduler
 
   @default_heartbeat_interval_ms 30_000
   @default_pending_drain_batch_size 25
@@ -652,13 +654,26 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   defp initialize_local_state(module, node, _snapshot), do: module.init(node)
 
   defp inject_runtime_paths(node, runtime_context) do
+    allocation = Scheduler.allocation(runtime_context[:scheduler], node.node_id)
+
     runtime_config =
       node.config
       |> Map.put("__bundle_root", runtime_context[:bundle_root])
       |> Map.put("__manifest_path", runtime_context[:manifest_path])
       |> Map.put("__payloads_path", runtime_context[:payloads_path])
+      |> Map.put("__mirror_neuron_allocation", allocation)
+      |> put_allocation_environment(allocation)
 
     %{node | config: runtime_config}
+  end
+
+  defp put_allocation_environment(config, allocation) do
+    allocation_env = ResourceSpec.allocation_env(allocation)
+
+    Map.update(config, "environment", allocation_env, fn
+      env when is_map(env) -> Map.merge(env, allocation_env)
+      _env -> allocation_env
+    end)
   end
 
   defp maybe_recover_actions(%{recovered_snapshot: nil} = state), do: {:ok, state}

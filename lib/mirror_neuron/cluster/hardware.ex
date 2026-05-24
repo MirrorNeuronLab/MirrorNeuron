@@ -3,13 +3,23 @@ defmodule MirrorNeuron.Cluster.Hardware do
   Fetches hardware information from the current node.
   """
 
+  alias MirrorNeuron.ResourceSpec
+
   def info do
+    platform = platform_info()
+    cpu = cpu_info()
+    memory = memory_info()
+    gpu = gpu_info(memory)
+
     %{
-      platform: platform_info(),
-      cpu: cpu_info(),
-      memory: memory_info(),
-      gpu: gpu_info(),
-      disk: disk_info()
+      platform: platform,
+      cpu: cpu,
+      memory: memory,
+      gpu: gpu,
+      devices: ResourceSpec.normalize_node_devices(%{"gpu" => gpu}),
+      disk: disk_info(),
+      host_paths: advertised_host_paths(),
+      runtime_drivers: advertised_runtime_drivers()
     }
   end
 
@@ -61,12 +71,12 @@ defmodule MirrorNeuron.Cluster.Hardware do
     _ -> %{total_bytes: 0, total_mb: 0}
   end
 
-  defp gpu_info do
+  defp gpu_info(memory) do
     case :os.type() do
       {:unix, :darwin} ->
         case System.cmd("system_profiler", ["SPDisplaysDataType"]) do
           {output, 0} ->
-            parse_darwin_gpu(output)
+            parse_darwin_gpu(output, memory)
 
           _ ->
             "Unknown"
@@ -74,7 +84,7 @@ defmodule MirrorNeuron.Cluster.Hardware do
 
       {:unix, :linux} ->
         case System.cmd("nvidia-smi", [
-               "--query-gpu=name,utilization.gpu,memory.used,memory.total",
+               "--query-gpu=index,uuid,name,utilization.gpu,memory.used,memory.free,memory.total",
                "--format=csv,noheader,nounits"
              ]) do
           {output, 0} ->
@@ -103,16 +113,37 @@ defmodule MirrorNeuron.Cluster.Hardware do
     _ -> %{total_bytes: 0, total_mb: 0, available_bytes: 0, available_mb: 0}
   end
 
-  defp parse_darwin_gpu(output) do
-    # Simple extraction of Chipset Model
+  def parse_darwin_gpu(output, memory \\ %{}) do
     lines = String.split(output, "\n")
-    model_line = Enum.find(lines, &String.contains?(&1, "Chipset Model"))
 
-    if model_line do
-      model_line |> String.split(":") |> List.last() |> String.trim()
-    else
-      "Unknown macOS GPU"
-    end
+    models =
+      lines
+      |> Enum.filter(&String.contains?(&1, "Chipset Model"))
+      |> Enum.map(fn line ->
+        line |> String.split(":", parts: 2) |> List.last() |> String.trim()
+      end)
+      |> Enum.reject(&(&1 == ""))
+
+    models =
+      case models do
+        [] -> ["Unknown macOS GPU"]
+        values -> values
+      end
+
+    Enum.with_index(models, fn model, index ->
+      %{
+        id: "metal-#{index}",
+        index: index,
+        name: model,
+        kind: "gpu",
+        type: "apple/gpu",
+        vendor: "apple",
+        driver: "metal",
+        memory_total_mb: number_value(map_get(memory, "total_mb")),
+        memory_free_mb: number_value(map_get(memory, "available_mb")),
+        capabilities: ["gpu", "apple", "metal", "unified_memory"]
+      }
+    end)
   end
 
   defp load_average_1m do
@@ -196,29 +227,96 @@ defmodule MirrorNeuron.Cluster.Hardware do
     }
   end
 
-  defp parse_nvidia_gpu(output) do
+  def parse_nvidia_gpu(output) do
     output
     |> String.split("\n", trim: true)
+    |> Enum.with_index()
     |> Enum.map(fn line ->
-      [name, utilization, memory_used, memory_total] =
+      {line, fallback_index} = line
+
+      columns =
         line
         |> String.split(",", trim: true)
         |> Enum.map(&String.trim/1)
 
+      {index, uuid, name, utilization, memory_used, memory_free, memory_total} =
+        case columns do
+          [index, uuid, name, utilization, memory_used, memory_free, memory_total] ->
+            {parse_integer(index) || fallback_index, uuid, name, utilization, memory_used,
+             memory_free, memory_total}
+
+          [name, utilization, memory_used, memory_total] ->
+            {fallback_index, nil, name, utilization, memory_used, nil, memory_total}
+
+          _ ->
+            {fallback_index, nil, Enum.join(columns, ", "), nil, nil, nil, nil}
+        end
+
       utilization_ratio = utilization |> parse_float() |> ratio(100)
       memory_used_mb = parse_float(memory_used)
+      memory_free_mb = parse_float(memory_free)
       memory_total_mb = parse_float(memory_total)
 
       %{
+        id: uuid || "nvidia-#{index}",
+        index: index,
         name: name,
+        kind: "gpu",
+        type: "nvidia/gpu",
+        vendor: "nvidia",
+        driver: "cuda",
         utilization_ratio: utilization_ratio,
         memory_used_mb: memory_used_mb,
+        memory_free_mb:
+          memory_free_mb ||
+            if(is_number(memory_total_mb) and is_number(memory_used_mb),
+              do: max(memory_total_mb - memory_used_mb, 0),
+              else: nil
+            ),
         memory_total_mb: memory_total_mb,
-        memory_used_ratio: ratio(memory_used_mb, memory_total_mb)
+        memory_used_ratio: ratio(memory_used_mb, memory_total_mb),
+        capabilities: ["gpu", "nvidia", "cuda"]
       }
     end)
   rescue
     _ -> String.split(output, "\n", trim: true)
+  end
+
+  defp advertised_host_paths do
+    System.get_env("MN_NODE_HOST_PATHS")
+    |> split_env_list()
+    |> Enum.map(&Path.expand/1)
+    |> Enum.uniq()
+  end
+
+  defp advertised_runtime_drivers do
+    configured =
+      System.get_env("MN_NODE_RUNTIME_DRIVERS")
+      |> split_env_list()
+      |> Enum.map(&String.downcase/1)
+
+    drivers = ["host_local"] ++ configured ++ openshell_driver()
+
+    drivers
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp openshell_driver do
+    if System.find_executable("openshell") || System.get_env("OPENSHELL_GATEWAY") do
+      ["openshell"]
+    else
+      []
+    end
+  end
+
+  defp split_env_list(nil), do: []
+
+  defp split_env_list(value) do
+    value
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
   end
 
   defp parse_disk_df(output) do
@@ -252,6 +350,26 @@ defmodule MirrorNeuron.Cluster.Hardware do
       :error -> nil
     end
   end
+
+  defp parse_integer(value) do
+    case Integer.parse(to_string(value)) do
+      {integer, _rest} -> integer
+      :error -> nil
+    end
+  end
+
+  defp number_value(value) when is_integer(value), do: value
+  defp number_value(value) when is_float(value), do: value
+  defp number_value(value) when is_binary(value), do: parse_float(value)
+  defp number_value(_value), do: nil
+
+  defp map_get(map, key) when is_map(map) do
+    Map.get(map, key) || Map.get(map, String.to_atom(key))
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp map_get(_map, _key), do: nil
 
   defp ratio(nil, _denominator), do: nil
   defp ratio(_numerator, nil), do: nil

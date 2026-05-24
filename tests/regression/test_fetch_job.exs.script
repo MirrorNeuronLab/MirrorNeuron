@@ -5,7 +5,7 @@ defmodule TestFetchJob do
     raw_manifest = %{
       "graph_id" => "graph-1",
       "job_name" => "Test Job",
-      "daemon" => false,
+      "type" => "batch",
       "entrypoints" => ["root"],
       "initial_inputs" => %{"root" => [%{"message" => "hello"}]},
       "nodes" => [%{"node_id" => "root", "agent_type" => "router", "type" => "map"}],
