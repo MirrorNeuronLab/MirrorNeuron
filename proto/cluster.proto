@@ -6,6 +6,7 @@ service ClusterService {
   rpc GetResource (GetResourceRequest) returns (GetResourceResponse);
   rpc SetResource (SetResourceRequest) returns (SetResourceResponse);
   rpc RemoveNode (RemoveNodeRequest) returns (RemoveNodeResponse);
+  rpc ReconcileNode (ReconcileNodeRequest) returns (ReconcileNodeResponse);
 }
 
 message GetSystemSummaryRequest {}
@@ -35,4 +36,14 @@ message RemoveNodeRequest {
 message RemoveNodeResponse {
   string node_name = 1;
   string status = 2;
+}
+
+message ReconcileNodeRequest {
+  string node_name = 1;
+  string reason = 2;
+  bool dry_run = 3;
+}
+
+message ReconcileNodeResponse {
+  string result_json = 1;
 }

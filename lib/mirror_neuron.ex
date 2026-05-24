@@ -78,6 +78,14 @@ defmodule MirrorNeuron do
     end
   end
 
+  def reconcile_node(node_name, opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :reconcile_node, [node_name, opts])
+    else
+      MirrorNeuron.Cluster.Reconciler.reconcile_node(node_name, opts)
+    end
+  end
+
   def list_jobs(opts \\ []), do: Monitor.list_jobs(opts)
   def job_details(job_id, opts \\ []), do: Monitor.job_details(job_id, opts)
   def cluster_overview(opts \\ []), do: Monitor.cluster_overview(opts)

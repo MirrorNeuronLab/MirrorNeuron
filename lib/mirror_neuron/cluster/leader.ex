@@ -2,6 +2,7 @@ defmodule MirrorNeuron.Cluster.Leader do
   use GenServer
   require Logger
 
+  alias MirrorNeuron.Cluster.Reconciler
   alias MirrorNeuron.Persistence.RedisStore
 
   @lease_duration_ms 10_000
@@ -128,184 +129,19 @@ defmodule MirrorNeuron.Cluster.Leader do
   end
 
   defp sweep_orphaned_jobs(owner_node \\ nil) do
-    # When the node is leader, sweep jobs that are running but have no valid lease.
-    case RedisStore.list_jobs() do
-      {:ok, jobs} ->
-        jobs
-        |> Enum.filter(fn job -> job["status"] in ["pending", "running", "paused"] end)
-        |> Enum.filter(fn job -> is_nil(owner_node) or job["lease_owner"] == owner_node end)
-        |> Enum.reduce(%{checked: 0, recovered: 0, failed: 0}, fn job, acc ->
-          update_sweep_counts(acc, check_job_lease(job))
-        end)
+    reason =
+      if owner_node,
+        do: "node #{owner_node} lost its job lease",
+        else: "lost job lease"
 
-      _ ->
-        %{checked: 0, recovered: 0, failed: 0}
+    case Reconciler.sweep_orphaned_jobs(owner_node, reason: reason) do
+      {:ok, result} ->
+        Map.take(result, [:checked, :recovered, :failed, :paused, :skipped])
+
+      {:error, _reason} ->
+        %{checked: 0, recovered: 0, failed: 0, paused: 0, skipped: 0}
     end
   end
-
-  defp check_job_lease(job) do
-    job_id = job["job_id"]
-    lease_name = "job:#{job_id}"
-
-    case RedisStore.get_lease(lease_name) do
-      {:ok, nil} ->
-        if safe_to_sweep?(job) do
-          cond do
-            recoverable_on_cluster?(job) ->
-              Logger.info("Job #{job_id} has no active lease. Leader is re-assigning...")
-              # Start the job on the cluster (Horde will distribute it)
-              case start_job_on_cluster(job_id) do
-                :ok -> :recovered
-                _ -> :checked
-              end
-
-            recoverable_locally?(job) ->
-              Logger.info(
-                "Job #{job_id} has no active lease and is configured for local recovery. Leaving it for local startup recovery."
-              )
-
-              MirrorNeuron.Runtime.EventBus.publish(job_id, %{
-                type: :local_recovery_waiting,
-                reason: "job requires local recovery on its original machine",
-                timestamp: MirrorNeuron.Runtime.timestamp()
-              })
-
-              :checked
-
-            true ->
-              Logger.info(
-                "Job #{job_id} has no active lease and is not cluster-recoverable. Marking as failed."
-              )
-
-              fail_orphaned_job(job_id)
-              :failed
-          end
-        else
-          :checked
-        end
-
-      _ ->
-        :checked
-    end
-  end
-
-  defp safe_to_sweep?(job) do
-    # Prevent sweeping a job that was *just* submitted and hasn't acquired a lease yet.
-    # If the job is older than 15 seconds, it should definitely have a lease if it's active.
-    case DateTime.from_iso8601(job["updated_at"] || job["submitted_at"] || "") do
-      {:ok, dt, _offset} ->
-        diff = DateTime.diff(DateTime.utc_now(), dt, :millisecond)
-        diff > 15_000
-
-      _ ->
-        true
-    end
-  end
-
-  defp fail_orphaned_job(job_id) do
-    now = MirrorNeuron.Runtime.timestamp()
-
-    RedisStore.persist_terminal_job(job_id, %{
-      "status" => "failed",
-      "error" => "Node running the job died and job is not configured for cluster recovery."
-    })
-
-    MirrorNeuron.Runtime.EventBus.publish(job_id, %{
-      type: :job_failed,
-      reason: "Node running the job died and job is not configured for cluster recovery.",
-      timestamp: now
-    })
-  end
-
-  defp start_job_on_cluster(job_id) do
-    case RedisStore.fetch_job(job_id) do
-      {:ok, job_map} ->
-        case load_recovery_bundle(job_map) do
-          {:ok, bundle} ->
-            spec =
-              {MirrorNeuron.Runtime.JobRunner,
-               {job_id, bundle.manifest,
-                [
-                  job_bundle: bundle,
-                  requested_recovery_policy: job_map["requested_recovery_policy"],
-                  recovery_policy: job_map["recovery_policy"],
-                  reliability: job_map["reliability"]
-                ]}}
-
-            case Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) do
-              {:ok, _pid} ->
-                MirrorNeuron.Runtime.EventBus.publish(job_id, %{
-                  type: :job_relocated,
-                  reason: "lost job lease",
-                  timestamp: MirrorNeuron.Runtime.timestamp()
-                })
-
-                :ok
-
-              {:error, {:already_started, _pid}} ->
-                :ok
-
-              {:error, reason} ->
-                Logger.warning("Leader could not restart job #{job_id}: #{inspect(reason)}")
-                {:error, reason}
-            end
-
-          {:error, reason} ->
-            Logger.warning(
-              "Leader could not load recovery bundle for #{job_id}: #{inspect(reason)}"
-            )
-
-            {:error, reason}
-        end
-
-      _ ->
-        {:error, :missing_job}
-    end
-  end
-
-  defp recoverable_on_cluster?(job) do
-    Map.get(job, "recovery_policy", "local_restart") == "cluster_recover"
-  end
-
-  defp recoverable_locally?(job) do
-    Map.get(job, "recovery_policy", "local_restart") in ["local_restart", "manual_recover"]
-  end
-
-  defp load_recovery_bundle(job_map) do
-    manifest_ref = job_map["manifest_ref"] || %{}
-    fingerprint = manifest_ref["bundle_fingerprint"]
-    job_path = manifest_ref["job_path"]
-
-    cond do
-      is_binary(fingerprint) and fingerprint != "" ->
-        case MirrorNeuron.Bundle.Archive.load(fingerprint) do
-          {:ok, bundle} ->
-            {:ok, bundle}
-
-          {:error, _reason} when is_binary(job_path) ->
-            MirrorNeuron.JobBundle.load_filesystem_path(job_path)
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-
-      is_binary(job_path) ->
-        MirrorNeuron.JobBundle.load_filesystem_path(job_path)
-
-      true ->
-        {:error, :missing_bundle_reference}
-    end
-  end
-
-  defp update_sweep_counts(acc, :recovered) do
-    acc |> Map.update!(:checked, &(&1 + 1)) |> Map.update!(:recovered, &(&1 + 1))
-  end
-
-  defp update_sweep_counts(acc, :failed) do
-    acc |> Map.update!(:checked, &(&1 + 1)) |> Map.update!(:failed, &(&1 + 1))
-  end
-
-  defp update_sweep_counts(acc, _other), do: Map.update!(acc, :checked, &(&1 + 1))
 
   defp schedule_sweep(state) do
     cancel_sweep(state)

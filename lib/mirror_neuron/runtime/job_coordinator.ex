@@ -231,6 +231,69 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   @impl true
+  def handle_call({:reschedule_agents, agent_ids, scheduler_plan, reason}, _from, state)
+      when state.status in ["running", "paused"] do
+    affected_agent_ids = normalize_agent_ids(agent_ids, state)
+
+    if affected_agent_ids == [] do
+      {:reply, {:error, :no_matching_agents}, state}
+    else
+      next_state = put_scheduler_plan(state, scheduler_plan)
+
+      EventBus.publish(state.job_id, %{
+        type: :job_agent_reschedule_started,
+        reason: reason,
+        affected_agents: affected_agent_ids,
+        timestamp: Runtime.timestamp()
+      })
+
+      Enum.each(affected_agent_ids, fn agent_id ->
+        EventBus.publish(state.job_id, %{
+          type: :agent_reschedule_started,
+          agent_id: agent_id,
+          reason: reason,
+          target_node: Scheduler.target_node(scheduler_plan, agent_id),
+          timestamp: Runtime.timestamp()
+        })
+      end)
+
+      terminate_agent_workers(next_state, affected_agent_ids)
+
+      with :ok <- wait_for_agents_stopped(next_state, 5_000, affected_agent_ids),
+           {:ok, recovered_state} <- recover_agents(next_state, affected_agent_ids) do
+        persist_job(recovered_state)
+
+        Enum.each(affected_agent_ids, fn agent_id ->
+          EventBus.publish(state.job_id, %{
+            type: :agent_rescheduled,
+            agent_id: agent_id,
+            reason: reason,
+            target_node: Scheduler.target_node(scheduler_plan, agent_id),
+            timestamp: Runtime.timestamp()
+          })
+        end)
+
+        {:reply,
+         {:ok,
+          %{
+            affected_agents: affected_agent_ids,
+            scheduler: scheduler_plan
+          }}, recovered_state}
+      else
+        {:error, failed_reason, failed_state} ->
+          {:reply, {:error, failed_reason}, failed_state}
+
+        {:error, failed_reason} ->
+          {:reply, {:error, failed_reason}, next_state}
+      end
+    end
+  end
+
+  def handle_call({:reschedule_agents, _agent_ids, _scheduler_plan, _reason}, _from, state) do
+    {:reply, {:error, "job is #{state.status}"}, state}
+  end
+
+  @impl true
   def handle_info({:agent_event, agent_id, event_type, payload}, state) do
     EventBus.publish(state.job_id, %{
       type: event_type,
@@ -475,6 +538,15 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     end)
   end
 
+  defp recover_agents(state, agent_ids) do
+    Enum.reduce_while(agent_ids, {:ok, state}, fn agent_id, {:ok, acc_state} ->
+      case recover_agent(acc_state, agent_id) do
+        {:ok, next_state} -> {:cont, {:ok, next_state}}
+        {:error, reason, next_state} -> {:halt, {:error, reason, next_state}}
+      end
+    end)
+  end
+
   defp recover_agent(state, agent_id) do
     attempts = Map.get(state.agent_restart_attempts, agent_id, 0)
 
@@ -567,12 +639,16 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp apply_execution_profile(node), do: node
 
   defp wait_for_agents_stopped(state, timeout_ms) do
-    started_at = System.monotonic_time(:millisecond)
-    do_wait_for_agents_stopped(state, started_at, timeout_ms)
+    wait_for_agents_stopped(state, timeout_ms, state.agent_ids)
   end
 
-  defp do_wait_for_agents_stopped(state, started_at, timeout_ms) do
-    running_agents = Enum.filter(state.agent_ids, &agent_ready?(state, &1))
+  defp wait_for_agents_stopped(state, timeout_ms, agent_ids) do
+    started_at = System.monotonic_time(:millisecond)
+    do_wait_for_agents_stopped(state, started_at, timeout_ms, agent_ids)
+  end
+
+  defp do_wait_for_agents_stopped(state, started_at, timeout_ms, agent_ids) do
+    running_agents = Enum.filter(agent_ids, &agent_ready?(state, &1))
 
     case running_agents do
       [] ->
@@ -583,7 +659,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
           {:error, "timed out waiting for existing agents to stop before recovery"}
         else
           Process.sleep(25)
-          do_wait_for_agents_stopped(state, started_at, timeout_ms)
+          do_wait_for_agents_stopped(state, started_at, timeout_ms, agent_ids)
         end
     end
   end
@@ -695,7 +771,11 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp terminate_agent_workers(state) do
-    Enum.each(state.agent_ids, fn agent_id ->
+    terminate_agent_workers(state, state.agent_ids)
+  end
+
+  defp terminate_agent_workers(state, agent_ids) do
+    Enum.each(agent_ids, fn agent_id ->
       case Horde.Registry.lookup(
              MirrorNeuron.DistributedRegistry,
              {:agent, state.job_id, agent_id}
@@ -946,6 +1026,20 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         "strategy" => "unknown",
         "placements" => []
       }
+  end
+
+  defp put_scheduler_plan(state, scheduler_plan) do
+    %{state | opts: Keyword.put(state.opts, :scheduler_plan, scheduler_plan)}
+  end
+
+  defp normalize_agent_ids(agent_ids, state) do
+    valid = MapSet.new(state.agent_ids)
+
+    agent_ids
+    |> List.wrap()
+    |> Enum.map(&to_string/1)
+    |> Enum.filter(&MapSet.member?(valid, &1))
+    |> Enum.uniq()
   end
 
   defp maybe_put_lease(map, nil), do: map

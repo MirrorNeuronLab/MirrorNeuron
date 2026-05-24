@@ -34,6 +34,41 @@ defmodule MirrorNeuron.Scheduler do
 
   def target_node(_plan, _agent_id), do: nil
 
+  def affected_agent_ids(%{"placements" => placements}, node) when is_list(placements) do
+    node = to_string(node)
+
+    placements
+    |> Enum.filter(&(Map.get(&1, "node") == node))
+    |> Enum.map(&Map.get(&1, "agent_id"))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  def affected_agent_ids(_plan, _node), do: []
+
+  def merge_plan(%{"placements" => existing_placements} = existing, %{
+        "placements" => replacement_placements
+      })
+      when is_list(existing_placements) and is_list(replacement_placements) do
+    replacement_ids =
+      replacement_placements
+      |> Enum.map(&Map.get(&1, "agent_id"))
+      |> Enum.reject(&is_nil/1)
+      |> MapSet.new()
+
+    placements =
+      existing_placements
+      |> Enum.reject(&(Map.get(&1, "agent_id") in replacement_ids))
+      |> Kernel.++(replacement_placements)
+
+    existing
+    |> Map.put("placements", placements)
+    |> Map.put("placement_count", length(placements))
+    |> Map.put("generated_at", MirrorNeuron.Runtime.timestamp())
+  end
+
+  def merge_plan(_existing, partial), do: partial
+
   def job_type(%Manifest{} = manifest), do: normalize_job_type(manifest)
   def strategy(%Manifest{} = manifest), do: normalize_strategy(manifest)
 
@@ -47,8 +82,13 @@ defmodule MirrorNeuron.Scheduler do
            opts
            |> Keyword.get_lazy(:nodes, &default_nodes/0)
            |> normalize_nodes(lookup_node_state),
+         nodes <- exclude_nodes(nodes, Keyword.get(opts, :exclude_nodes, [])),
          :ok <- ensure_nodes(nodes),
-         usage <- opts |> Keyword.get_lazy(:jobs, &active_jobs/0) |> usage_from_jobs(),
+         usage <-
+           opts
+           |> Keyword.get_lazy(:jobs, &active_jobs/0)
+           |> usage_from_jobs(Keyword.get(opts, :ignore_job_ids, [])),
+         demands <- filter_demands(demands, Keyword.get(opts, :only_agent_ids)),
          {:ok, placements, _usage} <- place_demands(demands, nodes, usage, strategy) do
       {:ok,
        %{
@@ -311,6 +351,16 @@ defmodule MirrorNeuron.Scheduler do
     |> Enum.reject(&is_nil/1)
   end
 
+  defp exclude_nodes(nodes, excluded) do
+    excluded =
+      excluded
+      |> List.wrap()
+      |> Enum.map(&to_string/1)
+      |> MapSet.new()
+
+    Enum.reject(nodes, &(Map.get(&1, "name") in excluded))
+  end
+
   defp normalize_node(node, lookup_node_state) when is_map(node) do
     name = map_get(node, "name") || map_get(node, "node") || to_string(Node.self())
     stored = if lookup_node_state, do: stored_node_state(name), else: %{}
@@ -366,10 +416,19 @@ defmodule MirrorNeuron.Scheduler do
     _ -> []
   end
 
-  defp usage_from_jobs(jobs) do
+  defp usage_from_jobs(jobs, ignored_job_ids) do
+    ignored_job_ids =
+      ignored_job_ids
+      |> List.wrap()
+      |> Enum.map(&to_string/1)
+      |> MapSet.new()
+
     jobs
     |> List.wrap()
-    |> Enum.filter(&(Map.get(&1, "status") in @active_job_statuses))
+    |> Enum.filter(fn job ->
+      Map.get(job, "status") in @active_job_statuses and
+        Map.get(job, "job_id") not in ignored_job_ids
+    end)
     |> Enum.flat_map(&(get_in(&1, ["scheduler", "placements"]) || []))
     |> Enum.reduce(%{}, fn placement, acc ->
       node = Map.get(placement, "node")
@@ -381,6 +440,18 @@ defmodule MirrorNeuron.Scheduler do
         acc
       end
     end)
+  end
+
+  defp filter_demands(demands, nil), do: demands
+
+  defp filter_demands(demands, agent_ids) do
+    agent_ids =
+      agent_ids
+      |> List.wrap()
+      |> Enum.map(&to_string/1)
+      |> MapSet.new()
+
+    Enum.filter(demands, &(Map.get(&1, "agent_id") in agent_ids))
   end
 
   defp place_demands(demands, nodes, usage, strategy) do

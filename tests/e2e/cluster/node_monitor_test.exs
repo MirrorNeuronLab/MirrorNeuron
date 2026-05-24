@@ -31,6 +31,13 @@ defmodule MirrorNeuron.Cluster.NodeMonitorTest do
     end
   end
 
+  defmodule ReconcilerStub do
+    def reconcile_node(node, opts) do
+      send(Process.whereis(:node_monitor_test_pid), {:reconcile_node, node, opts})
+      {:ok, %{checked: 2, recovered: 0, paused: 2, skipped: 0, failed: 0, jobs: []}}
+    end
+  end
+
   defmodule RedisStoreStub do
     def put_jobs(jobs), do: :persistent_term.put({__MODULE__, :jobs}, jobs)
 
@@ -179,7 +186,7 @@ defmodule MirrorNeuron.Cluster.NodeMonitorTest do
     assert {:ok, ^queued_lease} = Task.await(waiting_task, 1_000)
   end
 
-  test "failed reconnect attempts release capacity and pause active jobs" do
+  test "failed reconnect attempts release capacity and reconcile active jobs" do
     manager =
       start_supervised!({LeaseManager, name: unique_name(), capacities: %{"default" => 1}})
 
@@ -244,23 +251,11 @@ defmodule MirrorNeuron.Cluster.NodeMonitorTest do
     assert %{"default" => %{"queued" => 0, "in_use" => 0, "available" => 1}} =
              stringify_stats(LeaseManager.stats(manager))
 
-    assert_receive {:event_published, "running-job", %{type: :job_paused_for_manual_restart}}
-    assert_receive {:event_published, "pending-job", %{type: :job_paused_for_manual_restart}}
-
-    persisted =
-      collect_messages(fn
-        {:job_persisted, job_id, updates, _defaults} -> {job_id, updates}
-        _other -> nil
-      end)
-
-    assert Enum.sort(Enum.map(persisted, &elem(&1, 0))) == ["pending-job", "running-job"]
-
-    for {_job_id, updates} <- persisted do
-      assert updates["status"] == "paused"
-      assert updates["recovery_status"] == "paused_for_review"
-      assert updates["recovery_requires_review"] == true
-      assert updates["recovery_reason"] == "node reconnect failed after 3 attempts"
-    end
+    assert_receive {:reconcile_node, node, opts}
+    assert node == Node.self()
+    assert opts[:reason] == "node reconnect failed after 3 attempts"
+    assert opts[:redis_store] == RedisStoreStub
+    assert opts[:event_bus] == EventBusStub
 
     send(monitor, {:nodeup, Node.self()})
     assert_receive {:node_state_marked, _node, "healthy", %{}}
@@ -281,9 +276,10 @@ defmodule MirrorNeuron.Cluster.NodeMonitorTest do
            monitor_nodes: false,
            reconnect_attempts: 3,
            reconnect_backoff_ms: 1,
-           node_state: NodeStateStub,
-           leader: LeaderStub,
-           redis_store: RedisStoreStub,
+          node_state: NodeStateStub,
+          leader: LeaderStub,
+          reconciler: ReconcilerStub,
+          redis_store: RedisStoreStub,
            event_bus: EventBusStub
          ],
          opts
@@ -292,18 +288,6 @@ defmodule MirrorNeuron.Cluster.NodeMonitorTest do
   end
 
   defp parent_pid, do: Process.whereis(@test_pid_name)
-
-  defp collect_messages(mapper, acc \\ []) do
-    receive do
-      message ->
-        case mapper.(message) do
-          nil -> collect_messages(mapper, acc)
-          value -> collect_messages(mapper, [value | acc])
-        end
-    after
-      0 -> Enum.reverse(acc)
-    end
-  end
 
   defp assert_eventually(fun, timeout_ms \\ 1_000) do
     started_at = System.monotonic_time(:millisecond)

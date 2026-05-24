@@ -119,6 +119,111 @@ defmodule MirrorNeuron.SchedulerTest do
     assert [%{"agent_id" => "worker", "node" => "large@lab"}] = plan["placements"]
   end
 
+  test "ignore_job_ids removes stale capacity from replans" do
+    {:ok, manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "ignore-self",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{"cpu_cores" => 2, "memory_mb" => 2048}
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    jobs = [
+      %{
+        "job_id" => "same-job",
+        "status" => "running",
+        "scheduler" => %{
+          "placements" => [
+            %{
+              "agent_id" => "worker",
+              "node" => "small@lab",
+              "resources" => %{"cpu_cores" => 3, "memory_mb" => 3072}
+            }
+          ]
+        }
+      }
+    ]
+
+    assert {:ok, plan} =
+             Scheduler.plan(manifest,
+               nodes: [small_node(), large_node()],
+               jobs: jobs,
+               ignore_job_ids: ["same-job"]
+             )
+
+    assert [%{"agent_id" => "worker", "node" => "small@lab"}] = plan["placements"]
+  end
+
+  test "exclude_nodes prevents placement on failed node" do
+    {:ok, manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "exclude-node",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{"cpu_cores" => 2, "memory_mb" => 2048}
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    assert {:ok, plan} =
+             Scheduler.plan(manifest,
+               nodes: [small_node(), large_node()],
+               jobs: [],
+               exclude_nodes: ["small@lab"]
+             )
+
+    assert [%{"agent_id" => "worker", "node" => "large@lab"}] = plan["placements"]
+  end
+
+  test "only_agent_ids creates partial plans for affected agents" do
+    {:ok, manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "partial-plan",
+        "entrypoints" => ["first"],
+        "nodes" => [
+          %{
+            "node_id" => "first",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{"cpu_cores" => 1, "memory_mb" => 512}
+          },
+          %{
+            "node_id" => "second",
+            "agent_type" => "executor",
+            "resources" => %{"cpu_cores" => 1, "memory_mb" => 512}
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    assert {:ok, partial} =
+             Scheduler.plan(manifest,
+               nodes: [small_node(), large_node()],
+               jobs: [],
+               only_agent_ids: ["second"]
+             )
+
+    assert [%{"agent_id" => "second"}] = partial["placements"]
+  end
+
   test "execution profiles participate in placement eligibility" do
     Application.put_env(:mirror_neuron, :execution_profiles, %{
       "mlx-metal" => %{"gpu" => true, "required_capabilities" => ["metal"]}

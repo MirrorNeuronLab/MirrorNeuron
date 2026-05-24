@@ -83,6 +83,30 @@ defmodule Mirrorneuron.Cluster.V1.RemoveNodeResponse do
   field(:status, 2, type: :string)
 end
 
+defmodule Mirrorneuron.Cluster.V1.ReconcileNodeRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.ReconcileNodeRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:node_name, 1, type: :string, json_name: "nodeName")
+  field(:reason, 2, type: :string)
+  field(:dry_run, 3, type: :bool, json_name: "dryRun")
+end
+
+defmodule Mirrorneuron.Cluster.V1.ReconcileNodeResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.ReconcileNodeResponse",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:result_json, 1, type: :string, json_name: "resultJson")
+end
+
 defmodule Mirrorneuron.Cluster.V1.ClusterService.Service do
   @moduledoc false
 
@@ -112,6 +136,12 @@ defmodule Mirrorneuron.Cluster.V1.ClusterService.Service do
     :RemoveNode,
     Mirrorneuron.Cluster.V1.RemoveNodeRequest,
     Mirrorneuron.Cluster.V1.RemoveNodeResponse
+  )
+
+  rpc(
+    :ReconcileNode,
+    Mirrorneuron.Cluster.V1.ReconcileNodeRequest,
+    Mirrorneuron.Cluster.V1.ReconcileNodeResponse
   )
 end
 

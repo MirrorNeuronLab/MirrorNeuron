@@ -203,6 +203,7 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
   alias Mirrorneuron.Cluster.V1.{
     GetResourceResponse,
     GetSystemSummaryResponse,
+    ReconcileNodeResponse,
     RemoveNodeResponse,
     SetResourceResponse
   }
@@ -245,6 +246,28 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
         raise GRPC.RPCError, status: GRPC.Status.internal(), message: reason
     end
   end
+
+  def reconcile_node(request, stream) do
+    MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
+
+    opts =
+      [
+        reason: blank_to_nil(request.reason),
+        dry_run: request.dry_run
+      ]
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+
+    case MirrorNeuron.reconcile_node(request.node_name, opts) do
+      {:ok, result} ->
+        %ReconcileNodeResponse{result_json: Jason.encode!(result)}
+
+      {:error, reason} ->
+        raise GRPC.RPCError, status: GRPC.Status.internal(), message: inspect(reason)
+    end
+  end
+
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(value), do: value
 end
 
 defmodule MirrorNeuron.Grpc.ObservabilityServer do

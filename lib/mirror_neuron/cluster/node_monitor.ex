@@ -2,6 +2,7 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
   use GenServer
   require Logger
 
+  alias MirrorNeuron.Cluster.Reconciler
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime.EventBus
 
@@ -29,6 +30,7 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
          Keyword.get(opts, :lease_manager_server, MirrorNeuron.Execution.LeaseManager),
        leader: Keyword.get(opts, :leader, MirrorNeuron.Cluster.Leader),
        node_state: node_state(opts),
+       reconciler: Keyword.get(opts, :reconciler, Reconciler),
        redis_store: Keyword.get(opts, :redis_store, RedisStore),
        event_bus: Keyword.get(opts, :event_bus, EventBus),
        reconnect_attempts:
@@ -103,7 +105,7 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
 
     Logger.warning("#{reason}: #{node}")
     release_executor_capacity(node, state)
-    pause_jobs_for_node(node, reason, state)
+    reconcile_node(node, reason, state)
     state.node_state.mark(node, "offline")
     state.leader.node_down(node)
     cancel_reconnect(node_name(node), state)
@@ -149,73 +151,18 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
     end
   end
 
-  defp pause_jobs_for_node(node, reason, state) do
-    owner = node_name(node)
+  defp reconcile_node(node, reason, state) do
+    case state.reconciler.reconcile_node(node,
+           reason: reason,
+           redis_store: state.redis_store,
+           event_bus: state.event_bus
+         ) do
+      {:ok, result} ->
+        Logger.info("reconciled jobs for unavailable node #{node}: #{inspect(result)}")
 
-    case state.redis_store.list_jobs() do
-      {:ok, jobs} ->
-        jobs
-        |> Enum.filter(&job_pause_candidate?(&1, owner))
-        |> Enum.each(&pause_job_for_manual_restart(&1, reason, state))
-
-      {:error, pause_reason} ->
+      {:error, reconcile_reason} ->
         Logger.warning(
-          "failed to inspect jobs while pausing node #{owner}: #{inspect(pause_reason)}"
-        )
-    end
-  end
-
-  defp job_pause_candidate?(%{"lease_owner" => owner, "status" => status}, owner)
-       when status in ["pending", "running"],
-       do: true
-
-  defp job_pause_candidate?(_job, _owner), do: false
-
-  defp pause_job_for_manual_restart(%{"job_id" => job_id} = job, reason, state) do
-    now = MirrorNeuron.Runtime.timestamp()
-
-    recovery = %{
-      "status" => "paused_for_review",
-      "reason" => reason,
-      "requires_review" => true,
-      "can_resume" => true,
-      "updated_at" => now
-    }
-
-    updates = %{
-      "status" => "paused",
-      "recovery" => recovery,
-      "recovery_status" => "paused_for_review",
-      "recovery_requires_review" => true,
-      "recovery_reason" => reason
-    }
-
-    defaults = %{
-      "graph_id" => job["graph_id"] || "unknown",
-      "job_name" => job["job_name"] || job["graph_id"] || "unknown",
-      "root_agent_ids" => job["root_agent_ids"] || [],
-      "placement_policy" => job["placement_policy"] || "local",
-      "recovery_policy" => job["recovery_policy"] || "local_restart",
-      "manifest" => job["manifest"],
-      "manifest_ref" => job["manifest_ref"] || %{},
-      "submitted_at" => job["submitted_at"] || now
-    }
-
-    case state.redis_store.persist_terminal_job(job_id, updates, defaults) do
-      {:ok, _job} ->
-        _ =
-          state.event_bus.publish(job_id, %{
-            type: :job_paused_for_manual_restart,
-            reason: reason,
-            node: job["lease_owner"],
-            timestamp: now
-          })
-
-        :ok
-
-      {:error, persist_reason} ->
-        Logger.warning(
-          "failed to pause job #{job_id} after node reconnect exhaustion: #{inspect(persist_reason)}"
+          "failed to reconcile jobs for unavailable node #{node}: #{inspect(reconcile_reason)}"
         )
     end
   end
