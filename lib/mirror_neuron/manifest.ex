@@ -3,6 +3,7 @@ defmodule MirrorNeuron.Manifest do
     :manifest_version,
     :graph_id,
     :job_name,
+    :type,
     :daemon,
     :required_context_engine,
     :requirements,
@@ -68,6 +69,7 @@ defmodule MirrorNeuron.Manifest do
   def to_map(%__MODULE__{} = manifest) do
     %{
       "manifest_version" => manifest.manifest_version,
+      "type" => manifest.type,
       "graph_id" => manifest.graph_id,
       "job_name" => manifest.job_name,
       "daemon" => manifest.daemon,
@@ -85,11 +87,15 @@ defmodule MirrorNeuron.Manifest do
   end
 
   defp normalize_and_validate(raw) do
+    raw_daemon = Map.get(raw, "daemon", :unset)
+    manifest_type = normalize_type(Map.get(raw, "type"), raw_daemon)
+
     manifest = %__MODULE__{
       manifest_version: Map.get(raw, "manifest_version"),
+      type: manifest_type,
       graph_id: Map.get(raw, "graph_id"),
       job_name: Map.get(raw, "job_name") || Map.get(raw, "graph_id"),
-      daemon: normalize_daemon(Map.get(raw, "daemon", false)),
+      daemon: normalize_daemon(raw_daemon, manifest_type),
       required_context_engine:
         normalize_required_context_engine(
           Map.get(raw, "requiredContextEngine", Map.get(raw, "required_context_engine", false))
@@ -118,6 +124,7 @@ defmodule MirrorNeuron.Manifest do
       |> validate_nodes(manifest)
       |> validate_edges(manifest)
       |> validate_entrypoints(manifest)
+      |> validate_type(manifest)
       |> validate_daemon(manifest)
       |> validate_required_context_engine(manifest)
       |> validate_requirements(manifest)
@@ -291,6 +298,14 @@ defmodule MirrorNeuron.Manifest do
     add_errors(errors, scheduling_errors)
   end
 
+  defp validate_type(errors, manifest) do
+    maybe_add_error(
+      errors,
+      manifest.type not in ["batch", "service"],
+      "type must be service or omitted for batch"
+    )
+  end
+
   defp validate_daemon(errors, manifest) do
     maybe_add_error(
       errors,
@@ -427,8 +442,16 @@ defmodule MirrorNeuron.Manifest do
 
   defp normalize_reload(_), do: %{mode: "manual", interval_seconds: 60}
 
-  defp normalize_daemon(value) when is_boolean(value), do: value
-  defp normalize_daemon(value), do: value
+  defp normalize_type(nil, true), do: "service"
+  defp normalize_type(nil, _daemon), do: "batch"
+  defp normalize_type(value, _daemon) when is_binary(value), do: String.downcase(value)
+  defp normalize_type(value, _daemon), do: value
+
+  defp normalize_daemon(:unset, "service"), do: true
+  defp normalize_daemon(:unset, _type), do: false
+  defp normalize_daemon(value, _type) when is_boolean(value), do: value
+  defp normalize_daemon(_value, "service"), do: true
+  defp normalize_daemon(value, _type), do: value
 
   defp normalize_required_context_engine(value) when is_boolean(value), do: value
   defp normalize_required_context_engine(value), do: value

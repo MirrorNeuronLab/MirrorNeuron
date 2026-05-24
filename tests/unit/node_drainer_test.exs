@@ -134,6 +134,42 @@ defmodule MirrorNeuron.Cluster.NodeDrainerTest do
     refute_receive {:reconciled, _, _}
   end
 
+  test "batch jobs migrate after the drain deadline expires" do
+    RedisStoreStub.put_jobs([batch_job("batch")])
+
+    assert {:ok, result} =
+             NodeDrainer.drain_node("small@lab",
+               deadline_ms: 0,
+               redis_store: RedisStoreStub,
+               node_state: NodeStateStub,
+               reconciler: ReconcilerStub,
+               event_bus: EventBusStub
+             )
+
+    assert result["status"] == "complete"
+    assert [%{"job_id" => "batch", "status" => "migrated"}] = result["actions"]
+    assert_receive {:reconciled, "small@lab", opts}
+    assert opts[:trigger] == "node_drain"
+    assert opts[:only_job_ids] == ["batch"]
+  end
+
+  test "completed batch jobs no longer block drain completion" do
+    RedisStoreStub.put_jobs([batch_job("done") |> Map.put("status", "completed")])
+
+    assert {:ok, result} =
+             NodeDrainer.drain_node("small@lab",
+               redis_store: RedisStoreStub,
+               node_state: NodeStateStub,
+               reconciler: ReconcilerStub,
+               event_bus: EventBusStub
+             )
+
+    assert result["status"] == "complete"
+    assert result["actions"] == []
+    assert result["counters"] == %{"checked" => 0}
+    refute_receive {:reconciled, _, _}
+  end
+
   test "system jobs are ignored by default and do not block completion" do
     RedisStoreStub.put_jobs([system_job("sys")])
 
@@ -148,6 +184,52 @@ defmodule MirrorNeuron.Cluster.NodeDrainerTest do
     assert result["status"] == "complete"
     assert [%{"status" => "ignored"}] = result["actions"]
     refute_receive {:reconciled, _, _}
+  end
+
+  test "system jobs can be included when the operator asks for them" do
+    RedisStoreStub.put_jobs([system_job("sys")])
+
+    assert {:ok, result} =
+             NodeDrainer.drain_node("small@lab",
+               ignore_system_jobs: false,
+               redis_store: RedisStoreStub,
+               node_state: NodeStateStub,
+               reconciler: ReconcilerStub,
+               event_bus: EventBusStub
+             )
+
+    assert result["status"] == "complete"
+    assert [%{"job_id" => "sys", "status" => "migrated"}] = result["actions"]
+    assert_receive {:reconciled, "small@lab", opts}
+    assert opts[:only_job_ids] == ["sys"]
+  end
+
+  test "coordinator lease on the draining node is enough to trigger a migration" do
+    job =
+      service_job("lease-owner")
+      |> Map.put("lease_owner", "small@lab")
+      |> put_in(["scheduler", "placements"], [
+        %{
+          "agent_id" => "worker",
+          "node" => "large@lab",
+          "resources" => %{"cpu_cores" => 1, "memory_mb" => 512}
+        }
+      ])
+
+    RedisStoreStub.put_jobs([job])
+
+    assert {:ok, result} =
+             NodeDrainer.drain_node("small@lab",
+               redis_store: RedisStoreStub,
+               node_state: NodeStateStub,
+               reconciler: ReconcilerStub,
+               event_bus: EventBusStub
+             )
+
+    assert result["status"] == "complete"
+    assert [%{"job_id" => "lease-owner", "affected_agents" => []}] = result["actions"]
+    assert_receive {:reconciled, "small@lab", opts}
+    assert opts[:only_job_ids] == ["lease-owner"]
   end
 
   test "blocked placement leaves node draining for later leader retries" do
@@ -168,6 +250,66 @@ defmodule MirrorNeuron.Cluster.NodeDrainerTest do
     assert_receive {:node_marked, "small@lab", "draining", state}
     assert get_in(state, ["drain", "status"]) == "blocked_no_placement"
     assert_receive {:event_published, "__cluster__", %{type: :node_drain_blocked}}
+  end
+
+  test "paused drain leftovers stay in review instead of completing the drain" do
+    ReconcilerStub.put_result(%{paused: 1, jobs: []})
+    RedisStoreStub.put_jobs([service_job("unsafe")])
+
+    assert {:ok, result} =
+             NodeDrainer.drain_node("small@lab",
+               redis_store: RedisStoreStub,
+               node_state: NodeStateStub,
+               reconciler: ReconcilerStub,
+               event_bus: EventBusStub
+             )
+
+    assert result["status"] == "paused_for_review"
+    assert [%{"status" => "paused_for_review"}] = result["actions"]
+    assert_receive {:node_marked, "small@lab", "draining", _}
+    assert_receive {:node_marked, "small@lab", "draining", state}
+    assert get_in(state, ["drain", "status"]) == "paused_for_review"
+    assert_receive {:event_published, "__cluster__", %{type: :node_drain_progress}}
+  end
+
+  test "due drain sweep retries draining and blocked nodes" do
+    NodeStateStub.put(%{
+      "small@lab" => %{
+        "node" => "small@lab",
+        "status" => "draining",
+        "scheduling_eligible" => false,
+        "drain" => %{
+          "status" => "blocked_no_placement",
+          "started_at" => "2026-05-24T10:00:00Z",
+          "deadline_at" => "2026-05-24T10:30:00Z",
+          "reason" => "retry drain",
+          "ignore_system_jobs" => true
+        }
+      },
+      "large@lab" => %{
+        "node" => "large@lab",
+        "status" => "maintenance",
+        "scheduling_eligible" => false,
+        "drain" => %{"status" => "complete"}
+      }
+    })
+
+    RedisStoreStub.put_jobs([service_job("svc")])
+
+    assert {:ok, result} =
+             NodeDrainer.process_due_drains(
+               redis_store: RedisStoreStub,
+               node_state: NodeStateStub,
+               reconciler: ReconcilerStub,
+               event_bus: EventBusStub
+             )
+
+    assert result["checked"] == 1
+    assert result["completed"] == 1
+    assert [%{"node" => "small@lab", "status" => "complete"}] = result["nodes"]
+    assert_receive {:reconciled, "small@lab", opts}
+    assert opts[:continue] == true
+    assert opts[:reason] == "retry drain"
   end
 
   test "cancel drain and maintenance toggles update scheduling eligibility exactly" do

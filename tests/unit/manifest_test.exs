@@ -129,6 +129,7 @@ defmodule MirrorNeuron.ManifestTest do
     assert {:ok, normalized} = Manifest.load(manifest)
     assert normalized.graph_id == "simple"
     assert normalized.daemon == false
+    assert normalized.type == "batch"
     assert normalized.required_context_engine == true
     assert normalized.entrypoints == ["router"]
     assert Enum.find(normalized.nodes, &(&1.node_id == "router")).type == "generic"
@@ -359,6 +360,26 @@ defmodule MirrorNeuron.ManifestTest do
 
     assert {:ok, normalized} = Manifest.load(manifest)
     assert normalized.daemon == true
+    assert normalized.type == "service"
+  end
+
+  test "accepts explicit service type as the new daemon-compatible spelling" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "service-type",
+      "type" => "service",
+      "entrypoints" => ["streamer"],
+      "nodes" => [
+        %{"node_id" => "streamer", "agent_type" => "module", "type" => "stream", "role" => "root"}
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, normalized} = Manifest.load(manifest)
+    assert normalized.type == "service"
+    assert normalized.daemon == true
+    assert Manifest.to_map(normalized)["daemon"] == true
   end
 
   test "rejects non-boolean daemon values" do

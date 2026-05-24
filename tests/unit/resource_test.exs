@@ -23,6 +23,9 @@ defmodule MirrorNeuron.ResourceTest do
       [
         %{
           "name" => "mn1@127.0.0.1",
+          "status" => "draining",
+          "scheduling_eligible" => false,
+          "drain" => %{"status" => "blocked_no_placement", "reason" => "kernel update"},
           "hardware" => %{
             "cpu" => %{"logical_processors" => 8},
             "memory" => %{"total_bytes" => 16 * 1024 * 1024 * 1024},
@@ -102,6 +105,16 @@ defmodule MirrorNeuron.ResourceTest do
              "disk_gb" => 150.0,
              "disk_available_gb" => 110.0
            }
+  end
+
+  test "lists node scheduling and drain metadata with resource totals" do
+    report = Resource.list()
+
+    [draining | _] = report["nodes"]
+    assert draining["name"] == "mn1@127.0.0.1"
+    assert draining["status"] == "draining"
+    assert draining["scheduling_eligible"] == false
+    assert draining["drain"] == %{"status" => "blocked_no_placement", "reason" => "kernel update"}
   end
 
   test "keeps single-node resources while exposing combined totals" do

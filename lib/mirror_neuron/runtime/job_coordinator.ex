@@ -1813,7 +1813,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp default_scheduler_plan(manifest) do
     %{
       "status" => "unknown",
-      "job_type" => if(manifest.daemon, do: "service", else: "batch"),
+      "job_type" => manifest.type || "batch",
       "strategy" => "unknown",
       "placements" => []
     }

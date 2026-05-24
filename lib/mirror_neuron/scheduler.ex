@@ -129,7 +129,7 @@ defmodule MirrorNeuron.Scheduler do
       manifest.policies
       |> policy_value("job_type", get_in(manifest.policies || %{}, ["scheduler", "job_type"]))
       |> case do
-        nil -> if(manifest.daemon, do: "service", else: "batch")
+        nil -> manifest.type || if(manifest.daemon, do: "service", else: "batch")
         value -> value
       end
       |> to_string()

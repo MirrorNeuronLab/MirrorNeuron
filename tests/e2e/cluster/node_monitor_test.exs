@@ -17,6 +17,22 @@ defmodule MirrorNeuron.Cluster.NodeMonitorTest do
     end
   end
 
+  defmodule NodeStateConnectedStub do
+    def advertise_self(status, attrs \\ %{}) do
+      mark(Node.self(), status, attrs)
+    end
+
+    def mark(node, status, attrs \\ %{}) do
+      send(Process.whereis(:node_monitor_test_pid), {:node_state_marked, node, status, attrs})
+      :ok
+    end
+
+    def mark_connected(node) do
+      send(Process.whereis(:node_monitor_test_pid), {:node_state_connected, node})
+      :ok
+    end
+  end
+
   defmodule LeaderStub do
     def node_down(node) do
       send(Process.whereis(:node_monitor_test_pid), {:leader_node_down, node})
@@ -189,6 +205,22 @@ defmodule MirrorNeuron.Cluster.NodeMonitorTest do
     LeaseManager.release(manager, queued_lease["lease_id"])
     send(waiting_task.pid, :release_queued)
     assert {:ok, ^queued_lease} = Task.await(waiting_task, 1_000)
+  end
+
+  test "nodeup uses mark_connected so maintenance and drain state are preserved" do
+    monitor =
+      start_monitor(
+        node_state: NodeStateConnectedStub,
+        reconnect_backoff_ms: 5
+      )
+
+    send(monitor, {:nodeup, Node.self()})
+
+    assert_receive {:node_state_connected, node}
+    assert node == Node.self()
+    assert_receive {:wake_blocked_evals, opts}
+    assert opts[:reason] == "node #{Node.self()} is healthy"
+    refute_received {:node_state_marked, _node, "healthy", _attrs}
   end
 
   test "failed reconnect attempts release capacity and reconcile active jobs" do

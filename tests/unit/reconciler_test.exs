@@ -335,6 +335,89 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
     refute_received {:coordinator_rescheduled, _, _, _}
   end
 
+  test "drain-triggered reschedule bypasses failure policy and does not consume attempts" do
+    {:ok, bundle} = JobBundle.load(manifest())
+
+    job =
+      running_job("drain-policy-skip")
+      |> Map.put("reschedule_policy", %{
+        "type" => "reschedule",
+        "enabled" => true,
+        "attempts" => 0,
+        "interval_ms" => 86_400_000,
+        "delay_ms" => 5_000,
+        "delay_function" => "constant",
+        "max_delay_ms" => 5_000,
+        "unlimited" => false
+      })
+
+    RedisStoreStub.put_jobs([job])
+    RedisStoreStub.put_agents("drain-policy-skip", [agent_snapshot("worker")])
+    {:ok, coordinator} = CoordinatorStub.start_link(self())
+
+    assert {:ok, result} =
+             Reconciler.reconcile_node("small@lab",
+               redis_store: RedisStoreStub,
+               event_bus: EventBusStub,
+               bundle_loader: fn _job -> {:ok, bundle} end,
+               lookup_coordinator: fn "drain-policy-skip" -> {:ok, coordinator} end,
+               scheduler_opts: [nodes: [small_node(), large_node()], jobs: [job]],
+               trigger: "node_drain",
+               skip_reschedule_policy: true,
+               skip_reschedule_policy_record: true
+             )
+
+    assert result.recovered == 1
+    assert_receive {:coordinator_rescheduled, ["worker"], scheduler_plan, _reason}
+    assert [%{"agent_id" => "worker", "node" => "large@lab"}] = scheduler_plan["placements"]
+
+    assert_receive {:job_persisted, "drain-policy-skip", %{"recovery_status" => "rescheduling"},
+                    _}
+
+    assert_receive {:job_persisted, "drain-policy-skip", %{"recovery_status" => "rescheduled"}, _}
+    refute_received {:job_persisted, "drain-policy-skip", %{"policy_state" => _policy_state}, _}
+  end
+
+  test "node drain whole-job recovery stops the live coordinator before restart" do
+    {:ok, bundle} = JobBundle.load(manifest())
+
+    job =
+      running_job("drain-whole-job")
+      |> Map.merge(%{
+        "lease_owner" => "small@lab",
+        "lease_epoch" => 9,
+        "lease" => %{"owner_id" => "small@lab", "epoch" => 9}
+      })
+
+    RedisStoreStub.put_jobs([job])
+    RedisStoreStub.put_agents("drain-whole-job", [agent_snapshot("worker")])
+    {:ok, coordinator} = CoordinatorStub.start_link(self())
+    monitor_ref = Process.monitor(coordinator)
+
+    starter = fn job_id, _bundle, opts ->
+      send(self(), {:job_started, job_id, opts})
+      :ok
+    end
+
+    assert {:ok, result} =
+             Reconciler.reconcile_node("small@lab",
+               redis_store: RedisStoreStub,
+               event_bus: EventBusStub,
+               bundle_loader: fn _job -> {:ok, bundle} end,
+               lookup_coordinator: fn "drain-whole-job" -> {:ok, coordinator} end,
+               start_job_runner: starter,
+               scheduler_opts: [nodes: [small_node(), large_node()], jobs: [job]],
+               trigger: "node_drain"
+             )
+
+    assert result.recovered == 1
+    assert_receive {:DOWN, ^monitor_ref, :process, ^coordinator, :normal}
+    assert_receive {:lease_released, "job:drain-whole-job", "small@lab", 9}
+    assert_receive {:job_started, "drain-whole-job", opts}
+    assert opts[:preferred_start_node] == "large@lab"
+    assert opts[:scheduler_plan]["placements"] |> hd() |> Map.get("node") == "large@lab"
+  end
+
   test "internal reschedule_agents recovers a specific agent after restart exhaustion" do
     {:ok, bundle} = JobBundle.load(manifest())
     job = running_job("restart-exhausted")

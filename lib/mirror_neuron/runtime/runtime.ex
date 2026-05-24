@@ -475,7 +475,7 @@ defmodule MirrorNeuron.Runtime do
     job_type =
       case Scheduler.job_type(manifest) do
         {:ok, type} -> type
-        {:error, _reason} -> if(manifest.daemon, do: "service", else: "batch")
+        {:error, _reason} -> manifest.type || if(manifest.daemon, do: "service", else: "batch")
       end
 
     %{
@@ -539,6 +539,7 @@ defmodule MirrorNeuron.Runtime do
         "job_id" => job_id,
         "graph_id" => manifest.graph_id,
         "job_name" => manifest.job_name,
+        "type" => manifest.type,
         "daemon" => manifest.daemon,
         "required_context_engine" => required_context_engine(manifest),
         "status" => "pending",

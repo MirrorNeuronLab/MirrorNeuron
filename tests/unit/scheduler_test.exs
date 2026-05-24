@@ -81,6 +81,43 @@ defmodule MirrorNeuron.SchedulerTest do
     assert [%{"agent_id" => "worker", "node" => "gpu@lab"}] = plan["placements"]
   end
 
+  test "device-style GPU resources are counted during placement" do
+    {:ok, manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "multi-gpu-device",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{
+              "cpu" => 1000,
+              "memory_gb" => 4,
+              "devices" => [%{"type" => "nvidia/gpu", "count" => 2}]
+            }
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    assert {:ok, plan} =
+             Scheduler.plan(manifest,
+               nodes: [gpu_node(), multi_gpu_node()],
+               jobs: []
+             )
+
+    assert [
+             %{
+               "agent_id" => "worker",
+               "node" => "multi-gpu@lab",
+               "resources" => %{"cpu_cores" => 1.0, "memory_mb" => 4096, "gpu_count" => 2}
+             }
+           ] = plan["placements"]
+  end
+
   test "active job placements reserve capacity for new plans" do
     {:ok, manifest} =
       Manifest.load(%{
@@ -455,6 +492,21 @@ defmodule MirrorNeuron.SchedulerTest do
         "memory" => %{"available_mb" => 65_536},
         "disk" => %{"available_mb" => 500_000},
         "gpu" => [%{"name" => "NVIDIA RTX"}]
+      }
+    }
+  end
+
+  defp multi_gpu_node do
+    %{
+      "name" => "multi-gpu@lab",
+      "status" => "healthy",
+      "capabilities" => ["cuda", "llm"],
+      "hardware" => %{
+        "platform" => %{"os" => "linux"},
+        "cpu" => %{"logical_processors" => 16},
+        "memory" => %{"available_mb" => 65_536},
+        "disk" => %{"available_mb" => 500_000},
+        "gpu" => [%{"name" => "GPU 1"}, %{"name" => "GPU 2"}]
       }
     }
   end

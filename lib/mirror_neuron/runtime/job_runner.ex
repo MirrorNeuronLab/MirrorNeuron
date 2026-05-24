@@ -325,7 +325,7 @@ defmodule MirrorNeuron.Runtime.JobRunner do
     Keyword.get(opts, :scheduler_plan) ||
       %{
         "status" => "unknown",
-        "job_type" => if(manifest.daemon, do: "service", else: "batch"),
+        "job_type" => manifest.type || "batch",
         "strategy" => "unknown",
         "placements" => []
       }
