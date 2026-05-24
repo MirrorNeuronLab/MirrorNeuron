@@ -1093,7 +1093,7 @@ defmodule MirrorNeuron.Cluster.Reconciler do
   end
 
   defp record_reschedule_policy_attempt(job, agent_ids, reason, opts) do
-    if dry_run?(opts) do
+    if dry_run?(opts) or Keyword.get(opts, :skip_reschedule_policy_record, false) do
       :ok
     else
       agent_ids = normalize_policy_agent_ids(agent_ids)

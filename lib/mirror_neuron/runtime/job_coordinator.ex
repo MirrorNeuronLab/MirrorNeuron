@@ -769,7 +769,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       MirrorNeuron.Cluster.Reconciler.reschedule_agents(
         state.job_id,
         affected_agent_ids,
-        reason: reason
+        reason: reason,
+        skip_reschedule_policy: true,
+        skip_reschedule_policy_record: true
       )
     end
 
