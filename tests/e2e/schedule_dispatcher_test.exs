@@ -6,13 +6,11 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcherTest do
 
   setup do
     unique = "schedule_test_#{System.unique_integer([:positive])}"
-    previous = System.get_env("MN_REDIS_NAMESPACE")
-    System.put_env("MN_REDIS_NAMESPACE", unique)
+    previous = Application.get_env(:mirror_neuron, :redis_namespace)
+    Application.put_env(:mirror_neuron, :redis_namespace, unique)
 
     on_exit(fn ->
-      if previous,
-        do: System.put_env("MN_REDIS_NAMESPACE", previous),
-        else: System.delete_env("MN_REDIS_NAMESPACE")
+      Application.put_env(:mirror_neuron, :redis_namespace, previous)
     end)
 
     :ok
