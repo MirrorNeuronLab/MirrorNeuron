@@ -423,7 +423,8 @@ defmodule MirrorNeuron.Runtime do
       review_reason = profile_placement_review_reason(manifest, reason)
       scheduler_plan = placement_failure_plan(manifest, reason)
 
-      with :ok <- persist_initial_job(job_id, manifest, manifest_ref, reliability, scheduler_plan),
+      with :ok <-
+             persist_initial_job(job_id, manifest, manifest_ref, reliability, scheduler_plan),
            {:ok, _job} <-
              RedisStore.persist_terminal_job(
                job_id,
