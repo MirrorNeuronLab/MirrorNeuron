@@ -25,13 +25,17 @@ defmodule MirrorNeuron.Sandbox.JobSandbox do
   end
 
   def cleanup_job_local(job_id) do
-    case Registry.lookup(@registry, job_id) do
-      [{pid, _meta}] ->
-        GenServer.stop(pid, :normal, :infinity)
-        :ok
+    if Process.whereis(@registry) do
+      case Registry.lookup(@registry, job_id) do
+        [{pid, _meta}] ->
+          GenServer.stop(pid, :normal, :infinity)
+          :ok
 
-      [] ->
-        :ok
+        [] ->
+          :ok
+      end
+    else
+      :ok
     end
   end
 
