@@ -657,9 +657,14 @@ defmodule MirrorNeuron.Cluster.Reconciler do
       else
         :ok = record_reschedule_policy_attempt(job, whole_job_policy_agents(job), reason, opts)
         mark_recovery(job, "rescheduling", reason, failed_node, [], opts)
+        stop_existing_coordinator_for_drain(job_id, opts)
         release_job_lease(job_id, job, opts)
 
-        case start_job_runner(job_id, bundle, job, scheduler_plan, opts) do
+        start_opts =
+          opts
+          |> Keyword.put(:preferred_start_node, preferred_start_node(scheduler_plan, failed_node))
+
+        case start_job_runner(job_id, bundle, job, scheduler_plan, start_opts) do
           :ok ->
             mark_recovery(job, "rescheduled", reason, failed_node, [], opts)
 
@@ -1013,11 +1018,7 @@ defmodule MirrorNeuron.Cluster.Reconciler do
       Keyword.get(opts, :start_job_runner, fn start_job_id, start_bundle, start_opts ->
         spec = {JobRunner, {start_job_id, start_bundle.manifest, start_opts}}
 
-        case Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) do
-          {:ok, _pid} -> :ok
-          {:error, {:already_started, _pid}} -> :ok
-          {:error, reason} -> {:error, reason}
-        end
+        start_supervised_job(spec, Keyword.get(start_opts, :preferred_start_node))
       end)
 
     runner_opts =
@@ -1027,11 +1028,66 @@ defmodule MirrorNeuron.Cluster.Reconciler do
         requested_recovery_policy: job["requested_recovery_policy"],
         recovery_policy: job["recovery_policy"],
         reliability: job["reliability"],
-        scheduler_plan: scheduler_plan
+        scheduler_plan: scheduler_plan,
+        preferred_start_node: Keyword.get(opts, :preferred_start_node)
       ]
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)
 
     runner.(job_id, bundle, runner_opts)
+  end
+
+  defp start_supervised_job(spec, nil), do: start_supervised_job_here(spec)
+
+  defp start_supervised_job(spec, preferred_node) when is_binary(preferred_node) do
+    preferred_node
+    |> String.to_atom()
+    |> start_supervised_job(spec)
+  rescue
+    _ -> start_supervised_job_here(spec)
+  end
+
+  defp start_supervised_job(spec, preferred_node) when is_atom(preferred_node) do
+    if preferred_node != Node.self() and Node.connect(preferred_node) do
+      case :rpc.call(
+             preferred_node,
+             Horde.DynamicSupervisor,
+             :start_child,
+             [MirrorNeuron.Runtime.JobSupervisor, spec],
+             30_000
+           ) do
+        {:ok, _pid} -> :ok
+        {:error, {:already_started, _pid}} -> :ok
+        {:error, reason} -> {:error, reason}
+        {:badrpc, reason} -> {:error, reason}
+        other -> {:error, other}
+      end
+    else
+      start_supervised_job_here(spec)
+    end
+  end
+
+  defp start_supervised_job_here(spec) do
+    case Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp stop_existing_coordinator_for_drain(job_id, opts) do
+    if Keyword.get(opts, :trigger) == "node_drain" do
+      case coordinator_pid(job_id, opts) do
+        {:ok, pid} ->
+          GenServer.stop(pid, :normal, 10_000)
+
+        :not_found ->
+          :ok
+      end
+    end
+
+    :ok
+  catch
+    :exit, _reason -> :ok
   end
 
   defp wait_for_existing_runner_stopped(job_id, opts) do
@@ -1223,6 +1279,22 @@ defmodule MirrorNeuron.Cluster.Reconciler do
       ids -> ids
     end
   end
+
+  defp preferred_start_node(%{"placements" => placements}, failed_node)
+       when is_list(placements) do
+    failed_nodes =
+      failed_node
+      |> List.wrap()
+      |> Enum.map(&to_string/1)
+      |> MapSet.new()
+
+    placements
+    |> Enum.map(&Map.get(&1, "node"))
+    |> Enum.reject(&(is_nil(&1) or &1 in failed_nodes))
+    |> List.first()
+  end
+
+  defp preferred_start_node(_scheduler_plan, _failed_node), do: nil
 
   defp current_target_nodes(job, agent_ids) do
     agent_ids
