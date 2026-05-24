@@ -31,6 +31,7 @@ defmodule MirrorNeuron.Cluster.Reconciler do
       result =
         jobs
         |> Enum.filter(&(Map.get(&1, "status") in @active_statuses))
+        |> filter_only_job_ids(Keyword.get(opts, :only_job_ids))
         |> Enum.reduce(@empty_result, fn job, acc ->
           if affected_by_node?(job, node_name) do
             record(acc, enqueue_or_run_affected_job(job, node_name, opts))
@@ -887,6 +888,11 @@ defmodule MirrorNeuron.Cluster.Reconciler do
              {:placement_blocked,
               "target node #{target} is #{status || "unknown"} during final validation"}}
 
+          validation_node_scheduling_eligible?(node) == false ->
+            {:halt,
+             {:placement_blocked,
+              "target node #{target} is scheduling-ineligible during final validation"}}
+
           true ->
             {:cont, :ok}
         end
@@ -929,6 +935,15 @@ defmodule MirrorNeuron.Cluster.Reconciler do
 
   defp validation_node_status(node),
     do: Map.get(node, "status") || Map.get(node, :status) || "healthy"
+
+  defp validation_node_scheduling_eligible?(node) do
+    cond do
+      is_nil(node) -> false
+      Map.has_key?(node, "scheduling_eligible") -> Map.get(node, "scheduling_eligible")
+      Map.has_key?(node, :scheduling_eligible) -> Map.get(node, :scheduling_eligible)
+      true -> true
+    end
+  end
 
   defp disconnected_grace_active?(nil, _opts), do: false
 
@@ -990,6 +1005,10 @@ defmodule MirrorNeuron.Cluster.Reconciler do
   end
 
   defp start_job_runner(job_id, bundle, job, scheduler_plan, opts) do
+    if Keyword.get(opts, :trigger) == "node_drain" do
+      wait_for_existing_runner_stopped(job_id, opts)
+    end
+
     runner =
       Keyword.get(opts, :start_job_runner, fn start_job_id, start_bundle, start_opts ->
         spec = {JobRunner, {start_job_id, start_bundle.manifest, start_opts}}
@@ -1013,6 +1032,31 @@ defmodule MirrorNeuron.Cluster.Reconciler do
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)
 
     runner.(job_id, bundle, runner_opts)
+  end
+
+  defp wait_for_existing_runner_stopped(job_id, opts) do
+    timeout_ms = Keyword.get(opts, :existing_runner_stop_timeout_ms, 12_000)
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_for_existing_runner_stopped(job_id, deadline)
+  end
+
+  defp do_wait_for_existing_runner_stopped(job_id, deadline) do
+    case Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:job, job_id}) do
+      [] ->
+        :ok
+
+      _entries ->
+        if System.monotonic_time(:millisecond) >= deadline do
+          :timeout
+        else
+          Process.sleep(100)
+          do_wait_for_existing_runner_stopped(job_id, deadline)
+        end
+    end
+  rescue
+    _ -> :ok
+  catch
+    _kind, _reason -> :ok
   end
 
   defp load_recovery_bundle(job, opts) do
@@ -1185,6 +1229,18 @@ defmodule MirrorNeuron.Cluster.Reconciler do
     |> Enum.map(&Scheduler.target_node(Map.get(job, "scheduler", %{}), &1))
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
+  end
+
+  defp filter_only_job_ids(jobs, nil), do: jobs
+
+  defp filter_only_job_ids(jobs, job_ids) do
+    allowed =
+      job_ids
+      |> List.wrap()
+      |> Enum.map(&to_string/1)
+      |> MapSet.new()
+
+    Enum.filter(jobs, &(Map.get(&1, "job_id") in allowed))
   end
 
   defp affected_by_node?(job, node) do

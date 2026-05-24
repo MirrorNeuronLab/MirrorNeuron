@@ -5,7 +5,8 @@ defmodule MirrorNeuron.Cluster.NodeState do
   alias MirrorNeuron.Persistence.RedisStore
 
   @active_statuses ["healthy", "joining"]
-  @inactive_statuses ["disconnected", "draining", "offline", "quarantined"]
+  @operator_statuses ["maintenance", "draining"]
+  @inactive_statuses ["disconnected", "maintenance", "draining", "offline", "quarantined"]
 
   def mark(node, status, attrs \\ %{}) do
     node_name = to_string(node)
@@ -16,6 +17,21 @@ defmodule MirrorNeuron.Cluster.NodeState do
       |> Map.put("node", node_name)
 
     RedisStore.persist_node_state(node_name, attrs)
+  end
+
+  def mark_connected(node, attrs \\ %{}) do
+    node_name = to_string(node)
+
+    case fetch(node_name) do
+      {:ok, %{"status" => status} = existing} when status in @operator_statuses ->
+        mark(node_name, status, Map.merge(existing, attrs))
+
+      {:ok, %{"scheduling_eligible" => false} = existing} ->
+        mark(node_name, Map.get(existing, "status", "maintenance"), Map.merge(existing, attrs))
+
+      _ ->
+        mark(node_name, "healthy", attrs)
+    end
   end
 
   def status(node) do
@@ -30,6 +46,20 @@ defmodule MirrorNeuron.Cluster.NodeState do
   def active?(node), do: status(node) in @active_statuses
   def inactive?(node), do: status(node) in @inactive_statuses
 
+  def schedulable?(node) do
+    case fetch(node) do
+      {:ok, state} -> schedulable_state?(state)
+      _ -> active?(node)
+    end
+  end
+
+  def schedulable_state?(%{"status" => status, "scheduling_eligible" => eligible}) do
+    status in @active_statuses and eligible != false
+  end
+
+  def schedulable_state?(%{"status" => status}), do: status in @active_statuses
+  def schedulable_state?(_state), do: true
+
   def list do
     case RedisStore.list_node_states() do
       {:ok, states} -> states
@@ -43,7 +73,11 @@ defmodule MirrorNeuron.Cluster.NodeState do
       |> Map.merge(Profile.node_advertisement())
       |> Map.merge(attrs)
 
-    mark(Node.self(), status, attrs)
+    if to_string(status) == "healthy" do
+      mark_connected(Node.self(), Map.merge(attrs, %{"self" => Map.get(attrs, "self", true)}))
+    else
+      mark(Node.self(), status, attrs)
+    end
   end
 
   def mark_profile_health(node, profile_name, status, attrs \\ %{}) do

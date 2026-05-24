@@ -9,12 +9,14 @@ defmodule MirrorNeuron.Resource do
   def list do
     limits = limits()
     nodes = nodes_provider().resource_nodes() |> List.wrap() |> Enum.map(&node_resource/1)
+    totals = totals(nodes)
 
     %{
       "mode" => if(length(nodes) > 1, do: "cluster", else: "single_node"),
       "node_count" => length(nodes),
       "limits" => limits,
-      "totals" => totals(nodes),
+      "combined" => totals,
+      "totals" => totals,
       "nodes" => nodes
     }
     |> put_usable_totals()
@@ -76,6 +78,9 @@ defmodule MirrorNeuron.Resource do
 
     %{
       "name" => Map.get(node, :name) || Map.get(node, "name") || "unknown",
+      "status" => Map.get(node, :status) || Map.get(node, "status") || "healthy",
+      "scheduling_eligible" => node_attr(node, :scheduling_eligible, true),
+      "drain" => Map.get(node, :drain) || Map.get(node, "drain"),
       "cpu_cores" => integer_value(map_get(cpu, "logical_processors")),
       "gpu_count" => gpu_count(gpu),
       "memory_gb" => memory_gb(memory),
@@ -95,6 +100,14 @@ defmodule MirrorNeuron.Resource do
       "disk_available_gb" => 0.0,
       "gpu" => []
     }
+  end
+
+  defp node_attr(node, key, default) when is_map(node) do
+    cond do
+      Map.has_key?(node, key) -> Map.get(node, key)
+      Map.has_key?(node, Atom.to_string(key)) -> Map.get(node, Atom.to_string(key))
+      true -> default
+    end
   end
 
   defp totals(nodes) do

@@ -2,11 +2,34 @@ syntax = "proto3";
 package mirrorneuron.cluster.v1;
 
 service ClusterService {
+  rpc NetworkHandshake (NetworkHandshakeRequest) returns (NetworkHandshakeResponse);
   rpc GetSystemSummary (GetSystemSummaryRequest) returns (GetSystemSummaryResponse);
   rpc GetResource (GetResourceRequest) returns (GetResourceResponse);
   rpc SetResource (SetResourceRequest) returns (SetResourceResponse);
+  rpc AddNode (AddNodeRequest) returns (AddNodeResponse);
   rpc RemoveNode (RemoveNodeRequest) returns (RemoveNodeResponse);
   rpc ReconcileNode (ReconcileNodeRequest) returns (ReconcileNodeResponse);
+  rpc DrainNode (DrainNodeRequest) returns (DrainNodeResponse);
+  rpc CancelNodeDrain (CancelNodeDrainRequest) returns (CancelNodeDrainResponse);
+  rpc SetNodeMaintenance (SetNodeMaintenanceRequest) returns (SetNodeMaintenanceResponse);
+  rpc GetNodeDrainStatus (GetNodeDrainStatusRequest) returns (GetNodeDrainStatusResponse);
+}
+
+message NetworkHandshakeRequest {
+  string token = 1;
+}
+
+message NetworkHandshakeResponse {
+  string node_name = 1;
+  string runtime_mode = 2;
+  string grpc_host = 3;
+  int32 grpc_port = 4;
+  int32 dist_port = 5;
+  string redis_host = 6;
+  int32 redis_port = 7;
+  string redis_url = 8;
+  string cluster_nodes = 9;
+  bool network_only = 10;
 }
 
 message GetSystemSummaryRequest {}
@@ -29,6 +52,16 @@ message SetResourceResponse {
   string resource_json = 1;
 }
 
+message AddNodeRequest {
+  string node_name = 1;
+  string token = 2;
+}
+
+message AddNodeResponse {
+  string node_name = 1;
+  string status = 2;
+}
+
 message RemoveNodeRequest {
   string node_name = 1;
 }
@@ -45,5 +78,46 @@ message ReconcileNodeRequest {
 }
 
 message ReconcileNodeResponse {
+  string result_json = 1;
+}
+
+message DrainNodeRequest {
+  string node_name = 1;
+  string reason = 2;
+  bool dry_run = 3;
+  int64 deadline_ms = 4;
+  bool ignore_system_jobs = 5;
+  bool wait = 6;
+}
+
+message DrainNodeResponse {
+  string result_json = 1;
+}
+
+message CancelNodeDrainRequest {
+  string node_name = 1;
+  string reason = 2;
+  bool mark_eligible = 3;
+}
+
+message CancelNodeDrainResponse {
+  string result_json = 1;
+}
+
+message SetNodeMaintenanceRequest {
+  string node_name = 1;
+  bool enabled = 2;
+  string reason = 3;
+}
+
+message SetNodeMaintenanceResponse {
+  string result_json = 1;
+}
+
+message GetNodeDrainStatusRequest {
+  string node_name = 1;
+}
+
+message GetNodeDrainStatusResponse {
   string result_json = 1;
 }

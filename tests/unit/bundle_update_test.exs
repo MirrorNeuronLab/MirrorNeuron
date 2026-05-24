@@ -88,6 +88,7 @@ defmodule MirrorNeuron.BundleUpdateTest do
                config: %{},
                resources: %{},
                constraints: [],
+               policies: %{},
                checkpoint_policy: %{},
                retry_policy: %{},
                spawn_policy: %{},

@@ -2,7 +2,7 @@ defmodule MirrorNeuron.Cluster.Leader do
   use GenServer
   require Logger
 
-  alias MirrorNeuron.Cluster.Reconciler
+  alias MirrorNeuron.Cluster.{NodeDrainer, Reconciler}
   alias MirrorNeuron.Persistence.RedisStore
 
   @lease_duration_ms 10_000
@@ -145,6 +145,22 @@ defmodule MirrorNeuron.Cluster.Leader do
           %{checked: 0, recovered: 0, failed: 0, paused: 0, blocked: 0, skipped: 0}
       end
 
+    drain_result =
+      case NodeDrainer.process_due_drains() do
+        {:ok, result} ->
+          %{
+            checked: Map.get(result, "checked", 0),
+            recovered: Map.get(result, "completed", 0),
+            failed: Map.get(result, "failed", 0),
+            paused: 0,
+            blocked: Map.get(result, "blocked", 0),
+            skipped: Map.get(result, "waiting", 0)
+          }
+
+        {:error, _reason} ->
+          %{checked: 0, recovered: 0, failed: 0, paused: 0, blocked: 0, skipped: 0}
+      end
+
     sweep_result =
       case Reconciler.sweep_orphaned_jobs(owner_node, reason: reason) do
         {:ok, result} ->
@@ -154,7 +170,9 @@ defmodule MirrorNeuron.Cluster.Leader do
           %{checked: 0, recovered: 0, failed: 0, paused: 0, blocked: 0, skipped: 0}
       end
 
-    Map.merge(due_result, sweep_result, fn _key, left, right -> left + right end)
+    due_result
+    |> Map.merge(drain_result, fn _key, left, right -> left + right end)
+    |> Map.merge(sweep_result, fn _key, left, right -> left + right end)
   end
 
   defp schedule_sweep(state) do

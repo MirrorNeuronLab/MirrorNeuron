@@ -1,4 +1,5 @@
 defmodule MirrorNeuron.Cluster.Manager do
+  alias MirrorNeuron.Cluster.NodeState
   alias MirrorNeuron.Execution.LeaseManager
 
   def nodes do
@@ -7,8 +8,13 @@ defmodule MirrorNeuron.Cluster.Manager do
     |> Enum.map(fn node ->
       case fetch_node_info(node) do
         {:ok, {lease_stats, hardware_info}} ->
+          state = stored_node_state(node)
+
           %{
             name: to_string(node),
+            status: Map.get(state, "status", "healthy"),
+            scheduling_eligible: Map.get(state, "scheduling_eligible", true),
+            drain: Map.get(state, "drain"),
             connected_nodes: runtime_connected_nodes(node),
             self?: node == Node.self(),
             scheduler_hint: if(node == Node.self(), do: "cluster_member", else: "remote_member"),
@@ -72,5 +78,14 @@ defmodule MirrorNeuron.Cluster.Manager do
       end
     end)
     |> Enum.map(&to_string/1)
+  end
+
+  defp stored_node_state(node) do
+    case NodeState.fetch(to_string(node)) do
+      {:ok, state} when is_map(state) -> state
+      _ -> %{}
+    end
+  rescue
+    _ -> %{}
   end
 end

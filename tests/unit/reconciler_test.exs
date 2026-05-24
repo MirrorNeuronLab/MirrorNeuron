@@ -230,6 +230,25 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
     assert updates["recovery_status"] == "paused_for_review"
   end
 
+  test "only_job_ids limits node reconciliation to selected jobs" do
+    RedisStoreStub.put_jobs([
+      running_job("selected") |> Map.put("recovery_policy", "local_restart"),
+      running_job("ignored") |> Map.put("recovery_policy", "local_restart")
+    ])
+
+    assert {:ok, result} =
+             Reconciler.reconcile_node("small@lab",
+               redis_store: RedisStoreStub,
+               event_bus: EventBusStub,
+               only_job_ids: ["selected"]
+             )
+
+    assert result.checked == 1
+    assert [%{job_id: "selected"}] = result.jobs
+    assert_receive {:job_persisted, "selected", _, _}
+    refute_receive {:job_persisted, "ignored", _, _}
+  end
+
   test "pauses cluster recoverable job when affected snapshot is missing" do
     {:ok, bundle} = JobBundle.load(manifest())
     job = running_job("missing-snapshot")

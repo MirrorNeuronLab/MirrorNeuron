@@ -164,6 +164,8 @@ Runtime configuration is read from environment variables in `config/runtime.exs`
 | `MN_GRPC_PORT` | `50051` | gRPC port. |
 | `MN_GRPC_AUTH_TOKEN` | Empty | Required bearer token for protected gRPC RPCs such as pause, resume, and resource updates. |
 | `MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN` | Empty | Required request token for destructive admin gRPC RPCs such as `ClearJobs`. |
+| `MN_NETWORK_ONLY` | `false` | Restricts public gRPC to network join and cluster/resource summaries for core-only cluster peers. |
+| `MN_NETWORK_JOIN_TOKEN` | Empty | Join token required by `ClusterService.NetworkHandshake`; the CLI stores it at `~/.mn/network.token` and derives cluster secrets from it. |
 | `MN_API_ENABLED` | `true` | Enables API-related runtime config, including the gRPC control-plane listener. Set to `false` to prevent the listener from starting. |
 | `MN_API_PORT` | `4000` | Core API config port. The separate `mn-api` package uses its own defaults. |
 | `MN_TEMP_DIR` | `/tmp/mirror_neuron` | Temporary runtime directory. |
@@ -332,6 +334,11 @@ MirrorNeuron Core includes protobuf definitions and generated Elixir modules for
 Generated modules live under `lib/mirror_neuron_grpc/`. The gRPC listener is controlled by `MN_API_ENABLED` and binds to `MN_CORE_HOST`, which defaults to loopback-only `localhost`.
 
 `JobService.ClearJobs` is a destructive administrative RPC. It is denied unless the server has `MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN` set and the request includes the same value in `admin_token`.
+
+`ClusterService.NetworkHandshake` is used by `mn join` and `mn add-node` to verify
+the token printed by `mn start` or `mn expose-node`. `mn expose-node` runs with
+`MN_NETWORK_ONLY=true`; in that mode job, observability, and mutating cluster RPCs
+are denied, while cluster/resource summary RPCs remain available for inspection.
 
 The separate REST API package is maintained in [`mn-api`](https://github.com/MirrorNeuronLab/mn-api). The Python SDK is maintained in [`mn-python-sdk`](https://github.com/MirrorNeuronLab/mn-python-sdk).
 

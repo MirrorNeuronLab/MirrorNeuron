@@ -46,6 +46,25 @@ defmodule MirrorNeuron.ResourceTest do
     end
   end
 
+  defmodule SingleNode do
+    def resource_nodes do
+      [
+        %{
+          "name" => "mn1@127.0.0.1",
+          "hardware" => %{
+            "cpu" => %{"logical_processors" => 8},
+            "memory" => %{"total_bytes" => 16 * 1024 * 1024 * 1024},
+            "disk" => %{
+              "total_bytes" => 100 * 1024 * 1024 * 1024,
+              "available_bytes" => 80 * 1024 * 1024 * 1024
+            },
+            "gpu" => [%{"name" => "GPU 1"}]
+          }
+        }
+      ]
+    end
+  end
+
   setup do
     {:ok, _pid} = start_supervised(Store)
     Application.put_env(:mirror_neuron, :resource_limits_store, Store)
@@ -73,6 +92,7 @@ defmodule MirrorNeuron.ResourceTest do
              "disk_available_gb" => 110.0
            }
 
+    assert report["combined"] == report["totals"]
     assert report["limits"] == %{"cpu" => 100, "gpu" => 100, "memory" => 100, "disk" => 100}
 
     assert report["usable"] == %{
@@ -84,11 +104,30 @@ defmodule MirrorNeuron.ResourceTest do
            }
   end
 
+  test "keeps single-node resources while exposing combined totals" do
+    Application.put_env(:mirror_neuron, :resource_nodes_provider, SingleNode)
+
+    report = Resource.list()
+
+    assert report["mode"] == "single_node"
+    assert report["node_count"] == 1
+    assert [%{"name" => "mn1@127.0.0.1", "cpu_cores" => 8, "gpu_count" => 1}] = report["nodes"]
+
+    assert report["combined"] == %{
+             "cpu_cores" => 8,
+             "gpu_count" => 1,
+             "memory_gb" => 16.0,
+             "disk_gb" => 100.0,
+             "disk_available_gb" => 80.0
+           }
+  end
+
   test "sets allowed percentages and applies usable totals" do
     assert {:ok, report} =
              Resource.set(%{"cpu" => 50, "gpu" => 25, "memory" => "75", "disk" => 50})
 
     assert report["limits"] == %{"cpu" => 50, "gpu" => 25, "memory" => 75, "disk" => 50}
+    assert report["combined"] == report["totals"]
 
     assert report["usable"] == %{
              "cpu_cores" => 6,

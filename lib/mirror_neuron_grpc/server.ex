@@ -1,3 +1,23 @@
+defmodule MirrorNeuron.Grpc.NetworkOnly do
+  @moduledoc false
+
+  def enabled? do
+    System.get_env("MN_NETWORK_ONLY", "false")
+    |> String.downcase()
+    |> Kernel.in(["1", "true", "yes", "on"])
+  end
+
+  def reject_if_enabled!(operation) do
+    if enabled?() do
+      raise GRPC.RPCError,
+        status: GRPC.Status.permission_denied(),
+        message: "#{operation} is disabled while MN_NETWORK_ONLY=true"
+    end
+
+    :ok
+  end
+end
+
 defmodule MirrorNeuron.Grpc.JobServer do
   use GRPC.Server, service: Mirrorneuron.Job.V1.JobService.Service
 
@@ -14,6 +34,8 @@ defmodule MirrorNeuron.Grpc.JobServer do
   }
 
   def submit_job(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("SubmitJob")
+
     bundle_id = "bundle_#{System.unique_integer([:positive])}"
     tmp_dir = Path.join(System.tmp_dir!(), bundle_id)
     File.mkdir_p!(tmp_dir)
@@ -87,6 +109,8 @@ defmodule MirrorNeuron.Grpc.JobServer do
   end
 
   def get_job(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("GetJob")
+
     job_id = request.job_id
 
     case MirrorNeuron.job_details(job_id) do
@@ -99,6 +123,8 @@ defmodule MirrorNeuron.Grpc.JobServer do
   end
 
   def list_jobs(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("ListJobs")
+
     limit = if request.limit > 0, do: request.limit, else: 100
 
     case MirrorNeuron.Monitor.list_jobs(
@@ -115,6 +141,8 @@ defmodule MirrorNeuron.Grpc.JobServer do
   end
 
   def cancel_job(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("CancelJob")
+
     job_id = request.job_id
 
     case MirrorNeuron.cancel(job_id) do
@@ -130,6 +158,7 @@ defmodule MirrorNeuron.Grpc.JobServer do
   end
 
   def pause_job(request, stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("PauseJob")
     MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
 
     job_id = request.job_id
@@ -147,6 +176,7 @@ defmodule MirrorNeuron.Grpc.JobServer do
   end
 
   def resume_job(request, stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("ResumeJob")
     MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
 
     job_id = request.job_id
@@ -164,6 +194,7 @@ defmodule MirrorNeuron.Grpc.JobServer do
   end
 
   def clear_jobs(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("ClearJobs")
     authorize_clear_jobs!(request)
 
     case MirrorNeuron.Monitor.clear_jobs() do
@@ -201,12 +232,36 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
   use GRPC.Server, service: Mirrorneuron.Cluster.V1.ClusterService.Service
 
   alias Mirrorneuron.Cluster.V1.{
+    AddNodeResponse,
+    CancelNodeDrainResponse,
+    DrainNodeResponse,
+    GetNodeDrainStatusResponse,
     GetResourceResponse,
     GetSystemSummaryResponse,
+    NetworkHandshakeResponse,
     ReconcileNodeResponse,
     RemoveNodeResponse,
+    SetNodeMaintenanceResponse,
     SetResourceResponse
   }
+
+  def network_handshake(request, _stream) do
+    authorize_network_join!(Map.get(request, :token, ""))
+
+    %NetworkHandshakeResponse{
+      node_name: to_string(Node.self()),
+      runtime_mode:
+        if(MirrorNeuron.Grpc.NetworkOnly.enabled?(), do: "network_only", else: "full"),
+      grpc_host: advertised_host(),
+      grpc_port: env_integer("MN_GRPC_PORT", 50_051),
+      dist_port: env_integer("MN_DIST_PORT", 4_370),
+      redis_host: redis_host(),
+      redis_port: redis_port(),
+      redis_url: redis_url(),
+      cluster_nodes: System.get_env("MN_CLUSTER_NODES", ""),
+      network_only: MirrorNeuron.Grpc.NetworkOnly.enabled?()
+    }
+  end
 
   def get_system_summary(_request, _stream) do
     case MirrorNeuron.Monitor.cluster_overview() do
@@ -223,6 +278,8 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
   end
 
   def set_resource(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("SetResource")
+
     with {:ok, attrs} <- Jason.decode(request.resource_json),
          {:ok, resource} <- MirrorNeuron.resource_set(attrs) do
       %SetResourceResponse{resource_json: Jason.encode!(resource)}
@@ -237,7 +294,22 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
     end
   end
 
+  def add_node(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("AddNode")
+    maybe_set_remote_cookie(request.node_name, Map.get(request, :token, ""))
+
+    case MirrorNeuron.add_node(request.node_name) do
+      {:ok, %{status: status}} ->
+        %AddNodeResponse{node_name: request.node_name, status: status}
+
+      {:error, reason} ->
+        raise GRPC.RPCError, status: GRPC.Status.internal(), message: reason
+    end
+  end
+
   def remove_node(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("RemoveNode")
+
     case MirrorNeuron.remove_node(request.node_name) do
       {:ok, %{status: status}} ->
         %RemoveNodeResponse{node_name: request.node_name, status: status}
@@ -248,6 +320,7 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
   end
 
   def reconcile_node(request, stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("ReconcileNode")
     MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
 
     opts =
@@ -266,8 +339,154 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
     end
   end
 
+  def drain_node(request, stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("DrainNode")
+    MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
+
+    opts =
+      [
+        reason: blank_to_nil(request.reason),
+        dry_run: request.dry_run,
+        deadline_ms: if(request.deadline_ms > 0, do: request.deadline_ms, else: nil),
+        ignore_system_jobs: request.ignore_system_jobs
+      ]
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+
+    case MirrorNeuron.drain_node(request.node_name, opts) do
+      {:ok, result} ->
+        %DrainNodeResponse{result_json: Jason.encode!(result)}
+
+      {:error, reason} ->
+        raise GRPC.RPCError, status: GRPC.Status.internal(), message: inspect(reason)
+    end
+  end
+
+  def cancel_node_drain(request, stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("CancelNodeDrain")
+    MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
+
+    opts =
+      [
+        reason: blank_to_nil(request.reason),
+        mark_eligible: request.mark_eligible
+      ]
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+
+    case MirrorNeuron.cancel_node_drain(request.node_name, opts) do
+      {:ok, result} ->
+        %CancelNodeDrainResponse{result_json: Jason.encode!(result)}
+
+      {:error, reason} ->
+        raise GRPC.RPCError, status: GRPC.Status.internal(), message: inspect(reason)
+    end
+  end
+
+  def set_node_maintenance(request, stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("SetNodeMaintenance")
+    MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
+
+    opts =
+      [reason: blank_to_nil(request.reason)]
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+
+    case MirrorNeuron.set_node_maintenance(request.node_name, request.enabled, opts) do
+      {:ok, result} ->
+        %SetNodeMaintenanceResponse{result_json: Jason.encode!(result)}
+
+      {:error, reason} ->
+        raise GRPC.RPCError, status: GRPC.Status.internal(), message: inspect(reason)
+    end
+  end
+
+  def get_node_drain_status(request, stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("GetNodeDrainStatus")
+    MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
+
+    case MirrorNeuron.node_drain_status(request.node_name) do
+      {:ok, result} ->
+        %GetNodeDrainStatusResponse{result_json: Jason.encode!(result)}
+
+      {:error, reason} ->
+        raise GRPC.RPCError, status: GRPC.Status.internal(), message: inspect(reason)
+    end
+  end
+
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(value), do: value
+
+  defp authorize_network_join!(request_token) do
+    expected_token = System.get_env("MN_NETWORK_JOIN_TOKEN", "") |> String.trim()
+    request_token = to_string(request_token || "") |> String.trim()
+
+    unless expected_token != "" and secure_compare(request_token, expected_token) do
+      raise GRPC.RPCError,
+        status: GRPC.Status.unauthenticated(),
+        message: "valid MN_NETWORK_JOIN_TOKEN is required"
+    end
+
+    :ok
+  end
+
+  defp secure_compare(left, right) when is_binary(left) and is_binary(right) do
+    byte_size(left) == byte_size(right) and
+      :crypto.hash(:sha256, left) == :crypto.hash(:sha256, right)
+  end
+
+  defp secure_compare(_left, _right), do: false
+
+  defp maybe_set_remote_cookie(node_name, token)
+       when is_binary(node_name) and is_binary(token) and token != "" do
+    cookie =
+      :crypto.hash(:sha256, "mirror-neuron:cookie:#{token}")
+      |> Base.encode16(case: :lower)
+      |> String.to_atom()
+
+    node_name
+    |> String.to_atom()
+    |> Node.set_cookie(cookie)
+
+    :ok
+  end
+
+  defp maybe_set_remote_cookie(_node_name, _token), do: :ok
+
+  defp advertised_host do
+    System.get_env("MN_NETWORK_ADVERTISE_HOST") ||
+      System.get_env("MN_CORE_HOST", "localhost")
+  end
+
+  defp redis_host do
+    System.get_env("MN_NETWORK_REDIS_HOST") ||
+      (redis_uri().host || advertised_host())
+  end
+
+  defp redis_port do
+    env_integer("MN_NETWORK_REDIS_PORT", redis_uri().port || 6_379)
+  end
+
+  defp redis_url do
+    uri = redis_uri()
+    host = redis_host()
+    port = redis_port()
+    path = uri.path || "/0"
+    scheme = uri.scheme || "redis"
+    userinfo = if uri.userinfo, do: "#{uri.userinfo}@", else: ""
+
+    "#{scheme}://#{userinfo}#{host}:#{port}#{path}"
+  end
+
+  defp redis_uri do
+    "MN_REDIS_URL"
+    |> System.get_env("redis://localhost:6379/0")
+    |> URI.parse()
+  end
+
+  defp env_integer(name, default) do
+    case Integer.parse(System.get_env(name, "")) do
+      {value, ""} -> value
+      _ -> default
+    end
+  end
 end
 
 defmodule MirrorNeuron.Grpc.ObservabilityServer do
@@ -276,6 +495,8 @@ defmodule MirrorNeuron.Grpc.ObservabilityServer do
   alias Mirrorneuron.Observability.V1.EventResponse
 
   def stream_events(request, stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("StreamEvents")
+
     job_id = request.job_id
 
     case MirrorNeuron.events(job_id) do

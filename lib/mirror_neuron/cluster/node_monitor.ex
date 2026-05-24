@@ -70,7 +70,7 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
       |> cancel_disconnect(node_name(node))
 
     restore_executor_capacity(state)
-    state.node_state.mark(node, "healthy")
+    mark_node_connected(state.node_state, node)
     wake_blocked_evals(node, state)
     Logger.notice("Node reconnected: #{node}")
     {:noreply, state}
@@ -112,7 +112,7 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
     if state.connect.(node) do
       Logger.notice("Node reconnected after #{attempt} attempt(s): #{node}")
       restore_executor_capacity(state)
-      state.node_state.mark(node, "healthy")
+      mark_node_connected(state.node_state, node)
       wake_blocked_evals(node, state)
       {:noreply, cancel_reconnect(node_name(node), state)}
     else
@@ -318,6 +318,15 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
   defp server_alive?(_server), do: false
 
   defp node_state(opts), do: Keyword.get(opts, :node_state, MirrorNeuron.Cluster.NodeState)
+
+  defp mark_node_connected(node_state, node) do
+    if function_exported?(node_state, :mark_connected, 1) do
+      node_state.mark_connected(node)
+    else
+      node_state.mark(node, "healthy")
+    end
+  end
+
   defp node_name(node) when is_atom(node), do: Atom.to_string(node)
   defp node_name(node) when is_binary(node), do: node
   defp node_name(node), do: to_string(node)

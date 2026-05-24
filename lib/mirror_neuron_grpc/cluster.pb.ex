@@ -1,3 +1,34 @@
+defmodule Mirrorneuron.Cluster.V1.NetworkHandshakeRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.NetworkHandshakeRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:token, 1, type: :string)
+end
+
+defmodule Mirrorneuron.Cluster.V1.NetworkHandshakeResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.NetworkHandshakeResponse",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:node_name, 1, type: :string, json_name: "nodeName")
+  field(:runtime_mode, 2, type: :string, json_name: "runtimeMode")
+  field(:grpc_host, 3, type: :string, json_name: "grpcHost")
+  field(:grpc_port, 4, type: :int32, json_name: "grpcPort")
+  field(:dist_port, 5, type: :int32, json_name: "distPort")
+  field(:redis_host, 6, type: :string, json_name: "redisHost")
+  field(:redis_port, 7, type: :int32, json_name: "redisPort")
+  field(:redis_url, 8, type: :string, json_name: "redisUrl")
+  field(:cluster_nodes, 9, type: :string, json_name: "clusterNodes")
+  field(:network_only, 10, type: :bool, json_name: "networkOnly")
+end
+
 defmodule Mirrorneuron.Cluster.V1.GetSystemSummaryRequest do
   @moduledoc false
 
@@ -60,6 +91,30 @@ defmodule Mirrorneuron.Cluster.V1.SetResourceResponse do
   field(:resource_json, 1, type: :string, json_name: "resourceJson")
 end
 
+defmodule Mirrorneuron.Cluster.V1.AddNodeRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.AddNodeRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:node_name, 1, type: :string, json_name: "nodeName")
+  field(:token, 2, type: :string)
+end
+
+defmodule Mirrorneuron.Cluster.V1.AddNodeResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.AddNodeResponse",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:node_name, 1, type: :string, json_name: "nodeName")
+  field(:status, 2, type: :string)
+end
+
 defmodule Mirrorneuron.Cluster.V1.RemoveNodeRequest do
   @moduledoc false
 
@@ -107,12 +162,115 @@ defmodule Mirrorneuron.Cluster.V1.ReconcileNodeResponse do
   field(:result_json, 1, type: :string, json_name: "resultJson")
 end
 
+defmodule Mirrorneuron.Cluster.V1.DrainNodeRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.DrainNodeRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:node_name, 1, type: :string, json_name: "nodeName")
+  field(:reason, 2, type: :string)
+  field(:dry_run, 3, type: :bool, json_name: "dryRun")
+  field(:deadline_ms, 4, type: :int64, json_name: "deadlineMs")
+  field(:ignore_system_jobs, 5, type: :bool, json_name: "ignoreSystemJobs")
+  field(:wait, 6, type: :bool)
+end
+
+defmodule Mirrorneuron.Cluster.V1.DrainNodeResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.DrainNodeResponse",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:result_json, 1, type: :string, json_name: "resultJson")
+end
+
+defmodule Mirrorneuron.Cluster.V1.CancelNodeDrainRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.CancelNodeDrainRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:node_name, 1, type: :string, json_name: "nodeName")
+  field(:reason, 2, type: :string)
+  field(:mark_eligible, 3, type: :bool, json_name: "markEligible")
+end
+
+defmodule Mirrorneuron.Cluster.V1.CancelNodeDrainResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.CancelNodeDrainResponse",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:result_json, 1, type: :string, json_name: "resultJson")
+end
+
+defmodule Mirrorneuron.Cluster.V1.SetNodeMaintenanceRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.SetNodeMaintenanceRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:node_name, 1, type: :string, json_name: "nodeName")
+  field(:enabled, 2, type: :bool)
+  field(:reason, 3, type: :string)
+end
+
+defmodule Mirrorneuron.Cluster.V1.SetNodeMaintenanceResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.SetNodeMaintenanceResponse",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:result_json, 1, type: :string, json_name: "resultJson")
+end
+
+defmodule Mirrorneuron.Cluster.V1.GetNodeDrainStatusRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.GetNodeDrainStatusRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:node_name, 1, type: :string, json_name: "nodeName")
+end
+
+defmodule Mirrorneuron.Cluster.V1.GetNodeDrainStatusResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.GetNodeDrainStatusResponse",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:result_json, 1, type: :string, json_name: "resultJson")
+end
+
 defmodule Mirrorneuron.Cluster.V1.ClusterService.Service do
   @moduledoc false
 
   use GRPC.Service,
     name: "mirrorneuron.cluster.v1.ClusterService",
     protoc_gen_elixir_version: "0.16.0"
+
+  rpc(
+    :NetworkHandshake,
+    Mirrorneuron.Cluster.V1.NetworkHandshakeRequest,
+    Mirrorneuron.Cluster.V1.NetworkHandshakeResponse
+  )
 
   rpc(
     :GetSystemSummary,
@@ -133,6 +291,12 @@ defmodule Mirrorneuron.Cluster.V1.ClusterService.Service do
   )
 
   rpc(
+    :AddNode,
+    Mirrorneuron.Cluster.V1.AddNodeRequest,
+    Mirrorneuron.Cluster.V1.AddNodeResponse
+  )
+
+  rpc(
     :RemoveNode,
     Mirrorneuron.Cluster.V1.RemoveNodeRequest,
     Mirrorneuron.Cluster.V1.RemoveNodeResponse
@@ -142,6 +306,30 @@ defmodule Mirrorneuron.Cluster.V1.ClusterService.Service do
     :ReconcileNode,
     Mirrorneuron.Cluster.V1.ReconcileNodeRequest,
     Mirrorneuron.Cluster.V1.ReconcileNodeResponse
+  )
+
+  rpc(
+    :DrainNode,
+    Mirrorneuron.Cluster.V1.DrainNodeRequest,
+    Mirrorneuron.Cluster.V1.DrainNodeResponse
+  )
+
+  rpc(
+    :CancelNodeDrain,
+    Mirrorneuron.Cluster.V1.CancelNodeDrainRequest,
+    Mirrorneuron.Cluster.V1.CancelNodeDrainResponse
+  )
+
+  rpc(
+    :SetNodeMaintenance,
+    Mirrorneuron.Cluster.V1.SetNodeMaintenanceRequest,
+    Mirrorneuron.Cluster.V1.SetNodeMaintenanceResponse
+  )
+
+  rpc(
+    :GetNodeDrainStatus,
+    Mirrorneuron.Cluster.V1.GetNodeDrainStatusRequest,
+    Mirrorneuron.Cluster.V1.GetNodeDrainStatusResponse
   )
 end
 

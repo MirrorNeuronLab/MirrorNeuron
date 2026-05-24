@@ -370,9 +370,19 @@ defmodule MirrorNeuron.Scheduler do
     hardware = map_get(node, "hardware") || map_get(stored, "hardware") || local_hardware(name)
     status = map_get(node, "status") || map_get(stored, "status") || "healthy"
 
+    scheduling_eligible =
+      map_get(node, "scheduling_eligible")
+      |> case do
+        nil -> map_get(stored, "scheduling_eligible")
+        value -> value
+      end
+      |> eligible_value()
+
     %{
       "name" => name,
       "status" => status,
+      "scheduling_eligible" => scheduling_eligible,
+      "drain" => map_get(node, "drain") || map_get(stored, "drain"),
       "hardware" => stringify_map(hardware),
       "profiles" => list_value(map_get(node, "profiles") || map_get(stored, "profiles")),
       "capabilities" =>
@@ -403,10 +413,10 @@ defmodule MirrorNeuron.Scheduler do
   defp ensure_nodes([]), do: {:error, "no runtime nodes are available"}
 
   defp ensure_nodes(nodes) do
-    if Enum.any?(nodes, &(Map.get(&1, "status") in @active_node_statuses)) do
+    if Enum.any?(nodes, &schedulable_node?/1) do
       :ok
     else
-      {:error, "no healthy runtime nodes are available"}
+      {:error, "no schedulable runtime nodes are available"}
     end
   end
 
@@ -475,7 +485,7 @@ defmodule MirrorNeuron.Scheduler do
 
     eligible =
       nodes
-      |> Enum.filter(&(Map.get(&1, "status") in @active_node_statuses))
+      |> Enum.filter(&schedulable_node?/1)
       |> Enum.reduce([], fn node, acc ->
         case system_node_plan(node, demands, Map.get(usage, node["name"], empty_resources())) do
           {:ok, group_resources} ->
@@ -534,7 +544,7 @@ defmodule MirrorNeuron.Scheduler do
   end
 
   defp system_node_plan(node, demands, used) do
-    if Enum.all?(demands, &system_demand_eligible?(&1, node)) do
+    if schedulable_node?(node) and Enum.all?(demands, &system_demand_eligible?(&1, node)) do
       group_resources =
         demands
         |> Enum.map(& &1["resources"])
@@ -600,8 +610,8 @@ defmodule MirrorNeuron.Scheduler do
         used = Map.get(usage, node["name"], empty_resources())
 
         cond do
-          Map.get(node, "status") not in @active_node_statuses ->
-            "#{node["name"]}: status #{inspect(node["status"])}"
+          not schedulable_node?(node) ->
+            "#{node["name"]}: #{unschedulable_reason(node)}"
 
           not Enum.all?(demands, &system_demand_eligible?(&1, node)) ->
             "#{node["name"]}: constraints, profiles, or capabilities not matched"
@@ -667,7 +677,7 @@ defmodule MirrorNeuron.Scheduler do
   defp choose_node(demand, nodes, usage, strategy) do
     candidates =
       nodes
-      |> Enum.filter(&(Map.get(&1, "status") in @active_node_statuses))
+      |> Enum.filter(&schedulable_node?/1)
       |> Enum.filter(&profile_match?(demand["profile"], &1))
       |> Enum.filter(&constraints_match?(demand["constraints"], &1))
       |> Enum.filter(
@@ -705,8 +715,8 @@ defmodule MirrorNeuron.Scheduler do
       nodes
       |> Enum.map(fn node ->
         cond do
-          Map.get(node, "status") not in @active_node_statuses ->
-            "#{node["name"]}: status #{inspect(node["status"])}"
+          not schedulable_node?(node) ->
+            "#{node["name"]}: #{unschedulable_reason(node)}"
 
           not profile_match?(demand["profile"], node) ->
             "#{node["name"]}: execution profile not available"
@@ -735,6 +745,24 @@ defmodule MirrorNeuron.Scheduler do
     Enum.all?(@resource_keys, fn key ->
       Map.get(used, key, 0) + Map.get(ask, key, 0) <= Map.get(capacity, key, 0)
     end)
+  end
+
+  defp schedulable_node?(node) do
+    Map.get(node, "status") in @active_node_statuses and
+      Map.get(node, "scheduling_eligible", true) != false
+  end
+
+  defp unschedulable_reason(node) do
+    cond do
+      Map.get(node, "status") not in @active_node_statuses ->
+        "status #{inspect(node["status"])}"
+
+      Map.get(node, "scheduling_eligible", true) == false ->
+        "scheduling is disabled"
+
+      true ->
+        "unavailable"
+    end
   end
 
   defp score_node(node, used, ask, "spread") do
@@ -959,17 +987,26 @@ defmodule MirrorNeuron.Scheduler do
   end
 
   defp map_get(map, key) when is_map(map) and is_atom(key) do
-    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+    cond do
+      Map.has_key?(map, key) -> Map.get(map, key)
+      Map.has_key?(map, Atom.to_string(key)) -> Map.get(map, Atom.to_string(key))
+      true -> nil
+    end
   end
 
   defp map_get(map, key) when is_map(map) and is_binary(key) do
-    Map.get(map, key) || existing_atom_value(map, key)
+    if Map.has_key?(map, key) do
+      Map.get(map, key)
+    else
+      existing_atom_value(map, key)
+    end
   end
 
   defp map_get(_map, _key), do: nil
 
   defp existing_atom_value(map, key) do
-    Map.get(map, String.to_existing_atom(key))
+    atom = String.to_existing_atom(key)
+    if Map.has_key?(map, atom), do: Map.get(map, atom)
   rescue
     ArgumentError -> nil
   end
@@ -990,6 +1027,10 @@ defmodule MirrorNeuron.Scheduler do
     do: true
 
   defp truthy?(_value), do: false
+
+  defp eligible_value(nil), do: true
+  defp eligible_value(value) when value in [false, "false", "FALSE", "False", "0", 0], do: false
+  defp eligible_value(_value), do: true
 
   defp stringify_map(map) when is_map(map) do
     Enum.into(map, %{}, fn {key, value} ->

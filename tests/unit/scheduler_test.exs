@@ -191,6 +191,42 @@ defmodule MirrorNeuron.SchedulerTest do
     assert [%{"agent_id" => "worker", "node" => "large@lab"}] = plan["placements"]
   end
 
+  test "maintenance draining and ineligible nodes are not schedulable" do
+    {:ok, manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "cordoned-node",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{"cpu_cores" => 1, "memory_mb" => 512}
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    nodes = [
+      small_node() |> Map.put("status", "maintenance") |> Map.put("scheduling_eligible", false),
+      large_node() |> Map.put("status", "draining") |> Map.put("scheduling_eligible", false),
+      gpu_node() |> Map.put("scheduling_eligible", false)
+    ]
+
+    assert {:error, "placement_failed: no schedulable runtime nodes are available"} =
+             Scheduler.plan(manifest, nodes: nodes, jobs: [])
+
+    assert {:ok, plan} =
+             Scheduler.plan(manifest,
+               nodes: nodes ++ [large_node()],
+               jobs: []
+             )
+
+    assert [%{"agent_id" => "worker", "node" => "large@lab"}] = plan["placements"]
+  end
+
   test "only_agent_ids creates partial plans for affected agents" do
     {:ok, manifest} =
       Manifest.load(%{
@@ -283,7 +319,11 @@ defmodule MirrorNeuron.SchedulerTest do
 
     assert plan["job_type"] == "sysbatch"
     assert plan["system_targets"] == ["large@lab"]
-    assert Enum.map(plan["placements"], & &1["agent_id"]) == ["first@large@lab", "second@large@lab"]
+
+    assert Enum.map(plan["placements"], & &1["agent_id"]) == [
+             "first@large@lab",
+             "second@large@lab"
+           ]
   end
 
   test "execution profiles participate in placement eligibility" do
@@ -368,7 +408,10 @@ defmodule MirrorNeuron.SchedulerTest do
     worker = Manifest.to_map(manifest)["nodes"] |> List.first()
 
     assert worker["resources"] == %{"cpu_cores" => 1}
-    assert worker["constraints"] == [%{"attribute" => "os", "operator" => "==", "value" => "linux"}]
+
+    assert worker["constraints"] == [
+             %{"attribute" => "os", "operator" => "==", "value" => "linux"}
+           ]
   end
 
   defp small_node do

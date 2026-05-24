@@ -86,6 +86,38 @@ defmodule MirrorNeuron do
     end
   end
 
+  def drain_node(node_name, opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :drain_node, [node_name, opts])
+    else
+      MirrorNeuron.Cluster.NodeDrainer.drain_node(node_name, opts)
+    end
+  end
+
+  def cancel_node_drain(node_name, opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :cancel_node_drain, [node_name, opts])
+    else
+      MirrorNeuron.Cluster.NodeDrainer.cancel_node_drain(node_name, opts)
+    end
+  end
+
+  def set_node_maintenance(node_name, enabled, opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :set_node_maintenance, [node_name, enabled, opts])
+    else
+      MirrorNeuron.Cluster.NodeDrainer.set_node_maintenance(node_name, enabled, opts)
+    end
+  end
+
+  def node_drain_status(node_name) do
+    if control_node?() do
+      Control.call(__MODULE__, :node_drain_status, [node_name])
+    else
+      MirrorNeuron.Cluster.NodeDrainer.node_drain_status(node_name)
+    end
+  end
+
   def list_jobs(opts \\ []), do: Monitor.list_jobs(opts)
   def job_details(job_id, opts \\ []), do: Monitor.job_details(job_id, opts)
   def cluster_overview(opts \\ []), do: Monitor.cluster_overview(opts)
