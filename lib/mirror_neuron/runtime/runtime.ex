@@ -34,8 +34,33 @@ defmodule MirrorNeuron.Runtime do
     manifest_ref = bundle_ref(manifest, bundle)
     reliability = ReliabilityStrategy.resolve(manifest, manifest_ref: manifest_ref)
 
-    with {:ok, scheduler_plan} <- Scheduler.plan(manifest, opts),
-         opts <-
+    case Scheduler.plan(manifest, opts) do
+      {:ok, scheduler_plan} ->
+        start_planned_job(
+          job_id,
+          manifest,
+          opts,
+          bundle,
+          manifest_ref,
+          reliability,
+          scheduler_plan
+        )
+
+      {:error, reason} ->
+        maybe_pause_placement_failure(job_id, manifest, manifest_ref, reliability, reason)
+    end
+  end
+
+  defp start_planned_job(
+         job_id,
+         manifest,
+         opts,
+         _bundle,
+         manifest_ref,
+         reliability,
+         scheduler_plan
+       ) do
+    with opts <-
            opts
            |> Keyword.put(:bundle_ref, manifest_ref)
            |> Keyword.put(:reliability, reliability)
@@ -64,11 +89,8 @@ defmodule MirrorNeuron.Runtime do
           {:error, "failed to start job runner: #{inspect(reason)}"}
       end
     else
-      :ok ->
-        {:error, "failed to persist initial job"}
-
-      {:error, reason} ->
-        {:error, reason}
+      :ok -> {:error, "failed to persist initial job"}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -383,6 +405,128 @@ defmodule MirrorNeuron.Runtime do
     }
 
     RedisStore.persist_terminal_job(job_id, updates, defaults)
+  end
+
+  defp maybe_pause_placement_failure(job_id, manifest, manifest_ref, reliability, reason) do
+    if profile_placement_failure?(reason) do
+      review_reason = profile_placement_review_reason(manifest, reason)
+      scheduler_plan = placement_failure_plan(manifest, reason)
+
+      with :ok <- persist_initial_job(job_id, manifest, manifest_ref, reliability, scheduler_plan),
+           {:ok, _job} <-
+             RedisStore.persist_terminal_job(
+               job_id,
+               placement_pause_updates(review_reason),
+               placement_pause_defaults(manifest, manifest_ref, reliability, scheduler_plan)
+             ) do
+        publish_reliability_events(job_id, reliability)
+
+        EventBus.publish(job_id, %{
+          type: :job_paused_for_manual_restart,
+          reason: review_reason,
+          execution_profile: placement_failure_profile(manifest),
+          timestamp: timestamp()
+        })
+
+        {:ok, job_id, nil}
+      else
+        {:error, persist_reason} -> {:error, persist_reason}
+        other -> {:error, "failed to persist placement pause: #{inspect(other)}"}
+      end
+    else
+      {:error, reason}
+    end
+  end
+
+  defp profile_placement_failure?(reason) do
+    reason = to_string(reason)
+    String.contains?(reason, "execution profile not available")
+  end
+
+  defp profile_placement_review_reason(manifest, fallback_reason) do
+    profiles = placement_failure_profiles(manifest)
+
+    case profiles do
+      [profile] -> "execution profile #{profile} has no eligible runtime nodes"
+      [_ | _] -> "execution profiles #{Enum.join(profiles, ", ")} have no eligible runtime nodes"
+      [] -> fallback_reason
+    end
+  end
+
+  defp placement_failure_profile(manifest) do
+    case placement_failure_profiles(manifest) do
+      [profile] -> profile
+      profiles when profiles != [] -> Enum.join(profiles, ",")
+      [] -> nil
+    end
+  end
+
+  defp placement_failure_profiles(manifest) do
+    manifest.nodes
+    |> Enum.map(&MirrorNeuron.Execution.Profile.profile_name(&1.config))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp placement_failure_plan(manifest, reason) do
+    job_type =
+      case Scheduler.job_type(manifest) do
+        {:ok, type} -> type
+        {:error, _reason} -> if(manifest.daemon, do: "service", else: "batch")
+      end
+
+    %{
+      "status" => "placement_failed",
+      "job_type" => job_type,
+      "strategy" => "unknown",
+      "mode" => "unknown",
+      "placement_count" => 0,
+      "placements" => [],
+      "requirements" => %{},
+      "reason" => reason,
+      "generated_at" => timestamp()
+    }
+  end
+
+  defp placement_pause_updates(reason) do
+    now = timestamp()
+
+    recovery = %{
+      "status" => "paused_for_review",
+      "reason" => reason,
+      "requires_review" => true,
+      "can_resume" => true,
+      "updated_at" => now
+    }
+
+    %{
+      "status" => "paused",
+      "updated_at" => now,
+      "result" => %{"agent_id" => "scheduler", "error" => reason},
+      "recovery" => recovery,
+      "recovery_status" => "paused_for_review",
+      "recovery_reason" => reason,
+      "recovery_requires_review" => true
+    }
+  end
+
+  defp placement_pause_defaults(manifest, manifest_ref, reliability, scheduler_plan) do
+    %{
+      "graph_id" => manifest.graph_id,
+      "job_name" => manifest.job_name,
+      "required_context_engine" => required_context_engine(manifest),
+      "root_agent_ids" => manifest.entrypoints,
+      "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
+      "job_type" => scheduler_plan["job_type"],
+      "scheduler" => scheduler_plan,
+      "requested_recovery_policy" => reliability["requested_recovery_policy"],
+      "recovery_policy" => reliability["effective_recovery_policy"],
+      "reliability_degraded" => reliability["reliability_degraded"],
+      "reliability" => reliability_map(reliability),
+      "manifest" => MirrorNeuron.Manifest.to_map(manifest),
+      "manifest_ref" => manifest_ref,
+      "submitted_at" => timestamp()
+    }
   end
 
   defp persist_initial_job(job_id, manifest, manifest_ref, reliability, scheduler_plan) do

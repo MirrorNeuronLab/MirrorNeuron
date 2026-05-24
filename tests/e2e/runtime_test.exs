@@ -1509,6 +1509,79 @@ defmodule MirrorNeuron.RuntimeTest do
     RedisStore.delete_job(job_id)
   end
 
+  test "service jobs ignore task completion and keep the allocation running" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "service_completion_restart_test",
+      "entrypoints" => ["worker"],
+      "initial_inputs" => %{"worker" => [%{"work" => "stay up"}]},
+      "nodes" => [
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "role" => "root_coordinator",
+          "config" => %{
+            "runner_module" => DelayedCompleteRunner,
+            "output_message_type" => nil
+          }
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart", "job_type" => "service"}
+    }
+
+    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    wait_until(fn -> running_status?(job_id) end, 2_000)
+
+    wait_until(
+      fn ->
+        {:ok, events} = MirrorNeuron.events(job_id)
+        Enum.any?(events, &(&1["type"] == "service_agent_completed"))
+      end,
+      3_000
+    )
+
+    assert {:ok, job} = MirrorNeuron.inspect_job(job_id)
+    assert job["status"] == "running"
+    assert job["job_type"] == "service"
+
+    assert {:ok, "cancelled"} = MirrorNeuron.cancel(job_id)
+    RedisStore.delete_job(job_id)
+  end
+
+  test "sysbatch jobs complete after every eligible system target finishes once" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "sysbatch_completion_test",
+      "entrypoints" => ["worker"],
+      "initial_inputs" => %{"worker" => [%{"work" => "once per node"}]},
+      "nodes" => [
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "role" => "root_coordinator",
+          "config" => %{
+            "runner_module" => DelayedCompleteRunner,
+            "output_message_type" => nil
+          }
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart", "job_type" => "sysbatch"}
+    }
+
+    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 3_000)
+
+    assert job["status"] == "completed"
+    assert job["job_type"] == "sysbatch"
+    assert get_in(job, ["scheduler", "system_count"]) == 1
+    assert get_in(job, ["result", "completed_targets"]) == [to_string(Node.self())]
+    assert map_size(get_in(job, ["result", "target_results"])) == 1
+
+    RedisStore.delete_job(job_id)
+  end
+
   test "cancel terminates busy agent workers instead of waiting for queued cancel casts" do
     manifest = %{
       "manifest_version" => "1.0",
@@ -2207,15 +2280,23 @@ defmodule MirrorNeuron.RuntimeTest do
       Process.exit(pid, :kill)
     end
 
-    assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 12_000)
-    assert job["status"] == "completed"
-    assert get_in(job, ["result", "output", "recovered"]) == true
-    assert get_in(job, ["result", "output", "invocation"]) == 3
-
     assert {:ok, events} = MirrorNeuron.events(job_id)
-    assert Enum.count(events, &(&1["type"] == "agent_recovery_started")) >= 2
-    assert Enum.count(events, &(&1["type"] == "agent_recovered")) >= 2
+    assert Enum.count(events, &(&1["type"] == "agent_recovery_started")) >= 1
+    assert Enum.count(events, &(&1["type"] == "agent_recovered")) >= 1
 
+    wait_until(
+      fn ->
+        {:ok, events} = MirrorNeuron.events(job_id)
+        Enum.any?(events, &(&1["type"] == "service_agent_completed"))
+      end,
+      12_000
+    )
+
+    assert {:ok, job} = MirrorNeuron.inspect_job(job_id)
+    assert job["status"] == "running"
+    assert job["job_type"] == "service"
+
+    assert {:ok, "cancelled"} = MirrorNeuron.cancel(job_id)
     RedisStore.delete_job(job_id)
   end
 

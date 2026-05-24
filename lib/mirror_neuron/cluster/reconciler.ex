@@ -59,6 +59,9 @@ defmodule MirrorNeuron.Cluster.Reconciler do
       owner_match? ->
         recover_whole_job(job, failed_node, reason, opts)
 
+      node_scoped_job?(job) ->
+        wait_for_node_scoped_recovery(job, failed_node, affected_agents, reason, opts)
+
       affected_agents == [] ->
         skipped(job, "job has no scheduler placements on #{failed_node}")
 
@@ -276,6 +279,27 @@ defmodule MirrorNeuron.Cluster.Reconciler do
     end
   end
 
+  defp wait_for_node_scoped_recovery(job, failed_node, affected_agents, reason, opts) do
+    wait_reason =
+      "#{job_type(job)} allocations are scoped to their original runtime node; " <>
+        "waiting for #{failed_node} to recover instead of relocating them"
+
+    unless dry_run?(opts) do
+      mark_recovery(job, "waiting_for_node", wait_reason, failed_node, affected_agents, opts)
+
+      publish(job["job_id"], opts, %{
+        type: :job_node_scoped_recovery_waiting,
+        reason: reason,
+        detail: wait_reason,
+        failed_node: failed_node,
+        affected_agents: affected_agents,
+        timestamp: Runtime.timestamp()
+      })
+    end
+
+    skipped(job, wait_reason)
+  end
+
   defp mark_recovery(job, status, reason, failed_node, affected_agents, opts, mark_opts \\ []) do
     now = Runtime.timestamp()
     requires_review? = Keyword.get(mark_opts, :requires_review?, false)
@@ -424,6 +448,12 @@ defmodule MirrorNeuron.Cluster.Reconciler do
 
   defp cluster_recoverable?(job) do
     Map.get(job, "recovery_policy", "local_restart") == "cluster_recover"
+  end
+
+  defp node_scoped_job?(job), do: job_type(job) in ["system", "sysbatch"]
+
+  defp job_type(job) do
+    job["job_type"] || get_in(job, ["scheduler", "job_type"]) || "batch"
   end
 
   defp lease_owner(job), do: job["lease_owner"] || get_in(job, ["lease", "owner_id"])

@@ -114,7 +114,6 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
           next_state
 
         {:error, reason, next_state} ->
-          persist_terminal_failure(next_state, reason)
           send(state.coordinator, {:agent_failed, state.node.node_id, reason})
           next_state
       end
@@ -247,7 +246,6 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       {:error, reason, new_local_state} ->
         failed_state = %{state | local_state: new_local_state, inflight_message: nil}
         persist_snapshot(failed_state)
-        persist_terminal_failure(failed_state, reason)
         send(state.coordinator, {:agent_failed, state.node.node_id, reason})
         failed_state
     end
@@ -349,7 +347,10 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   end
 
   defp execute_action({:complete_job, result}, _incoming, state) do
-    persist_terminal_completion(state, result)
+    if agent_completion_writes_terminal_job?(state) do
+      persist_terminal_completion(state, result)
+    end
+
     send(state.coordinator, {:agent_completed_job, state.node.node_id, result})
   end
 
@@ -564,13 +565,8 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     persist_terminal_job(state, updates)
   end
 
-  defp persist_terminal_failure(state, reason) do
-    updates = %{
-      "status" => "failed",
-      "result" => %{"agent_id" => state.node.node_id, "error" => inspect(reason)}
-    }
-
-    persist_terminal_job(state, updates)
+  defp agent_completion_writes_terminal_job?(state) do
+    Map.get(state.runtime_context, :job_type, "batch") == "batch"
   end
 
   defp persist_terminal_job(state, updates) do

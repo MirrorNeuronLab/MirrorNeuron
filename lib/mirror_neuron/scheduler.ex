@@ -8,7 +8,8 @@ defmodule MirrorNeuron.Scheduler do
 
   @active_node_statuses ["healthy", "joining"]
   @active_job_statuses ["pending", "validated", "scheduled", "running", "paused"]
-  @supported_job_types ["service", "batch"]
+  @supported_job_types ["service", "batch", "system", "sysbatch"]
+  @system_job_types ["system", "sysbatch"]
   @supported_strategies ["binpack", "spread"]
   @resource_keys ["cpu_cores", "memory_mb", "disk_mb", "gpu_count"]
 
@@ -88,8 +89,9 @@ defmodule MirrorNeuron.Scheduler do
            opts
            |> Keyword.get_lazy(:jobs, &active_jobs/0)
            |> usage_from_jobs(Keyword.get(opts, :ignore_job_ids, [])),
-         demands <- filter_demands(demands, Keyword.get(opts, :only_agent_ids)),
-         {:ok, placements, _usage} <- place_demands(demands, nodes, usage, strategy) do
+         only_agent_ids <- Keyword.get(opts, :only_agent_ids),
+         {:ok, placements, placed_demands, _usage} <-
+           place_workloads(job_type, demands, nodes, usage, strategy, only_agent_ids) do
       {:ok,
        %{
          "status" => "planned",
@@ -98,9 +100,10 @@ defmodule MirrorNeuron.Scheduler do
          "mode" => if(length(nodes) > 1, do: "cluster", else: "single_node"),
          "placement_count" => length(placements),
          "placements" => placements,
-         "requirements" => requirements_summary(demands),
+         "requirements" => requirements_summary(placed_demands),
          "generated_at" => MirrorNeuron.Runtime.timestamp()
-       }}
+       }
+       |> maybe_put_system_targets(job_type, placements)}
     else
       {:error, reason} -> {:error, "placement_failed: #{reason}"}
     end
@@ -454,6 +457,166 @@ defmodule MirrorNeuron.Scheduler do
     Enum.filter(demands, &(Map.get(&1, "agent_id") in agent_ids))
   end
 
+  defp place_workloads(job_type, demands, nodes, usage, strategy, only_agent_ids)
+       when job_type in @system_job_types do
+    place_system_demands(demands, nodes, usage, strategy, only_agent_ids)
+  end
+
+  defp place_workloads(_job_type, demands, nodes, usage, strategy, only_agent_ids) do
+    demands = filter_demands(demands, only_agent_ids)
+
+    with {:ok, placements, usage} <- place_demands(demands, nodes, usage, strategy) do
+      {:ok, placements, demands, usage}
+    end
+  end
+
+  defp place_system_demands(demands, nodes, usage, strategy, only_agent_ids) do
+    only_agent_ids = normalize_agent_id_filter(only_agent_ids)
+
+    eligible =
+      nodes
+      |> Enum.filter(&(Map.get(&1, "status") in @active_node_statuses))
+      |> Enum.reduce([], fn node, acc ->
+        case system_node_plan(node, demands, Map.get(usage, node["name"], empty_resources())) do
+          {:ok, group_resources} ->
+            score =
+              score_node(
+                node,
+                Map.get(usage, node["name"], empty_resources()),
+                group_resources,
+                strategy
+              )
+
+            [{node, group_resources, score} | acc]
+
+          :error ->
+            acc
+        end
+      end)
+      |> Enum.reverse()
+
+    case eligible do
+      [] ->
+        {:error, no_system_candidate_reason(demands, nodes, usage)}
+
+      eligible ->
+        {placements, placed_demands, usage} =
+          Enum.reduce(eligible, {[], [], usage}, fn {node, group_resources, score},
+                                                    {placement_acc, demand_acc, usage_acc} ->
+            target_node = node["name"]
+
+            target_placements =
+              demands
+              |> Enum.map(&system_placement(&1, target_node, score))
+              |> Enum.filter(&placement_selected?(&1, only_agent_ids))
+
+            target_demands =
+              target_placements
+              |> Enum.map(&placement_to_demand/1)
+
+            next_usage =
+              if target_placements == [] do
+                usage_acc
+              else
+                Map.update(
+                  usage_acc,
+                  target_node,
+                  group_resources,
+                  &add_resources(&1, group_resources)
+                )
+              end
+
+            {placement_acc ++ target_placements, demand_acc ++ target_demands, next_usage}
+          end)
+
+        {:ok, placements, placed_demands, usage}
+    end
+  end
+
+  defp system_node_plan(node, demands, used) do
+    if Enum.all?(demands, &system_demand_eligible?(&1, node)) do
+      group_resources =
+        demands
+        |> Enum.map(& &1["resources"])
+        |> Enum.reduce(empty_resources(), &add_resources/2)
+
+      if capacity_available?(node, used, group_resources),
+        do: {:ok, group_resources},
+        else: :error
+    else
+      :error
+    end
+  end
+
+  defp system_demand_eligible?(demand, node) do
+    profile_match?(demand["profile"], node) and constraints_match?(demand["constraints"], node)
+  end
+
+  defp system_placement(demand, target_node, score) do
+    %{
+      "agent_id" => system_agent_id(demand["agent_id"], target_node),
+      "source_agent_id" => demand["agent_id"],
+      "agent_type" => demand["agent_type"],
+      "node" => target_node,
+      "system_target" => target_node,
+      "resources" => demand["resources"],
+      "constraints" => demand["constraints"],
+      "score" => Float.round(score, 4)
+    }
+  end
+
+  defp placement_to_demand(placement) do
+    %{
+      "agent_id" => placement["agent_id"],
+      "agent_type" => placement["agent_type"],
+      "resources" => placement["resources"],
+      "constraints" => placement["constraints"]
+    }
+  end
+
+  defp placement_selected?(_placement, nil), do: true
+
+  defp placement_selected?(placement, only_agent_ids) do
+    placement["agent_id"] in only_agent_ids or placement["source_agent_id"] in only_agent_ids
+  end
+
+  defp normalize_agent_id_filter(nil), do: nil
+
+  defp normalize_agent_id_filter(agent_ids) do
+    agent_ids
+    |> List.wrap()
+    |> Enum.map(&to_string/1)
+    |> MapSet.new()
+  end
+
+  defp system_agent_id(agent_id, target_node), do: "#{agent_id}@#{target_node}"
+
+  defp no_system_candidate_reason(demands, nodes, usage) do
+    demand_ids = demands |> Enum.map(& &1["agent_id"]) |> Enum.join(", ")
+
+    reasons =
+      nodes
+      |> Enum.map(fn node ->
+        used = Map.get(usage, node["name"], empty_resources())
+
+        cond do
+          Map.get(node, "status") not in @active_node_statuses ->
+            "#{node["name"]}: status #{inspect(node["status"])}"
+
+          not Enum.all?(demands, &system_demand_eligible?(&1, node)) ->
+            "#{node["name"]}: constraints, profiles, or capabilities not matched"
+
+          not match?({:ok, _}, system_node_plan(node, demands, used)) ->
+            "#{node["name"]}: insufficient resources for system group"
+
+          true ->
+            "#{node["name"]}: unavailable"
+        end
+      end)
+
+    "system job agents #{demand_ids} have no eligible nodes (#{Enum.join(reasons, "; ")})"
+  end
+
   defp place_demands(demands, nodes, usage, strategy) do
     Enum.reduce_while(demands, {:ok, [], usage}, fn demand, {:ok, placements, usage_acc} ->
       case choose_node(demand, nodes, usage_acc, strategy) do
@@ -486,6 +649,20 @@ defmodule MirrorNeuron.Scheduler do
       error -> error
     end
   end
+
+  defp maybe_put_system_targets(plan, job_type, placements) when job_type in @system_job_types do
+    targets =
+      placements
+      |> Enum.map(&Map.get(&1, "system_target", Map.get(&1, "node")))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    plan
+    |> Map.put("system_targets", targets)
+    |> Map.put("system_count", length(targets))
+  end
+
+  defp maybe_put_system_targets(plan, _job_type, _placements), do: plan
 
   defp choose_node(demand, nodes, usage, strategy) do
     candidates =

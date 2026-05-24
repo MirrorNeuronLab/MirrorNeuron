@@ -95,6 +95,47 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
     assert_receive {:job_persisted, "agent-job", %{"recovery_status" => "rescheduled"}, _}
   end
 
+  test "does not relocate node-scoped system allocations to a different node" do
+    job =
+      running_job("system-job")
+      |> Map.put("job_type", "system")
+      |> put_in(["scheduler", "job_type"], "system")
+      |> put_in(["scheduler", "system_targets"], ["small@lab", "large@lab"])
+      |> put_in(["scheduler", "placements"], [
+        %{
+          "agent_id" => "worker@small@lab",
+          "source_agent_id" => "worker",
+          "agent_type" => "executor",
+          "node" => "small@lab",
+          "system_target" => "small@lab",
+          "resources" => %{"cpu_cores" => 1, "memory_mb" => 512, "disk_mb" => 0, "gpu_count" => 0}
+        },
+        %{
+          "agent_id" => "worker@large@lab",
+          "source_agent_id" => "worker",
+          "agent_type" => "executor",
+          "node" => "large@lab",
+          "system_target" => "large@lab",
+          "resources" => %{"cpu_cores" => 1, "memory_mb" => 512, "disk_mb" => 0, "gpu_count" => 0}
+        }
+      ])
+
+    RedisStoreStub.put_jobs([job])
+    {:ok, coordinator} = CoordinatorStub.start_link(self())
+
+    assert {:ok, result} =
+             Reconciler.reconcile_node("small@lab",
+               redis_store: RedisStoreStub,
+               event_bus: EventBusStub,
+               lookup_coordinator: fn "system-job" -> {:ok, coordinator} end
+             )
+
+    assert result.skipped == 1
+    assert_receive {:job_persisted, "system-job", %{"recovery_status" => "waiting_for_node"}, _}
+    assert_receive {:event_published, "system-job", %{type: :job_node_scoped_recovery_waiting}}
+    refute_received {:coordinator_rescheduled, _, _, _}
+  end
+
   test "restarts whole job when failed node owns the job lease" do
     {:ok, bundle} = JobBundle.load(manifest())
 

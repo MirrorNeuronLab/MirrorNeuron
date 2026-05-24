@@ -30,6 +30,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     status = if existing_job, do: existing_job["status"], else: "pending"
     submitted_at = if existing_job, do: existing_job["submitted_at"], else: Runtime.timestamp()
     result = if existing_job, do: existing_job["result"], else: nil
+    scheduler_plan = scheduler_plan_from(manifest, opts)
+    runtime_topology = build_runtime_topology(manifest, scheduler_plan)
 
     state = %{
       job_id: job_id,
@@ -39,11 +41,19 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       status: status,
       result: result,
       submitted_at: submitted_at,
-      agent_ids: Enum.map(manifest.nodes, & &1.node_id),
-      nodes_by_id: Map.new(manifest.nodes, &{&1.node_id, &1}),
-      outbound_edges_by_node: Enum.group_by(manifest.edges, & &1.from_node),
-      inbound_edges_by_node: Enum.group_by(manifest.edges, & &1.to_node),
-      downstream_by_node: build_downstream_index(manifest.edges),
+      agent_ids: runtime_topology.agent_ids,
+      runtime_nodes: runtime_topology.nodes,
+      runtime_edges: runtime_topology.edges,
+      runtime_entrypoints: runtime_topology.entrypoints,
+      source_agent_ids: runtime_topology.source_agent_ids,
+      system_targets: runtime_topology.system_targets,
+      agents_by_system_target: runtime_topology.agents_by_system_target,
+      nodes_by_id: Map.new(runtime_topology.nodes, &{&1.node_id, &1}),
+      outbound_edges_by_node: Enum.group_by(runtime_topology.edges, & &1.from_node),
+      inbound_edges_by_node: Enum.group_by(runtime_topology.edges, & &1.to_node),
+      downstream_by_node: build_downstream_index(runtime_topology.edges),
+      completed_agents: completed_agents_from(existing_job),
+      completed_system_targets: completed_system_targets_from(existing_job),
       pressure: %{},
       agent_restart_attempts: %{},
       max_agent_restart_attempts:
@@ -336,29 +346,47 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   def handle_info({:agent_completed_job, agent_id, result}, state) do
-    next_state =
-      finalize_job(
-        state,
-        "completed",
-        %{agent_id: agent_id, output: result},
-        :job_completed,
-        %{agent_id: agent_id, result: result}
-      )
+    case job_type(state) do
+      "service" ->
+        restart_service_agent(state, agent_id, result)
 
-    {:stop, :normal, next_state}
+      "system" ->
+        restart_system_target(state, agent_id, result)
+
+      "sysbatch" ->
+        complete_sysbatch_target(state, agent_id, result)
+
+      _batch ->
+        next_state =
+          finalize_job(
+            state,
+            "completed",
+            %{agent_id: agent_id, output: result},
+            :job_completed,
+            %{agent_id: agent_id, result: result}
+          )
+
+        {:stop, :normal, next_state}
+    end
   end
 
   def handle_info({:agent_failed, agent_id, reason}, state) do
-    next_state =
-      finalize_job(
-        state,
-        "failed",
-        %{agent_id: agent_id, error: inspect(reason)},
-        :job_failed,
-        %{agent_id: agent_id, reason: inspect(reason)}
-      )
+    case restart_failed_agent(state, agent_id, reason) do
+      {:ok, next_state} ->
+        {:noreply, next_state}
 
-    {:stop, {:shutdown, reason}, next_state}
+      {:error, failed_reason, next_state} ->
+        failed_state =
+          finalize_job(
+            next_state,
+            "failed",
+            %{agent_id: agent_id, error: failed_reason},
+            :job_failed,
+            %{agent_id: agent_id, reason: failed_reason}
+          )
+
+        {:stop, {:shutdown, failed_reason}, failed_state}
+    end
   end
 
   def handle_info(:health_check, %{status: status} = state)
@@ -386,8 +414,153 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   def handle_info(:health_check, state), do: {:noreply, state}
 
+  defp restart_service_agent(state, agent_id, result) do
+    EventBus.publish(state.job_id, %{
+      type: :service_agent_completed,
+      agent_id: agent_id,
+      result: result,
+      timestamp: Runtime.timestamp()
+    })
+
+    case restart_agents(state, [agent_id], "service agent completed") do
+      {:ok, next_state} ->
+        {:noreply, next_state}
+
+      {:error, reason, next_state} ->
+        EventBus.publish(state.job_id, %{
+          type: :service_agent_restart_failed,
+          agent_id: agent_id,
+          reason: reason,
+          timestamp: Runtime.timestamp()
+        })
+
+        schedule_health_check(next_state.health_check_interval_ms)
+        {:noreply, next_state}
+    end
+  end
+
+  defp restart_system_target(state, agent_id, result) do
+    target = system_target_for_agent(state, agent_id)
+    agent_ids = agents_for_system_target(state, target, [agent_id])
+
+    EventBus.publish(state.job_id, %{
+      type: :system_target_completed,
+      agent_id: agent_id,
+      system_target: target,
+      result: result,
+      timestamp: Runtime.timestamp()
+    })
+
+    case restart_agents(state, agent_ids, "system target completed") do
+      {:ok, next_state} ->
+        {:noreply, next_state}
+
+      {:error, reason, next_state} ->
+        EventBus.publish(state.job_id, %{
+          type: :system_target_restart_failed,
+          agent_id: agent_id,
+          system_target: target,
+          reason: reason,
+          timestamp: Runtime.timestamp()
+        })
+
+        schedule_health_check(next_state.health_check_interval_ms)
+        {:noreply, next_state}
+    end
+  end
+
+  defp complete_sysbatch_target(state, agent_id, result) do
+    target = system_target_for_agent(state, agent_id)
+    agent_ids = agents_for_system_target(state, target, [agent_id])
+
+    next_state =
+      state
+      |> put_completed_agent(agent_id)
+      |> put_completed_system_target(target)
+      |> put_sysbatch_result(agent_id, target, result)
+
+    EventBus.publish(state.job_id, %{
+      type: :sysbatch_target_completed,
+      agent_id: agent_id,
+      system_target: target,
+      result: result,
+      completed_targets: MapSet.to_list(next_state.completed_system_targets),
+      timestamp: Runtime.timestamp()
+    })
+
+    terminate_agent_workers(next_state, agent_ids)
+
+    if all_system_targets_completed?(next_state) do
+      completed_state =
+        finalize_job(
+          next_state,
+          "completed",
+          sysbatch_result(next_state),
+          :job_completed,
+          %{agent_id: agent_id, result: sysbatch_result(next_state)}
+        )
+
+      {:stop, :normal, completed_state}
+    else
+      persist_job(next_state)
+      {:noreply, next_state}
+    end
+  end
+
+  defp restart_failed_agent(state, agent_id, reason) do
+    EventBus.publish(state.job_id, %{
+      type: :agent_restart_scheduled,
+      agent_id: agent_id,
+      reason: inspect(reason),
+      job_type: job_type(state),
+      timestamp: Runtime.timestamp()
+    })
+
+    case restart_agents(state, [agent_id], inspect(reason)) do
+      {:ok, next_state} ->
+        {:ok, next_state}
+
+      {:error, failed_reason, next_state} ->
+        if job_type(state) in ["service", "system"] do
+          EventBus.publish(state.job_id, %{
+            type: :agent_restart_deferred,
+            agent_id: agent_id,
+            reason: failed_reason,
+            timestamp: Runtime.timestamp()
+          })
+
+          schedule_health_check(next_state.health_check_interval_ms)
+          {:ok, next_state}
+        else
+          {:error, failed_reason, next_state}
+        end
+    end
+  end
+
+  defp restart_agents(state, agent_ids, reason) do
+    agent_ids = normalize_agent_ids(agent_ids, state)
+    terminate_agent_workers(state, agent_ids)
+
+    with :ok <- wait_for_agents_stopped(state, 5_000, agent_ids),
+         {:ok, next_state} <- recover_agents(state, agent_ids) do
+      persist_job(next_state)
+
+      EventBus.publish(state.job_id, %{
+        type: :agents_restarted,
+        affected_agents: agent_ids,
+        reason: reason,
+        timestamp: Runtime.timestamp()
+      })
+
+      {:ok, next_state}
+    else
+      {:error, failed_reason, failed_state} -> {:error, failed_reason, failed_state}
+      {:error, failed_reason} -> {:error, failed_reason, state}
+    end
+  end
+
   defp start_agents(state) do
-    Enum.reduce_while(state.manifest.nodes, :ok, fn node, :ok ->
+    Enum.reduce_while(state.runtime_nodes, :ok, fn node, :ok ->
       case start_agent(state, node.node_id) do
         {:ok, _pid} ->
           {:cont, :ok}
@@ -488,9 +661,12 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp seed_entrypoints(state) do
     inputs = state.manifest.initial_inputs
 
-    Enum.reduce_while(state.manifest.entrypoints, :ok, fn agent_id, :ok ->
+    Enum.reduce_while(state.runtime_entrypoints, :ok, fn agent_id, :ok ->
+      source_agent_id = Map.get(state.source_agent_ids, agent_id, agent_id)
+
       payloads =
         Map.get(inputs, agent_id) ||
+          Map.get(inputs, source_agent_id) ||
           Map.get(inputs, "__entrypoints__") ||
           [%{}]
 
@@ -527,22 +703,31 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   defp recover_missing_agents(state) do
     Enum.reduce_while(state.agent_ids, {:ok, state}, fn agent_id, {:ok, acc_state} ->
-      if agent_ready?(acc_state, agent_id) do
-        {:cont, {:ok, acc_state}}
-      else
-        case recover_agent(acc_state, agent_id) do
-          {:ok, next_state} -> {:cont, {:ok, next_state}}
-          {:error, reason, next_state} -> {:halt, {:error, reason, next_state}}
-        end
+      cond do
+        agent_completed?(acc_state, agent_id) ->
+          {:cont, {:ok, acc_state}}
+
+        agent_ready?(acc_state, agent_id) ->
+          {:cont, {:ok, acc_state}}
+
+        true ->
+          case recover_agent(acc_state, agent_id) do
+            {:ok, next_state} -> {:cont, {:ok, next_state}}
+            {:error, reason, next_state} -> {:halt, {:error, reason, next_state}}
+          end
       end
     end)
   end
 
   defp recover_agents(state, agent_ids) do
     Enum.reduce_while(agent_ids, {:ok, state}, fn agent_id, {:ok, acc_state} ->
-      case recover_agent(acc_state, agent_id) do
-        {:ok, next_state} -> {:cont, {:ok, next_state}}
-        {:error, reason, next_state} -> {:halt, {:error, reason, next_state}}
+      if agent_completed?(acc_state, agent_id) do
+        {:cont, {:ok, acc_state}}
+      else
+        case recover_agent(acc_state, agent_id) do
+          {:ok, next_state} -> {:cont, {:ok, next_state}}
+          {:error, reason, next_state} -> {:halt, {:error, reason, next_state}}
+        end
       end
     end)
   end
@@ -595,10 +780,12 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     end
   end
 
-  defp restart_attempts_exhausted?(%{manifest: %{daemon: true}}, _attempts), do: false
-
   defp restart_attempts_exhausted?(state, attempts) do
-    attempts >= state.max_agent_restart_attempts
+    if job_type(state) in ["service", "system"] do
+      false
+    else
+      attempts >= state.max_agent_restart_attempts
+    end
   end
 
   defp start_agent(state, agent_id, recovery_snapshot \\ nil, retry_count \\ 0) do
@@ -710,6 +897,222 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   defp schedule_health_check(interval_ms) do
     Process.send_after(self(), :health_check, interval_ms)
+  end
+
+  defp build_runtime_topology(manifest, scheduler_plan) do
+    job_type = scheduler_plan["job_type"]
+    placements = Map.get(scheduler_plan, "placements", [])
+
+    if job_type in ["system", "sysbatch"] and placements != [] do
+      build_system_runtime_topology(manifest, scheduler_plan, placements)
+    else
+      %{
+        nodes: manifest.nodes,
+        edges: manifest.edges,
+        entrypoints: manifest.entrypoints,
+        agent_ids: Enum.map(manifest.nodes, & &1.node_id),
+        source_agent_ids: Map.new(manifest.nodes, &{&1.node_id, &1.node_id}),
+        system_targets: [],
+        agents_by_system_target: %{}
+      }
+    end
+  end
+
+  defp build_system_runtime_topology(manifest, scheduler_plan, placements) do
+    source_nodes = Map.new(manifest.nodes, &{&1.node_id, &1})
+
+    runtime_nodes =
+      placements
+      |> Enum.map(fn placement ->
+        source_agent_id = placement["source_agent_id"] || placement["agent_id"]
+        source_node = Map.fetch!(source_nodes, source_agent_id)
+        target = placement["system_target"] || placement["node"]
+
+        config =
+          source_node.config
+          |> Map.put("__mirror_neuron_source_node_id", source_agent_id)
+          |> Map.put("__mirror_neuron_system_target", target)
+
+        %{source_node | node_id: placement["agent_id"], config: config}
+      end)
+
+    system_targets =
+      scheduler_plan
+      |> Map.get("system_targets", [])
+      |> case do
+        [] ->
+          placements
+          |> Enum.map(&(&1["system_target"] || &1["node"]))
+          |> Enum.reject(&is_nil/1)
+          |> Enum.uniq()
+
+        targets ->
+          targets
+      end
+
+    runtime_edges =
+      for target <- system_targets,
+          edge <- manifest.edges do
+        %{
+          edge
+          | from_node: system_agent_id(edge.from_node, target),
+            to_node: system_agent_id(edge.to_node, target)
+        }
+      end
+
+    entrypoints =
+      for target <- system_targets,
+          entrypoint <- manifest.entrypoints do
+        system_agent_id(entrypoint, target)
+      end
+
+    source_agent_ids =
+      Map.new(placements, fn placement ->
+        {placement["agent_id"], placement["source_agent_id"] || placement["agent_id"]}
+      end)
+
+    agents_by_system_target =
+      placements
+      |> Enum.group_by(&(&1["system_target"] || &1["node"]), & &1["agent_id"])
+      |> Enum.reject(fn {target, _agents} -> is_nil(target) end)
+      |> Map.new()
+
+    %{
+      nodes: runtime_nodes,
+      edges: runtime_edges,
+      entrypoints: entrypoints,
+      agent_ids: Enum.map(runtime_nodes, & &1.node_id),
+      source_agent_ids: source_agent_ids,
+      system_targets: system_targets,
+      agents_by_system_target: agents_by_system_target
+    }
+  end
+
+  defp runtime_topology(state) do
+    %{
+      "nodes" =>
+        Enum.map(state.runtime_nodes, fn node ->
+          %{
+            "node_id" => node.node_id,
+            "source_node_id" => Map.get(state.source_agent_ids, node.node_id, node.node_id),
+            "agent_type" => node.agent_type,
+            "type" => node.type,
+            "role" => node.role,
+            "system_target" => get_in(node.config, ["__mirror_neuron_system_target"])
+          }
+        end),
+      "edges" =>
+        Enum.map(state.runtime_edges, fn edge ->
+          %{
+            "edge_id" => edge.edge_id,
+            "from_node" => edge.from_node,
+            "to_node" => edge.to_node,
+            "message_type" => edge.message_type,
+            "routing_mode" => edge.routing_mode,
+            "conditions" => edge.conditions
+          }
+        end),
+      "entrypoints" => state.runtime_entrypoints,
+      "system_targets" => state.system_targets
+    }
+  end
+
+  defp system_agent_id(agent_id, target_node), do: "#{agent_id}@#{target_node}"
+
+  defp job_type(state), do: scheduler_plan(state)["job_type"] || "batch"
+
+  defp completed_agents_from(nil), do: MapSet.new()
+
+  defp completed_agents_from(job) when is_map(job) do
+    job
+    |> Map.get("result", %{})
+    |> list_from_result("completed_agents")
+    |> MapSet.new()
+  end
+
+  defp completed_system_targets_from(nil), do: MapSet.new()
+
+  defp completed_system_targets_from(job) when is_map(job) do
+    job
+    |> Map.get("result", %{})
+    |> list_from_result("completed_targets")
+    |> MapSet.new()
+  end
+
+  defp list_from_result(result, key) when is_map(result) do
+    result
+    |> Map.get(key, [])
+    |> List.wrap()
+    |> Enum.map(&to_string/1)
+  end
+
+  defp list_from_result(_result, _key), do: []
+
+  defp put_completed_agent(state, agent_id) do
+    %{state | completed_agents: MapSet.put(state.completed_agents, agent_id)}
+  end
+
+  defp put_completed_system_target(state, nil), do: state
+
+  defp put_completed_system_target(state, target) do
+    %{state | completed_system_targets: MapSet.put(state.completed_system_targets, target)}
+  end
+
+  defp put_sysbatch_result(state, agent_id, target, result) do
+    existing = if is_map(state.result), do: state.result, else: %{}
+    target_key = target || agent_id
+
+    target_results =
+      existing
+      |> Map.get("target_results", %{})
+      |> Map.put(target_key, %{"agent_id" => agent_id, "output" => result})
+
+    %{
+      state
+      | result:
+          existing
+          |> Map.put("completed_agents", MapSet.to_list(state.completed_agents))
+          |> Map.put("completed_targets", MapSet.to_list(state.completed_system_targets))
+          |> Map.put("target_results", target_results)
+    }
+  end
+
+  defp sysbatch_result(state) do
+    if is_map(state.result) do
+      state.result
+    else
+      %{
+        "completed_agents" => MapSet.to_list(state.completed_agents),
+        "completed_targets" => MapSet.to_list(state.completed_system_targets),
+        "target_results" => %{}
+      }
+    end
+  end
+
+  defp all_system_targets_completed?(state) do
+    expected = MapSet.new(state.system_targets)
+    expected != MapSet.new() and MapSet.subset?(expected, state.completed_system_targets)
+  end
+
+  defp agent_completed?(state, agent_id) do
+    target = system_target_for_agent(state, agent_id)
+
+    MapSet.member?(state.completed_agents, agent_id) or
+      (job_type(state) == "sysbatch" and not is_nil(target) and
+         MapSet.member?(state.completed_system_targets, target))
+  end
+
+  defp system_target_for_agent(state, agent_id) do
+    case Map.get(state.nodes_by_id, agent_id) do
+      %{config: config} when is_map(config) -> Map.get(config, "__mirror_neuron_system_target")
+      _ -> nil
+    end
+  end
+
+  defp agents_for_system_target(_state, nil, fallback), do: fallback
+
+  defp agents_for_system_target(state, target, fallback) do
+    Map.get(state.agents_by_system_target, target, fallback)
   end
 
   defp build_downstream_index(edges) do
@@ -874,6 +1277,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         reliability: reliability_map(state),
         result: state.result,
         topology: MirrorNeuron.Manifest.topology(state.manifest),
+        runtime_topology: runtime_topology(state),
         manifest: MirrorNeuron.Manifest.to_map(state.manifest),
         manifest_ref: manifest_ref(state)
       }
@@ -916,6 +1320,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         reliability_degraded: reliability_degraded?(state),
         result: state.result,
         topology: MirrorNeuron.Manifest.topology(state.manifest),
+        runtime_topology: runtime_topology(state),
         manifest: MirrorNeuron.Manifest.to_map(state.manifest),
         manifest_ref: manifest_ref(state),
         recovery: recovery,
@@ -986,7 +1391,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       graph_id: state.manifest.graph_id,
       job_name: state.manifest.job_name,
       required_context_engine: Map.get(state.manifest, :required_context_engine, false),
-      entrypoints: state.manifest.entrypoints,
+      entrypoints: state.runtime_entrypoints,
       placement_policy: Map.get(state.manifest.policies, "placement_policy", "local"),
       job_type: scheduler_plan(state)["job_type"],
       scheduler: scheduler_plan(state),
@@ -998,11 +1403,11 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       lease_epoch: lease && lease["epoch"],
       lease_owner: lease && lease["owner_id"],
       backpressure_by_agent:
-        Map.new(state.manifest.nodes, fn node ->
+        Map.new(state.runtime_nodes, fn node ->
           {node.node_id, Backpressure.config(node) |> Map.to_list()}
         end),
       execution_profiles:
-        Map.new(state.manifest.nodes, fn node ->
+        Map.new(state.runtime_nodes, fn node ->
           {node.node_id, Profile.profile_name(node.config)}
         end)
     }
@@ -1019,13 +1424,20 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp scheduler_plan(state) do
-    Keyword.get(state.opts, :scheduler_plan) ||
-      %{
-        "status" => "unknown",
-        "job_type" => if(state.manifest.daemon, do: "service", else: "batch"),
-        "strategy" => "unknown",
-        "placements" => []
-      }
+    scheduler_plan_from(state.manifest, state.opts)
+  end
+
+  defp scheduler_plan_from(manifest, opts) do
+    Keyword.get(opts, :scheduler_plan) || default_scheduler_plan(manifest)
+  end
+
+  defp default_scheduler_plan(manifest) do
+    %{
+      "status" => "unknown",
+      "job_type" => if(manifest.daemon, do: "service", else: "batch"),
+      "strategy" => "unknown",
+      "placements" => []
+    }
   end
 
   defp put_scheduler_plan(state, scheduler_plan) do
