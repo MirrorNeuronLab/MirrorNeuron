@@ -41,7 +41,18 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
            |> Map.merge(stringify(attrs || %{}))
            |> SchedulePolicy.normalize(Map.get(existing, "manifest", %{}), opts) do
       normalized
-      |> Map.merge(Map.take(existing, ["schedule_id", "manifest", "bundle_ref", "source", "dispatches", "active_job_ids", "counters", "created_at"]))
+      |> Map.merge(
+        Map.take(existing, [
+          "schedule_id",
+          "manifest",
+          "bundle_ref",
+          "source",
+          "dispatches",
+          "active_job_ids",
+          "counters",
+          "created_at"
+        ])
+      )
       |> then(&RedisStore.persist_schedule(schedule_id, &1))
     end
   end
@@ -52,7 +63,12 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
 
   def resume_schedule(schedule_id, opts \\ []) do
     with {:ok, schedule} <- RedisStore.fetch_schedule(schedule_id),
-         {:ok, normalized} <- SchedulePolicy.normalize(Map.put(schedule, "enabled", true), Map.get(schedule, "manifest", %{}), opts) do
+         {:ok, normalized} <-
+           SchedulePolicy.normalize(
+             Map.put(schedule, "enabled", true),
+             Map.get(schedule, "manifest", %{}),
+             opts
+           ) do
       RedisStore.persist_schedule(schedule_id, Map.merge(schedule, normalized))
     end
   end
@@ -207,7 +223,11 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     metadata = schedule_dispatch_metadata(schedule, instance, dispatch_id, lease)
 
     with {:ok, bundle_or_manifest} <- load_dispatch_bundle(schedule, metadata),
-         {:ok, job_id, _pid} <- Runtime.start_job(dispatch_manifest(bundle_or_manifest), dispatch_opts(bundle_or_manifest)) do
+         {:ok, job_id, _pid} <-
+           Runtime.start_job(
+             dispatch_manifest(bundle_or_manifest),
+             dispatch_opts(bundle_or_manifest)
+           ) do
       update_after_dispatch(schedule, dispatch_id, job_id, instance, metadata)
       %{checked: 1, dispatched: 1, skipped: 0, failed: 0, missed: 0, blocked: 0}
     else
@@ -315,7 +335,12 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     if result.dispatched > 0 and schedule["kind"] == "periodic" do
       next_run_at = SchedulePolicy.next_run_at(schedule, DateTime.add(now, 60, :second))
       current = current_schedule(schedule)
-      _ = RedisStore.persist_schedule(schedule["schedule_id"], Map.put(current, "next_run_at", next_run_at))
+
+      _ =
+        RedisStore.persist_schedule(
+          schedule["schedule_id"],
+          Map.put(current, "next_run_at", next_run_at)
+        )
     end
 
     result
@@ -463,9 +488,14 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
 
   defp merge_counts(left, right) do
     Map.merge(left, right, fn
-      :event, _left, right -> right
-      _key, left_value, right_value when is_integer(left_value) and is_integer(right_value) -> left_value + right_value
-      _key, _left_value, right_value -> right_value
+      :event, _left, right ->
+        right
+
+      _key, left_value, right_value when is_integer(left_value) and is_integer(right_value) ->
+        left_value + right_value
+
+      _key, _left_value, right_value ->
+        right_value
     end)
   end
 
@@ -474,12 +504,15 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
   end
 
   defp dispatch_token(schedule, instance) do
-    :crypto.hash(:sha256, Jason.encode!(%{
-      schedule_id: schedule["schedule_id"],
-      scheduled_for: instance["scheduled_for"],
-      reason: instance["reason"],
-      event_id: get_in(instance, ["event", "event_id"])
-    }))
+    :crypto.hash(
+      :sha256,
+      Jason.encode!(%{
+        schedule_id: schedule["schedule_id"],
+        scheduled_for: instance["scheduled_for"],
+        reason: instance["reason"],
+        event_id: get_in(instance, ["event", "event_id"])
+      })
+    )
     |> Base.url_encode64(padding: false)
   end
 

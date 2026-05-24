@@ -402,8 +402,14 @@ defmodule MirrorNeuron.Manifest do
       manifest.triggers
       |> Enum.flat_map(fn trigger ->
         case SchedulePolicy.normalize(Map.merge(trigger, %{"kind" => "event"}), manifest) do
-          {:ok, _normalized} -> []
-          {:error, errors} -> Enum.map(errors, &"trigger #{trigger["name"] || trigger["event_type"] || "unknown"}: #{&1}")
+          {:ok, _normalized} ->
+            []
+
+          {:error, errors} ->
+            Enum.map(
+              errors,
+              &"trigger #{trigger["name"] || trigger["event_type"] || "unknown"}: #{&1}"
+            )
         end
       end)
 
@@ -517,7 +523,9 @@ defmodule MirrorNeuron.Manifest do
   defp normalize_triggers(trigger) when is_map(trigger), do: [json_safe(trigger)]
   defp normalize_triggers(_triggers), do: []
 
-  defp normalize_parameterized(parameterized) when is_map(parameterized), do: json_safe(parameterized)
+  defp normalize_parameterized(parameterized) when is_map(parameterized),
+    do: json_safe(parameterized)
+
   defp normalize_parameterized(_parameterized), do: %{}
 
   defp normalize_type(nil), do: "batch"

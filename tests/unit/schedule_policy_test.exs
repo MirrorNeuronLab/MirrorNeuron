@@ -19,9 +19,7 @@ defmodule MirrorNeuron.Runtime.SchedulePolicyTest do
     now = ~U[2026-05-24 10:00:00Z]
 
     assert {:ok, schedule} =
-             SchedulePolicy.normalize(%{"kind" => "delayed", "delay_ms" => 60_000}, nil,
-               now: now
-             )
+             SchedulePolicy.normalize(%{"kind" => "delayed", "delay_ms" => 60_000}, nil, now: now)
 
     assert schedule["run_at"] == "2026-05-24T10:01:00.000Z"
     assert schedule["next_run_at"] == "2026-05-24T10:01:00.000Z"

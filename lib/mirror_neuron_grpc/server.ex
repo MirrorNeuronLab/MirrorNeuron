@@ -324,7 +324,10 @@ defmodule MirrorNeuron.Grpc.JobServer do
 
   def update_schedule(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("UpdateSchedule")
-    schedule_action_response(MirrorNeuron.update_schedule(request.schedule_id, decode_json_map(request.attrs_json)))
+
+    schedule_action_response(
+      MirrorNeuron.update_schedule(request.schedule_id, decode_json_map(request.attrs_json))
+    )
   end
 
   def get_schedule(request, _stream) do
@@ -348,12 +351,18 @@ defmodule MirrorNeuron.Grpc.JobServer do
 
   def pause_schedule(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("PauseSchedule")
-    schedule_action_response(MirrorNeuron.pause_schedule(request.schedule_id, reason: request.reason))
+
+    schedule_action_response(
+      MirrorNeuron.pause_schedule(request.schedule_id, reason: request.reason)
+    )
   end
 
   def resume_schedule(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("ResumeSchedule")
-    schedule_action_response(MirrorNeuron.resume_schedule(request.schedule_id, reason: request.reason))
+
+    schedule_action_response(
+      MirrorNeuron.resume_schedule(request.schedule_id, reason: request.reason)
+    )
   end
 
   def delete_schedule(request, _stream) do

@@ -872,9 +872,18 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     |> maybe_service_index(operation, service, instance_id, "agent_id", ["service", "agent"])
   end
 
-  defp schedule_due_commands(%{"enabled" => true, "status" => status, "next_run_at" => next_run_at} = schedule)
+  defp schedule_due_commands(
+         %{"enabled" => true, "status" => status, "next_run_at" => next_run_at} = schedule
+       )
        when status in ["active", "running"] and is_binary(next_run_at) do
-    [["ZADD", key(@schedule_due_zset), to_string(schedule_score(next_run_at)), schedule["schedule_id"]]]
+    [
+      [
+        "ZADD",
+        key(@schedule_due_zset),
+        to_string(schedule_score(next_run_at)),
+        schedule["schedule_id"]
+      ]
+    ]
   end
 
   defp schedule_due_commands(_schedule), do: []

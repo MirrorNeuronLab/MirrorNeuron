@@ -10,7 +10,9 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcherTest do
     System.put_env("MN_REDIS_NAMESPACE", unique)
 
     on_exit(fn ->
-      if previous, do: System.put_env("MN_REDIS_NAMESPACE", previous), else: System.delete_env("MN_REDIS_NAMESPACE")
+      if previous,
+        do: System.put_env("MN_REDIS_NAMESPACE", previous),
+        else: System.delete_env("MN_REDIS_NAMESPACE")
     end)
 
     :ok

@@ -22,7 +22,8 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
         "kind" => kind,
         "enabled" => enabled,
         "status" => if(enabled, do: "active", else: "paused"),
-        "name" => Map.get(raw, "name") || (manifest && Map.get(manifest_map(manifest), "job_name")),
+        "name" =>
+          Map.get(raw, "name") || (manifest && Map.get(manifest_map(manifest), "job_name")),
         "crons" => normalize_crons(raw),
         "timezone" => normalize_timezone(Map.get(raw, "timezone", Map.get(raw, "time_zone"))),
         "run_at" => normalize_run_at(raw, now),
@@ -48,7 +49,10 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
   def validate(schedule) when is_map(schedule) do
     errors =
       []
-      |> add_error(Map.get(schedule, "kind") not in @supported_kinds, "schedule.kind must be periodic, delayed, or event")
+      |> add_error(
+        Map.get(schedule, "kind") not in @supported_kinds,
+        "schedule.kind must be periodic, delayed, or event"
+      )
       |> validate_kind(schedule)
       |> validate_window(schedule)
 
@@ -111,7 +115,8 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
     is_struct(next_dt, DateTime) and
       Map.get(schedule, "kind") == "periodic" and
       Map.get(schedule, "missed_policy", "skip") == "skip" and
-      DateTime.diff(now_dt, next_dt, :millisecond) > Map.get(schedule, "missed_grace_ms", @default_grace_ms)
+      DateTime.diff(now_dt, next_dt, :millisecond) >
+        Map.get(schedule, "missed_grace_ms", @default_grace_ms)
   end
 
   def event_matches?(schedule, event) do
@@ -149,13 +154,18 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
 
   def now, do: DateTime.utc_now() |> DateTime.truncate(:millisecond)
 
-  defp put_next_run(%{"kind" => "event"} = schedule, _now), do: Map.put_new(schedule, "next_run_at", nil)
+  defp put_next_run(%{"kind" => "event"} = schedule, _now),
+    do: Map.put_new(schedule, "next_run_at", nil)
 
   defp put_next_run(%{"kind" => "delayed"} = schedule, _now),
     do: Map.put(schedule, "next_run_at", Map.get(schedule, "run_at"))
 
   defp put_next_run(%{"kind" => "periodic"} = schedule, now) do
-    Map.put(schedule, "next_run_at", Map.get(schedule, "next_run_at") || next_run_at(schedule, now))
+    Map.put(
+      schedule,
+      "next_run_at",
+      Map.get(schedule, "next_run_at") || next_run_at(schedule, now)
+    )
   end
 
   defp infer_kind(%{"kind" => kind}) when is_binary(kind), do: String.downcase(kind)
@@ -168,7 +178,10 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
   defp normalize_crons(raw) do
     cond do
       is_list(Map.get(raw, "crons")) ->
-        raw["crons"] |> Enum.map(&to_string/1) |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+        raw["crons"]
+        |> Enum.map(&to_string/1)
+        |> Enum.map(&String.trim/1)
+        |> Enum.reject(&(&1 == ""))
 
       is_binary(Map.get(raw, "cron")) ->
         [String.trim(raw["cron"])]
@@ -239,12 +252,18 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
     errors
     |> add_error(crons == [], "periodic schedules require cron or crons")
     |> add_errors(invalid_cron_errors(crons))
-    |> add_error(Map.get(schedule, "missed_policy") not in @supported_missed_policies, "schedule.missed_policy must be skip, catchup_one, or catchup_all")
+    |> add_error(
+      Map.get(schedule, "missed_policy") not in @supported_missed_policies,
+      "schedule.missed_policy must be skip, catchup_one, or catchup_all"
+    )
   end
 
   defp validate_kind(errors, %{"kind" => "delayed"} = schedule) do
     errors
-    |> add_error(is_nil(parse_datetime(Map.get(schedule, "run_at"))), "delayed schedules require a valid run_at or delay_ms")
+    |> add_error(
+      is_nil(parse_datetime(Map.get(schedule, "run_at"))),
+      "delayed schedules require a valid run_at or delay_ms"
+    )
   end
 
   defp validate_kind(errors, %{"kind" => "event"} = schedule) do
@@ -350,7 +369,13 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
              hour: hour_values,
              day: day_values,
              month: month_values,
-             dow: MapSet.new(Enum.map(dow_values, fn 7 -> 0; value -> value end)),
+             dow:
+               MapSet.new(
+                 Enum.map(dow_values, fn
+                   7 -> 0
+                   value -> value
+                 end)
+               ),
              day_any: day == "*",
              dow_any: dow == "*"
            }}
@@ -450,13 +475,21 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
   defp iso_or_nil(_value), do: nil
 
   defp event_type_matches(expected, actual) when is_list(expected), do: actual in expected
-  defp event_type_matches(expected, actual), do: to_string(expected || "") == to_string(actual || "")
+
+  defp event_type_matches(expected, actual),
+    do: to_string(expected || "") == to_string(actual || "")
 
   defp filter_value_matches?(_actual, nil), do: true
   defp filter_value_matches?(actual, expected) when is_list(expected), do: actual in expected
-  defp filter_value_matches?(actual, %{"prefix" => prefix}) when is_binary(actual), do: String.starts_with?(actual, to_string(prefix))
-  defp filter_value_matches?(actual, %{"contains" => needle}) when is_binary(actual), do: String.contains?(actual, to_string(needle))
-  defp filter_value_matches?(actual, expected), do: to_string(actual || "") == to_string(expected || "")
+
+  defp filter_value_matches?(actual, %{"prefix" => prefix}) when is_binary(actual),
+    do: String.starts_with?(actual, to_string(prefix))
+
+  defp filter_value_matches?(actual, %{"contains" => needle}) when is_binary(actual),
+    do: String.contains?(actual, to_string(needle))
+
+  defp filter_value_matches?(actual, expected),
+    do: to_string(actual || "") == to_string(expected || "")
 
   defp get_path(map, path) do
     path
@@ -473,15 +506,19 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
   defp bool(_value), do: false
 
   defp positive_int(value, _default) when is_integer(value) and value > 0, do: value
+
   defp positive_int(value, default) when is_binary(value) do
     case Integer.parse(value) do
       {parsed, ""} when parsed > 0 -> parsed
       _ -> default
     end
   end
+
   defp positive_int(_value, default), do: default
 
-  defp manifest_map(%MirrorNeuron.Manifest{} = manifest), do: MirrorNeuron.Manifest.to_map(manifest)
+  defp manifest_map(%MirrorNeuron.Manifest{} = manifest),
+    do: MirrorNeuron.Manifest.to_map(manifest)
+
   defp manifest_map(map) when is_map(map), do: stringify(map)
   defp manifest_map(_other), do: %{}
 
