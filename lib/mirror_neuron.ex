@@ -118,7 +118,13 @@ defmodule MirrorNeuron do
       if control_node?() do
         call_control_or_runtime(job_id, :cancel, [job_id])
       else
-        Runtime.cancel_job(job_id)
+        case Runtime.cancel_job(job_id) do
+          {:error, "job " <> _} ->
+            call_runtime_by_job(job_id, Runtime, :cancel_job, [job_id])
+
+          other ->
+            other
+        end
       end
 
     case result do
@@ -214,12 +220,18 @@ defmodule MirrorNeuron do
       {:error, "no runtime nodes available in the connected cluster"} ->
         call_runtime_by_job(job_id, function, args)
 
+      {:error, "job " <> _} ->
+        call_runtime_by_job(job_id, function, args)
+
       other ->
         other
     end
   end
 
-  defp call_runtime_by_job(job_id, function, args) do
+  defp call_runtime_by_job(job_id, function, args),
+    do: call_runtime_by_job(job_id, __MODULE__, function, args)
+
+  defp call_runtime_by_job(job_id, module, function, args) do
     with {:ok, agents} <- RedisStore.list_agents(job_id) do
       agents
       |> Enum.map(& &1["assigned_node"])
@@ -231,8 +243,11 @@ defmodule MirrorNeuron do
           node = String.to_atom(node_name)
           _ = Node.connect(node)
 
-          case :rpc.call(node, __MODULE__, function, args, 15_000) do
+          case :rpc.call(node, module, function, args, 15_000) do
             {:badrpc, _reason} ->
+              {:cont, {:error, "job #{job_id} is not running in the connected cluster"}}
+
+            {:error, "job " <> _reason} ->
               {:cont, {:error, "job #{job_id} is not running in the connected cluster"}}
 
             reply ->

@@ -894,10 +894,21 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
            MirrorNeuron.DistributedRegistry,
            {:agent, state.job_id, agent_id}
          ) do
-      [{pid, _meta}] -> Process.alive?(pid)
+      [{pid, _meta}] -> pid_alive?(pid)
       _ -> false
     end
   end
+
+  defp pid_alive?(pid) when is_pid(pid) and node(pid) == node(), do: Process.alive?(pid)
+
+  defp pid_alive?(pid) when is_pid(pid) do
+    case :rpc.call(node(pid), Process, :alive?, [pid], 5_000) do
+      true -> true
+      _ -> false
+    end
+  end
+
+  defp pid_alive?(_pid), do: false
 
   defp schedule_health_check(interval_ms) do
     Process.send_after(self(), :health_check, interval_ms)
