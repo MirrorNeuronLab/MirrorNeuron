@@ -1,0 +1,15 @@
+INFO:     Started server process [6532]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://localhost:54001 (Press CTRL+C to quit)
+INFO:     ::1:51197 - "GET /api/v1/health HTTP/1.1" 200 OK
+INFO:     ::1:51196 - "GET /api/v1/system/summary HTTP/1.1" 200 OK
+INFO:     ::1:51207 - "GET /api/v1/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51221 - "GET /api/v1/health HTTP/1.1" 200 OK
+INFO:     ::1:51223 - "GET /api/v1/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51226 - "GET /api/v1/blueprints HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51231 - "GET /api/v1/health HTTP/1.1" 200 OK
+INFO:     ::1:51237 - "GET /api/v1/resource HTTP/1.1" 200 OK
+INFO:     ::1:51277 - "GET /api/v1/resource HTTP/1.1" 200 OK
+INFO:     ::1:51281 - "POST /api/v1/blueprints/video_watch_assistant/install HTTP/1.1" 200 OK
+INFO:     ::1:51283 - "GET /api/v1/health HTTP/1.1" 200 OK
