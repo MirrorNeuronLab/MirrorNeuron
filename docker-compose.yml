@@ -48,7 +48,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
 
   context-engine-model:
-    image: ${MN_CONTEXT_MODEL_IMAGE:-mirror-enuron-context-model:cpu}
+    image: ${MN_CONTEXT_MODEL_IMAGE:-mirror-neuron-context-model:cpu}
     container_name: mirror-neuron-context-engine-model
     profiles:
       - context
@@ -67,7 +67,7 @@ services:
       - context-model-cache:/root/.cache/huggingface
 
   membrane-context-engine:
-    image: ${ENGINE_IMAGE:-mirror-enuron-memory-engine:latest}
+    image: ${ENGINE_IMAGE:-mirror-neuron-memory-engine:latest}
     container_name: mirror-neuron-context-engine
     profiles:
       - context

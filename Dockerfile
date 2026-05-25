@@ -36,6 +36,8 @@ WORKDIR /app
 
 # Copy dependency files and fetch deps
 COPY mix.exs mix.lock ./
+RUN test -s mix.exs && grep -q "use Mix.Project" mix.exs || \
+    (echo "Invalid mix.exs copied into Docker build context" >&2; exit 1)
 RUN mix deps.get
 
 # Copy the rest of the application

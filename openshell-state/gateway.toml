@@ -1,0 +1,27 @@
+[openshell]
+version = 1
+
+[openshell.gateway]
+bind_address = "0.0.0.0:58080"
+log_level = "info"
+compute_drivers = ["docker"]
+sandbox_namespace = "mirror-neuron"
+default_image = "ghcr.io/nvidia/openshell/sandbox:latest"
+supervisor_image = "ghcr.io/nvidia/openshell/supervisor:latest"
+
+[openshell.gateway.gateway_jwt]
+signing_key_path = "/Users/homer/Projects/mirror-neuron-set/MirrorNeuron/openshell-state/jwt/signing.pem"
+public_key_path = "/Users/homer/Projects/mirror-neuron-set/MirrorNeuron/openshell-state/jwt/public.pem"
+kid_path = "/Users/homer/Projects/mirror-neuron-set/MirrorNeuron/openshell-state/jwt/kid"
+gateway_id = "openshell"
+ttl_secs = 3600
+
+[openshell.gateway.auth]
+allow_unauthenticated_users = true
+
+[openshell.drivers.docker]
+default_image = "ghcr.io/nvidia/openshell/sandbox:latest"
+image_pull_policy = "IfNotPresent"
+sandbox_namespace = "mirror-neuron"
+grpc_endpoint = "http://host.openshell.internal:58080"
+network_name = "openshell-docker"
