@@ -79,10 +79,9 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
           "create",
           "--name",
           sandbox_name,
-          "--upload",
-          "#{staged_dir}:#{remote_dir}",
           "--no-git-ignore"
         ]
+        |> put_uploads(staged_dir, remote_dir)
         |> maybe_put_flag("--no-keep", Map.get(config, "no_keep", true))
         |> maybe_put_flag("--no-auto-providers", Map.get(config, "no_auto_providers", true))
         |> maybe_put_flag("--gpu", Map.get(config, "gpu", false))
@@ -140,7 +139,7 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
 
     cleanup_step =
       if cleanup_remote_dir do
-        "rm -rf #{shell_escape(remote_dir)} >/dev/null 2>&1 || true"
+        "rm -rf #{shell_escape(remote_dir)} || true"
       else
         ":"
       end
@@ -211,25 +210,32 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
   end
 
   defp upload_workspace(executable, sandbox_name, staged_dir, remote_dir) do
-    case System.cmd(
-           executable,
-           ["sandbox", "upload", sandbox_name, staged_dir, remote_dir, "--no-git-ignore"],
-           stderr_to_stdout: true,
-           env: [{"NO_COLOR", "1"}]
-         ) do
-      {_output, 0} ->
-        {:ok, :uploaded}
+    staged_dir
+    |> staged_uploads(remote_dir)
+    |> Enum.reduce_while({:ok, :uploaded}, fn {source, destination}, {:ok, :uploaded} ->
+      case System.cmd(
+             executable,
+             ["sandbox", "upload", sandbox_name, source, destination, "--no-git-ignore"],
+             stderr_to_stdout: true,
+             env: [{"NO_COLOR", "1"}]
+           ) do
+        {_output, 0} ->
+          {:cont, {:ok, :uploaded}}
 
-      {output, exit_code} ->
-        {:error,
-         %{
-           "error" => "failed to upload workspace to shared sandbox",
-           "sandbox_name" => sandbox_name,
-           "remote_dir" => remote_dir,
-           "exit_code" => exit_code,
-           "logs" => output
-         }}
-    end
+        {output, exit_code} ->
+          {:halt,
+           {:error,
+            %{
+              "error" => "failed to upload workspace to shared sandbox",
+              "sandbox_name" => sandbox_name,
+              "remote_dir" => remote_dir,
+              "source" => source,
+              "destination" => destination,
+              "exit_code" => exit_code,
+              "logs" => output
+            }}}
+      end
+    end)
   rescue
     error in ErlangError ->
       {:error, "failed to invoke #{executable}: #{Exception.message(error)}"}
@@ -540,7 +546,7 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
     config
     |> maybe_promote_custom_openshell_image()
     |> resolve_from_path(payloads_path)
-    |> resolve_local_cli_path("policy", payloads_path)
+    |> resolve_policy_path(payloads_path)
     |> resolve_local_cli_path("ssh_key", payloads_path)
   end
 
@@ -603,6 +609,77 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
       _other ->
         config
     end
+  end
+
+  defp resolve_policy_path(config, nil), do: config
+
+  defp resolve_policy_path(config, payloads_path) do
+    config
+    |> resolve_local_cli_path("policy", payloads_path)
+    |> maybe_prepare_policy_runtime_filesystem()
+  end
+
+  defp maybe_prepare_policy_runtime_filesystem(%{"policy" => policy_path} = config)
+       when is_binary(policy_path) do
+    Map.put(config, "policy", prepare_policy_runtime_filesystem(policy_path))
+  end
+
+  defp maybe_prepare_policy_runtime_filesystem(config), do: config
+
+  defp prepare_policy_runtime_filesystem(policy_path) do
+    case File.read(policy_path) do
+      {:ok, text} ->
+        cond do
+          String.contains?(text, "/dev/null") ->
+            policy_path
+
+          String.contains?(text, "filesystem_policy:") ->
+            policy_path
+
+          true ->
+            write_runtime_policy(policy_path, append_runtime_filesystem_policy(text))
+        end
+
+      {:error, _reason} ->
+        policy_path
+    end
+  end
+
+  defp append_runtime_filesystem_policy(text) do
+    String.trim_trailing(text) <> "\n\n" <> runtime_filesystem_policy()
+  end
+
+  defp runtime_filesystem_policy do
+    """
+    filesystem_policy:
+      include_workdir: true
+      read_only:
+        - /usr
+        - /lib
+        - /etc
+        - /var/log
+        - /proc
+        - /dev/urandom
+      read_write:
+        - /sandbox
+        - /tmp
+        - /dev/null
+    """
+  end
+
+  defp write_runtime_policy(source_path, text) do
+    digest =
+      :crypto.hash(:sha256, source_path <> "\0" <> text)
+      |> Base.encode16(case: :lower)
+      |> String.slice(0, 16)
+
+    policy_dir =
+      Path.join(Config.string("MN_TEMP_DIR", :temp_dir), "mirror_neuron_openshell_policies")
+
+    File.mkdir_p!(policy_dir)
+    target = Path.join(policy_dir, "#{digest}.yaml")
+    File.write!(target, text)
+    target
   end
 
   defp build_sandbox_name(config, opts) do
@@ -731,6 +808,33 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
   defp maybe_put_value(args, _flag, nil), do: args
   defp maybe_put_value(args, _flag, ""), do: args
   defp maybe_put_value(args, flag, value), do: args ++ [flag, to_string(value)]
+
+  defp put_uploads(args, staged_dir, remote_dir) do
+    staged_dir
+    |> staged_uploads(remote_dir)
+    |> Enum.reduce(args, fn {source, destination}, acc ->
+      acc ++ ["--upload", "#{source}:#{destination}"]
+    end)
+  end
+
+  defp staged_uploads(staged_dir, remote_dir) do
+    staged_dir
+    |> File.ls!()
+    |> Enum.sort()
+    |> Enum.map(fn entry ->
+      source = Path.join(staged_dir, entry)
+      destination = upload_destination(source, remote_dir)
+      {source, destination}
+    end)
+  end
+
+  defp upload_destination(source, remote_dir) do
+    if File.dir?(source) do
+      remote_dir
+    else
+      Path.join(remote_dir, Path.basename(source))
+    end
+  end
 
   defp maybe_put_many(args, _flag, []), do: args
 

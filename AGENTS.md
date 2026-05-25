@@ -4,6 +4,12 @@ You are working on `MirrorNeuron`, an Elixir/BEAM runtime for long-lived, messag
 
 Read this file before making changes. Follow the existing codebase closely and prefer small, idiomatic edits over broad rewrites.
 
+## Issue Fixing Policy
+
+- Unless the user explicitly asks for a temporary workaround, fix the root cause in the intended layer or contract.
+- Avoid adding fallback paths, compatibility shims, feature flags, or temp solutions that mask a broken primary path.
+- If fallback behavior is already product-specified, keep it narrow, documented, and tested; do not use it to avoid fixing the primary path.
+
 ## Core Mandates
 
 - Match existing project conventions before introducing new structure.

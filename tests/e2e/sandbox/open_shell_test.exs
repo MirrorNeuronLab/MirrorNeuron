@@ -60,25 +60,31 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
 
       printf "%s\\n" "$*" >> "#{args_log}"
 
-      upload_spec=""
+      upload_specs=()
       args=("$@")
       i=0
       while [ "$i" -lt "$#" ]; do
         current="${args[$i]}"
         if [ "$current" = "--upload" ]; then
           i=$((i + 1))
-          upload_spec="${args[$i]}"
+          upload_specs+=("${args[$i]}")
         elif [ "$current" = "--" ]; then
           break
         fi
         i=$((i + 1))
       done
 
-      local_path="${upload_spec%%:*}"
-      remote_path="${upload_spec#*:}"
-      rm -rf "$remote_path"
-      mkdir -p "$remote_path"
-      cp -R "$local_path"/. "$remote_path"
+      for upload_spec in "${upload_specs[@]}"; do
+        local_path="${upload_spec%%:*}"
+        remote_path="${upload_spec#*:}"
+        if [ -d "$local_path" ]; then
+          mkdir -p "$remote_path"
+          cp -R "$local_path" "$remote_path/"
+        else
+          mkdir -p "$(dirname "$remote_path")"
+          cp "$local_path" "$remote_path"
+        fi
+      done
 
       shift $((i + 1))
       exec "$@"
@@ -117,7 +123,9 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
 
     assert result["exit_code"] == 0
     assert result["stdout"] =~ "\"seen\": \"sandbox-ok\""
-    assert File.read!(args_log) =~ "--policy #{Path.join(policy_dir, "api-egress.yaml")}"
+    policy_text = args_log |> logged_arg_after("--policy") |> File.read!()
+    assert policy_text =~ "network_policies:"
+    assert policy_text =~ "/dev/null"
     assert File.read!(args_log) =~ "--from #{sandbox_image_dir}"
 
     File.rm_rf!(tmp_dir)
@@ -151,25 +159,31 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
       #!/usr/bin/env bash
       set -euo pipefail
 
-      upload_spec=""
+      upload_specs=()
       args=("$@")
       i=0
       while [ "$i" -lt "$#" ]; do
         current="${args[$i]}"
         if [ "$current" = "--upload" ]; then
           i=$((i + 1))
-          upload_spec="${args[$i]}"
+          upload_specs+=("${args[$i]}")
         elif [ "$current" = "--" ]; then
           break
         fi
         i=$((i + 1))
       done
 
-      local_path="${upload_spec%%:*}"
-      remote_path="${upload_spec#*:}"
-      rm -rf "$remote_path"
-      mkdir -p "$remote_path"
-      cp -R "$local_path"/. "$remote_path"
+      for upload_spec in "${upload_specs[@]}"; do
+        local_path="${upload_spec%%:*}"
+        remote_path="${upload_spec#*:}"
+        if [ -d "$local_path" ]; then
+          mkdir -p "$remote_path"
+          cp -R "$local_path" "$remote_path/"
+        else
+          mkdir -p "$(dirname "$remote_path")"
+          cp "$local_path" "$remote_path"
+        fi
+      done
 
       shift $((i + 1))
       exec "$@"
@@ -262,25 +276,31 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
       #!/usr/bin/env bash
       set -euo pipefail
 
-      upload_spec=""
+      upload_specs=()
       args=("$@")
       i=0
       while [ "$i" -lt "$#" ]; do
         current="${args[$i]}"
         if [ "$current" = "--upload" ]; then
           i=$((i + 1))
-          upload_spec="${args[$i]}"
+          upload_specs+=("${args[$i]}")
         elif [ "$current" = "--" ]; then
           break
         fi
         i=$((i + 1))
       done
 
-      local_path="${upload_spec%%:*}"
-      remote_path="${upload_spec#*:}"
-      rm -rf "$remote_path"
-      mkdir -p "$remote_path"
-      cp -R "$local_path"/. "$remote_path"
+      for upload_spec in "${upload_specs[@]}"; do
+        local_path="${upload_spec%%:*}"
+        remote_path="${upload_spec#*:}"
+        if [ -d "$local_path" ]; then
+          mkdir -p "$remote_path"
+          cp -R "$local_path" "$remote_path/"
+        else
+          mkdir -p "$(dirname "$remote_path")"
+          cp "$local_path" "$remote_path"
+        fi
+      done
 
       shift $((i + 1))
       exec "$@"
@@ -373,25 +393,31 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
       #!/usr/bin/env bash
       set -euo pipefail
 
-      upload_spec=""
+      upload_specs=()
       args=("$@")
       i=0
       while [ "$i" -lt "$#" ]; do
         current="${args[$i]}"
         if [ "$current" = "--upload" ]; then
           i=$((i + 1))
-          upload_spec="${args[$i]}"
+          upload_specs+=("${args[$i]}")
         elif [ "$current" = "--" ]; then
           break
         fi
         i=$((i + 1))
       done
 
-      local_path="${upload_spec%%:*}"
-      remote_path="${upload_spec#*:}"
-      rm -rf "$remote_path"
-      mkdir -p "$remote_path"
-      cp -R "$local_path"/. "$remote_path"
+      for upload_spec in "${upload_specs[@]}"; do
+        local_path="${upload_spec%%:*}"
+        remote_path="${upload_spec#*:}"
+        if [ -d "$local_path" ]; then
+          mkdir -p "$remote_path"
+          cp -R "$local_path" "$remote_path/"
+        else
+          mkdir -p "$(dirname "$remote_path")"
+          cp "$local_path" "$remote_path"
+        fi
+      done
 
       shift $((i + 1))
       exec "$@"
@@ -558,9 +584,13 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
           else
             target="$root${dest#/sandbox}"
           fi
-          rm -rf "$target"
-          mkdir -p "$target"
-          cp -R "$local_path"/. "$target"
+          if [ -d "$local_path" ]; then
+            mkdir -p "$target"
+            cp -R "$local_path" "$target/"
+          else
+            mkdir -p "$(dirname "$target")"
+            cp "$local_path" "$target"
+          fi
           ;;
         ssh-config)
           name="$3"
@@ -629,8 +659,7 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
     config = %{
       "sandbox_cli" => fake_cli,
       "ssh_bin" => fake_ssh,
-      "upload_path" => "bundle",
-      "upload_as" => "bundle",
+      "upload_paths" => [%{"source" => "bundle", "target" => "bundle"}],
       "sandbox_upload_path" => "/sandbox/job",
       "workdir" => "/sandbox/job/bundle",
       "command" => ["python3", "scripts/echo_input.py"],
@@ -674,7 +703,9 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
       assert result1["stdout"] =~ "\"seen\": \"first\""
       assert result2["stdout"] =~ "\"seen\": \"second\""
       assert File.dir?(Path.join(sandboxes_dir, result1["sandbox_name"]))
-      assert File.read!(args_log) =~ "--policy #{Path.join(policy_dir, "api-egress.yaml")}"
+      policy_text = args_log |> logged_arg_after("--policy") |> File.read!()
+      assert policy_text =~ "network_policies:"
+      assert policy_text =~ "/dev/null"
 
       assert :ok = JobSandbox.cleanup_job_local("job-shared-1")
       refute File.exists?(Path.join(sandboxes_dir, result1["sandbox_name"]))
@@ -789,8 +820,13 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
           else
             target="$root${dest#/sandbox}"
           fi
-          mkdir -p "$target"
-          cp -R "$local_path"/. "$target"
+          if [ -d "$local_path" ]; then
+            mkdir -p "$target"
+            cp -R "$local_path" "$target/"
+          else
+            mkdir -p "$(dirname "$target")"
+            cp "$local_path" "$target"
+          fi
           ;;
         ssh-config)
           name="$3"
@@ -898,5 +934,16 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
 
       File.rm_rf!(tmp_dir)
     end
+  end
+
+  defp logged_arg_after(log_path, flag) do
+    log_path
+    |> File.read!()
+    |> String.split()
+    |> Enum.chunk_every(2, 1, :discard)
+    |> Enum.find_value(fn
+      [^flag, value] -> value
+      _other -> nil
+    end)
   end
 end
