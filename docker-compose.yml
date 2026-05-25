@@ -27,7 +27,6 @@ services:
     user: "${OPENSHELL_GATEWAY_USER:-1000:1000}"
     group_add:
       - "${OPENSHELL_GATEWAY_DOCKER_GROUP:-0}"
-      - "0"
     profiles:
       - openshell
     restart: unless-stopped
