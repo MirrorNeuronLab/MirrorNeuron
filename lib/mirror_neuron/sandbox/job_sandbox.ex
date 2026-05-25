@@ -24,18 +24,14 @@ defmodule MirrorNeuron.Sandbox.JobSandbox do
     end
   end
 
-  def cleanup_job_local(job_id) do
-    if Process.whereis(@registry) do
-      case Registry.lookup(@registry, job_id) do
-        [{pid, _meta}] ->
-          GenServer.stop(pid, :normal, :infinity)
-          :ok
+  def cleanup_job_local(job_id, config \\ %{}) do
+    case if(Process.whereis(@registry), do: Registry.lookup(@registry, job_id), else: []) do
+      [{pid, _meta}] ->
+        GenServer.stop(pid, :normal, :infinity)
+        :ok
 
-        [] ->
-          :ok
-      end
-    else
-      :ok
+      [] ->
+        cleanup_sandbox_by_job_id(job_id, config)
     end
   end
 
@@ -71,16 +67,14 @@ defmodule MirrorNeuron.Sandbox.JobSandbox do
 
   @impl true
   def terminate(_reason, state) do
-    if state.ready? do
-      case delete_sandbox(state.executable, state.sandbox_name) do
-        :ok ->
-          :ok
+    case delete_sandbox(state.executable, state.sandbox_name, allow_missing?: not state.ready?) do
+      :ok ->
+        :ok
 
-        {:error, reason} ->
-          Logger.warning(
-            "failed to delete shared sandbox #{state.sandbox_name} for #{state.job_id}: #{inspect(reason)}"
-          )
-      end
+      {:error, reason} ->
+        Logger.warning(
+          "failed to delete shared sandbox #{state.sandbox_name} for #{state.job_id}: #{inspect(reason)}"
+        )
     end
 
     :ok
@@ -102,6 +96,29 @@ defmodule MirrorNeuron.Sandbox.JobSandbox do
           {:error, reason} ->
             {:error, reason}
         end
+    end
+  end
+
+  defp cleanup_sandbox_by_job_id(job_id, config) do
+    exact_result =
+      delete_sandbox(sandbox_cli(config), build_shared_sandbox_name(job_id, config),
+        allow_missing?: true
+      )
+
+    job_result = delete_local_docker_job_sandboxes(job_id, config)
+
+    case {exact_result, job_result} do
+      {{:error, reason}, {:error, docker_reason}} ->
+        {:error, %{"sandbox" => reason, "job_docker" => docker_reason}}
+
+      {{:error, reason}, _job_result} ->
+        {:error, reason}
+
+      {:ok, {:error, reason}} ->
+        {:error, %{"job_docker" => reason}}
+
+      {:ok, _job_result} ->
+        :ok
     end
   end
 
@@ -162,7 +179,31 @@ defmodule MirrorNeuron.Sandbox.JobSandbox do
       {:error, "failed to invoke #{executable}: #{Exception.message(error)}"}
   end
 
-  defp delete_sandbox(executable, sandbox_name) do
+  defp delete_sandbox(executable, sandbox_name, opts) do
+    allow_missing? = Keyword.get(opts, :allow_missing?, false)
+    openshell_result = delete_openshell_sandbox(executable, sandbox_name)
+    docker_result = delete_local_docker_sandbox(sandbox_name)
+
+    case {openshell_result, docker_result} do
+      {:ok, {:error, reason}} ->
+        {:error, %{"openshell" => "deleted", "docker" => reason}}
+
+      {:ok, _docker_result} ->
+        :ok
+
+      {{:error, _reason}, :removed} ->
+        :ok
+
+      {{:error, _reason}, docker_result}
+      when allow_missing? and docker_result in [:missing, :unavailable] ->
+        :ok
+
+      {{:error, reason}, docker_result} ->
+        {:error, cleanup_error(reason, docker_result)}
+    end
+  end
+
+  defp delete_openshell_sandbox(executable, sandbox_name) do
     case System.cmd(executable, ["sandbox", "delete", sandbox_name],
            stderr_to_stdout: true,
            env: [{"NO_COLOR", "1"}]
@@ -173,6 +214,108 @@ defmodule MirrorNeuron.Sandbox.JobSandbox do
   rescue
     error in ErlangError ->
       {:error, Exception.message(error)}
+  end
+
+  defp delete_local_docker_sandbox(sandbox_name) do
+    delete_local_docker_containers("openshell-#{sandbox_name}")
+  end
+
+  defp delete_local_docker_job_sandboxes(job_id, config) do
+    delete_local_docker_containers(openshell_job_container_prefix(job_id, config))
+  end
+
+  defp delete_local_docker_containers(container_name_prefix) do
+    case docker_cli() do
+      nil ->
+        :unavailable
+
+      docker ->
+        case local_docker_container_ids(docker, container_name_prefix) do
+          {:ok, []} ->
+            :missing
+
+          {:ok, ids} ->
+            case System.cmd(docker, ["rm", "-f" | ids], stderr_to_stdout: true) do
+              {_output, 0} -> :removed
+              {output, exit_code} -> {:error, %{"exit_code" => exit_code, "logs" => output}}
+            end
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+    end
+  rescue
+    error in ErlangError ->
+      {:error, Exception.message(error)}
+  end
+
+  defp local_docker_container_ids(docker, container_name_prefix) do
+    case System.cmd(
+           docker,
+           [
+             "ps",
+             "-a",
+             "--filter",
+             "name=#{container_name_prefix}",
+             "--format",
+             "{{.ID}}\t{{.Names}}"
+           ],
+           stderr_to_stdout: true
+         ) do
+      {output, 0} ->
+        ids =
+          output
+          |> String.split("\n", trim: true)
+          |> Enum.flat_map(fn line ->
+            case String.split(line, "\t", parts: 2) do
+              [id, name] ->
+                if openshell_container_name?(name, container_name_prefix), do: [id], else: []
+
+              _other ->
+                []
+            end
+          end)
+
+        {:ok, ids}
+
+      {output, exit_code} ->
+        {:error, %{"exit_code" => exit_code, "logs" => output}}
+    end
+  end
+
+  defp openshell_container_name?(name, container_name_prefix) do
+    name == container_name_prefix or String.starts_with?(name, "#{container_name_prefix}-")
+  end
+
+  defp openshell_job_container_prefix(job_id, config) do
+    prefix = Map.get(config, "shared_sandbox_prefix", "mirror-neuron-job")
+
+    base =
+      [prefix, job_id]
+      |> Enum.join("-")
+      |> String.downcase()
+      |> String.replace(~r/[^a-z0-9-]/, "-")
+      |> String.trim("-")
+
+    "openshell-#{base}"
+  end
+
+  defp docker_cli do
+    case System.get_env("MN_DOCKER_BIN") do
+      value when is_binary(value) and value != "" -> value
+      _ -> System.find_executable("docker")
+    end
+  end
+
+  defp cleanup_error(openshell_reason, docker_result) do
+    docker_reason =
+      case docker_result do
+        :missing -> "no matching local Docker container"
+        :unavailable -> "docker executable not available"
+        {:error, reason} -> reason
+      end
+
+    %{"openshell" => openshell_reason, "docker" => docker_reason}
   end
 
   defp sandbox_exists?(executable, sandbox_name) do

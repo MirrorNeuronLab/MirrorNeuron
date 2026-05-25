@@ -6,6 +6,7 @@ defmodule MirrorNeuron.Runtime do
   alias MirrorNeuron.ContextEnginePreflight
   alias MirrorNeuron.JobId
   alias MirrorNeuron.Scheduler
+  alias MirrorNeuron.Sandbox.JobSandbox
 
   alias MirrorNeuron.Runtime.{
     Backpressure,
@@ -143,6 +144,7 @@ defmodule MirrorNeuron.Runtime do
           end)
           |> Enum.map(& &1["job_id"])
           |> Enum.map(fn job_id ->
+            JobSandbox.cleanup_job_local(job_id)
             MirrorNeuron.Persistence.RedisStore.delete_job(job_id)
             job_id
           end)
