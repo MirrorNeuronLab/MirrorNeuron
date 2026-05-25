@@ -45,7 +45,7 @@ services:
       OPENSHELL_SERVER_PORT: ${OPENSHELL_GATEWAY_PORT:-58080}
     volumes:
       - ${MN_HOST_OPENSHELL_STATE_DIR:-./openshell-state}:${MN_HOST_OPENSHELL_STATE_DIR:-./openshell-state}
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DOCKER_HOST_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
 
   context-engine-model:
     image: ${MN_CONTEXT_MODEL_IMAGE:-mirror-neuron-context-model:cpu}

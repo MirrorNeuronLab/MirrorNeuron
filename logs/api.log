@@ -1,13 +1,24 @@
-Traceback (most recent call last):
-  File "/Users/homer/.local/share/mn_venv/bin/mn-api", line 3, in <module>
-    from mn_api.main import start
-  File "/Users/homer/Projects/mirror-neuron-set/mn-api/mn_api/main.py", line 5, in <module>
-    from mn_api import state
-  File "/Users/homer/Projects/mirror-neuron-set/mn-api/mn_api/state.py", line 20, in <module>
-    config = ApiConfig.from_env()
-             ^^^^^^^^^^^^^^^^^^^^
-  File "/Users/homer/Projects/mirror-neuron-set/mn-api/mn_api/config.py", line 90, in from_env
-    config.validate()
-  File "/Users/homer/Projects/mirror-neuron-set/mn-api/mn_api/config.py", line 107, in validate
-    raise ValueError("MN_BLUEPRINT_REPO must be a non-empty path")
-ValueError: MN_BLUEPRINT_REPO must be a non-empty path
+INFO:     Started server process [61973]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://localhost:54001 (Press CTRL+C to quit)
+INFO:     ::1:56875 - "GET /api/v1/health HTTP/1.1" 200 OK
+INFO:     ::1:56876 - "GET /api/v1/services/blueprint-web-ui/resolve?passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:56915 - "GET /api/v1/jobs/vwav-7293dcde HTTP/1.1" 200 OK
+INFO:     ::1:56918 - "GET /api/v1/jobs/vwav-7293dcde/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:56916 - "GET /api/v1/jobs/vwav-7293dcde/events HTTP/1.1" 200 OK
+INFO:     ::1:56917 - "GET /api/v1/jobs/vwav-7293dcde/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:56919 - "GET /api/v1/runs/video_watch_assistant-20260525T142541540Z-jiivy8pu/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:56916 - "GET /api/v1/runs/video_watch_assistant-20260525T142541540Z-jiivy8pu/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:56915 - "GET /api/v1/runs/video_watch_assistant-20260525T142541540Z-jiivy8pu/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:56918 - "GET /api/v1/runs/video_watch_assistant-20260525T142541540Z-jiivy8pu/human HTTP/1.1" 200 OK
+INFO:     ::1:56917 - "GET /api/v1/runs/video_watch_assistant-20260525T142541540Z-jiivy8pu/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:56977 - "GET /api/v1/jobs/vwav-7293dcde HTTP/1.1" 200 OK
+INFO:     ::1:56978 - "GET /api/v1/jobs/vwav-7293dcde/events HTTP/1.1" 200 OK
+INFO:     ::1:56980 - "GET /api/v1/jobs/vwav-7293dcde/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:56979 - "GET /api/v1/jobs/vwav-7293dcde/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:56977 - "GET /api/v1/runs/video_watch_assistant-20260525T142541540Z-jiivy8pu/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:56978 - "GET /api/v1/runs/video_watch_assistant-20260525T142541540Z-jiivy8pu/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:56979 - "GET /api/v1/runs/video_watch_assistant-20260525T142541540Z-jiivy8pu/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:56980 - "GET /api/v1/runs/video_watch_assistant-20260525T142541540Z-jiivy8pu/human HTTP/1.1" 200 OK
+INFO:     ::1:56981 - "GET /api/v1/runs/video_watch_assistant-20260525T142541540Z-jiivy8pu/ui HTTP/1.1" 404 Not Found
