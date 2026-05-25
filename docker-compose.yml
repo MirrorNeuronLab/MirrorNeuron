@@ -1,0 +1,157 @@
+name: mirror-neuron
+
+services:
+  redis:
+    image: redis:7
+    container_name: mirror-neuron-redis
+    restart: unless-stopped
+    expose:
+      - "6379"
+    ports:
+      - "${MN_REDIS_BIND_HOST:-0.0.0.0}:${MN_REDIS_PORT:-56379}:6379"
+    environment:
+      MN_REDIS_PASSWORD: ${MN_REDIS_PASSWORD:-}
+    command: >
+      sh -c 'if [ -n "$$MN_REDIS_PASSWORD" ]; then
+      exec redis-server --appendonly yes --requirepass "$$MN_REDIS_PASSWORD" --masterauth "$$MN_REDIS_PASSWORD";
+      else
+      exec redis-server --appendonly yes;
+      fi'
+    volumes:
+      - redis-data:/data
+
+  openshell:
+    image: ${OPENSHELL_GATEWAY_IMAGE:-ghcr.io/nvidia/openshell/gateway:0.0.47}
+    container_name: openshell-cluster-openshell
+    command: ["--bind-address", "0.0.0.0", "--port", "${OPENSHELL_GATEWAY_PORT:-58080}"]
+    user: "${OPENSHELL_GATEWAY_USER:-1000:1000}"
+    group_add:
+      - "${OPENSHELL_GATEWAY_DOCKER_GROUP:-0}"
+      - "0"
+    profiles:
+      - openshell
+    restart: unless-stopped
+    expose:
+      - "${OPENSHELL_GATEWAY_PORT:-58080}"
+    ports:
+      - "${OPENSHELL_GATEWAY_BIND_HOST:-127.0.0.1}:${OPENSHELL_GATEWAY_PORT:-58080}:${OPENSHELL_GATEWAY_PORT:-58080}"
+    environment:
+      HOME: ${MN_HOST_OPENSHELL_STATE_DIR:-./openshell-state}
+      XDG_DATA_HOME: ${MN_HOST_OPENSHELL_STATE_DIR:-./openshell-state}/.local/share
+      OPENSHELL_GATEWAY_CONFIG: ${MN_HOST_OPENSHELL_STATE_DIR:-./openshell-state}/gateway.toml
+      OPENSHELL_DRIVERS: docker
+      OPENSHELL_DB_URL: "sqlite:${MN_HOST_OPENSHELL_STATE_DIR:-./openshell-state}/openshell.db"
+      OPENSHELL_DISABLE_TLS: "true"
+      OPENSHELL_BIND_ADDRESS: 0.0.0.0
+      OPENSHELL_SERVER_PORT: ${OPENSHELL_GATEWAY_PORT:-58080}
+    volumes:
+      - ${MN_HOST_OPENSHELL_STATE_DIR:-./openshell-state}:${MN_HOST_OPENSHELL_STATE_DIR:-./openshell-state}
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  context-engine-model:
+    image: ${MN_CONTEXT_MODEL_IMAGE:-mirror-enuron-context-model:cpu}
+    container_name: mirror-neuron-context-engine-model
+    profiles:
+      - context
+    build:
+      context: ${MEMBRANE_DIR}
+      dockerfile: Dockerfile
+      target: ${MN_CONTEXT_MODEL_BUILD_TARGET:-context-model-cpu}
+    restart: unless-stopped
+    environment:
+      MN_CONTEXT_COMPRESSOR_REPO: ${MN_CONTEXT_COMPRESSOR_REPO:-homerquan/mn-context-engine-model-v-Q4_K_M}
+      MN_CONTEXT_COMPRESSOR_FILE: ${MN_CONTEXT_COMPRESSOR_FILE:-mn-context-engine-model-v3.Q4_K_M.gguf}
+      MN_CONTEXT_COMPRESSOR_MODEL_PATH: ${MN_CONTEXT_COMPRESSOR_MODEL_PATH:-}
+      MN_CONTEXT_COMPRESSOR_N_GPU_LAYERS: ${MN_CONTEXT_COMPRESSOR_N_GPU_LAYERS:-0}
+      MN_CONTEXT_COMPRESSOR_N_CTX: ${MN_CONTEXT_COMPRESSOR_N_CTX:-16384}
+    volumes:
+      - context-model-cache:/root/.cache/huggingface
+
+  membrane-context-engine:
+    image: ${ENGINE_IMAGE:-mirror-enuron-memory-engine:latest}
+    container_name: mirror-neuron-context-engine
+    profiles:
+      - context
+    build:
+      context: ${MEMBRANE_DIR}
+      dockerfile: Dockerfile
+      target: runtime
+    restart: unless-stopped
+    expose:
+      - "50052"
+    environment:
+      MN_CONTEXT_ADDR: 0.0.0.0:50052
+      MN_CONTEXT_REDIS_URL: ${MN_CONTEXT_REDIS_URL:-redis://redis:6379/1}
+      MN_CONTEXT_DEBUG: ${MN_CONTEXT_DEBUG:-0}
+      MN_CONTEXT_DEBUG_DETAIL: ${MN_CONTEXT_DEBUG_DETAIL:-basic}
+      MN_CONTEXT_DEBUG_DIR: /tmp/mn-context-engine/context-views
+      MN_CONTEXT_MODEL_COMPRESSION_ENABLED: ${MN_CONTEXT_MODEL_COMPRESSION_ENABLED:-true}
+      MN_CONTEXT_COMPRESSION_COMMAND: /usr/local/bin/mn_context_model_client.py
+      MN_CONTEXT_MODEL_ENDPOINT: http://context-engine-model:8000/compress
+      MN_CONTEXT_MODEL_TIMEOUT_SECONDS: ${MN_CONTEXT_MODEL_TIMEOUT_SECONDS:-300}
+    depends_on:
+      redis:
+        condition: service_started
+      context-engine-model:
+        condition: service_started
+    volumes:
+      - context-debug:/tmp/mn-context-engine
+
+  mirror-neuron-core:
+    image: mirror-neuron-core:latest
+    container_name: mirror-neuron-core
+    restart: unless-stopped
+    expose:
+      - "50051"
+      - "4369"
+      - "${MN_DIST_PORT:-54370}"
+    ports:
+      - "${MN_GRPC_BIND_HOST:-127.0.0.1}:${MN_GRPC_PORT:-55051}:50051"
+      - "${MN_EPMD_BIND_HOST:-127.0.0.1}:${MN_EPMD_PORT:-54369}:4369"
+      - "${MN_DIST_BIND_HOST:-127.0.0.1}:${MN_DIST_PORT:-54370}:${MN_DIST_PORT:-54370}"
+      - "${MN_BLUEPRINT_WEB_UI_PUBLISH_HOST:-127.0.0.1}:${MN_BLUEPRINT_WEB_UI_PORT_START:-58000}-${MN_BLUEPRINT_WEB_UI_PORT_END:-58049}:${MN_BLUEPRINT_WEB_UI_PORT_START:-58000}-${MN_BLUEPRINT_WEB_UI_PORT_END:-58049}"
+    environment:
+      HOME: /root
+      MN_CORE_HOST: 0.0.0.0
+      MN_REDIS_HOST: redis
+      MN_REDIS_URL: ${MN_REDIS_URL:-redis://redis:6379/0}
+      MN_NETWORK_JOIN_TOKEN: ${MN_NETWORK_JOIN_TOKEN:-}
+      MN_NETWORK_ADVERTISE_HOST: ${MN_NETWORK_ADVERTISE_HOST:-}
+      MN_NETWORK_REDIS_HOST: ${MN_NETWORK_REDIS_HOST:-}
+      MN_NETWORK_REDIS_PORT: ${MN_NETWORK_REDIS_PORT:-}
+      MN_CONTEXT_ADDR: membrane-context-engine:50052
+      MN_EXECUTOR_MAX_CONCURRENCY: ${MN_EXECUTOR_MAX_CONCURRENCY:-50}
+      MN_NODE_NAME: ${MN_NODE_NAME:-}
+      MN_NODE_ROLE: ${MN_NODE_ROLE:-runtime}
+      MN_CLUSTER_NODES: ${MN_CLUSTER_NODES:-}
+      MN_DIST_PORT: ${MN_DIST_PORT:-54370}
+      MN_BLUEPRINT_WEB_UI_BIND_HOST: ${MN_BLUEPRINT_WEB_UI_BIND_HOST:-0.0.0.0}
+      MN_BLUEPRINT_WEB_UI_PUBLIC_HOST: ${MN_BLUEPRINT_WEB_UI_PUBLIC_HOST:-localhost}
+      MN_BLUEPRINT_WEB_UI_PORT_START: ${MN_BLUEPRINT_WEB_UI_PORT_START:-58000}
+      MN_BLUEPRINT_WEB_UI_PORT_END: ${MN_BLUEPRINT_WEB_UI_PORT_END:-58049}
+      ERL_EPMD_ADDRESS: ${ERL_EPMD_ADDRESS:-0.0.0.0}
+      ERL_AFLAGS: ${ERL_AFLAGS:-}
+      MN_COOKIE: ${MN_COOKIE}
+      MN_GRPC_AUTH_TOKEN: ${MN_GRPC_AUTH_TOKEN}
+      MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN: ${MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
+      SLACK_DEFAULT_CHANNEL: ${SLACK_DEFAULT_CHANNEL:-}
+      SLACK_API_BASE_URL: ${SLACK_API_BASE_URL:-}
+      MN_SLACK_BOT_TOKEN: ${MN_SLACK_BOT_TOKEN:-}
+      MN_SLACK_DEFAULT_CHANNEL: ${MN_SLACK_DEFAULT_CHANNEL:-}
+      MN_SLACK_API_BASE_URL: ${MN_SLACK_API_BASE_URL:-}
+    depends_on:
+      redis:
+        condition: service_started
+    volumes:
+      - ${MN_HOST_STATE_DIR}:/root/.mirror_neuron
+      - ${MN_HOST_STATE_DIR}:/opt/mirror_neuron/.mirror_neuron
+      - ${MN_HOST_MN_DIR}:/root/.mn
+      - ${MN_HOST_MN_DIR}:/opt/mirror_neuron/.mn
+      - ${MN_HOST_OPENSHELL_CONFIG_DIR}:/root/.config/openshell:ro
+      - ${MN_HOST_OPENSHELL_CONFIG_DIR}:/opt/mirror_neuron/.config/openshell:ro
+
+volumes:
+  redis-data:
+  context-debug:
+  context-model-cache:
