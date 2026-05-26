@@ -39,6 +39,7 @@ defmodule MirrorNeuron.ServiceMonitor do
     case ServiceRegistry.list() do
       {:ok, services} ->
         services
+        |> Enum.filter(&refreshable_on_current_node?/1)
         |> Enum.filter(&(Map.get(&1, "checks", []) != []))
         |> Enum.each(&refresh_service/1)
 
@@ -47,6 +48,14 @@ defmodule MirrorNeuron.ServiceMonitor do
       {:error, reason} ->
         Logger.debug("service monitor could not list services: #{inspect(reason)}")
         {:error, reason}
+    end
+  end
+
+  def refreshable_on_current_node?(service) when is_map(service) do
+    case Map.get(service, "node") || Map.get(service, :node) do
+      nil -> true
+      "" -> true
+      node -> to_string(node) == to_string(Node.self())
     end
   end
 

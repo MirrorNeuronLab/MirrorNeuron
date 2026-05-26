@@ -1,7 +1,1115 @@
-INFO:     Started server process [13866]
+INFO:     Started server process [27719]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://localhost:54001 (Press CTRL+C to quit)
-INFO:     ::1:52399 - "GET /api/v1/health HTTP/1.1" 200 OK
-INFO:     ::1:52399 - "GET /api/v1/health HTTP/1.1" 200 OK
-INFO:     ::1:52402 - "GET /api/v1/resource HTTP/1.1" 200 OK
+INFO:     ::1:64773 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:64773 - "GET /api/v1/jobs/vwav-38bbbd20 HTTP/1.1" 200 OK
+INFO:     ::1:64779 - "GET /api/v1/jobs/vwav-38bbbd20/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:64777 - "GET /api/v1/jobs/vwav-38bbbd20/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:64778 - "GET /api/v1/jobs/vwav-38bbbd20/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:64781 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:64782 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:64780 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:64773 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:64777 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:64778 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:64779 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/human HTTP/1.1" 200 OK
+INFO:     ::1:64773 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-38bbbd20&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:64777 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:64786 - "GET /api/v1/jobs/vwav-38bbbd20 HTTP/1.1" 200 OK
+INFO:     ::1:64789 - "GET /api/v1/jobs/vwav-38bbbd20/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:64787 - "GET /api/v1/jobs/vwav-38bbbd20/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:64788 - "GET /api/v1/jobs/vwav-38bbbd20/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:64786 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:64787 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:64788 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:64789 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/human HTTP/1.1" 200 OK
+INFO:     ::1:64791 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:64792 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:64790 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:64786 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-38bbbd20&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:64787 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49159 - "GET /api/v1/resource HTTP/1.1" 200 OK
+INFO:     ::1:49481 - "GET /api/v1/jobs/vwav-38bbbd20 HTTP/1.1" 200 OK
+INFO:     ::1:49488 - "GET /api/v1/jobs/vwav-38bbbd20/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:49490 - "GET /api/v1/jobs/vwav-38bbbd20/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:49489 - "GET /api/v1/jobs/vwav-38bbbd20/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:49497 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:49481 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:49489 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:49488 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:49496 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:49490 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/human HTTP/1.1" 200 OK
+INFO:     ::1:49498 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:49481 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-38bbbd20&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:49488 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:49630 - "GET /api/v1/jobs/vwav-38bbbd20 HTTP/1.1" 200 OK
+INFO:     ::1:49631 - "GET /api/v1/jobs/vwav-38bbbd20/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:49633 - "GET /api/v1/jobs/vwav-38bbbd20/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:49632 - "GET /api/v1/jobs/vwav-38bbbd20/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:49630 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:49635 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:49631 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:49632 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:49634 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:49633 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/human HTTP/1.1" 200 OK
+INFO:     ::1:49636 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:49630 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-38bbbd20&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:49631 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:49641 - "GET /api/v1/health HTTP/1.1" 200 OK
+INFO:     ::1:49654 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:50529 - "GET /api/v1/jobs/vwav-38bbbd20 HTTP/1.1" 200 OK
+INFO:     ::1:50530 - "GET /api/v1/jobs/vwav-38bbbd20/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:50532 - "GET /api/v1/jobs/vwav-38bbbd20/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:50531 - "GET /api/v1/jobs/vwav-38bbbd20/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:50529 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:50532 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:50530 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:50535 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:50533 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/human HTTP/1.1" 200 OK
+INFO:     ::1:50534 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:50536 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:50529 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-38bbbd20&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:50530 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:50538 - "GET /api/v1/jobs/vwav-38bbbd20?include=compact HTTP/1.1" 200 OK
+INFO:     ::1:50544 - "GET /api/v1/jobs/vwav-38bbbd20 HTTP/1.1" 200 OK
+INFO:     ::1:50547 - "GET /api/v1/jobs/vwav-38bbbd20/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:50545 - "GET /api/v1/jobs/vwav-38bbbd20/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:50546 - "GET /api/v1/jobs/vwav-38bbbd20/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:50545 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:50544 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:50546 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:50547 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/human HTTP/1.1" 200 OK
+INFO:     ::1:50549 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:50550 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:50548 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:50544 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-38bbbd20&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:50545 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:50554 - "GET /api/v1/jobs/vwav-38bbbd20 HTTP/1.1" 200 OK
+INFO:     ::1:50555 - "GET /api/v1/jobs/vwav-38bbbd20/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:50557 - "GET /api/v1/jobs/vwav-38bbbd20/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:50556 - "GET /api/v1/jobs/vwav-38bbbd20/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:50555 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:50554 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:50557 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/human HTTP/1.1" 200 OK
+INFO:     ::1:50556 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:50559 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:50560 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:50558 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:50554 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-38bbbd20&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:50555 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:52422 - "GET /api/v1/jobs/vwav-38bbbd20/events?include=full&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:52424 - "GET /api/v1/jobs/vwav-38bbbd20 HTTP/1.1" 200 OK
+INFO:     ::1:52425 - "GET /api/v1/jobs/vwav-38bbbd20/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:52427 - "GET /api/v1/jobs/vwav-38bbbd20/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:52426 - "GET /api/v1/jobs/vwav-38bbbd20/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:52424 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:52425 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:52426 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:52427 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/human HTTP/1.1" 200 OK
+INFO:     ::1:52429 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:52430 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:52428 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:52424 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-38bbbd20&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:52425 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:52436 - "GET /api/v1/jobs/vwav-38bbbd20 HTTP/1.1" 200 OK
+INFO:     ::1:52437 - "GET /api/v1/jobs/vwav-38bbbd20/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:52439 - "GET /api/v1/jobs/vwav-38bbbd20/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:52438 - "GET /api/v1/jobs/vwav-38bbbd20/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:52437 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:52436 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:52441 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:52439 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/human HTTP/1.1" 200 OK
+INFO:     ::1:52438 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:52440 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:52442 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:52436 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-38bbbd20&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:52437 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:52798 - "GET /api/v1/jobs?include_terminal=true&limit=5 HTTP/1.1" 200 OK
+INFO:     ::1:52799 - "GET /api/v1/jobs/vwav-38bbbd20 HTTP/1.1" 200 OK
+INFO:     ::1:52800 - "GET /api/v1/jobs/vwav-38bbbd20/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:52802 - "GET /api/v1/jobs/vwav-38bbbd20/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:52801 - "GET /api/v1/jobs/vwav-38bbbd20/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:52800 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:52799 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:52802 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/human HTTP/1.1" 200 OK
+INFO:     ::1:52801 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:52804 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:52805 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:52803 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:52799 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-38bbbd20&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:52800 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:52811 - "GET /api/v1/jobs/vwav-38bbbd20 HTTP/1.1" 200 OK
+INFO:     ::1:52814 - "GET /api/v1/jobs/vwav-38bbbd20/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:52812 - "GET /api/v1/jobs/vwav-38bbbd20/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:52813 - "GET /api/v1/jobs/vwav-38bbbd20/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:52811 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:52812 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:52814 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/human HTTP/1.1" 200 OK
+INFO:     ::1:52813 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:52816 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:52815 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:52817 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:52811 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-38bbbd20&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:52812 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:54211 - "GET /api/v1/jobs/vwav-38bbbd20 HTTP/1.1" 200 OK
+INFO:     ::1:54222 - "GET /api/v1/jobs/vwav-38bbbd20/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:54224 - "GET /api/v1/jobs/vwav-38bbbd20/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:54223 - "GET /api/v1/jobs/vwav-38bbbd20/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:54211 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:54222 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:54224 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/human HTTP/1.1" 200 OK
+INFO:     ::1:54223 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:54235 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:54236 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:54234 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:54211 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-38bbbd20&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:54222 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:55693 - "GET /api/v1/jobs/vwav-38bbbd20 HTTP/1.1" 200 OK
+INFO:     ::1:55701 - "GET /api/v1/jobs/vwav-38bbbd20/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:55699 - "GET /api/v1/jobs/vwav-38bbbd20/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:55700 - "GET /api/v1/jobs/vwav-38bbbd20/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:55693 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:55701 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/human HTTP/1.1" 200 OK
+INFO:     ::1:55709 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:55700 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:55699 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:55708 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:55710 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:55693 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-38bbbd20&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:55699 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:57438 - "GET /api/v1/jobs/vwav-38bbbd20 HTTP/1.1" 200 OK
+INFO:     ::1:57448 - "GET /api/v1/jobs/vwav-38bbbd20/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:57446 - "GET /api/v1/jobs/vwav-38bbbd20/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:57447 - "GET /api/v1/jobs/vwav-38bbbd20/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:57446 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:57438 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:57447 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:57458 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:57448 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/human HTTP/1.1" 200 OK
+INFO:     ::1:57457 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:57459 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:57438 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-38bbbd20&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:57446 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:59782 - "GET /api/v1/jobs?include_terminal=true&limit=8 HTTP/1.1" 200 OK
+INFO:     ::1:59843 - "GET /api/v1/jobs/vwav-38bbbd20 HTTP/1.1" 200 OK
+INFO:     ::1:59847 - "GET /api/v1/jobs/vwav-38bbbd20/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:59849 - "GET /api/v1/jobs/vwav-38bbbd20/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:59848 - "GET /api/v1/jobs/vwav-38bbbd20/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:59855 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:59843 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:59849 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/human HTTP/1.1" 200 OK
+INFO:     ::1:59847 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:59848 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:59854 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:59856 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:59843 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-38bbbd20&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:59847 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:62095 - "GET /api/v1/jobs/vwav-38bbbd20 HTTP/1.1" 200 OK
+INFO:     ::1:62101 - "GET /api/v1/jobs/vwav-38bbbd20/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:62099 - "GET /api/v1/jobs/vwav-38bbbd20/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62100 - "GET /api/v1/jobs/vwav-38bbbd20/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:62095 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62099 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:62108 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:62101 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/human HTTP/1.1" 200 OK
+INFO:     ::1:62100 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62109 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:62107 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:62095 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-38bbbd20&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:62099 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:62817 - "GET /api/v1/jobs/vwav-38bbbd20 HTTP/1.1" 200 OK
+INFO:     ::1:62818 - "GET /api/v1/jobs/vwav-38bbbd20/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62820 - "GET /api/v1/jobs/vwav-38bbbd20/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:62819 - "GET /api/v1/jobs/vwav-38bbbd20/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:62818 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:62817 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62820 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/human HTTP/1.1" 200 OK
+INFO:     ::1:62819 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62822 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:62821 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:62823 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:62817 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-38bbbd20&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:62818 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:62816 - "POST /api/v1/jobs/vwav-acf6edfb/cancel HTTP/1.1" 200 OK
+INFO:     ::1:62858 - "GET /api/v1/jobs/vwav-38bbbd20 HTTP/1.1" 200 OK
+INFO:     ::1:62861 - "GET /api/v1/jobs/vwav-38bbbd20/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:62859 - "GET /api/v1/jobs/vwav-38bbbd20/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62860 - "GET /api/v1/jobs/vwav-38bbbd20/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:62858 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62859 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:62860 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62861 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/human HTTP/1.1" 200 OK
+INFO:     ::1:62863 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:62864 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:62862 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:62858 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-38bbbd20&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:62859 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:62972 - "GET /api/v1/health HTTP/1.1" 200 OK
+INFO:     ::1:62976 - "GET /api/v1/jobs/vwav-38bbbd20 HTTP/1.1" 200 OK
+INFO:     ::1:62977 - "GET /api/v1/jobs/vwav-38bbbd20/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62979 - "GET /api/v1/jobs/vwav-38bbbd20/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:62978 - "GET /api/v1/jobs/vwav-38bbbd20/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:62976 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62977 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:62978 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62979 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/human HTTP/1.1" 200 OK
+INFO:     ::1:62981 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:62982 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:62980 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:62976 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-38bbbd20&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:62977 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:62993 - "GET /api/v1/jobs/vwav-38bbbd20 HTTP/1.1" 200 OK
+INFO:     ::1:62994 - "GET /api/v1/jobs/vwav-38bbbd20/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62996 - "GET /api/v1/jobs/vwav-38bbbd20/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:62995 - "GET /api/v1/jobs/vwav-38bbbd20/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:62993 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62994 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:62995 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62996 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/human HTTP/1.1" 200 OK
+INFO:     ::1:62998 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:62999 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:62997 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:62993 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-38bbbd20&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:62994 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:63009 - "GET /api/v1/jobs/vwav-38bbbd20 HTTP/1.1" 200 OK
+INFO:     ::1:63012 - "GET /api/v1/jobs/vwav-38bbbd20/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:63010 - "GET /api/v1/jobs/vwav-38bbbd20/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63011 - "GET /api/v1/jobs/vwav-38bbbd20/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:63009 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63010 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:63012 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/human HTTP/1.1" 200 OK
+INFO:     ::1:63011 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63014 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:63015 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:63013 - "GET /api/v1/runs/video_watch_assistant-20260526T023327413Z-0cmedx7o/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:63009 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-38bbbd20&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:63010 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:62973 - "POST /api/v1/blueprints/video_watch_assistant/runs HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:63031 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63033 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:63032 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:63031 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63033 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:63032 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63035 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:63034 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:63036 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:63031 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63033 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:63032 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:63035 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:63031 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63033 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:63034 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:63032 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63036 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:63033 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:63031 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63032 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63031 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:63035 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:63032 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63033 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:63034 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:63036 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:63033 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:63031 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63032 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:63036 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:63031 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63033 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63034 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:63035 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:63060 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:63031 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63033 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:63032 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:63035 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:63031 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63033 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:63032 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63034 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:63036 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:63031 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63033 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:63032 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:63035 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:63030 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63031 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:63032 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63033 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:63034 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:63036 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:63033 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:63031 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63032 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63035 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:63031 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:63033 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:63032 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63034 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:63036 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:63031 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63033 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:63032 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63036 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:63031 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:63034 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:63033 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63035 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:63076 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:63031 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63033 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:63032 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:63030 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63031 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:63036 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:63033 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63034 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:63035 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:63076 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:63084 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:63085 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63087 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:63086 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:63085 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:63084 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63086 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63087 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:63089 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:63090 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:63088 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:63101 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:63102 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63104 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:63103 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:63101 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63102 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:63106 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:63104 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:63103 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63105 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:63107 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:63961 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:63967 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:63965 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63966 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:63976 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:63965 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:63966 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63967 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:63961 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63975 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:63977 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:65041 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:65048 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65050 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:65049 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:65048 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:65049 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65041 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65050 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:65062 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:65063 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:65061 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:65041 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:65041 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:65050 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:65048 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65049 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:65063 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:65041 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65048 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:65061 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:65050 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65181 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:65062 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:65041 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:65041 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:65048 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65050 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:65049 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:65048 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:65041 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65063 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:65050 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65061 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:65062 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:65181 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:65041 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:65041 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:65048 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65050 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:65049 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:65062 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:65048 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:65041 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65049 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65050 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:65061 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:65063 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:65041 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:65048 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:65041 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:65041 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:65048 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65050 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:65049 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:65041 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65062 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:65048 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:65050 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:65049 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65061 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:65063 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:65041 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:65041 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:65050 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:65048 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65049 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:65041 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65049 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65062 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:65050 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:65048 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:65061 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:65063 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:50261 - "GET /api/v1/jobs/vwav-dd452fae?include=compact HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50255 - "GET /api/v1/resource HTTP/1.1" 200 OK
+INFO:     ::1:50537 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:65041 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:65041 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:65048 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65050 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:65049 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:65062 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:65048 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:65049 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65050 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:65041 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65061 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:65063 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:65041 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:65041 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:65050 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:65048 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65049 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:65041 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65048 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:65062 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:65049 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65050 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:65063 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:65061 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:51588 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:51601 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:51603 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:51602 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:51588 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:51602 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:51613 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:51601 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:51603 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:51614 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:51612 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:52317 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:52322 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:52324 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:52323 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:52322 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:52331 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:52317 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:52324 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:52323 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:52332 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:52330 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:53030 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:53036 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:53038 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:53037 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:53036 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:53030 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:53038 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:53050 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:53048 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:53049 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:53051 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:53420 - "GET /api/v1/jobs/vwav-dd452fae/events?include=full&limit=500 HTTP/1.1" 200 OK
+INFO:     ::1:53977 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:53986 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:53984 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:53985 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:53977 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:53997 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:53984 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:53986 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:53985 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:53996 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:53998 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:55241 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:55250 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:55248 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:55249 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:55250 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:55248 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:55241 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:55249 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:55264 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:55265 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:55263 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:56580 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:56588 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:56586 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:56587 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:56586 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:56599 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:56580 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:56587 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:56588 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:56600 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:56598 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:57749 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:57755 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:57757 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:57756 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:57749 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:57755 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:57756 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:57757 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:57765 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:57764 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:57763 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:58596 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:58601 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58603 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:58602 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:58596 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58610 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:58601 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:58602 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58603 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:58611 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:58609 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:58625 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:58626 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58628 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:58627 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:58626 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:58625 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58627 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58628 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:58630 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:58631 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:58629 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:58640 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:58641 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58643 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:58642 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:58641 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:58640 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58643 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:58642 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58645 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:58646 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:58644 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 200 OK
+INFO:     ::1:58881 - "POST /api/v1/jobs/vwav-dd452fae/cancel HTTP/1.1" 200 OK
+INFO:     ::1:59575 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:59585 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:59583 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:59584 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:59583 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:59575 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:59585 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:59584 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:59599 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:59598 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:59600 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:59575 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-dd452fae&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:59583 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:60698 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:60699 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:60701 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:60700 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:60698 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:60700 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:60699 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:60701 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:60703 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:60704 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:60702 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:60698 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-dd452fae&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:60699 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:60709 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:60712 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:60710 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:60711 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:60710 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:60709 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:60711 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:60712 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:60714 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:60713 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:60715 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:60709 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-dd452fae&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:60716 - "GET /api/v1/health HTTP/1.1" 200 OK
+INFO:     ::1:60710 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:60962 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:60969 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:60971 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:60970 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:60969 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:60970 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:60962 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:60971 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:60983 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:60982 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:60984 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:60962 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-dd452fae&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:60969 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62597 - "GET /api/v1/resource HTTP/1.1" 200 OK
+INFO:     ::1:62798 - "GET /api/v1/jobs/vwav-dd452fae HTTP/1.1" 200 OK
+INFO:     ::1:62799 - "GET /api/v1/jobs/vwav-dd452fae/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62801 - "GET /api/v1/jobs/vwav-dd452fae/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:62800 - "GET /api/v1/jobs/vwav-dd452fae/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:62798 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62799 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:62801 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/human HTTP/1.1" 200 OK
+INFO:     ::1:62800 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62803 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:62804 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:62802 - "GET /api/v1/runs/video_watch_assistant-20260526T023545126Z-6bfx5vix/ui HTTP/1.1" 404 Not Found
+INFO:     ::1:62798 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-dd452fae&tag=video_watch_assistant&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:62799 - "GET /api/v1/services/blueprint-web-ui/resolve?tag=video_watch_assistant&passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:60717 - "POST /api/v1/blueprints/video_watch_assistant/runs HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:62837 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62839 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:62838 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:62838 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62837 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:62840 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:62835 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62839 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:62841 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:62842 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:62837 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62839 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:62838 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:62837 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62840 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:62839 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:62838 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62841 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:62842 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:62837 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62839 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:62838 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62837 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:62838 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62840 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:62839 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:62841 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:62842 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:62837 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62839 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:62838 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62837 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:62838 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62839 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:62840 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:62842 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:62841 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:62837 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62839 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:62838 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:62840 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:62837 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62839 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:62838 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62841 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:62842 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:62837 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62839 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:62838 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62837 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:62840 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:62839 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:62838 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62841 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:62842 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:62837 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62839 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:62838 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:62837 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62840 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:62839 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:62842 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:62838 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62841 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/jobs?limit=200&include_terminal=true HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:62837 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62839 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:62838 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:62837 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:62840 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:62839 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62838 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62841 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:62842 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:62837 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62839 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:62838 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:62835 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62837 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:62838 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62839 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:62840 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:62841 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:62842 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:62880 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:62881 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62883 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:62882 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:62880 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62881 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:62882 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62883 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:62885 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:62886 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:62884 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:63782 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:63787 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63789 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:63788 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:63787 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:63789 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:63782 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63788 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:63797 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:63798 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:63796 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:64696 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:64781 - "GET /api/v1/jobs/vwav-6d795e80?include=compact HTTP/1.1" 200 OK
+INFO:     ::1:64900 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:64908 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:64906 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:64907 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:64906 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:64918 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:64900 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:64908 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:64916 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:64917 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:64919 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:49845 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:49851 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:49853 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:49852 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:49862 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:49851 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:49853 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:49845 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:49852 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:49861 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:49863 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:51185 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:51191 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:51193 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:51192 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:51202 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:51185 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:51191 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:51192 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:51203 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:51193 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:51204 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:52992 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:53000 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:52998 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:52999 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:52992 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:52998 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:52999 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:53000 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:53010 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:53011 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:53009 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:54949 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:54954 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:54956 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:54955 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:54956 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:54949 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:54966 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:54955 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:54954 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:54965 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:54967 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:56973 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:56974 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:56976 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:56975 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:56973 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:56978 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:56974 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:56975 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:56976 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:56977 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:56979 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:58486 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:58487 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58489 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:58488 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:58486 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58487 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:58488 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58489 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:58491 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:58492 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:58490 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:58501 - "GET /api/v1/resource HTTP/1.1" 200 OK
+INFO:     ::1:58512 - "GET /api/v1/services/blueprint-web-ui/resolve?passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:58514 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:58516 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:58515 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58517 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:58517 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58515 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:58514 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58518 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:58516 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:58520 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:58519 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:58524 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:58525 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58527 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:58526 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:58524 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58525 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:58526 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58527 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:58529 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:58530 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:58528 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:58535 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:58536 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58538 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:58537 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:58535 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58536 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:58537 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58538 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:58540 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:58541 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:58539 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:58692 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:58695 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:58693 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58694 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:58692 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58693 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:58694 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58695 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:58697 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:58698 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:58696 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:58711 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:58712 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58714 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:58713 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:58711 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58712 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:58713 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58714 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:58716 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:58717 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:58715 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:58723 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:58726 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:58724 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58725 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:58723 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58724 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:58726 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:58725 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58728 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:58729 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:58727 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:58740 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:58743 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:58741 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58742 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:58740 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58741 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:58743 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:58742 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58745 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:58746 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:58744 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:58752 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:58755 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:58753 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58754 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:58753 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:58754 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58755 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:58752 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58757 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:58758 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:58756 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:58864 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:58865 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58867 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:58866 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:58864 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58865 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:58866 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:58867 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:58869 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:58870 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:58868 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:60157 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:63604 - "GET /api/v1/services/blueprint-web-ui/resolve?passing_only=true HTTP/1.1" 200 OK
+INFO:     ::1:63606 - "GET /api/v1/services/blueprint-web-ui/resolve?passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:63649 - "GET /api/v1/jobs/vwav-6d795e80?include=compact HTTP/1.1" 200 OK
+INFO:     ::1:49194 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:49202 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:49204 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:49203 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:49194 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:49202 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:49218 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:49204 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:49203 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:49217 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:49219 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:55859 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:55858 - "GET /api/v1/runs/video_watch_assistant-20260526T022400293Z-seukowtd/ui HTTP/1.1" 200 OK
+INFO:     ::1:55938 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:55939 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:55941 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:55940 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:55939 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:55942 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:55940 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:55938 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:55941 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:55943 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:55944 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:62541 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:62553 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:62551 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62552 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:62541 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62551 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:62552 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62553 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:62562 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:62563 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:62561 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:52260 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:52263 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:52261 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:52262 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:52260 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:52261 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:52266 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:52262 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:52263 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:52265 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:52267 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:60361 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:60372 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:60374 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:60373 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:60361 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:60372 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:60400 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:60374 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:60398 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:60399 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:60401 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:65158 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-0449204c&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:65182 - "GET /api/v1/services/blueprint-web-ui/resolve?job_id=vwav-6d795e80&passing_only=false HTTP/1.1" 200 OK
+INFO:     ::1:65230 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:65231 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65233 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:65232 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:65230 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65231 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:65232 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65233 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:65235 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:65236 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:65234 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:65363 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:65364 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65366 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:65365 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:65363 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65364 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:65365 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:65366 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:65368 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:65369 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     ::1:65367 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:49874 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui?limit=0 HTTP/1.1" 200 OK
+INFO:     ::1:49876 - "GET /api/v1/jobs/vwav-6d795e80?include=compact HTTP/1.1" 200 OK
+INFO:     ::1:54807 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:54826 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:54828 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:54827 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:54807 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:54853 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:54828 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:54826 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:54851 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:54852 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:54854 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
