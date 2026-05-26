@@ -12,6 +12,8 @@ defmodule MirrorNeuron.Cluster.Manager do
 
           %{
             name: to_string(node),
+            display_name: node_display_name(node, state, hardware_info),
+            hostname: node_hostname(hardware_info),
             status: Map.get(state, "status", "healthy"),
             scheduling_eligible: Map.get(state, "scheduling_eligible", true),
             drain: Map.get(state, "drain"),
@@ -87,5 +89,17 @@ defmodule MirrorNeuron.Cluster.Manager do
     end
   rescue
     _ -> %{}
+  end
+
+  defp node_display_name(node, state, hardware) do
+    Map.get(state, "display_name") ||
+      get_in(hardware, [:platform, :display_name]) ||
+      get_in(hardware, ["platform", "display_name"]) ||
+      node_hostname(hardware) ||
+      node |> to_string() |> String.split("@", parts: 2) |> List.last()
+  end
+
+  defp node_hostname(hardware) do
+    get_in(hardware, [:platform, :hostname]) || get_in(hardware, ["platform", "hostname"])
   end
 end

@@ -5,11 +5,11 @@
     "port": "54001"
   },
   "grpc": {
-    "host": "127.0.0.1",
+    "host": "192.168.4.35",
     "port": "55051",
-    "target": "localhost:55051"
+    "target": "192.168.4.35:55051"
   },
-  "updated_at": "2026-05-26T00:16:34.102072Z",
+  "updated_at": "2026-05-26T01:46:42.070046Z",
   "version": 1,
   "web_ui": {
     "host": "localhost",

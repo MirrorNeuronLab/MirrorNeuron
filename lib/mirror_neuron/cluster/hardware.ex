@@ -25,11 +25,14 @@ defmodule MirrorNeuron.Cluster.Hardware do
 
   defp platform_info do
     {family, name} = :os.type()
+    hostname = host_name()
 
     %{
       family: to_string(family),
       os: to_string(name),
-      node: to_string(Node.self())
+      node: to_string(Node.self()),
+      hostname: hostname,
+      display_name: System.get_env("MN_NODE_DISPLAY_NAME") || hostname
     }
   end
 
@@ -72,33 +75,55 @@ defmodule MirrorNeuron.Cluster.Hardware do
   end
 
   defp gpu_info(memory) do
-    case :os.type() do
-      {:unix, :darwin} ->
-        case System.cmd("system_profiler", ["SPDisplaysDataType"]) do
-          {output, 0} ->
-            parse_darwin_gpu(output, memory)
+    case configured_gpu_info(memory) do
+      nil ->
+        case :os.type() do
+          {:unix, :darwin} ->
+            case System.cmd("system_profiler", ["SPDisplaysDataType"]) do
+              {output, 0} ->
+                parse_darwin_gpu(output, memory)
+
+              _ ->
+                "Unknown"
+            end
+
+          {:unix, :linux} ->
+            case System.cmd("nvidia-smi", [
+                   "--query-gpu=index,uuid,name,utilization.gpu,memory.used,memory.free,memory.total",
+                   "--format=csv,noheader,nounits"
+                 ]) do
+              {output, 0} ->
+                parse_nvidia_gpu(output)
+
+              _ ->
+                "Unknown or None"
+            end
 
           _ ->
-            "Unknown"
+            "Unsupported"
         end
 
-      {:unix, :linux} ->
-        case System.cmd("nvidia-smi", [
-               "--query-gpu=index,uuid,name,utilization.gpu,memory.used,memory.free,memory.total",
-               "--format=csv,noheader,nounits"
-             ]) do
-          {output, 0} ->
-            parse_nvidia_gpu(output)
-
-          _ ->
-            "Unknown or None"
-        end
-
-      _ ->
-        "Unsupported"
+      configured ->
+        configured
     end
   rescue
     _ -> "Not available"
+  end
+
+  defp configured_gpu_info(memory) do
+    cond do
+      count = parse_gpu_count(System.get_env("MN_NODE_GPU_COUNT")) ->
+        generic_gpu_devices(count, memory)
+
+      truthy?(System.get_env("MN_NODE_GPU")) ->
+        generic_gpu_devices(1, memory)
+
+      falsey?(System.get_env("MN_NODE_GPU")) ->
+        []
+
+      true ->
+        nil
+    end
   end
 
   defp disk_info do
@@ -282,6 +307,27 @@ defmodule MirrorNeuron.Cluster.Hardware do
     _ -> String.split(output, "\n", trim: true)
   end
 
+  defp generic_gpu_devices(0, _memory), do: []
+
+  defp generic_gpu_devices(count, memory) when is_integer(count) and count > 0 do
+    for index <- 0..(count - 1) do
+      %{
+        id: "gpu-#{index}",
+        index: index,
+        name: "GPU #{index + 1}",
+        kind: "gpu",
+        type: "generic/gpu",
+        vendor: "generic",
+        driver: "generic",
+        memory_total_mb: number_value(map_get(memory, "total_mb")),
+        memory_free_mb: number_value(map_get(memory, "available_mb")),
+        capabilities: ["gpu"]
+      }
+    end
+  end
+
+  defp generic_gpu_devices(_count, _memory), do: []
+
   defp advertised_host_paths do
     System.get_env("MN_NODE_HOST_PATHS")
     |> split_env_list()
@@ -355,6 +401,32 @@ defmodule MirrorNeuron.Cluster.Hardware do
     case Integer.parse(to_string(value)) do
       {integer, _rest} -> integer
       :error -> nil
+    end
+  end
+
+  defp parse_gpu_count(nil), do: nil
+
+  defp parse_gpu_count(value) do
+    case Integer.parse(String.trim(to_string(value))) do
+      {count, ""} when count >= 0 -> count
+      _ -> nil
+    end
+  end
+
+  defp truthy?(value) when is_binary(value),
+    do: String.downcase(String.trim(value)) in ["1", "true", "yes", "on"]
+
+  defp truthy?(_value), do: false
+
+  defp falsey?(value) when is_binary(value),
+    do: String.downcase(String.trim(value)) in ["0", "false", "no", "off"]
+
+  defp falsey?(_value), do: false
+
+  defp host_name do
+    case :inet.gethostname() do
+      {:ok, hostname} -> hostname |> to_string() |> String.split(".", parts: 2) |> List.first()
+      _ -> "unknown-host"
     end
   end
 
