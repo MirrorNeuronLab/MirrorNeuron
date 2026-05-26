@@ -7,6 +7,8 @@ defmodule Mirrorneuron.Cluster.V1.NetworkHandshakeRequest do
     syntax: :proto3
 
   field(:token, 1, type: :string)
+  field(:node_name, 2, type: :string, json_name: "nodeName")
+  field(:node_info_json, 3, type: :string, json_name: "nodeInfoJson")
 end
 
 defmodule Mirrorneuron.Cluster.V1.NetworkHandshakeResponse do
@@ -27,6 +29,7 @@ defmodule Mirrorneuron.Cluster.V1.NetworkHandshakeResponse do
   field(:redis_url, 8, type: :string, json_name: "redisUrl")
   field(:cluster_nodes, 9, type: :string, json_name: "clusterNodes")
   field(:network_only, 10, type: :bool, json_name: "networkOnly")
+  field(:node_info_json, 11, type: :string, json_name: "nodeInfoJson")
 end
 
 defmodule Mirrorneuron.Cluster.V1.GetSystemSummaryRequest do

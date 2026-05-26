@@ -8,7 +8,7 @@ defmodule MirrorNeuron.Cluster.Manager do
     |> Enum.map(fn node ->
       state = stored_node_state(node)
 
-      if NodeState.operator_disconnected_state?(state) do
+      if node != Node.self() and NodeState.operator_disconnected_state?(state) do
         nil
       else
         case fetch_node_info(node) do

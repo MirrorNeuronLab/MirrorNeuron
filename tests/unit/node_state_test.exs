@@ -125,6 +125,44 @@ defmodule MirrorNeuron.Cluster.NodeStateTest do
     end
   end
 
+  test "direct node monitor marks preserve operator disconnect until explicitly cleared", %{
+    redis_available?: redis_available?
+  } do
+    unless redis_available?, do: :ok
+
+    if redis_available? do
+      assert {:ok, _state} =
+               NodeState.mark("node-d@lab", "disconnected", %{
+                 "operator_disconnect" => true,
+                 "scheduling_eligible" => false
+               })
+
+      assert {:ok, reconnecting} =
+               NodeState.mark("node-d@lab", "reconnecting", %{
+                 "reason" => "node monitor saw nodedown"
+               })
+
+      assert reconnecting["status"] == "disconnected"
+      assert reconnecting["operator_disconnect"] == true
+      assert reconnecting["scheduling_eligible"] == false
+
+      assert {:ok, offline} = NodeState.mark("node-d@lab", "offline")
+      assert offline["status"] == "disconnected"
+      assert offline["operator_disconnect"] == true
+      assert offline["scheduling_eligible"] == false
+
+      assert {:ok, cleared} =
+               NodeState.mark("node-d@lab", "healthy", %{
+                 "operator_disconnect" => false,
+                 "scheduling_eligible" => true
+               })
+
+      assert cleared["status"] == "healthy"
+      assert cleared["operator_disconnect"] == false
+      assert cleared["scheduling_eligible"] == true
+    end
+  end
+
   test "schedulable_state rejects operator and failure states" do
     refute NodeState.schedulable_state?(%{
              "status" => "maintenance",

@@ -29,12 +29,14 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     old_advertise_host = System.get_env("MN_NETWORK_ADVERTISE_HOST")
     old_redis_host = System.get_env("MN_NETWORK_REDIS_HOST")
     old_redis_port = System.get_env("MN_NETWORK_REDIS_PORT")
+    old_redis_url = System.get_env("MN_REDIS_URL")
     old_grpc_port = System.get_env("MN_GRPC_PORT")
     old_dist_port = System.get_env("MN_DIST_PORT")
     old_cluster_nodes = System.get_env("MN_CLUSTER_NODES")
     System.delete_env(@admin_token_env)
     System.delete_env("MN_NETWORK_ONLY")
     System.delete_env("MN_NETWORK_JOIN_TOKEN")
+    System.delete_env("MN_REDIS_URL")
 
     on_exit(fn ->
       restore_env(@admin_token_env, old_token)
@@ -44,6 +46,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       restore_env("MN_NETWORK_ADVERTISE_HOST", old_advertise_host)
       restore_env("MN_NETWORK_REDIS_HOST", old_redis_host)
       restore_env("MN_NETWORK_REDIS_PORT", old_redis_port)
+      restore_env("MN_REDIS_URL", old_redis_url)
       restore_env("MN_GRPC_PORT", old_grpc_port)
       restore_env("MN_DIST_PORT", old_dist_port)
       restore_env("MN_CLUSTER_NODES", old_cluster_nodes)
@@ -149,6 +152,11 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert response.redis_port == 6_380
     assert response.redis_url == "redis://192.168.4.10:6380/0"
     assert response.cluster_nodes == "mirror_neuron@192.168.4.10"
+
+    node_info = Jason.decode!(response.node_info_json)
+    assert node_info["node_name"] == to_string(Node.self())
+    assert is_binary(node_info["display_name"])
+    assert is_integer(node_info["gpu_count"])
   end
 
   test "network handshake rejects a missing or wrong join token" do

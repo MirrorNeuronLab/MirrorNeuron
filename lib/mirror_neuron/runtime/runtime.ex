@@ -71,7 +71,8 @@ defmodule MirrorNeuron.Runtime do
            |> Keyword.put(:reliability, reliability)
            |> Keyword.put(:scheduler_plan, scheduler_plan)
            |> Keyword.put(:requested_recovery_policy, reliability["requested_recovery_policy"])
-           |> Keyword.put(:recovery_policy, reliability["effective_recovery_policy"]),
+           |> Keyword.put(:recovery_policy, reliability["effective_recovery_policy"])
+           |> Keyword.put_new(:preferred_start_node, to_string(Node.self())),
          :ok <-
            persist_initial_job(job_id, manifest, manifest_ref, reliability, scheduler_plan, opts) do
       publish_reliability_events(job_id, reliability)

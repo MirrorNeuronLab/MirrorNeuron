@@ -20,6 +20,14 @@ defmodule MirrorNeuron.Runtime.JobRunner do
       restart: :transient,
       type: :worker
     }
+    |> put_target_node(Keyword.get(opts, :preferred_start_node))
+  end
+
+  defp put_target_node(spec, nil), do: spec
+  defp put_target_node(spec, ""), do: spec
+
+  defp put_target_node(spec, node_name) do
+    Map.put(spec, :mirror_neuron_target_node, to_string(node_name))
   end
 
   def start_link({job_id, manifest, opts}) do

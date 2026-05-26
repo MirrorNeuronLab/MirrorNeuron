@@ -10,6 +10,7 @@ defmodule MirrorNeuron.Cluster.NodeState do
 
   def mark(node, status, attrs \\ %{}) do
     node_name = to_string(node)
+    {status, attrs} = preserve_operator_disconnect(node_name, status, attrs)
 
     attrs =
       attrs
@@ -124,5 +125,29 @@ defmodule MirrorNeuron.Cluster.NodeState do
 
   defp default_status(node) do
     if node in [Node.self() | Node.list()], do: "healthy", else: "offline"
+  end
+
+  defp preserve_operator_disconnect(node_name, status, attrs) do
+    if clears_operator_disconnect?(attrs) do
+      {status, attrs}
+    else
+      case fetch(node_name) do
+        {:ok, %{"operator_disconnect" => true} = existing} ->
+          preserved =
+            existing
+            |> Map.merge(attrs)
+            |> Map.put("operator_disconnect", true)
+            |> Map.put("scheduling_eligible", false)
+
+          {Map.get(existing, "status", "disconnected"), preserved}
+
+        _ ->
+          {status, attrs}
+      end
+    end
+  end
+
+  defp clears_operator_disconnect?(attrs) do
+    Map.get(attrs, "operator_disconnect") == false or Map.get(attrs, :operator_disconnect) == false
   end
 end

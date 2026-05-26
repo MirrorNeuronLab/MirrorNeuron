@@ -28,6 +28,55 @@ defmodule MirrorNeuron.ServiceCheck do
     }
   end
 
+  def apply_failure_thresholds(service, health) when is_map(service) and is_map(health) do
+    service = stringify_map(service)
+    health = stringify_map(health)
+    previous_counts = service |> Map.get("health_check_failures", %{}) |> stringify_map()
+    check_specs = service |> Map.get("checks", []) |> check_specs_by_name()
+
+    {checks, failure_counts} =
+      health
+      |> Map.get("checks", [])
+      |> List.wrap()
+      |> Enum.map_reduce(previous_counts, fn result, counts ->
+        result = stringify_map(result)
+        check_name = check_name(result)
+
+        if Map.get(result, "status") == "critical" do
+          count = parse_int(Map.get(counts, check_name), 0) + 1
+          threshold = failure_threshold(Map.get(check_specs, check_name))
+
+          result =
+            result
+            |> Map.put("consecutive_failures", count)
+            |> Map.put("failures_before_critical", threshold)
+
+          result =
+            if count < threshold do
+              result
+              |> Map.put("status", "passing")
+              |> Map.put("suppressed_status", "critical")
+              |> Map.put("transient_failure", true)
+            else
+              result
+            end
+
+          {result, Map.put(counts, check_name, count)}
+        else
+          {result, Map.delete(counts, check_name)}
+        end
+      end)
+
+    health =
+      health
+      |> Map.put("checks", checks)
+      |> Map.put("status", aggregate_status(checks))
+
+    {health, failure_counts}
+  end
+
+  def apply_failure_thresholds(_service, health), do: {stringify_map(health), %{}}
+
   def run_check(check, service, opts \\ [])
 
   def run_check(check, service, opts) when is_map(check) do
@@ -373,6 +422,18 @@ defmodule MirrorNeuron.ServiceCheck do
   end
 
   defp timeout_ms(check), do: parse_int(Map.get(check, "timeout_ms"), @default_timeout_ms)
+
+  defp check_specs_by_name(checks) when is_list(checks) do
+    Map.new(checks, fn check ->
+      check = stringify_map(check)
+      {check_name(check), check}
+    end)
+  end
+
+  defp check_specs_by_name(_checks), do: %{}
+
+  defp failure_threshold(nil), do: 1
+  defp failure_threshold(check), do: parse_int(Map.get(check, "failures_before_critical"), 1)
 
   defp parse_port(value) when is_integer(value) and value >= 1 and value <= 65_535, do: value
 

@@ -20,6 +20,8 @@ service ClusterService {
 
 message NetworkHandshakeRequest {
   string token = 1;
+  string node_name = 2;
+  string node_info_json = 3;
 }
 
 message NetworkHandshakeResponse {
@@ -33,6 +35,7 @@ message NetworkHandshakeResponse {
   string redis_url = 8;
   string cluster_nodes = 9;
   bool network_only = 10;
+  string node_info_json = 11;
 }
 
 message GetSystemSummaryRequest {}

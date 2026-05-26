@@ -9,7 +9,7 @@ defmodule MirrorNeuron.Runtime.JobSupervisor do
   def init(:ok) do
     [
       strategy: :one_for_one,
-      distribution_strategy: Horde.UniformDistribution,
+      distribution_strategy: MirrorNeuron.Runtime.ProfileDistribution,
       members: :auto
     ]
     |> Horde.DynamicSupervisor.init()

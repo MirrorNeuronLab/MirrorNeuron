@@ -513,6 +513,7 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
 
   def network_handshake(request, _stream) do
     authorize_network_join!(Map.get(request, :token, ""))
+    maybe_record_joining_node(request)
 
     %NetworkHandshakeResponse{
       node_name: to_string(Node.self()),
@@ -525,7 +526,8 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
       redis_port: redis_port(),
       redis_url: redis_url(),
       cluster_nodes: System.get_env("MN_CLUSTER_NODES", ""),
-      network_only: MirrorNeuron.Grpc.NetworkOnly.enabled?()
+      network_only: MirrorNeuron.Grpc.NetworkOnly.enabled?(),
+      node_info_json: Jason.encode!(handshake_node_info())
     }
   end
 
@@ -760,6 +762,77 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
     case Jason.decode(json) do
       {:ok, value} -> {:ok, value}
       {:error, error} -> {:error, "body must be valid JSON: #{Exception.message(error)}"}
+    end
+  end
+
+  defp maybe_record_joining_node(request) do
+    node_name = request |> Map.get(:node_name, "") |> to_string() |> String.trim()
+
+    if node_name != "" do
+      attrs =
+        request
+        |> Map.get(:node_info_json, "")
+        |> decode_node_info()
+        |> Map.put("operator_disconnect", false)
+        |> Map.put("scheduling_eligible", true)
+
+      MirrorNeuron.Cluster.NodeState.mark(node_name, handshake_node_status(node_name), attrs)
+    end
+
+    :ok
+  end
+
+  defp handshake_node_status(node_name) do
+    case MirrorNeuron.Cluster.NodeState.fetch(node_name) do
+      {:ok, %{"status" => status}} when status in ["healthy", "maintenance", "draining"] ->
+        status
+
+      _ ->
+        "joining"
+    end
+  end
+
+  defp decode_node_info(json) when is_binary(json) and json != "" do
+    case Jason.decode(json) do
+      {:ok, value} when is_map(value) -> value
+      _ -> %{}
+    end
+  end
+
+  defp decode_node_info(_json), do: %{}
+
+  defp handshake_node_info do
+    hardware = MirrorNeuron.Cluster.Hardware.info()
+    platform = Map.get(hardware, :platform, %{})
+    cpu = Map.get(hardware, :cpu, %{})
+    memory = Map.get(hardware, :memory, %{})
+    gpu = Map.get(hardware, :gpu)
+
+    %{
+      "node_name" => to_string(Node.self()),
+      "node_role" => MirrorNeuron.Application.node_role(),
+      "display_name" => map_value(platform, "display_name"),
+      "hostname" => map_value(platform, "hostname"),
+      "cpu_cores" => map_value(cpu, "logical_processors"),
+      "gpu_count" => gpu_count(gpu),
+      "memory_gb" => memory_gb(memory)
+    }
+  end
+
+  defp map_value(map, key) when is_map(map) do
+    Map.get(map, key) || Map.get(map, String.to_atom(key))
+  end
+
+  defp map_value(_map, _key), do: nil
+
+  defp gpu_count(gpu) when is_list(gpu), do: length(gpu)
+  defp gpu_count(%{} = gpu), do: map_value(gpu, "count") || 0
+  defp gpu_count(_gpu), do: 0
+
+  defp memory_gb(memory) do
+    case map_value(memory, "total_mb") do
+      value when is_number(value) -> Float.round(value / 1024, 2)
+      _ -> 0
     end
   end
 

@@ -643,6 +643,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         agent_ready?(acc_state, agent_id) ->
           {:cont, {:ok, acc_state}}
 
+        ignorable_missing_agent?(acc_state, agent_id) ->
+          {:cont, {:ok, acc_state}}
+
         pending_policy_action?(acc_state, agent_id) ->
           {:cont, {:ok, acc_state}}
 
@@ -1660,6 +1663,14 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     MapSet.member?(state.completed_agents, agent_id) or
       (job_type(state) == "sysbatch" and not is_nil(target) and
          MapSet.member?(state.completed_system_targets, target))
+  end
+
+  defp ignorable_missing_agent?(state, agent_id) do
+    node = Map.get(state.nodes_by_id, agent_id)
+
+    job_type(state) == "service" and
+      Map.get(node || %{}, :agent_type) == "router" and
+      Map.get(state.inbound_edges_by_node, agent_id, []) == []
   end
 
   defp system_target_for_agent(state, agent_id) do

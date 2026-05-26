@@ -191,6 +191,7 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
       [
         job_bundle: bundle,
         local_recovery: true,
+        preferred_start_node: to_string(Node.self()),
         requested_recovery_policy: job["requested_recovery_policy"],
         recovery_policy: job["recovery_policy"],
         reliability: job["reliability"]

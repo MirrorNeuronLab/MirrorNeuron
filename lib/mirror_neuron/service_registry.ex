@@ -2,6 +2,7 @@ defmodule MirrorNeuron.ServiceRegistry do
   @moduledoc false
 
   alias MirrorNeuron.Persistence.RedisStore
+  alias MirrorNeuron.ServiceCheck
   alias MirrorNeuron.ServiceSpec
 
   def register(service) when is_map(service) do
@@ -52,11 +53,13 @@ defmodule MirrorNeuron.ServiceRegistry do
 
   def update_health(service_id, health) do
     with {:ok, service} <- RedisStore.fetch_service_instance(service_id) do
+      {health, failure_counts} = ServiceCheck.apply_failure_thresholds(service, health)
       status = Map.get(health, "status") || Map.get(health, :status) || "critical"
 
       service
       |> Map.put("status", status)
       |> Map.put("health", stringify_map(health))
+      |> Map.put("health_check_failures", failure_counts)
       |> Map.put("last_check_at", timestamp())
       |> register()
     end

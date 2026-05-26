@@ -81,6 +81,64 @@ defmodule MirrorNeuron.ServiceCheckTest do
     assert get_in(report, ["checks", Access.at(0), "status"]) == "critical"
   end
 
+  test "failure thresholds suppress transient required check failures" do
+    service = %{
+      "id" => "svc-threshold",
+      "name" => "dashboard",
+      "checks" => [
+        %{"name" => "ready", "type" => "http", "required" => true, "failures_before_critical" => 3}
+      ]
+    }
+
+    health = %{
+      "status" => "critical",
+      "checks" => [
+        %{"name" => "ready", "type" => "http", "required" => true, "status" => "critical"}
+      ]
+    }
+
+    {first_health, first_counts} = ServiceCheck.apply_failure_thresholds(service, health)
+
+    assert first_health["status"] == "passing"
+    assert get_in(first_health, ["checks", Access.at(0), "status"]) == "passing"
+    assert get_in(first_health, ["checks", Access.at(0), "suppressed_status"]) == "critical"
+    assert get_in(first_health, ["checks", Access.at(0), "consecutive_failures"]) == 1
+
+    {second_health, second_counts} =
+      service
+      |> Map.put("health_check_failures", first_counts)
+      |> ServiceCheck.apply_failure_thresholds(health)
+
+    assert second_health["status"] == "passing"
+    assert get_in(second_health, ["checks", Access.at(0), "consecutive_failures"]) == 2
+
+    {third_health, _third_counts} =
+      service
+      |> Map.put("health_check_failures", second_counts)
+      |> ServiceCheck.apply_failure_thresholds(health)
+
+    assert third_health["status"] == "critical"
+    assert get_in(third_health, ["checks", Access.at(0), "status"]) == "critical"
+    assert get_in(third_health, ["checks", Access.at(0), "consecutive_failures"]) == 3
+  end
+
+  test "passing checks reset failure thresholds" do
+    service = %{
+      "checks" => [%{"name" => "ready", "type" => "http", "failures_before_critical" => 2}],
+      "health_check_failures" => %{"ready" => 1}
+    }
+
+    health = %{
+      "status" => "passing",
+      "checks" => [%{"name" => "ready", "type" => "http", "status" => "passing"}]
+    }
+
+    {updated_health, counts} = ServiceCheck.apply_failure_thresholds(service, health)
+
+    assert updated_health["status"] == "passing"
+    assert counts == %{}
+  end
+
   test "grpc checks report critical when the health endpoint is unavailable" do
     report =
       ServiceCheck.check_service(%{

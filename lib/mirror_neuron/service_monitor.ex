@@ -64,14 +64,14 @@ defmodule MirrorNeuron.ServiceMonitor do
 
     case ServiceRegistry.update_health(service["id"], health) do
       {:ok, updated} ->
-        maybe_emit_health_event(service, updated, health)
+        maybe_emit_health_event(service, updated)
 
       {:error, reason} ->
         Logger.warning("failed to update service health #{service["id"]}: #{inspect(reason)}")
     end
   end
 
-  defp maybe_emit_health_event(previous, updated, health) do
+  defp maybe_emit_health_event(previous, updated) do
     if Map.get(previous, "status") != Map.get(updated, "status") do
       job_id = Map.get(updated, "job_id")
 
@@ -82,7 +82,7 @@ defmodule MirrorNeuron.ServiceMonitor do
           service_name: Map.get(updated, "name"),
           status: Map.get(updated, "status"),
           previous_status: Map.get(previous, "status"),
-          health: health,
+          health: Map.get(updated, "health", %{}),
           timestamp: timestamp()
         })
       end
