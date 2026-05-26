@@ -23,6 +23,13 @@ defmodule MirrorNeuron.Cluster.NodeState do
     node_name = to_string(node)
 
     case fetch(node_name) do
+      {:ok, %{"operator_disconnect" => true} = existing} ->
+        if Map.get(attrs, "operator_disconnect") == false do
+          mark(node_name, "healthy", Map.merge(existing, attrs) |> Map.put("scheduling_eligible", true))
+        else
+          mark(node_name, Map.get(existing, "status", "disconnected"), Map.merge(existing, attrs))
+        end
+
       {:ok, %{"status" => status} = existing} when status in @operator_statuses ->
         mark(node_name, status, Map.merge(existing, attrs))
 
@@ -59,6 +66,9 @@ defmodule MirrorNeuron.Cluster.NodeState do
 
   def schedulable_state?(%{"status" => status}), do: status in @active_statuses
   def schedulable_state?(_state), do: true
+
+  def operator_disconnected_state?(%{"operator_disconnect" => true}), do: true
+  def operator_disconnected_state?(_state), do: false
 
   def list do
     case RedisStore.list_node_states() do

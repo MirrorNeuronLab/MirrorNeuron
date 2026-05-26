@@ -88,6 +88,43 @@ defmodule MirrorNeuron.Cluster.NodeStateTest do
     end
   end
 
+  test "mark_connected preserves operator disconnect until add-node clears it", %{
+    redis_available?: redis_available?
+  } do
+    unless redis_available?, do: :ok
+
+    if redis_available? do
+      assert {:ok, _state} =
+               NodeState.mark("node-c@lab", "disconnected", %{
+                 "operator_disconnect" => true,
+                 "scheduling_eligible" => false
+               })
+
+      assert {:ok, disconnected} =
+               NodeState.mark_connected("node-c@lab", %{
+                 "node_role" => "runtime",
+                 "profiles" => ["cuda"]
+               })
+
+      assert disconnected["status"] == "disconnected"
+      assert disconnected["operator_disconnect"] == true
+      assert disconnected["scheduling_eligible"] == false
+      assert NodeState.operator_disconnected_state?(disconnected)
+      refute NodeState.schedulable?("node-c@lab")
+
+      assert {:ok, reconnected} =
+               NodeState.mark_connected("node-c@lab", %{
+                 "operator_disconnect" => false
+               })
+
+      assert reconnected["status"] == "healthy"
+      assert reconnected["operator_disconnect"] == false
+      assert reconnected["scheduling_eligible"] == true
+      refute NodeState.operator_disconnected_state?(reconnected)
+      assert NodeState.schedulable?("node-c@lab")
+    end
+  end
+
   test "schedulable_state rejects operator and failure states" do
     refute NodeState.schedulable_state?(%{
              "status" => "maintenance",

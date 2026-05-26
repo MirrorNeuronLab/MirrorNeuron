@@ -6,26 +6,30 @@ defmodule MirrorNeuron.Cluster.Manager do
     [Node.self() | Node.list()]
     |> Enum.uniq()
     |> Enum.map(fn node ->
-      case fetch_node_info(node) do
-        {:ok, {lease_stats, hardware_info}} ->
-          state = stored_node_state(node)
+      state = stored_node_state(node)
 
-          %{
-            name: to_string(node),
-            display_name: node_display_name(node, state, hardware_info),
-            hostname: node_hostname(hardware_info),
-            status: Map.get(state, "status", "healthy"),
-            scheduling_eligible: Map.get(state, "scheduling_eligible", true),
-            drain: Map.get(state, "drain"),
-            connected_nodes: runtime_connected_nodes(node),
-            self?: node == Node.self(),
-            scheduler_hint: if(node == Node.self(), do: "cluster_member", else: "remote_member"),
-            executor_pools: lease_stats,
-            hardware: hardware_info
-          }
+      if NodeState.operator_disconnected_state?(state) do
+        nil
+      else
+        case fetch_node_info(node) do
+          {:ok, {lease_stats, hardware_info}} ->
+            %{
+              name: to_string(node),
+              display_name: node_display_name(node, state, hardware_info),
+              hostname: node_hostname(hardware_info),
+              status: Map.get(state, "status", "healthy"),
+              scheduling_eligible: Map.get(state, "scheduling_eligible", true),
+              drain: Map.get(state, "drain"),
+              connected_nodes: runtime_connected_nodes(node),
+              self?: node == Node.self(),
+              scheduler_hint: if(node == Node.self(), do: "cluster_member", else: "remote_member"),
+              executor_pools: lease_stats,
+              hardware: hardware_info
+            }
 
-        {:error, _reason} ->
-          nil
+          {:error, _reason} ->
+            nil
+        end
       end
     end)
     |> Enum.reject(&is_nil/1)
@@ -35,6 +39,11 @@ defmodule MirrorNeuron.Cluster.Manager do
     atom_name = String.to_atom(node_name)
 
     if Node.connect(atom_name) do
+      NodeState.mark_connected(node_name, %{
+        "operator_disconnect" => false,
+        "scheduling_eligible" => true
+      })
+
       {:ok, %{name: node_name, status: "connected"}}
     else
       {:error, "failed to connect to #{node_name}"}
@@ -44,11 +53,16 @@ defmodule MirrorNeuron.Cluster.Manager do
   def remove_node(node_name) when is_binary(node_name) do
     atom_name = String.to_atom(node_name)
 
+    NodeState.mark(node_name, "disconnected", %{
+      "operator_disconnect" => true,
+      "scheduling_eligible" => false,
+      "reason" => "operator requested disconnect"
+    })
+
     if Node.disconnect(atom_name) do
       {:ok, %{name: node_name, status: "disconnected"}}
     else
-      # Node.disconnect returns false if node is not connected (ignored or error depending on version)
-      {:error, "failed to disconnect from #{node_name} or node not connected"}
+      {:ok, %{name: node_name, status: "disconnected"}}
     end
   end
 
