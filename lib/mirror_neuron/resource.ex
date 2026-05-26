@@ -78,12 +78,17 @@ defmodule MirrorNeuron.Resource do
     memory = map_get(hardware, "memory") || %{}
     gpu = map_get(hardware, "gpu")
     disk = map_get(hardware, "disk") || %{}
+    platform = map_get(hardware, "platform") || %{}
     devices = ResourceSpec.normalize_node_devices(%{"hardware" => hardware})
     host_paths = ResourceSpec.normalize_node_host_paths(node, hardware)
     runtime_drivers = ResourceSpec.normalize_node_runtime_drivers(node, hardware)
+    name = Map.get(node, :name) || Map.get(node, "name") || "unknown"
 
     %{
-      "name" => Map.get(node, :name) || Map.get(node, "name") || "unknown",
+      "name" => name,
+      "display_name" => node_display_name(node, platform, name),
+      "hostname" => Map.get(node, :hostname) || Map.get(node, "hostname") || map_get(platform, "hostname"),
+      "self" => node_attr(node, :self?, false) || node_attr(node, :self, false),
       "status" => Map.get(node, :status) || Map.get(node, "status") || "healthy",
       "scheduling_eligible" => node_attr(node, :scheduling_eligible, true),
       "drain" => Map.get(node, :drain) || Map.get(node, "drain"),
@@ -126,6 +131,14 @@ defmodule MirrorNeuron.Resource do
       Map.has_key?(node, Atom.to_string(key)) -> Map.get(node, Atom.to_string(key))
       true -> default
     end
+  end
+
+  defp node_display_name(node, platform, fallback) do
+    Map.get(node, :display_name) ||
+      Map.get(node, "display_name") ||
+      map_get(platform, "display_name") ||
+      map_get(platform, "hostname") ||
+      fallback
   end
 
   defp totals(nodes) do

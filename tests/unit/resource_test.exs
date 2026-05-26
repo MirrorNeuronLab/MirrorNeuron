@@ -25,8 +25,10 @@ defmodule MirrorNeuron.ResourceTest do
           "name" => "mn1@127.0.0.1",
           "status" => "draining",
           "scheduling_eligible" => false,
+          "self?" => true,
           "drain" => %{"status" => "blocked_no_placement", "reason" => "kernel update"},
           "hardware" => %{
+            "platform" => %{"hostname" => "local-lab", "display_name" => "Local Lab"},
             "cpu" => %{"logical_processors" => 8},
             "memory" => %{"total_bytes" => 16 * 1024 * 1024 * 1024},
             "disk" => %{
@@ -116,6 +118,9 @@ defmodule MirrorNeuron.ResourceTest do
 
     [draining | _] = report["nodes"]
     assert draining["name"] == "mn1@127.0.0.1"
+    assert draining["display_name"] == "Local Lab"
+    assert draining["hostname"] == "local-lab"
+    assert draining["self"] == true
     assert draining["status"] == "draining"
     assert draining["scheduling_eligible"] == false
     assert draining["drain"] == %{"status" => "blocked_no_placement", "reason" => "kernel update"}
