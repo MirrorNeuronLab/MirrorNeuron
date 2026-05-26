@@ -1113,3 +1113,15 @@ INFO:     ::1:54826 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522
 INFO:     ::1:54851 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
 INFO:     ::1:54852 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
 INFO:     ::1:54854 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62520 - "GET /api/v1/resource HTTP/1.1" 200 OK
+INFO:     ::1:62553 - "GET /api/v1/jobs/vwav-6d795e80 HTTP/1.1" 200 OK
+INFO:     ::1:62556 - "GET /api/v1/jobs/vwav-6d795e80/dead-letters HTTP/1.1" 200 OK
+INFO:     ::1:62554 - "GET /api/v1/jobs/vwav-6d795e80/events?include=summary&limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62555 - "GET /api/v1/jobs/vwav-6d795e80/agent-graph HTTP/1.1" 200 OK
+INFO:     ::1:62553 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/logs?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62556 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/human HTTP/1.1" 200 OK
+INFO:     ::1:62558 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/final-artifact HTTP/1.1" 404 Not Found
+INFO:     ::1:62554 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/resources?window=24h&bucket=1h HTTP/1.1" 200 OK
+INFO:     ::1:62555 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/events?limit=200 HTTP/1.1" 200 OK
+INFO:     ::1:62557 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/ui HTTP/1.1" 200 OK
+INFO:     ::1:62559 - "GET /api/v1/runs/video_watch_assistant-20260526T023750522Z-x0dt6owa/artifacts HTTP/1.1" 200 OK
