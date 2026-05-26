@@ -102,13 +102,23 @@ services:
     restart: unless-stopped
     expose:
       - "50051"
-      - "4369"
+      - "${MN_EPMD_PORT:-54369}"
       - "${MN_DIST_PORT:-54370}"
     ports:
       - "${MN_GRPC_BIND_HOST:-127.0.0.1}:${MN_GRPC_PORT:-55051}:50051"
-      - "${MN_EPMD_BIND_HOST:-127.0.0.1}:${MN_EPMD_PORT:-54369}:4369"
+      - "${MN_EPMD_BIND_HOST:-127.0.0.1}:${MN_EPMD_PORT:-54369}:${MN_EPMD_PORT:-54369}"
       - "${MN_DIST_BIND_HOST:-127.0.0.1}:${MN_DIST_PORT:-54370}:${MN_DIST_PORT:-54370}"
       - "${MN_BLUEPRINT_WEB_UI_PUBLISH_HOST:-127.0.0.1}:${MN_BLUEPRINT_WEB_UI_PORT_START:-58000}-${MN_BLUEPRINT_WEB_UI_PORT_END:-58049}:${MN_BLUEPRINT_WEB_UI_PORT_START:-58000}-${MN_BLUEPRINT_WEB_UI_PORT_END:-58049}"
+    command: >
+      sh -c 'if [ -n "$$MN_NODE_NAME" ]; then
+      if [ -z "$$MN_COOKIE" ] || [ "$$MN_COOKIE" = "mirrorneuron" ]; then
+      echo "MN_COOKIE must be set to a non-default secret when MN_NODE_NAME enables distributed Erlang" >&2; exit 1;
+      fi;
+      dist_port="$${MN_DIST_PORT:-4370}";
+      unset ERL_EPMD_ADDRESS;
+      epmd -daemon;
+      exec elixir --name "$$MN_NODE_NAME" --cookie "$$MN_COOKIE" --erl "-kernel inet_dist_listen_min $${dist_port} inet_dist_listen_max $${dist_port}" -S mix run --no-halt;
+      else exec mix run --no-halt; fi'
     environment:
       HOME: /root
       MN_CORE_HOST: 0.0.0.0
@@ -124,10 +134,12 @@ services:
       MN_NODE_ROLE: ${MN_NODE_ROLE:-runtime}
       MN_CLUSTER_NODES: ${MN_CLUSTER_NODES:-}
       MN_DIST_PORT: ${MN_DIST_PORT:-54370}
+      MN_RUNS_ROOT: ${MN_CONTAINER_RUNS_ROOT:-/root/.mn/runs}
       MN_BLUEPRINT_WEB_UI_BIND_HOST: ${MN_BLUEPRINT_WEB_UI_BIND_HOST:-0.0.0.0}
       MN_BLUEPRINT_WEB_UI_PUBLIC_HOST: ${MN_BLUEPRINT_WEB_UI_PUBLIC_HOST:-localhost}
       MN_BLUEPRINT_WEB_UI_PORT_START: ${MN_BLUEPRINT_WEB_UI_PORT_START:-58000}
       MN_BLUEPRINT_WEB_UI_PORT_END: ${MN_BLUEPRINT_WEB_UI_PORT_END:-58049}
+      ERL_EPMD_PORT: ${MN_EPMD_PORT:-54369}
       ERL_EPMD_ADDRESS: ${ERL_EPMD_ADDRESS:-0.0.0.0}
       ERL_AFLAGS: ${ERL_AFLAGS:-}
       MN_COOKIE: ${MN_COOKIE}
@@ -147,6 +159,8 @@ services:
       - ${MN_HOST_STATE_DIR}:/opt/mirror_neuron/.mirror_neuron
       - ${MN_HOST_MN_DIR}:/root/.mn
       - ${MN_HOST_MN_DIR}:/opt/mirror_neuron/.mn
+      - ${MN_HOST_ARTIFACTS_DIR}:/root/.mn/runs
+      - ${MN_HOST_ARTIFACTS_DIR}:/opt/mirror_neuron/.mn/runs
       - ${MN_HOST_OPENSHELL_CONFIG_DIR}:/root/.config/openshell:ro
       - ${MN_HOST_OPENSHELL_CONFIG_DIR}:/opt/mirror_neuron/.config/openshell:ro
 

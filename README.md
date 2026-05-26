@@ -41,6 +41,7 @@ MirrorNeuron Core is an Elixir/OTP runtime for durable, message-driven AI workfl
 | Message-driven execution | Available | Routes workflow messages between runtime nodes and agents. |
 | Built-in runtime primitives | Available | Includes `router`, `executor`, `aggregator`, `sensor`, and `module`. |
 | Durable job state | Available | Persists job metadata, events, agents, and terminal state through Redis. |
+| Shared run artifacts | Available | Docker Compose mounts the host run store into the core container so large JSON, Markdown, PDF, and log blobs move by filesystem reference instead of gRPC payload. |
 | Runtime monitoring | Available | Lists jobs, job details, cluster overview, metrics, and dead letters. |
 | Cluster coordination | Available | Uses Erlang distribution plus `libcluster` and Horde. |
 | Redis high availability helpers | Available | Includes scripts and config for Redis Sentinel development workflows. |
