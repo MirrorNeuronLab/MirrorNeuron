@@ -36,6 +36,8 @@ WORKDIR /app
 
 # Copy dependency files and fetch deps
 COPY mix.exs mix.lock ./
+RUN test -s mix.exs && grep -q "use Mix.Project" mix.exs || \
+    (echo "Invalid mix.exs copied into Docker build context" >&2; exit 1)
 RUN mix deps.get
 
 # Copy the rest of the application
@@ -47,4 +49,4 @@ RUN mix compile
 EXPOSE 50051 4369 4370
 
 # Set the default command
-CMD ["sh", "-c", "if [ -n \"$MN_NODE_NAME\" ]; then if [ -z \"$MN_COOKIE\" ] || [ \"$MN_COOKIE\" = \"mirrorneuron\" ]; then echo \"MN_COOKIE must be set to a non-default secret when MN_NODE_NAME enables distributed Erlang\" >&2; exit 1; fi; dist_port=\"${MN_DIST_PORT:-4370}\"; exec elixir --name \"$MN_NODE_NAME\" --cookie \"$MN_COOKIE\" --erl \"-kernel inet_dist_listen_min ${dist_port} inet_dist_listen_max ${dist_port}\" -S mix run --no-halt; else exec mix run --no-halt; fi"]
+CMD ["sh", "-c", "if [ -n \"$MN_NODE_NAME\" ]; then if [ -z \"$MN_COOKIE\" ] || [ \"$MN_COOKIE\" = \"mirrorneuron\" ]; then echo \"MN_COOKIE must be set to a non-default secret when MN_NODE_NAME enables distributed Erlang\" >&2; exit 1; fi; dist_port=\"${MN_DIST_PORT:-4370}\"; unset ERL_EPMD_ADDRESS; epmd -daemon; exec elixir --name \"$MN_NODE_NAME\" --cookie \"$MN_COOKIE\" --erl \"-kernel inet_dist_listen_min ${dist_port} inet_dist_listen_max ${dist_port}\" -S mix run --no-halt; else exec mix run --no-halt; fi"]
