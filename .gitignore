@@ -25,6 +25,21 @@ Thumbs.db
 /*.log
 /mirror_neuron
 /mirror_neuron_monitor
+/logs/
+/.logs/
+/pids/
+/.pids/
+/runs/
+/openshell-state/
+/runtime-endpoints.json
+/dump.rdb
+/server.log
+/docker-compose.env
+/install_metadata.json
+/erlang.cookie
+/grpc_admin.token
+/grpc_auth.token
+/network.token
 
 # Example-generated bundles and results
 /examples/**/generated/
@@ -46,5 +61,16 @@ Thumbs.db
 !.env.example
 !.env.sample
 
-.logs
-.pids
+# Local monorepo convenience symlinks; keep external repos outside this repo.
+/Membrane
+/api-source
+/blueprints
+/cli-source
+/core-source
+/docs
+/mn
+/python-sdk-source
+/skills
+/system-tests
+/web-ui-source
+/webui
