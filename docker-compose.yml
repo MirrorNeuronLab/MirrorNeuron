@@ -53,7 +53,7 @@ services:
     profiles:
       - context
     build:
-      context: ${MEMBRANE_DIR}
+      context: ${MEMBRANE_DIR:-../Membrane}
       dockerfile: Dockerfile
       target: ${MN_CONTEXT_MODEL_BUILD_TARGET:-context-model-cpu}
     restart: unless-stopped
@@ -72,7 +72,7 @@ services:
     profiles:
       - context
     build:
-      context: ${MEMBRANE_DIR}
+      context: ${MEMBRANE_DIR:-../Membrane}
       dockerfile: Dockerfile
       target: runtime
     restart: unless-stopped
@@ -145,9 +145,9 @@ services:
       ERL_EPMD_PORT: ${MN_EPMD_PORT:-54369}
       ERL_EPMD_ADDRESS: ${ERL_EPMD_ADDRESS:-0.0.0.0}
       ERL_AFLAGS: ${ERL_AFLAGS:-}
-      MN_COOKIE: ${MN_COOKIE}
-      MN_GRPC_AUTH_TOKEN: ${MN_GRPC_AUTH_TOKEN}
-      MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN: ${MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN}
+      MN_COOKIE: ${MN_COOKIE:-}
+      MN_GRPC_AUTH_TOKEN: ${MN_GRPC_AUTH_TOKEN:-}
+      MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN: ${MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN:-}
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
       SLACK_DEFAULT_CHANNEL: ${SLACK_DEFAULT_CHANNEL:-}
       SLACK_API_BASE_URL: ${SLACK_API_BASE_URL:-}
@@ -158,14 +158,14 @@ services:
       redis:
         condition: service_started
     volumes:
-      - ${MN_HOST_STATE_DIR}:/root/.mirror_neuron
-      - ${MN_HOST_STATE_DIR}:/opt/mirror_neuron/.mirror_neuron
-      - ${MN_HOST_MN_DIR}:/root/.mn
-      - ${MN_HOST_MN_DIR}:/opt/mirror_neuron/.mn
-      - ${MN_HOST_ARTIFACTS_DIR}:/root/.mn/runs
-      - ${MN_HOST_ARTIFACTS_DIR}:/opt/mirror_neuron/.mn/runs
-      - ${MN_HOST_OPENSHELL_CONFIG_DIR}:/root/.config/openshell:ro
-      - ${MN_HOST_OPENSHELL_CONFIG_DIR}:/opt/mirror_neuron/.config/openshell:ro
+      - ${MN_HOST_STATE_DIR:-./state}:/root/.mirror_neuron
+      - ${MN_HOST_STATE_DIR:-./state}:/opt/mirror_neuron/.mirror_neuron
+      - ${MN_HOST_MN_DIR:-./mn}:/root/.mn
+      - ${MN_HOST_MN_DIR:-./mn}:/opt/mirror_neuron/.mn
+      - ${MN_HOST_ARTIFACTS_DIR:-./mn/runs}:/root/.mn/runs
+      - ${MN_HOST_ARTIFACTS_DIR:-./mn/runs}:/opt/mirror_neuron/.mn/runs
+      - ${MN_HOST_OPENSHELL_CONFIG_DIR:-./openshell-config}:/root/.config/openshell:ro
+      - ${MN_HOST_OPENSHELL_CONFIG_DIR:-./openshell-config}:/opt/mirror_neuron/.config/openshell:ro
 
 volumes:
   redis-data:
