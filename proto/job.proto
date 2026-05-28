@@ -8,6 +8,8 @@ service JobService {
   rpc CancelJob (CancelJobRequest) returns (CancelJobResponse);
   rpc PauseJob (PauseJobRequest) returns (PauseJobResponse);
   rpc ResumeJob (ResumeJobRequest) returns (ResumeJobResponse);
+  rpc ExportJobBackup (ExportJobBackupRequest) returns (ExportJobBackupResponse);
+  rpc RestoreJobBackup (RestoreJobBackupRequest) returns (RestoreJobBackupResponse);
   rpc ClearJobs (ClearJobsRequest) returns (ClearJobsResponse);
   rpc DeployJob (DeployJobRequest) returns (DeploymentResponse);
   rpc UpdateDeployment (UpdateDeploymentRequest) returns (DeploymentResponse);
@@ -82,6 +84,26 @@ message ResumeJobRequest {
 message ResumeJobResponse {
   string job_id = 1;
   string status = 2;
+}
+
+message ExportJobBackupRequest {
+  string job_id = 1;
+}
+
+message ExportJobBackupResponse {
+  string backup_json = 1;
+  map<string, bytes> bundle_files = 2;
+}
+
+message RestoreJobBackupRequest {
+  string backup_json = 1;
+  map<string, bytes> bundle_files = 2;
+  string blueprint_id = 3;
+  string run_id = 4;
+}
+
+message RestoreJobBackupResponse {
+  string result_json = 1;
 }
 
 message ClearJobsRequest {

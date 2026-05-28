@@ -334,6 +334,24 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
+  def replace_job_events(job_id, events) when is_list(events) do
+    event_key = key("job", job_id, "events")
+    encoded_events = Enum.map(events, &Jason.encode!/1)
+
+    commands =
+      [["DEL", event_key]] ++
+        Enum.map(encoded_events, fn encoded -> ["RPUSH", event_key, encoded] end) ++
+        event_retention_commands(event_key)
+
+    with {:ok, _results} <- transaction(commands),
+         :ok <- wait_for_replicas() do
+      {:ok, events}
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
+    end
+  end
+
   def persist_agent(job_id, agent_id, snapshot) do
     encoded = Jason.encode!(snapshot)
 

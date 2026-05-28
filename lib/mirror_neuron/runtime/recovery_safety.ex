@@ -8,6 +8,10 @@ defmodule MirrorNeuron.Runtime.RecoverySafety do
       corrupt_checkpoint?(scoped_agents) ->
         {:blocked, "one or more agent checkpoints are corrupt; manual inspection is required"}
 
+      Keyword.get(opts, :force_paused, false) ->
+        {:manual,
+         Keyword.get(opts, :force_paused_reason, "job recovery was requested in paused state")}
+
       missing_required_snapshots?(job, manifest, agents, opts) ->
         {:manual, "running job is missing one or more durable agent snapshots"}
 

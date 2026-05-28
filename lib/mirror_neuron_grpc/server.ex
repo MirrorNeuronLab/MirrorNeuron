@@ -30,6 +30,8 @@ defmodule MirrorNeuron.Grpc.JobServer do
     CancelJobResponse,
     PauseJobResponse,
     ResumeJobResponse,
+    ExportJobBackupResponse,
+    RestoreJobBackupResponse,
     ClearJobsResponse,
     DeploymentResponse,
     ScheduleResponse
@@ -195,6 +197,44 @@ defmodule MirrorNeuron.Grpc.JobServer do
 
       _ ->
         %ResumeJobResponse{job_id: job_id, status: "running"}
+    end
+  end
+
+  def export_job_backup(request, stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("ExportJobBackup")
+    MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
+
+    case MirrorNeuron.export_job_backup(request.job_id) do
+      {:ok, backup, bundle_files} ->
+        %ExportJobBackupResponse{
+          backup_json: Jason.encode!(backup),
+          bundle_files: bundle_files
+        }
+
+      {:error, reason} ->
+        raise GRPC.RPCError, status: backup_error_status(reason), message: inspect(reason)
+    end
+  end
+
+  def restore_job_backup(request, stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("RestoreJobBackup")
+    MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
+
+    with {:ok, backup} <- Jason.decode(request.backup_json),
+         {:ok, result} <-
+           MirrorNeuron.restore_job_backup(backup, request.bundle_files,
+             blueprint_id: blank_to_nil(request.blueprint_id),
+             run_id: blank_to_nil(request.run_id)
+           ) do
+      %RestoreJobBackupResponse{result_json: Jason.encode!(result)}
+    else
+      {:error, %Jason.DecodeError{} = error} ->
+        raise GRPC.RPCError,
+          status: GRPC.Status.invalid_argument(),
+          message: "backup_json must be valid JSON: #{Exception.message(error)}"
+
+      {:error, reason} ->
+        raise GRPC.RPCError, status: backup_error_status(reason), message: inspect(reason)
     end
   end
 
@@ -445,6 +485,16 @@ defmodule MirrorNeuron.Grpc.JobServer do
   end
 
   defp schedule_response(result), do: %ScheduleResponse{result_json: Jason.encode!(result)}
+
+  defp backup_error_status(reason) do
+    text = inspect(reason)
+
+    cond do
+      String.contains?(text, "not found") -> GRPC.Status.not_found()
+      String.contains?(text, "must be paused") -> GRPC.Status.failed_precondition()
+      true -> GRPC.Status.invalid_argument()
+    end
+  end
 
   defp decode_json_map(nil), do: %{}
   defp decode_json_map(""), do: %{}

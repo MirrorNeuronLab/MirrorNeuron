@@ -1983,7 +1983,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
           "recovery",
           "recovery_status",
           "recovery_reason",
-          "recovery_requires_review"
+          "recovery_requires_review",
+          "restore_provenance"
         ])
         |> Enum.reject(fn {_key, value} -> is_nil(value) end)
         |> Map.new()

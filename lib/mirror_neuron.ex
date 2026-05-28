@@ -208,6 +208,10 @@ defmodule MirrorNeuron do
   def inspect_job(job_id), do: RedisStore.fetch_job(job_id)
   def inspect_agents(job_id), do: RedisStore.list_agents(job_id)
   def events(job_id), do: RedisStore.read_events(job_id)
+  def export_job_backup(job_id), do: MirrorNeuron.JobBackup.export_job(job_id)
+
+  def restore_job_backup(backup, bundle_files, opts \\ []),
+    do: MirrorNeuron.JobBackup.restore_job(backup, bundle_files, opts)
 
   def inspect_nodes do
     if control_node?() do

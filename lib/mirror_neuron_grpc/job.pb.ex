@@ -154,6 +154,93 @@ defmodule Mirrorneuron.Job.V1.ResumeJobResponse do
   field(:status, 2, type: :string)
 end
 
+defmodule Mirrorneuron.Job.V1.ExportJobBackupRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.ExportJobBackupRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:job_id, 1, type: :string, json_name: "jobId")
+end
+
+defmodule Mirrorneuron.Job.V1.ExportJobBackupResponse.BundleFilesEntry do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.ExportJobBackupResponse.BundleFilesEntry",
+    map: true,
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:key, 1, type: :string)
+  field(:value, 2, type: :bytes)
+end
+
+defmodule Mirrorneuron.Job.V1.ExportJobBackupResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.ExportJobBackupResponse",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:backup_json, 1, type: :string, json_name: "backupJson")
+
+  field(:bundle_files, 2,
+    repeated: true,
+    type: Mirrorneuron.Job.V1.ExportJobBackupResponse.BundleFilesEntry,
+    json_name: "bundleFiles",
+    map: true
+  )
+end
+
+defmodule Mirrorneuron.Job.V1.RestoreJobBackupRequest.BundleFilesEntry do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.RestoreJobBackupRequest.BundleFilesEntry",
+    map: true,
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:key, 1, type: :string)
+  field(:value, 2, type: :bytes)
+end
+
+defmodule Mirrorneuron.Job.V1.RestoreJobBackupRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.RestoreJobBackupRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:backup_json, 1, type: :string, json_name: "backupJson")
+
+  field(:bundle_files, 2,
+    repeated: true,
+    type: Mirrorneuron.Job.V1.RestoreJobBackupRequest.BundleFilesEntry,
+    json_name: "bundleFiles",
+    map: true
+  )
+
+  field(:blueprint_id, 3, type: :string, json_name: "blueprintId")
+  field(:run_id, 4, type: :string, json_name: "runId")
+end
+
+defmodule Mirrorneuron.Job.V1.RestoreJobBackupResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.RestoreJobBackupResponse",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:result_json, 1, type: :string, json_name: "resultJson")
+end
+
 defmodule Mirrorneuron.Job.V1.ClearJobsRequest do
   @moduledoc false
 
@@ -446,6 +533,18 @@ defmodule Mirrorneuron.Job.V1.JobService.Service do
   rpc(:PauseJob, Mirrorneuron.Job.V1.PauseJobRequest, Mirrorneuron.Job.V1.PauseJobResponse)
 
   rpc(:ResumeJob, Mirrorneuron.Job.V1.ResumeJobRequest, Mirrorneuron.Job.V1.ResumeJobResponse)
+
+  rpc(
+    :ExportJobBackup,
+    Mirrorneuron.Job.V1.ExportJobBackupRequest,
+    Mirrorneuron.Job.V1.ExportJobBackupResponse
+  )
+
+  rpc(
+    :RestoreJobBackup,
+    Mirrorneuron.Job.V1.RestoreJobBackupRequest,
+    Mirrorneuron.Job.V1.RestoreJobBackupResponse
+  )
 
   rpc(:ClearJobs, Mirrorneuron.Job.V1.ClearJobsRequest, Mirrorneuron.Job.V1.ClearJobsResponse)
 
