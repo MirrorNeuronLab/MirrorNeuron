@@ -47,25 +47,6 @@ services:
       - ${MN_HOST_OPENSHELL_STATE_DIR:-./openshell-state}:${MN_HOST_OPENSHELL_STATE_DIR:-./openshell-state}
       - ${DOCKER_HOST_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
 
-  context-engine-model:
-    image: ${MN_CONTEXT_MODEL_IMAGE:-mirror-neuron-context-model:cpu}
-    container_name: mirror-neuron-context-engine-model
-    profiles:
-      - context
-    build:
-      context: ${MEMBRANE_DIR:-../Membrane}
-      dockerfile: Dockerfile
-      target: ${MN_CONTEXT_MODEL_BUILD_TARGET:-context-model-cpu}
-    restart: unless-stopped
-    environment:
-      MN_CONTEXT_COMPRESSOR_REPO: ${MN_CONTEXT_COMPRESSOR_REPO:-homerquan/mn-context-engine-model-v-Q4_K_M}
-      MN_CONTEXT_COMPRESSOR_FILE: ${MN_CONTEXT_COMPRESSOR_FILE:-mn-context-engine-model-v3.Q4_K_M.gguf}
-      MN_CONTEXT_COMPRESSOR_MODEL_PATH: ${MN_CONTEXT_COMPRESSOR_MODEL_PATH:-}
-      MN_CONTEXT_COMPRESSOR_N_GPU_LAYERS: ${MN_CONTEXT_COMPRESSOR_N_GPU_LAYERS:-0}
-      MN_CONTEXT_COMPRESSOR_N_CTX: ${MN_CONTEXT_COMPRESSOR_N_CTX:-16384}
-    volumes:
-      - context-model-cache:/root/.cache/huggingface
-
   membrane-context-engine:
     image: ${ENGINE_IMAGE:-mirror-neuron-memory-engine:latest}
     container_name: mirror-neuron-context-engine
@@ -86,12 +67,13 @@ services:
       MN_CONTEXT_DEBUG_DIR: /tmp/mn-context-engine/context-views
       MN_CONTEXT_MODEL_COMPRESSION_ENABLED: ${MN_CONTEXT_MODEL_COMPRESSION_ENABLED:-true}
       MN_CONTEXT_COMPRESSION_COMMAND: /usr/local/bin/mn_context_model_client.py
-      MN_CONTEXT_MODEL_ENDPOINT: http://context-engine-model:8000/compress
       MN_CONTEXT_MODEL_TIMEOUT_SECONDS: ${MN_CONTEXT_MODEL_TIMEOUT_SECONDS:-300}
+    models:
+      context-engine-model:
+        endpoint_var: MN_CONTEXT_MODEL_ENDPOINT
+        model_var: MN_CONTEXT_MODEL_NAME
     depends_on:
       redis:
-        condition: service_started
-      context-engine-model:
         condition: service_started
     volumes:
       - context-debug:/tmp/mn-context-engine
@@ -170,4 +152,8 @@ services:
 volumes:
   redis-data:
   context-debug:
-  context-model-cache:
+
+models:
+  context-engine-model:
+    model: ${MN_CONTEXT_MODEL_RUNNER_MODEL:-hf.co/homerquan/mn-context-engine-model-v-Q4_K_M}
+    context_size: 16384
