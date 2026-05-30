@@ -143,10 +143,10 @@ mix test
 Useful CLI checks:
 
 ```bash
-mn validate examples/research_flow
-mn run examples/research_flow
+mn blueprint validate examples/research_flow
+mn blueprint run examples/research_flow
 mn inspect nodes
-mn monitor
+mn job monitor
 ```
 
 When Redis-backed tests or runtime flows are needed:
