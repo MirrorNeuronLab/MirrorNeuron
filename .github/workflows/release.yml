@@ -129,11 +129,6 @@ jobs:
 
           echo "Verified $TAG_NAME is checked out at validated commit $head_commit."
 
-      - name: Normalize ARM runner image label
-        if: matrix.platform == 'linux-arm64'
-        shell: bash
-        run: echo "ImageOS=ubuntu24" >> "$GITHUB_ENV"
-
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
         with:
@@ -214,6 +209,11 @@ jobs:
           fi
 
           echo "Verified $TAG_NAME is checked out at validated commit $head_commit."
+
+      - name: Normalize ARM runner image label
+        if: matrix.platform == 'linux-arm64'
+        shell: bash
+        run: echo "ImageOS=ubuntu24" >> "$GITHUB_ENV"
 
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
