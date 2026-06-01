@@ -146,6 +146,20 @@ defmodule MirrorNeuron.Runtime.JobRunner do
       {:ok, %{"status" => "paused"}} when reason == :normal ->
         :paused
 
+      {:ok, %{"status" => status}} when status in @active_statuses and reason == :normal ->
+        Logger.info(
+          "job coordinator for #{state.job_id} stopped normally while job was #{status}; leaving job active for local recovery"
+        )
+
+        EventBus.publish(state.job_id, %{
+          type: :job_recovery_scheduled,
+          reason: "runtime stopped before terminal state",
+          exit_reason: inspect(reason),
+          timestamp: Runtime.timestamp()
+        })
+
+        :recover_later
+
       {:ok, %{"status" => status}} when status in @active_statuses and reason != :normal ->
         Logger.warning(
           "job coordinator for #{state.job_id} exited unexpectedly; scheduling recovery: #{inspect(reason)}"
@@ -158,6 +172,20 @@ defmodule MirrorNeuron.Runtime.JobRunner do
         })
 
         :restart
+
+      _ when reason == :normal ->
+        Logger.info(
+          "job coordinator for #{state.job_id} stopped normally before terminal persistence; leaving existing job state for local recovery"
+        )
+
+        EventBus.publish(state.job_id, %{
+          type: :job_recovery_scheduled,
+          reason: "runtime stopped before terminal state",
+          exit_reason: inspect(reason),
+          timestamp: Runtime.timestamp()
+        })
+
+        :recover_later
 
       _ ->
         Logger.warning(

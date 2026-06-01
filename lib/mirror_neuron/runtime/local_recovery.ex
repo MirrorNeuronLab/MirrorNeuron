@@ -29,7 +29,7 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
 
     with {:ok, jobs} <- RedisStore.list_jobs() do
       jobs
-      |> Enum.filter(&(&1["status"] in @active_statuses))
+      |> Enum.filter(&recoverable_job_status?/1)
       |> Enum.reduce(%{checked: 0, recovered: 0, paused: 0, skipped: 0, failed: 0, jobs: []}, fn
         job, acc ->
           result =
@@ -97,9 +97,11 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
     {:reply, recover_unfinished_jobs(opts), state}
   end
 
-  defp recover_job_map(%{"job_id" => job_id, "status" => status} = job, opts)
-       when status in @active_statuses do
+  defp recover_job_map(%{"job_id" => job_id, "status" => status} = job, opts) do
     cond do
+      not recoverable_job_status?(job) ->
+        {:ok, %{job_id: job_id, action: :skipped, reason: "job is #{status}"}}
+
       job_runner_alive?(job_id) ->
         {:ok, %{job_id: job_id, action: :already_running, reason: "job runner is live"}}
 
@@ -119,9 +121,8 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
     end
   end
 
-  defp recover_job_map(%{"job_id" => job_id, "status" => status}, _opts) do
-    {:ok, %{job_id: job_id, action: :skipped, reason: "job is #{status}"}}
-  end
+  defp recover_job_map(%{"job_id" => job_id}, _opts),
+    do: {:ok, %{job_id: job_id, action: :skipped, reason: "job status is unknown"}}
 
   defp do_recover_job(job, opts) do
     job_id = job["job_id"]
@@ -130,7 +131,13 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
          {:ok, agents} <- RedisStore.list_agents(job_id) do
       case recovery_decision(job, bundle.manifest, agents, opts) do
         {:auto, reason} ->
-          mark_recovery(job, "auto_resuming", reason, requires_review?: false)
+          mark_recovery(
+            job,
+            "auto_resuming",
+            reason,
+            auto_resume_mark_options(job)
+          )
+
           start_recovered_job(job, bundle, :local_recovery_auto_resumed, reason)
 
         {:manual, reason} ->
@@ -182,6 +189,31 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
 
   defp recovery_decision(job, manifest, agents, opts) do
     RecoverySafety.decision(job, manifest, agents, opts)
+  end
+
+  defp recoverable_job_status?(%{"status" => status} = job) do
+    status in @active_statuses or recoverable_runner_interruption?(job)
+  end
+
+  defp recoverable_job_status?(_job), do: false
+
+  defp recoverable_runner_interruption?(%{
+         "status" => "failed",
+         "result" => %{
+           "agent_id" => "job_runner",
+           "error" => "job coordinator exited before terminal state"
+         }
+       }),
+       do: true
+
+  defp recoverable_runner_interruption?(_job), do: false
+
+  defp auto_resume_mark_options(job) do
+    if recoverable_runner_interruption?(job) do
+      [requires_review?: false, status: "running", clear_result?: true]
+    else
+      [requires_review?: false]
+    end
   end
 
   defp start_recovered_job(job, bundle, event_type, reason) do
@@ -278,6 +310,7 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
         "recovery_requires_review" => requires_review?
       }
       |> maybe_put_status(Keyword.get(opts, :status))
+      |> maybe_clear_result(Keyword.get(opts, :clear_result?, false))
 
     defaults = %{
       "job_id" => job["job_id"],
@@ -307,6 +340,8 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
 
   defp maybe_put_status(map, nil), do: map
   defp maybe_put_status(map, status), do: Map.put(map, "status", status)
+  defp maybe_clear_result(map, true), do: Map.put(map, "result", nil)
+  defp maybe_clear_result(map, _clear?), do: map
 
   defp cluster_recoverable_policy?(job) do
     Map.get(job, "recovery_policy", "local_restart") == "cluster_recover"

@@ -158,6 +158,63 @@ defmodule MirrorNeuron.ManifestTest do
     assert {:ok, _reloaded} = Manifest.load(durable)
   end
 
+  test "topology remains runtime agent topology while flow graph remains problem DAG" do
+    manifest = %{
+      "apiVersion" => "mn.workflow/v1",
+      "kind" => "Workflow",
+      "manifest_version" => "1.0",
+      "graph_id" => "layered-runtime",
+      "contract" => %{"inputs" => %{}, "outputs" => %{"primary" => %{"path" => "final.json"}}},
+      "flow" => %{
+        "entrypoint" => "intake",
+        "graph" => %{
+          "schema" => "mn.workflow.problem_graph/v1",
+          "mode" => "static_dag",
+          "source" => "intake",
+          "sink" => "report",
+          "edges" => [%{"id" => "intake-to-report", "from" => "intake", "to" => "report"}]
+        },
+        "steps" => [
+          %{"id" => "intake", "run" => "intake"},
+          %{"id" => "report", "run" => "report"}
+        ]
+      },
+      "runtime" => %{
+        "bindings" => %{
+          "intake" => %{"workers" => [%{"id" => "intake_worker"}]},
+          "report" => %{"workers" => [%{"id" => "writer"}]}
+        }
+      },
+      "entrypoints" => ["router"],
+      "nodes" => [
+        %{"node_id" => "router", "agent_type" => "router", "role" => "root"},
+        %{"node_id" => "executor", "agent_type" => "executor", "role" => "worker"}
+      ],
+      "edges" => [
+        %{
+          "edge_id" => "router-executor",
+          "from_node" => "router",
+          "to_node" => "executor",
+          "message_type" => "work"
+        }
+      ]
+    }
+
+    assert {:ok, normalized} = Manifest.load(manifest)
+
+    topology = Manifest.topology(normalized)
+    assert Enum.map(topology["nodes"], & &1["node_id"]) == ["router", "executor"]
+    assert Enum.map(topology["edges"], & &1["edge_id"]) == ["router-executor"]
+    refute Enum.any?(topology["nodes"], &(&1["node_id"] in ["intake", "report"]))
+    refute Enum.any?(topology["edges"], &(&1["edge_id"] == "intake-to-report"))
+
+    durable = Manifest.to_map(normalized)
+    assert get_in(durable, ["flow", "graph", "edges", Access.at(0), "id"]) == "intake-to-report"
+
+    assert get_in(durable, ["runtime", "bindings", "intake", "workers", Access.at(0), "id"]) ==
+             "intake_worker"
+  end
+
   test "validates missing agent_type" do
     manifest = %{
       "manifest_version" => "1.0",

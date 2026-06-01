@@ -142,6 +142,8 @@ defmodule MirrorNeuron.Manifest do
   end
 
   defp normalize_and_validate(raw) do
+    raw = materialize_workflow_runtime(raw)
+
     manifest = %__MODULE__{
       api_version: Map.get(raw, "apiVersion"),
       kind: Map.get(raw, "kind"),
@@ -185,6 +187,98 @@ defmodule MirrorNeuron.Manifest do
       {[], {:error, errors}} -> {:error, errors}
       {legacy_errors, {:error, errors}} -> {:error, errors ++ Enum.reverse(legacy_errors)}
     end
+  end
+
+  defp materialize_workflow_runtime(%{} = raw) do
+    if Map.get(raw, "nodes", []) != [] do
+      raw
+    else
+      binding = get_in(raw, ["runtime", "bindings", "run_workflow"])
+      workers = if is_map(binding), do: Map.get(binding, "workers", []), else: []
+
+      if is_list(workers) and workers != [] do
+        nodes = Enum.map(workers, &workflow_worker_to_node/1)
+        entrypoints = workflow_entrypoints(binding, nodes)
+
+        raw
+        |> Map.put("nodes", nodes)
+        |> Map.put("edges", Map.get(binding, "routes", Map.get(binding, "worker_edges", [])))
+        |> Map.put("entrypoints", entrypoints)
+        |> Map.put("initial_inputs", Map.get(binding, "seed_inputs", Map.get(binding, "initial_inputs", %{})))
+      else
+        raw
+      end
+    end
+  end
+
+  defp materialize_workflow_runtime(raw), do: raw
+
+  defp workflow_worker_to_node(%{} = worker) do
+    config = Map.get(worker, "with", Map.get(worker, "config", %{}))
+    uses = Map.get(worker, "uses", "")
+    kind = Map.get(worker, "kind", "")
+
+    %{
+      "node_id" => Map.get(worker, "id"),
+      "agent_type" => workflow_agent_type(uses, kind),
+      "type" => workflow_node_type(config, uses, kind),
+      "role" => Map.get(config, "role", Map.get(worker, "role")),
+      "config" => config,
+      "resources" => Map.get(worker, "resources", %{}),
+      "constraints" => Map.get(worker, "constraints", []),
+      "tool_bindings" => Map.get(worker, "tool_bindings", []),
+      "retry_policy" => Map.get(worker, "retry_policy", %{}),
+      "checkpoint_policy" => Map.get(worker, "checkpoint_policy", %{}),
+      "spawn_policy" => Map.get(worker, "spawn_policy", %{}),
+      "policies" => Map.get(worker, "policies", %{}),
+      "services" => Map.get(worker, "services", []),
+      "requires_services" => Map.get(worker, "requires_services", [])
+    }
+  end
+
+  defp workflow_worker_to_node(worker), do: workflow_worker_to_node(%{"id" => inspect(worker)})
+
+  defp workflow_agent_type(uses, kind) do
+    cond do
+      String.contains?(to_string(uses), "control_router") -> "router"
+      String.contains?(to_string(uses), "control_join") -> "aggregator"
+      String.contains?(to_string(uses), "data_module") -> "module"
+      kind == "stream" -> "module"
+      true -> "executor"
+    end
+  end
+
+  defp workflow_node_type(config, uses, kind) do
+    cond do
+      is_map(config) and is_binary(Map.get(config, "node_type")) -> Map.get(config, "node_type")
+      String.contains?(to_string(uses), "control_router") -> "map"
+      String.contains?(to_string(uses), "control_join") -> "reduce"
+      kind == "stream" -> "stream"
+      true -> "generic"
+    end
+  end
+
+  defp workflow_entrypoints(binding, nodes) when is_map(binding) do
+    case Map.get(binding, "start_workers", Map.get(binding, "entrypoints")) do
+      entrypoints when is_list(entrypoints) and entrypoints != [] ->
+        entrypoints
+
+      entrypoint when is_binary(entrypoint) ->
+        [entrypoint]
+
+      _ ->
+        nodes
+        |> Enum.filter(&(Map.get(&1, "role") in ["root", "root_coordinator"]))
+        |> Enum.map(&Map.get(&1, "node_id"))
+        |> case do
+          [] -> nodes |> List.first(%{}) |> Map.get("node_id") |> List.wrap()
+          entrypoints -> entrypoints
+        end
+    end
+  end
+
+  defp workflow_entrypoints(_binding, nodes) do
+    nodes |> List.first(%{}) |> Map.get("node_id") |> List.wrap()
   end
 
   defp legacy_manifest_errors(raw) do
