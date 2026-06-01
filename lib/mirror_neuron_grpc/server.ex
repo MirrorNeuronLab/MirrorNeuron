@@ -965,24 +965,77 @@ defmodule MirrorNeuron.Grpc.ObservabilityServer do
   use GRPC.Server, service: Mirrorneuron.Observability.V1.ObservabilityService.Service
 
   alias Mirrorneuron.Observability.V1.EventResponse
+  alias MirrorNeuron.Runtime.EventBus
 
   def stream_events(request, stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("StreamEvents")
 
     job_id = request.job_id
+    follow? = Map.get(request, :follow, false)
+    heartbeat_interval_ms = max(Map.get(request, :heartbeat_interval_ms, 0), 0)
 
-    case MirrorNeuron.events(job_id) do
-      {:ok, events} ->
-        Enum.each(events, fn ev ->
-          GRPC.Server.send_reply(stream, %EventResponse{event_json: Jason.encode!(ev)})
-        end)
-
-      _ ->
-        :ok
+    if follow? do
+      EventBus.subscribe(job_id)
     end
 
-    stream
+    terminal? =
+      case MirrorNeuron.events(job_id) do
+        {:ok, events} ->
+          Enum.each(events, fn ev ->
+            GRPC.Server.send_reply(stream, %EventResponse{event_json: Jason.encode!(ev)})
+          end)
+
+          Enum.any?(events, &terminal_event?/1)
+
+        _ ->
+          false
+      end
+
+    if follow? and not terminal? do
+      stream_live_events(job_id, stream, heartbeat_interval_ms)
+    else
+      stream
+    end
   end
+
+  defp stream_live_events(job_id, stream, heartbeat_interval_ms) do
+    receive do
+      {:mirror_neuron_event, event} ->
+        GRPC.Server.send_reply(stream, %EventResponse{event_json: Jason.encode!(event)})
+
+        if terminal_event?(event) do
+          stream
+        else
+          stream_live_events(job_id, stream, heartbeat_interval_ms)
+        end
+    after
+      heartbeat_timeout(heartbeat_interval_ms) ->
+        if heartbeat_interval_ms > 0 do
+          GRPC.Server.send_reply(stream, %EventResponse{
+            event_json:
+              Jason.encode!(%{
+                type: "stream_heartbeat",
+                job_id: job_id,
+                timestamp: MirrorNeuron.Runtime.timestamp()
+              })
+          })
+        end
+
+        stream_live_events(job_id, stream, heartbeat_interval_ms)
+    end
+  rescue
+    _ -> stream
+  end
+
+  defp heartbeat_timeout(interval) when is_integer(interval) and interval > 0, do: interval
+  defp heartbeat_timeout(_interval), do: :infinity
+
+  defp terminal_event?(event) when is_map(event) do
+    event_type = Map.get(event, "type") || Map.get(event, :type)
+    to_string(event_type) in ["job_completed", "job_failed", "job_cancelled"]
+  end
+
+  defp terminal_event?(_event), do: false
 end
 
 defmodule MirrorNeuron.Grpc.Endpoint do
