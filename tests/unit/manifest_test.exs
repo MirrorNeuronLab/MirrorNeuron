@@ -89,6 +89,75 @@ defmodule MirrorNeuron.ManifestTest do
     assert norm.initial_inputs == %{"__entrypoints__" => [%{"payload" => 1}, %{"payload" => 2}]}
   end
 
+  test "round-trips workflow manifest fields and problem DAG metadata" do
+    manifest = %{
+      "apiVersion" => "mn.workflow/v1",
+      "kind" => "Workflow",
+      "manifest_version" => "1.0",
+      "graph_id" => "tax-dag",
+      "job_name" => "Tax DAG",
+      "contract" => %{
+        "inputs" => %{"folder" => %{"type" => "string"}},
+        "outputs" => %{"primary" => %{"path" => "final_artifact.json"}}
+      },
+      "flow" => %{
+        "entrypoint" => "intake",
+        "graph" => %{
+          "schema" => "mn.workflow.problem_graph/v1",
+          "mode" => "static_dag",
+          "source" => "intake",
+          "sink" => "write",
+          "execution" => %{"strategy" => "parallel", "max_parallel_steps" => 2},
+          "dynamic" => %{"enabled" => false},
+          "edges" => [
+            %{"id" => "intake-to-write", "from" => "intake", "to" => "write", "required" => true}
+          ]
+        },
+        "steps" => [
+          %{
+            "id" => "intake",
+            "run" => "intake",
+            "control" => %{
+              "required" => true,
+              "timeout_seconds" => 30,
+              "retry" => %{"max_attempts" => 2, "backoff_seconds" => 1},
+              "failure_policy" => "fail_workflow",
+              "uncertainty" => %{"min_confidence" => 0.8, "on_low_confidence" => "human_review"}
+            }
+          },
+          %{"id" => "write", "run" => "write", "join" => %{"mode" => "all_required"}}
+        ]
+      },
+      "runtime" => %{
+        "bindings" => %{
+          "intake" => %{"type" => "team", "workers" => [%{"id" => "worker", "kind" => "worker"}]},
+          "write" => %{"type" => "single", "workers" => [%{"id" => "writer"}]}
+        }
+      },
+      "term" => %{"privacy" => "local"},
+      "entrypoints" => ["root"],
+      "nodes" => [%{"node_id" => "root", "agent_type" => "router", "role" => "root"}],
+      "edges" => []
+    }
+
+    assert {:ok, normalized} = Manifest.load(manifest)
+    durable = Manifest.to_map(normalized)
+
+    assert durable["apiVersion"] == "mn.workflow/v1"
+    assert durable["kind"] == "Workflow"
+    assert durable["contract"]["outputs"]["primary"]["path"] == "final_artifact.json"
+    assert durable["flow"]["graph"]["schema"] == "mn.workflow.problem_graph/v1"
+    assert durable["flow"]["graph"]["execution"]["strategy"] == "parallel"
+    assert durable["flow"]["steps"] |> hd() |> get_in(["control", "retry", "max_attempts"]) == 2
+    assert durable["flow"]["steps"] |> List.last() |> get_in(["join", "mode"]) == "all_required"
+
+    assert durable["runtime"]["bindings"]["intake"]["workers"] |> hd() |> Map.get("kind") ==
+             "worker"
+
+    assert durable["term"]["privacy"] == "local"
+    assert {:ok, _reloaded} = Manifest.load(durable)
+  end
+
   test "validates missing agent_type" do
     manifest = %{
       "manifest_version" => "1.0",
@@ -170,7 +239,9 @@ defmodule MirrorNeuron.ManifestTest do
     assert [%{"name" => "agent-api", "port" => 8080}] = hd(normalized.nodes).services
 
     serialized = Manifest.to_map(normalized)
-    assert get_in(serialized, ["nodes", Access.at(0), "requires_services", Access.at(0), "name"]) == "ollama"
+
+    assert get_in(serialized, ["nodes", Access.at(0), "requires_services", Access.at(0), "name"]) ==
+             "ollama"
   end
 
   test "rejects malformed service declarations" do

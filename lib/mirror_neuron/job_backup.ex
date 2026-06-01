@@ -175,8 +175,8 @@ defmodule MirrorNeuron.JobBackup do
 
   defp export_bundle_files(job) do
     case load_export_bundle(job) do
-      {:ok, %JobBundle{root_path: root_path} = bundle} when is_binary(root_path) ->
-        collect_bundle_files(root_path, bundle)
+      {:ok, %JobBundle{root_path: root_path}} when is_binary(root_path) ->
+        collect_bundle_files(root_path)
 
       {:ok, %JobBundle{manifest: manifest}} ->
         {:ok, %{"manifest.json" => Jason.encode!(Manifest.to_map(manifest), pretty: true)}}
@@ -203,14 +203,17 @@ defmodule MirrorNeuron.JobBackup do
         JobBundle.load_filesystem_path(job_path)
 
       is_map(job["manifest"]) ->
-        JobBundle.load(job["manifest"])
+        case workflow_manifest_incomplete?(job["manifest"]) do
+          true -> {:error, :incomplete_embedded_workflow_manifest}
+          false -> JobBundle.load(job["manifest"])
+        end
 
       true ->
         {:error, :missing_bundle}
     end
   end
 
-  defp collect_bundle_files(root_path, bundle) do
+  defp collect_bundle_files(root_path) do
     with {:ok, paths} <- regular_files(root_path) do
       files =
         paths
@@ -225,18 +228,12 @@ defmodule MirrorNeuron.JobBackup do
           {:error, "backup bundle is missing manifest.json"}
 
         true ->
-          {:ok, maybe_put_manifest(files, bundle)}
+          {:ok, files}
       end
     end
   rescue
     error -> {:error, Exception.message(error)}
   end
-
-  defp maybe_put_manifest(files, %JobBundle{manifest: %Manifest{} = manifest}) do
-    Map.put(files, "manifest.json", Jason.encode!(Manifest.to_map(manifest), pretty: true))
-  end
-
-  defp maybe_put_manifest(files, _bundle), do: files
 
   defp regular_files(root_path) do
     root = Path.expand(root_path)
@@ -268,10 +265,20 @@ defmodule MirrorNeuron.JobBackup do
   end
 
   defp export_embedded_manifest(%{"manifest" => manifest}) when is_map(manifest) do
-    {:ok, %{"manifest.json" => Jason.encode!(manifest, pretty: true)}}
+    if workflow_manifest_incomplete?(manifest) do
+      {:error, "embedded mn.workflow/v1 manifest is missing contract, flow, or runtime"}
+    else
+      {:ok, %{"manifest.json" => Jason.encode!(manifest, pretty: true)}}
+    end
   end
 
   defp export_embedded_manifest(_job), do: {:error, "backup bundle is unavailable"}
+
+  defp workflow_manifest_incomplete?(%{"apiVersion" => "mn.workflow/v1"} = manifest) do
+    not (is_map(manifest["contract"]) and is_map(manifest["flow"]) and is_map(manifest["runtime"]))
+  end
+
+  defp workflow_manifest_incomplete?(_manifest), do: false
 
   defp restore_bundle(new_job_id, bundle_files, blueprint_id, run_id) do
     root =

@@ -746,31 +746,14 @@ defmodule MirrorNeuron.RuntimeTest do
   end
 
   test "queues messages while paused and completes after resume" do
-    manifest = %{
-      "manifest_version" => "1.0",
-      "graph_id" => "pause_resume_test",
-      "nodes" => [
-        %{
-          "node_id" => "root",
-          "agent_type" => "router",
-          "role" => "root_coordinator",
-          "config" => %{"emit_type" => "manual_result"}
-        },
-        %{
-          "node_id" => "sink",
-          "agent_type" => "aggregator",
-          "config" => %{"complete_on_message" => true}
-        }
-      ],
-      "edges" => [],
-      "policies" => %{"recovery_mode" => "local_restart"}
-    }
+    manifest = pause_resume_dag_manifest("pause_resume_test")
 
     assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
     wait_until(fn -> running_status?(job_id) end)
 
     assert {:ok, "paused"} = MirrorNeuron.pause(job_id)
     wait_until(fn -> agent_paused?(job_id, "sink") end)
+    assert_runtime_workflow_manifest(job_id)
 
     assert {:ok, "delivered"} =
              MirrorNeuron.send_message(job_id, "sink", %{
@@ -783,66 +766,33 @@ defmodule MirrorNeuron.RuntimeTest do
     assert {:ok, "resumed"} = MirrorNeuron.resume(job_id)
     assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 2_000)
     assert job["status"] == "completed"
+    assert_runtime_workflow_manifest(job_id)
 
     RedisStore.delete_job(job_id)
   end
 
   test "resume is idempotent for an already running job" do
-    manifest = %{
-      "manifest_version" => "1.0",
-      "graph_id" => "resume_running_idempotent_test",
-      "nodes" => [
-        %{
-          "node_id" => "root",
-          "agent_type" => "router",
-          "role" => "root_coordinator",
-          "config" => %{"emit_type" => "manual_result"}
-        },
-        %{
-          "node_id" => "sink",
-          "agent_type" => "aggregator",
-          "config" => %{"complete_on_message" => true}
-        }
-      ],
-      "edges" => [],
-      "policies" => %{"recovery_mode" => "local_restart"}
-    }
+    manifest = pause_resume_dag_manifest("resume_running_idempotent_test")
 
     assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
     wait_until(fn -> running_status?(job_id) end)
 
     assert {:ok, "resumed"} = MirrorNeuron.resume(job_id)
     assert {:ok, %{"status" => "running"}} = MirrorNeuron.inspect_job(job_id)
+    assert_runtime_workflow_manifest(job_id)
 
     RedisStore.delete_job(job_id)
   end
 
   test "recovers a paused job after coordinator restart and completes after resume" do
-    manifest = %{
-      "manifest_version" => "1.0",
-      "graph_id" => "pause_resume_recovery_test",
-      "nodes" => [
-        %{
-          "node_id" => "root",
-          "agent_type" => "router",
-          "role" => "root_coordinator",
-          "config" => %{"emit_type" => "manual_result"}
-        },
-        %{
-          "node_id" => "sink",
-          "agent_type" => "aggregator",
-          "config" => %{"complete_on_message" => true}
-        }
-      ],
-      "edges" => [],
-      "policies" => %{"recovery_mode" => "local_restart"}
-    }
+    manifest = pause_resume_dag_manifest("pause_resume_recovery_test")
 
     assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
     wait_until(fn -> running_status?(job_id) end)
 
     assert {:ok, "paused"} = MirrorNeuron.pause(job_id)
     wait_until(fn -> agent_paused?(job_id, "sink") end)
+    assert_runtime_workflow_manifest(job_id)
 
     assert {:ok, "delivered"} =
              MirrorNeuron.send_message(job_id, "sink", %{
@@ -868,11 +818,13 @@ defmodule MirrorNeuron.RuntimeTest do
     wait_until(fn -> agent_paused?(job_id, "sink") end, 3_000)
     assert {:ok, %{"status" => "paused"}} = MirrorNeuron.inspect_job(job_id)
     assert agent_pending_count(job_id, "sink") == 1
+    assert_runtime_workflow_manifest(job_id)
 
     assert {:ok, "resumed"} = MirrorNeuron.resume(job_id)
     assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 3_000)
     assert job["status"] == "completed"
     assert get_in(job, ["result", "output", "last_message", "text"]) == "approved across restart"
+    assert_runtime_workflow_manifest(job_id)
 
     assert {:ok, events} = MirrorNeuron.events(job_id)
     assert Enum.any?(events, &(&1["type"] == "job_recovery_scheduled"))
@@ -2570,6 +2522,129 @@ defmodule MirrorNeuron.RuntimeTest do
       {:ok, %{"status" => "running"}} -> true
       _ -> false
     end
+  end
+
+  defp pause_resume_dag_manifest(graph_id) do
+    %{
+      "apiVersion" => "mn.workflow/v1",
+      "kind" => "Workflow",
+      "manifest_version" => "1.0",
+      "graph_id" => graph_id,
+      "job_name" => graph_id,
+      "contract" => %{"inputs" => [], "outputs" => [%{"id" => "review_packet"}]},
+      "flow" => %{
+        "steps" => [
+          workflow_test_step("intake_documents", "Intake Documents", [], ["documents"]),
+          workflow_test_step("manual_review", "Manual Review", ["documents"], ["approved_packet"]),
+          workflow_test_step("write_packet", "Write Packet", ["approved_packet"], [
+            "review_packet"
+          ])
+          |> Map.put("join", %{"mode" => "all_required"})
+        ],
+        "graph" => %{
+          "schema" => "mn.workflow.problem_graph/v1",
+          "mode" => "static_dag",
+          "source" => "intake_documents",
+          "sink" => "write_packet",
+          "execution" => %{"strategy" => "parallel", "join_default" => "all_required"},
+          "dynamic" => %{
+            "enabled" => false,
+            "patch_events" => [],
+            "apply_at" => "between_steps"
+          },
+          "edges" => [
+            %{
+              "id" => "edge-intake-review",
+              "from" => "intake_documents",
+              "to" => "manual_review",
+              "required" => true,
+              "accepts" => ["done"]
+            },
+            %{
+              "id" => "edge-review-write",
+              "from" => "manual_review",
+              "to" => "write_packet",
+              "required" => true,
+              "accepts" => ["done"]
+            }
+          ]
+        }
+      },
+      "runtime" => %{
+        "bindings" => %{
+          "manual_review" => %{
+            "type" => "team",
+            "strategy" => "sequential",
+            "workers" => [
+              %{
+                "id" => "router_worker",
+                "node" => "root",
+                "role" => "router",
+                "required" => true
+              },
+              %{
+                "id" => "sink_worker",
+                "node" => "sink",
+                "role" => "aggregator",
+                "required" => true
+              }
+            ]
+          }
+        }
+      },
+      "nodes" => [
+        %{
+          "node_id" => "root",
+          "agent_type" => "router",
+          "role" => "root_coordinator",
+          "config" => %{"emit_type" => "manual_result"}
+        },
+        %{
+          "node_id" => "sink",
+          "agent_type" => "aggregator",
+          "config" => %{"complete_on_message" => true}
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+  end
+
+  defp workflow_test_step(id, title, requires, provides) do
+    %{
+      "id" => id,
+      "title" => title,
+      "requires" => requires,
+      "provides" => provides,
+      "control" => %{
+        "required" => true,
+        "timeout_seconds" => 300,
+        "retry" => %{"max_attempts" => 2, "backoff" => "fixed", "delay_seconds" => 0},
+        "failure_policy" => "fail_workflow",
+        "uncertainty" => %{"policy" => "continue", "threshold" => 0.0}
+      }
+    }
+  end
+
+  defp assert_runtime_workflow_manifest(job_id) do
+    assert {:ok, job} = RedisStore.fetch_job(job_id)
+    assert get_in(job, ["manifest", "apiVersion"]) == "mn.workflow/v1"
+    assert get_in(job, ["manifest", "kind"]) == "Workflow"
+    assert get_in(job, ["manifest", "contract", "outputs"]) == [%{"id" => "review_packet"}]
+    assert get_in(job, ["manifest", "flow", "graph", "schema"]) == "mn.workflow.problem_graph/v1"
+    assert get_in(job, ["manifest", "flow", "graph", "dynamic", "enabled"]) == false
+
+    assert get_in(job, ["manifest", "flow", "graph", "edges"]) |> Enum.map(& &1["id"]) == [
+             "edge-intake-review",
+             "edge-review-write"
+           ]
+
+    assert get_in(job, ["manifest", "flow", "steps"])
+           |> Enum.find(&(&1["id"] == "write_packet"))
+           |> get_in(["join", "mode"]) == "all_required"
+
+    assert get_in(job, ["manifest", "runtime", "bindings", "manual_review", "workers"])
+           |> Enum.map(& &1["id"]) == ["router_worker", "sink_worker"]
   end
 
   defp worker_pid(job_id) do

@@ -1,9 +1,14 @@
 defmodule MirrorNeuron.Manifest do
   defstruct [
+    :api_version,
+    :kind,
     :manifest_version,
     :graph_id,
     :job_name,
     :type,
+    :contract,
+    :flow,
+    :runtime,
     :required_context_engine,
     :requirements,
     :input_validation,
@@ -19,12 +24,45 @@ defmodule MirrorNeuron.Manifest do
     :policies,
     :entrypoints,
     :initial_inputs,
-    :reload
+    :reload,
+    :extensions
   ]
 
   alias MirrorNeuron.{AgentRegistry, AgentTemplates, ResourceSpec}
   alias MirrorNeuron.ServiceSpec
   alias MirrorNeuron.Runtime.{DeploymentPolicy, LifecyclePolicy, RouteCondition, SchedulePolicy}
+
+  @known_top_level_keys MapSet.new([
+                          "apiVersion",
+                          "kind",
+                          "manifest_version",
+                          "graph_id",
+                          "job_name",
+                          "type",
+                          "contract",
+                          "flow",
+                          "runtime",
+                          "requiredContextEngine",
+                          "required_context_engine",
+                          "requirements",
+                          "requirments",
+                          "input_validation",
+                          "inputValidation",
+                          "services",
+                          "required_services",
+                          "requiredServices",
+                          "deployment",
+                          "schedule",
+                          "triggers",
+                          "parameterized",
+                          "metadata",
+                          "nodes",
+                          "edges",
+                          "policies",
+                          "entrypoints",
+                          "initial_inputs",
+                          "reload"
+                        ])
 
   def load(%__MODULE__{} = manifest), do: {:ok, manifest}
 
@@ -73,7 +111,10 @@ defmodule MirrorNeuron.Manifest do
   end
 
   def to_map(%__MODULE__{} = manifest) do
-    %{
+    json_safe(manifest.extensions || %{})
+    |> maybe_put("apiVersion", manifest.api_version)
+    |> maybe_put("kind", manifest.kind)
+    |> Map.merge(%{
       "manifest_version" => manifest.manifest_version,
       "type" => manifest.type,
       "graph_id" => manifest.graph_id,
@@ -94,15 +135,23 @@ defmodule MirrorNeuron.Manifest do
       "entrypoints" => manifest.entrypoints,
       "initial_inputs" => json_safe(manifest.initial_inputs),
       "reload" => json_safe(manifest.reload)
-    }
+    })
+    |> maybe_put("contract", manifest.contract)
+    |> maybe_put("flow", manifest.flow)
+    |> maybe_put("runtime", manifest.runtime)
   end
 
   defp normalize_and_validate(raw) do
     manifest = %__MODULE__{
+      api_version: Map.get(raw, "apiVersion"),
+      kind: Map.get(raw, "kind"),
       manifest_version: Map.get(raw, "manifest_version"),
       type: normalize_type(Map.get(raw, "type")),
       graph_id: Map.get(raw, "graph_id"),
       job_name: Map.get(raw, "job_name") || Map.get(raw, "graph_id"),
+      contract: normalize_optional_map(Map.get(raw, "contract")),
+      flow: normalize_optional_map(Map.get(raw, "flow")),
+      runtime: normalize_optional_map(Map.get(raw, "runtime")),
       required_context_engine:
         normalize_required_context_engine(
           Map.get(raw, "requiredContextEngine", Map.get(raw, "required_context_engine", false))
@@ -124,7 +173,8 @@ defmodule MirrorNeuron.Manifest do
       policies: Map.get(raw, "policies", %{}),
       entrypoints: normalize_entrypoints(Map.get(raw, "entrypoints"), Map.get(raw, "nodes", [])),
       initial_inputs: normalize_initial_inputs(Map.get(raw, "initial_inputs", %{})),
-      reload: normalize_reload(Map.get(raw, "reload", %{}))
+      reload: normalize_reload(Map.get(raw, "reload", %{})),
+      extensions: extension_fields(raw)
     }
 
     legacy_errors = legacy_manifest_errors(raw)
@@ -528,6 +578,17 @@ defmodule MirrorNeuron.Manifest do
 
   defp normalize_parameterized(_parameterized), do: %{}
 
+  defp normalize_optional_map(value) when is_map(value), do: json_safe(value)
+  defp normalize_optional_map(_value), do: nil
+
+  defp extension_fields(raw) when is_map(raw) do
+    raw
+    |> Enum.reject(fn {key, _value} -> MapSet.member?(@known_top_level_keys, key) end)
+    |> Enum.into(%{}, fn {key, value} -> {key, json_safe(value)} end)
+  end
+
+  defp extension_fields(_raw), do: %{}
+
   defp normalize_type(nil), do: "batch"
   defp normalize_type(value) when is_binary(value), do: String.downcase(value)
   defp normalize_type(value), do: value
@@ -547,6 +608,9 @@ defmodule MirrorNeuron.Manifest do
   defp json_safe(nil), do: nil
   defp json_safe(value) when is_atom(value), do: Atom.to_string(value)
   defp json_safe(value), do: inspect(value)
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, json_safe(value))
 
   defp maybe_add_error(errors, true, message), do: [message | errors]
   defp maybe_add_error(errors, false, _message), do: errors

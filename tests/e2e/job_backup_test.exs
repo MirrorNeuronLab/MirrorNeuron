@@ -57,7 +57,48 @@ defmodule MirrorNeuron.JobBackupTest do
     assert [%{"agent_id" => "node1"}] = backup["runtime"]["agents"]
     assert [%{"type" => "job_paused"}] = backup["runtime"]["events"]
     assert is_binary(bundle_files["manifest.json"])
+    exported_manifest = Jason.decode!(bundle_files["manifest.json"])
+    assert exported_manifest["apiVersion"] == "mn.workflow/v1"
+
+    assert get_in(exported_manifest, ["flow", "graph", "schema"]) ==
+             "mn.workflow.problem_graph/v1"
+
+    assert get_in(exported_manifest, ["runtime", "bindings", "intake", "workers"])
+           |> hd()
+           |> Map.get("id") == "intake_worker"
+
     assert bundle_files["payloads/dummy.txt"] == "hello"
+  end
+
+  test "export rejects embedded workflow manifests that lost DAG fields" do
+    job_id = "backup-incomplete-workflow-#{System.unique_integer([:positive])}"
+
+    incomplete_manifest = %{
+      "apiVersion" => "mn.workflow/v1",
+      "kind" => "Workflow",
+      "manifest_version" => "1.0",
+      "graph_id" => "incomplete_workflow",
+      "entrypoints" => ["node1"],
+      "nodes" => [%{"node_id" => "node1", "agent_type" => "router"}],
+      "edges" => []
+    }
+
+    assert {:ok, _job} =
+             RedisStore.persist_job(job_id, %{
+               "job_id" => job_id,
+               "graph_id" => "incomplete_workflow",
+               "job_name" => "incomplete_workflow",
+               "status" => "paused",
+               "submitted_at" => Runtime.timestamp(),
+               "updated_at" => Runtime.timestamp(),
+               "root_agent_ids" => ["node1"],
+               "manifest" => incomplete_manifest
+             })
+
+    on_exit(fn -> RedisStore.delete_job(job_id) end)
+
+    assert {:error, reason} = JobBackup.export_job(job_id)
+    assert reason =~ "embedded mn.workflow/v1 manifest is missing contract, flow, or runtime"
   end
 
   test "restore generates a new paused clone with provenance and rewritten runtime", %{
@@ -89,6 +130,13 @@ defmodule MirrorNeuron.JobBackupTest do
 
     assert get_in(restored_job, ["manifest", "metadata", "mn_cli", "blueprint_run_id"]) ==
              "restored-run"
+
+    assert get_in(restored_job, ["manifest", "flow", "graph", "schema"]) ==
+             "mn.workflow.problem_graph/v1"
+
+    assert get_in(restored_job, ["manifest", "runtime", "bindings", "intake", "workers"])
+           |> hd()
+           |> Map.get("id") == "intake_worker"
 
     assert get_in(restored_job, ["restore_provenance", "source", "job_id"]) == source_job_id
 
@@ -153,8 +201,55 @@ defmodule MirrorNeuron.JobBackupTest do
     File.mkdir_p!(payloads_dir)
 
     manifest = %{
+      "apiVersion" => "mn.workflow/v1",
+      "kind" => "Workflow",
       "manifest_version" => "1.0",
       "graph_id" => graph_id,
+      "contract" => %{
+        "inputs" => %{"folder" => %{"type" => "string"}},
+        "outputs" => %{"primary" => %{"path" => "final_artifact.json"}}
+      },
+      "flow" => %{
+        "entrypoint" => "intake",
+        "graph" => %{
+          "schema" => "mn.workflow.problem_graph/v1",
+          "mode" => "static_dag",
+          "source" => "intake",
+          "sink" => "write",
+          "execution" => %{"strategy" => "parallel"},
+          "dynamic" => %{"enabled" => false},
+          "edges" => [%{"id" => "intake-to-write", "from" => "intake", "to" => "write"}]
+        },
+        "steps" => [
+          %{
+            "id" => "intake",
+            "kind" => "stage",
+            "label" => "Intake",
+            "goal" => "Collect inputs",
+            "action" => "intake",
+            "run" => "intake",
+            "control" => %{"required" => true, "retry" => %{"max_attempts" => 1}}
+          },
+          %{
+            "id" => "write",
+            "kind" => "sink",
+            "label" => "Write",
+            "goal" => "Write output",
+            "action" => "write",
+            "run" => "write",
+            "join" => %{"mode" => "all_required"}
+          }
+        ]
+      },
+      "runtime" => %{
+        "bindings" => %{
+          "intake" => %{
+            "type" => "team",
+            "workers" => [%{"id" => "intake_worker", "role" => "Intake worker"}]
+          },
+          "write" => %{"type" => "single", "workers" => [%{"id" => "writer", "role" => "Writer"}]}
+        }
+      },
       "metadata" => %{
         "mn_cli" => %{
           "blueprint_id" => "source_blueprint",
