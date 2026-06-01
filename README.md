@@ -1,8 +1,21 @@
 # MirrorNeuron Core
 
-MirrorNeuron Core is the Elixir/OTP runtime for durable, message-driven AI
-workflows. It schedules workflow agents, routes messages, records events,
-persists job state through Redis, and exposes gRPC services.
+MirrorNeuron Core is the Elixir/OTP runtime at the center of the MirrorNeuron
+project: a durable, message-driven runtime for building AI workflows that need
+to keep running, recover cleanly, and coordinate work across agents and
+services.
+
+Core schedules workflow agents, routes messages, records events, persists job
+state through Redis, manages clustered runtime behavior, and exposes gRPC
+services for the surrounding ecosystem. It is the runtime layer used by the
+MirrorNeuron CLI, Python SDK, API services, Otterdesk app, blueprints, agents,
+and skills.
+
+If you are new to the project, start with the documentation repo:
+[MirrorNeuronLab/mn-docs](https://github.com/MirrorNeuronLab/mn-docs). It
+explains the overall architecture, component responsibilities, runtime model,
+deployment expectations, and how the core runtime fits with the rest of the
+MirrorNeuron stack.
 
 > Important: MirrorNeuron is in alpha. APIs, manifests, release artifacts, and
 > ecosystem components may change between releases.
@@ -25,6 +38,7 @@ mix test
 
 ## Details
 
+- [MirrorNeuron Documentation](https://github.com/MirrorNeuronLab/mn-docs)
 - [MirrorNeuron Component Guide](../mn-docs/component-guide.md#mirrorneuron-core)
 - [Runtime Architecture](../mn-docs/runtime-architecture.md)
 - [Cluster Architecture](../mn-docs/cluster_architecture.md)
