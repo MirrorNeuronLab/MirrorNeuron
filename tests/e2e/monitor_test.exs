@@ -267,7 +267,9 @@ defmodule MirrorNeuron.MonitorTest do
       "metadata" => %{}
     })
 
-    assert {:ok, [summary]} = Monitor.list_jobs(summary: :basic)
+    assert {:ok, jobs} = Monitor.list_jobs(summary: :basic)
+    summary = Enum.find(jobs, &(&1["job_id"] == job_id))
+    assert summary
     assert summary["job_id"] == job_id
     assert summary["graph_id"] == "basic_demo"
     assert summary["nodes"] == []

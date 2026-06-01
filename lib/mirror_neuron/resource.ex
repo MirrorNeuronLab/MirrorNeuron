@@ -87,7 +87,8 @@ defmodule MirrorNeuron.Resource do
     %{
       "name" => name,
       "display_name" => node_display_name(node, platform, name),
-      "hostname" => Map.get(node, :hostname) || Map.get(node, "hostname") || map_get(platform, "hostname"),
+      "hostname" =>
+        Map.get(node, :hostname) || Map.get(node, "hostname") || map_get(platform, "hostname"),
       "self" => node_attr(node, :self?, false) || node_attr(node, :self, false),
       "status" => Map.get(node, :status) || Map.get(node, "status") || "healthy",
       "scheduling_eligible" => node_attr(node, :scheduling_eligible, true),

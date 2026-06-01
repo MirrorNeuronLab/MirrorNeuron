@@ -204,7 +204,10 @@ defmodule MirrorNeuron.Manifest do
         |> Map.put("nodes", nodes)
         |> Map.put("edges", Map.get(binding, "routes", Map.get(binding, "worker_edges", [])))
         |> Map.put("entrypoints", entrypoints)
-        |> Map.put("initial_inputs", Map.get(binding, "seed_inputs", Map.get(binding, "initial_inputs", %{})))
+        |> Map.put(
+          "initial_inputs",
+          Map.get(binding, "seed_inputs", Map.get(binding, "initial_inputs", %{}))
+        )
       else
         raw
       end

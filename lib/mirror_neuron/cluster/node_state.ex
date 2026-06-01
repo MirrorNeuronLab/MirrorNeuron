@@ -26,7 +26,11 @@ defmodule MirrorNeuron.Cluster.NodeState do
     case fetch(node_name) do
       {:ok, %{"operator_disconnect" => true} = existing} ->
         if Map.get(attrs, "operator_disconnect") == false do
-          mark(node_name, "healthy", Map.merge(existing, attrs) |> Map.put("scheduling_eligible", true))
+          mark(
+            node_name,
+            "healthy",
+            Map.merge(existing, attrs) |> Map.put("scheduling_eligible", true)
+          )
         else
           mark(node_name, Map.get(existing, "status", "disconnected"), Map.merge(existing, attrs))
         end
@@ -148,6 +152,7 @@ defmodule MirrorNeuron.Cluster.NodeState do
   end
 
   defp clears_operator_disconnect?(attrs) do
-    Map.get(attrs, "operator_disconnect") == false or Map.get(attrs, :operator_disconnect) == false
+    Map.get(attrs, "operator_disconnect") == false or
+      Map.get(attrs, :operator_disconnect) == false
   end
 end

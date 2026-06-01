@@ -22,7 +22,8 @@ defmodule MirrorNeuron.Cluster.Manager do
               drain: Map.get(state, "drain"),
               connected_nodes: runtime_connected_nodes(node),
               self?: node == Node.self(),
-              scheduler_hint: if(node == Node.self(), do: "cluster_member", else: "remote_member"),
+              scheduler_hint:
+                if(node == Node.self(), do: "cluster_member", else: "remote_member"),
               executor_pools: lease_stats,
               hardware: hardware_info
             }
