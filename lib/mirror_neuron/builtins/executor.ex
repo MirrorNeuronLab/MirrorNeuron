@@ -16,6 +16,7 @@ defmodule MirrorNeuron.Builtins.Executor do
     "connection reset",
     "connection refused",
     "timed out",
+    "agent beacon deadline exceeded",
     "deadline exceeded",
     "unavailable"
   ]
@@ -88,30 +89,44 @@ defmodule MirrorNeuron.Builtins.Executor do
           "input" => payload
         }
 
-        {structured_state, structured_actions} =
-          structured_actions(result, state, normalized_message, output_payload)
+        case structured_actions(result, state, normalized_message, output_payload) do
+          {:ok, structured_state, structured_actions} ->
+            {structured_output_actions, structured_control_actions} =
+              Enum.split_with(structured_actions, &output_action?/1)
 
-        actions =
-          [
-            {:event, :sandbox_job_completed,
+            actions =
+              [
+                {:event, :sandbox_job_completed,
+                 %{
+                   "sandbox_name" => result["sandbox_name"],
+                   "exit_code" => result["exit_code"],
+                   "attempts" => attempts,
+                   "lease_id" => lease["lease_id"],
+                   "pool" => lease["pool"]
+                 }}
+              ] ++
+                structured_control_actions ++
+                implicit_workflow_step_completion_actions(
+                  context,
+                  output_payload,
+                  structured_actions
+                ) ++
+                default_output_actions(state.config, output_payload) ++
+                structured_output_actions
+
+            {:ok,
              %{
-               "sandbox_name" => result["sandbox_name"],
-               "exit_code" => result["exit_code"],
-               "attempts" => attempts,
-               "lease_id" => lease["lease_id"],
-               "pool" => lease["pool"]
-             }}
-          ] ++ default_output_actions(state.config, output_payload) ++ structured_actions
+               state
+               | runs: state.runs + 1,
+                 agent_state: structured_state,
+                 last_output_payload: output_payload,
+                 last_result: Map.put(Map.put(result, "attempts", attempts), "lease", lease),
+                 last_error: nil
+             }, actions}
 
-        {:ok,
-         %{
-           state
-           | runs: state.runs + 1,
-             agent_state: structured_state,
-             last_output_payload: output_payload,
-             last_result: Map.put(Map.put(result, "attempts", attempts), "lease", lease),
-             last_error: nil
-         }, actions}
+          {:error, reason} ->
+            {:error, reason, %{state | runs: state.runs + 1, last_error: inspect(reason)}}
+        end
 
       {:error, reason, attempts} ->
         {:error, enrich_error(reason, attempts),
@@ -172,12 +187,12 @@ defmodule MirrorNeuron.Builtins.Executor do
           ]
       end
 
-    output_actions ++ maybe_complete(config, payload)
+    output_actions ++ maybe_complete_run(config, payload)
   end
 
-  defp maybe_complete(config, payload) do
-    if Map.get(config, "complete_job", false) do
-      [{:complete_job, payload}]
+  defp maybe_complete_run(config, payload) do
+    if Map.get(config, "terminal_sink", false) and Map.get(config, "complete_run", false) do
+      [{:complete_run, payload}]
     else
       []
     end
@@ -216,7 +231,10 @@ defmodule MirrorNeuron.Builtins.Executor do
            agent_state: state.agent_state,
            bundle_root: context.bundle_root,
            manifest_path: context.manifest_path,
-           payloads_path: context.payloads_path
+           payloads_path: context.payloads_path,
+           event_callback: fn event_type, event_payload ->
+             report_event(context, event_type, event_payload)
+           end
          ) do
       {:ok, result} ->
         {:ok, result, attempt}
@@ -233,10 +251,13 @@ defmodule MirrorNeuron.Builtins.Executor do
 
   defp structured_actions(result, state, incoming, default_payload) do
     case decode_structured_stdout(result) do
-      nil ->
-        {state.agent_state, []}
+      :ignore ->
+        {:ok, state.agent_state, []}
 
-      payload ->
+      {:error, reason} ->
+        {:error, reason}
+
+      {:ok, payload} ->
         next_state = Map.get(payload, "next_state", state.agent_state)
 
         actions =
@@ -244,7 +265,7 @@ defmodule MirrorNeuron.Builtins.Executor do
             structured_emit_actions(payload, incoming) ++
             structured_completion_actions(payload, default_payload)
 
-        {next_state, actions}
+        {:ok, next_state, actions}
     end
   end
 
@@ -326,11 +347,17 @@ defmodule MirrorNeuron.Builtins.Executor do
 
   defp structured_completion_actions(payload, default_payload) do
     cond do
-      Map.get(payload, "complete_job") != nil ->
-        [{:complete_job, payload["complete_job"]}]
+      Map.get(payload, "complete_step") == true ->
+        [{:complete_step, default_payload}]
 
-      Map.get(payload, "complete_job?", false) ->
-        [{:complete_job, default_payload}]
+      Map.get(payload, "complete_step") not in [nil, false] ->
+        [{:complete_step, payload["complete_step"]}]
+
+      Map.get(payload, "complete_run") == true ->
+        [{:complete_run, default_payload}]
+
+      Map.get(payload, "complete_run") not in [nil, false] ->
+        [{:complete_run, payload["complete_run"]}]
 
       true ->
         []
@@ -339,22 +366,67 @@ defmodule MirrorNeuron.Builtins.Executor do
 
   defp decode_structured_stdout(result) do
     with stdout when is_binary(stdout) and stdout != "" <- Map.get(result, "stdout"),
-         {:ok, decoded} <- Jason.decode(stdout),
-         true <- structured_payload?(decoded) do
-      decoded
+         {:ok, decoded} <- Jason.decode(stdout) do
+      cond do
+        legacy_completion_payload?(decoded) ->
+          {:error,
+           %{
+             "error" => "unsupported structured output key",
+             "unsupported_keys" => legacy_completion_keys(decoded),
+             "message" => "Use complete_step or complete_run instead of complete_job"
+           }}
+
+        structured_payload?(decoded) ->
+          {:ok, decoded}
+
+        true ->
+          :ignore
+      end
     else
-      _ -> nil
+      _ -> :ignore
     end
   end
 
   defp structured_payload?(decoded) when is_map(decoded) do
     Enum.any?(
-      ["emit_messages", "events", "next_state", "complete_job", "complete_job?"],
+      ["emit_messages", "events", "next_state", "complete_step", "complete_run"],
       &Map.has_key?(decoded, &1)
     )
   end
 
   defp structured_payload?(_decoded), do: false
+
+  defp legacy_completion_payload?(decoded) when is_map(decoded) do
+    Enum.any?(["complete_job", "complete_job?"], &Map.has_key?(decoded, &1))
+  end
+
+  defp legacy_completion_payload?(_decoded), do: false
+
+  defp legacy_completion_keys(decoded) when is_map(decoded) do
+    Enum.filter(["complete_job", "complete_job?"], &Map.has_key?(decoded, &1))
+  end
+
+  defp output_action?({:emit, _, _, _}), do: true
+  defp output_action?({:emit, _, _}), do: true
+  defp output_action?({:emit_to, _, _, _, _}), do: true
+  defp output_action?({:emit_to, _, _, _}), do: true
+  defp output_action?({:emit_message, _}), do: true
+  defp output_action?(_action), do: false
+
+  defp implicit_workflow_step_completion_actions(context, payload, structured_actions) do
+    workflow = Map.get(context, :workflow)
+
+    cond do
+      not is_map(workflow) or map_size(workflow) == 0 ->
+        []
+
+      Enum.any?(structured_actions, &match?({:complete_step, _}, &1)) ->
+        []
+
+      true ->
+        [{:complete_step, payload}]
+    end
+  end
 
   defp max_attempts(config) do
     case Map.get(config, "max_attempts", 1) do
@@ -455,7 +527,29 @@ defmodule MirrorNeuron.Builtins.Executor do
   end
 
   defp report_event(context, event_type, payload) do
-    send(context.coordinator, {:agent_event, context.node.node_id, event_type, payload})
+    send(
+      context.coordinator,
+      {:agent_event, context.node.node_id, event_type, workflow_payload(context, payload)}
+    )
+  end
+
+  defp workflow_payload(context, payload) do
+    workflow =
+      case Map.get(context, :workflow) do
+        workflow when is_map(workflow) -> workflow
+        _ -> %{}
+      end
+
+    cond do
+      map_size(workflow) == 0 ->
+        payload
+
+      is_map(payload) ->
+        Map.merge(workflow, payload)
+
+      true ->
+        workflow
+    end
   end
 
   defp maybe_put_int(opts, _key, nil), do: opts

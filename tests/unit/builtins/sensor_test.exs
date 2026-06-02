@@ -43,11 +43,11 @@ defmodule MirrorNeuron.Builtins.SensorTest do
     assert Keyword.get(opts, :headers) == %{"x-test" => "1"}
   end
 
-  test "handle_message completes job if configured and threshold reached" do
+  test "handle_message completes run if configured and threshold reached" do
     node = %{
       config: %{
         "complete_after" => 2,
-        "complete_job" => true
+        "complete_run" => true
       }
     }
 
@@ -60,7 +60,7 @@ defmodule MirrorNeuron.Builtins.SensorTest do
     assert state1.observations == 1
 
     refute Enum.any?(actions1, fn
-             {type, _} -> type == :complete_job
+             {type, _} -> type == :complete_run
              _ -> false
            end)
 
@@ -70,10 +70,10 @@ defmodule MirrorNeuron.Builtins.SensorTest do
 
     complete_action =
       Enum.find(actions2, fn
-        {:complete_job, _} -> true
+        {:complete_run, _} -> true
         _ -> false
       end)
 
-    assert {:complete_job, %{"count" => 2, "last_message" => "hello"}} = complete_action
+    assert {:complete_run, %{"count" => 2, "last_message" => "hello"}} = complete_action
   end
 end

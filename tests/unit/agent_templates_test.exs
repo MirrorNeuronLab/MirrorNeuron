@@ -84,7 +84,7 @@ defmodule MirrorNeuron.AgentTemplatesTest do
     assert actions2 == [
              {:event, :custom_reduce, %{"count" => 2}},
              {:event, :checkpointed, %{"ok" => true}},
-             {:complete_job, %{"count" => 2, "last" => %{"value" => 2}}}
+             {:complete_run, %{"count" => 2, "last" => %{"value" => 2}}}
            ]
   end
 

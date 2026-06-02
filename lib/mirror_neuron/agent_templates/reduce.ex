@@ -25,7 +25,7 @@ defmodule MirrorNeuron.AgentTemplates.Reduce do
 
     if should_complete?(next_state, messages) do
       {:ok, next_state,
-       actions ++ [{:complete_job, build_result.(messages, state.config, payload)}]}
+       actions ++ [{:complete_run, build_result.(messages, state.config, payload)}]}
     else
       {:ok, next_state, actions}
     end

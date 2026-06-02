@@ -7,7 +7,8 @@ defmodule MirrorNeuron.Agent do
           | {:emit_message, map()}
           | {:event, atom(), map()}
           | {:checkpoint, map()}
-          | {:complete_job, map()}
+          | {:complete_step, map()}
+          | {:complete_run, map()}
 
   @callback init(node :: map()) :: {:ok, map()} | {:error, term()}
   @callback handle_message(message :: map(), state :: map(), context :: map()) ::

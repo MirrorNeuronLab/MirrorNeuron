@@ -23,7 +23,7 @@ defmodule MirrorNeuron.AggregatorTest do
         %{}
       )
 
-    refute Enum.any?(actions1, &match?({:complete_job, _}, &1))
+    refute Enum.any?(actions1, &match?({:complete_run, _}, &1))
 
     {:ok, _state2, actions2} =
       Aggregator.handle_message(
@@ -40,7 +40,7 @@ defmodule MirrorNeuron.AggregatorTest do
 
     assert result["count"] == 2
     assert result["messages"] == [%{"value" => 1}, %{"value" => 2}]
-    refute Enum.any?(actions2, &match?({:complete_job, _}, &1))
+    refute Enum.any?(actions2, &match?({:complete_run, _}, &1))
   end
 
   test "ignores duplicate replayed executor results by agent_id" do

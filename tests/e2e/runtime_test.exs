@@ -73,7 +73,7 @@ defmodule MirrorNeuron.RuntimeTest do
            Jason.encode!(%{
              "next_state" => %{"count" => count},
              "events" => [%{"type" => "stream_chunk_processed", "payload" => %{"count" => count}}],
-             "complete_job" => completion
+             "complete_run" => completion
            }),
          "stderr" => "",
          "logs" => ""
@@ -141,7 +141,7 @@ defmodule MirrorNeuron.RuntimeTest do
              "exit_code" => 0,
              "stdout" =>
                Jason.encode!(%{
-                 "complete_job" => %{
+                 "complete_run" => %{
                    "recovered" => true,
                    "invocation" => invocation
                  }
@@ -190,7 +190,7 @@ defmodule MirrorNeuron.RuntimeTest do
              "exit_code" => 0,
              "stdout" =>
                Jason.encode!(%{
-                 "complete_job" => %{
+                 "complete_run" => %{
                    "recovered" => true,
                    "invocation" => invocation
                  }
@@ -210,7 +210,7 @@ defmodule MirrorNeuron.RuntimeTest do
        %{
          "sandbox_name" => "delayed-complete",
          "exit_code" => 0,
-         "stdout" => Jason.encode!(%{"complete_job" => %{"done" => true}}),
+         "stdout" => Jason.encode!(%{"complete_run" => %{"done" => true}}),
          "stderr" => "",
          "logs" => ""
        }}
@@ -225,7 +225,7 @@ defmodule MirrorNeuron.RuntimeTest do
        %{
          "sandbox_name" => "long-sleep",
          "exit_code" => 0,
-         "stdout" => Jason.encode!(%{"complete_job" => %{"done" => true}}),
+         "stdout" => Jason.encode!(%{"complete_run" => %{"done" => true}}),
          "stderr" => "",
          "logs" => ""
        }}
@@ -240,7 +240,7 @@ defmodule MirrorNeuron.RuntimeTest do
          "exit_code" => 0,
          "stdout" =>
            Jason.encode!(%{
-             "complete_job" => %{
+             "complete_run" => %{
                "retried" => true,
                "payload" => payload,
                "attempt" => Keyword.get(opts, :attempt)
@@ -260,10 +260,54 @@ defmodule MirrorNeuron.RuntimeTest do
          "exit_code" => 0,
          "stdout" =>
            Jason.encode!(%{
-             "complete_job" => %{
+             "complete_run" => %{
                "profile" => Map.get(config, "execution_profile"),
                "image" => Map.get(config, "from")
              }
+           }),
+         "stderr" => "",
+         "logs" => ""
+       }}
+    end
+  end
+
+  defmodule WorkflowFirstRunner do
+    def run(_payload, _config, _opts) do
+      {:ok,
+       %{
+         "sandbox_name" => "workflow-first",
+         "exit_code" => 0,
+         "stdout" =>
+           Jason.encode!(%{
+             "emit_messages" => [
+               %{
+                 "type" => "step_a_done",
+                 "body" => %{"from" => "step_a"}
+               }
+             ],
+             "complete_step" => %{"from" => "step_a"}
+           }),
+         "stderr" => "",
+         "logs" => ""
+       }}
+    end
+  end
+
+  defmodule WorkflowSecondRunner do
+    def run(payload, _config, _opts) do
+      {:ok,
+       %{
+         "sandbox_name" => "workflow-second",
+         "exit_code" => 0,
+         "stdout" =>
+           Jason.encode!(%{
+             "emit_messages" => [
+               %{
+                 "type" => "workflow_done",
+                 "body" => %{"done" => true, "payload" => payload}
+               }
+             ],
+             "complete_step" => %{"done" => true, "payload" => payload}
            }),
          "stderr" => "",
          "logs" => ""
@@ -281,7 +325,7 @@ defmodule MirrorNeuron.RuntimeTest do
          "exit_code" => 0,
          "stdout" =>
            Jason.encode!(%{
-             "complete_job" => %{
+             "complete_run" => %{
                "allocation" => Map.get(config, "__mirror_neuron_allocation"),
                "env" => environment
              }
@@ -347,7 +391,7 @@ defmodule MirrorNeuron.RuntimeTest do
             if next_state.count >= next_state.target do
               actions ++
                 [
-                  {:complete_job,
+                  {:complete_run,
                    %{
                      "count" => next_state.count,
                      "seen_ids" => next_state.seen_ids
@@ -450,7 +494,11 @@ defmodule MirrorNeuron.RuntimeTest do
         %{
           "node_id" => "sink",
           "agent_type" => "aggregator",
-          "config" => %{"complete_on_message" => true}
+          "config" => %{
+            "complete_on_message" => true,
+            "terminal_sink" => true,
+            "complete_run" => true
+          }
         }
       ],
       "edges" => [
@@ -477,6 +525,102 @@ defmodule MirrorNeuron.RuntimeTest do
     wait_until(fn -> agent_unregistered?(job_id, "ingress") end, 2_000)
     wait_until(fn -> agent_unregistered?(job_id, "router") end, 2_000)
     wait_until(fn -> agent_unregistered?(job_id, "sink") end, 2_000)
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "workflow steps complete through ledger before terminal sink completes the run" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "workflow_complete_guard",
+      "entrypoints" => ["step_a"],
+      "flow" => %{
+        "steps" => [
+          %{
+            "id" => "step_a",
+            "run" => "step_a",
+            "label" => "Step A",
+            "control" => %{
+              "required" => true,
+              "failure_policy" => "fail_workflow",
+              "timeout_seconds" => 5,
+              "retry" => %{"max_attempts" => 1, "backoff_seconds" => 0}
+            }
+          },
+          %{
+            "id" => "step_b",
+            "run" => "step_b",
+            "label" => "Step B",
+            "control" => %{
+              "required" => true,
+              "failure_policy" => "fail_workflow",
+              "timeout_seconds" => 5,
+              "retry" => %{"max_attempts" => 1, "backoff_seconds" => 0}
+            }
+          }
+        ],
+        "graph" => %{
+          "edges" => [
+            %{
+              "id" => "step_a_to_step_b",
+              "from" => "step_a",
+              "to" => "step_b",
+              "event" => "step_a_done",
+              "accepts" => ["done"],
+              "required" => true
+            }
+          ]
+        }
+      },
+      "nodes" => [
+        %{
+          "node_id" => "step_a",
+          "agent_type" => "executor",
+          "config" => %{
+            "runner_module" => WorkflowFirstRunner,
+            "output_message_type" => nil
+          }
+        },
+        %{
+          "node_id" => "step_b",
+          "agent_type" => "executor",
+          "config" => %{
+            "runner_module" => WorkflowSecondRunner,
+            "output_message_type" => nil
+          }
+        },
+        %{
+          "node_id" => "report_sink",
+          "agent_type" => "aggregator",
+          "config" => %{
+            "complete_on_message" => true,
+            "terminal_sink" => true,
+            "complete_run" => true
+          }
+        }
+      ],
+      "edges" => [
+        %{"from_node" => "step_a", "to_node" => "step_b", "message_type" => "step_a_done"},
+        %{
+          "from_node" => "step_b",
+          "to_node" => "report_sink",
+          "message_type" => "workflow_done"
+        }
+      ],
+      "initial_inputs" => %{"step_a" => [%{"value" => "start"}]},
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, job_id, job} = MirrorNeuron.run_manifest(manifest, await: true, timeout: 3_000)
+    assert job["status"] == "completed"
+    assert get_in(job, ["result", "agent_id"]) == "report_sink"
+    assert get_in(job, ["result", "output", "last_message", "done"]) == true
+    assert get_in(job, ["result", "output", "last_message", "payload", "from"]) == "step_a"
+    assert get_in(job, ["workflow_state", "steps", "step_a", "status"]) == "completed"
+    assert get_in(job, ["workflow_state", "steps", "step_b", "status"]) == "completed"
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+    assert Enum.count(events, &(&1["type"] == "job_completed")) == 1
 
     RedisStore.delete_job(job_id)
   end
@@ -620,7 +764,11 @@ defmodule MirrorNeuron.RuntimeTest do
         %{
           "node_id" => "sink",
           "agent_type" => "aggregator",
-          "config" => %{"complete_on_message" => true}
+          "config" => %{
+            "complete_on_message" => true,
+            "terminal_sink" => true,
+            "complete_run" => true
+          }
         }
       ],
       "edges" => [
@@ -657,7 +805,11 @@ defmodule MirrorNeuron.RuntimeTest do
         %{
           "node_id" => "sink",
           "agent_type" => "aggregator",
-          "config" => %{"complete_on_message" => true}
+          "config" => %{
+            "complete_on_message" => true,
+            "terminal_sink" => true,
+            "complete_run" => true
+          }
         }
       ],
       "edges" => [
@@ -696,12 +848,20 @@ defmodule MirrorNeuron.RuntimeTest do
         %{
           "node_id" => "finance_sink",
           "agent_type" => "aggregator",
-          "config" => %{"complete_on_message" => true}
+          "config" => %{
+            "complete_on_message" => true,
+            "terminal_sink" => true,
+            "complete_run" => true
+          }
         },
         %{
           "node_id" => "human_review",
           "agent_type" => "aggregator",
-          "config" => %{"complete_on_message" => true}
+          "config" => %{
+            "complete_on_message" => true,
+            "terminal_sink" => true,
+            "complete_run" => true
+          }
         }
       ],
       "edges" => [
@@ -847,7 +1007,11 @@ defmodule MirrorNeuron.RuntimeTest do
         %{
           "node_id" => "sink",
           "agent_type" => "aggregator",
-          "config" => %{"complete_on_message" => true}
+          "config" => %{
+            "complete_on_message" => true,
+            "terminal_sink" => true,
+            "complete_run" => true
+          }
         }
       ],
       "edges" => [],
@@ -896,7 +1060,11 @@ defmodule MirrorNeuron.RuntimeTest do
         %{
           "node_id" => "sink",
           "agent_type" => "aggregator",
-          "config" => %{"complete_on_message" => true}
+          "config" => %{
+            "complete_on_message" => true,
+            "terminal_sink" => true,
+            "complete_run" => true
+          }
         }
       ],
       "edges" => [],
@@ -1249,7 +1417,7 @@ defmodule MirrorNeuron.RuntimeTest do
           "node_id" => "sink",
           "agent_type" => "aggregator",
           "role" => "root_coordinator",
-          "config" => %{"complete_after" => 1}
+          "config" => %{"complete_after" => 1, "terminal_sink" => true, "complete_run" => true}
         }
       ],
       "edges" => [],
@@ -1439,7 +1607,7 @@ defmodule MirrorNeuron.RuntimeTest do
           "node_id" => "sink",
           "agent_type" => "aggregator",
           "role" => "root_coordinator",
-          "config" => %{"complete_after" => 1}
+          "config" => %{"complete_after" => 1, "terminal_sink" => true, "complete_run" => true}
         }
       ],
       "edges" => [],
@@ -1659,7 +1827,7 @@ defmodule MirrorNeuron.RuntimeTest do
           "node_id" => "sink",
           "agent_type" => "aggregator",
           "role" => "root_coordinator",
-          "config" => %{"complete_after" => 2}
+          "config" => %{"complete_after" => 2, "terminal_sink" => true, "complete_run" => true}
         }
       ],
       "edges" => [],
@@ -1987,7 +2155,7 @@ defmodule MirrorNeuron.RuntimeTest do
         %{
           "node_id" => "sink",
           "agent_type" => "aggregator",
-          "config" => %{"complete_after" => 10}
+          "config" => %{"complete_after" => 10, "terminal_sink" => true, "complete_run" => true}
         }
       ],
       "edges" => [],
@@ -2029,7 +2197,11 @@ defmodule MirrorNeuron.RuntimeTest do
         %{
           "node_id" => "sink",
           "agent_type" => "aggregator",
-          "config" => %{"complete_on_message" => true}
+          "config" => %{
+            "complete_on_message" => true,
+            "terminal_sink" => true,
+            "complete_run" => true
+          }
         }
       ],
       "edges" => [],
@@ -2286,7 +2458,7 @@ defmodule MirrorNeuron.RuntimeTest do
           %{
             "node_id" => "sink",
             "agent_type" => "aggregator",
-            "config" => %{"complete_after" => 4}
+            "config" => %{"complete_after" => 4, "terminal_sink" => true, "complete_run" => true}
           }
         ] ++
           Enum.map(1..4, fn index ->
@@ -2373,7 +2545,7 @@ defmodule MirrorNeuron.RuntimeTest do
       node_id: "sink",
       agent_type: "aggregator",
       role: "sink",
-      config: %{"complete_on_message" => true}
+      config: %{"complete_on_message" => true, "terminal_sink" => true, "complete_run" => true}
     }
 
     coordinator =
@@ -2786,7 +2958,11 @@ defmodule MirrorNeuron.RuntimeTest do
         %{
           "node_id" => "sink",
           "agent_type" => "aggregator",
-          "config" => %{"complete_on_message" => true}
+          "config" => %{
+            "complete_on_message" => true,
+            "terminal_sink" => true,
+            "complete_run" => true
+          }
         }
       ],
       "edges" => [],

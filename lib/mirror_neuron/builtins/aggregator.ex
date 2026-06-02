@@ -38,7 +38,7 @@ defmodule MirrorNeuron.Builtins.Aggregator do
         result = aggregate(messages, state.config, payload)
 
         completion_actions =
-          maybe_emit_aggregate(state.config, result) ++ maybe_complete_job(state.config, result)
+          maybe_emit_aggregate(state.config, result) ++ maybe_complete_run(state.config, result)
 
         {:ok, next_state, actions ++ completion_actions}
       else
@@ -70,15 +70,9 @@ defmodule MirrorNeuron.Builtins.Aggregator do
     end
   end
 
-  defp maybe_complete_job(config, result) do
-    default =
-      case Map.fetch(config, "output_message_type") do
-        {:ok, _message_type} -> false
-        :error -> true
-      end
-
-    if Map.get(config, "complete_job", default) do
-      [{:complete_job, result}]
+  defp maybe_complete_run(config, result) do
+    if Map.get(config, "terminal_sink", false) and Map.get(config, "complete_run", false) do
+      [{:complete_run, result}]
     else
       []
     end

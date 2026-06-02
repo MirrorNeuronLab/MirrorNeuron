@@ -4,6 +4,9 @@ defmodule MirrorNeuron.Runner.HostLocal do
 
   @result_start "__MN_RESULT_START__"
   @result_end "__MN_RESULT_END__"
+  @beacon_prefix "__MN_AGENT_BEACON__"
+  @default_beacon_interval_ms 15_000
+  @default_beacon_timeout_ms 45_000
 
   def run(payload, config, opts \\ []) do
     runner_name = build_runner_name(config, opts)
@@ -22,7 +25,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
            {:ok, python_env} <- ensure_python_environment(config, opts),
            :ok <- write_runtime_files(base_dir, message, opts),
            {command, env, workdir} <- build_command(config, base_dir, opts, message, python_env),
-           {:ok, output, exit_code} <- run_command(command, env, workdir, config),
+           {:ok, output, exit_code} <- run_command(command, env, workdir, config, opts, message),
            {:ok, result} <- extract_result(output, exit_code, runner_name, workdir) do
         if result["exit_code"] == 0 do
           {:ok, result}
@@ -82,6 +85,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
                  agent_type: Keyword.get(opts, :agent_type),
                  template_type: Keyword.get(opts, :template_type, "generic"),
                  agent_state: Keyword.get(opts, :agent_state, %{}),
+                 workflow: workflow_context(message),
                  timestamp: MirrorNeuron.Runtime.timestamp()
                },
                pretty: true
@@ -123,6 +127,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
 
     env =
       runtime_env(input_file, context_file, message_file, body_file, workdir, message, opts)
+      |> Map.merge(beacon_env(config, opts, message))
       |> Map.merge(extra_env(config))
       |> apply_python_environment_env(python_env)
       |> Enum.map(fn {key, value} -> {key, value} end)
@@ -188,11 +193,12 @@ defmodule MirrorNeuron.Runner.HostLocal do
     end
   end
 
-  defp run_command([command | args], env, workdir, config) do
+  defp run_command([command | args], env, workdir, config, opts, message) do
     executable = System.find_executable(command) || command
     max_output_bytes = max_output_bytes(config)
     timeout_ms = timeout_ms(config)
     deadline = if timeout_ms, do: System.monotonic_time(:millisecond) + timeout_ms
+    beacon_state = beacon_state(config, opts, message)
 
     port =
       Port.open(
@@ -210,32 +216,75 @@ defmodule MirrorNeuron.Runner.HostLocal do
         ]
       )
 
-    collect_port_output(port, [], 0, max_output_bytes, deadline)
+    beacon_state = emit_runtime_beacon(beacon_state, "started")
+    collect_port_output(port, [], 0, max_output_bytes, deadline, beacon_state)
   rescue
     error in ErlangError ->
       {:error, "failed to invoke #{command}: #{Exception.message(error)}"}
   end
 
-  defp collect_port_output(port, chunks, bytes, max_output_bytes, deadline) do
-    timeout = receive_timeout(deadline)
+  defp collect_port_output(port, chunks, bytes, max_output_bytes, deadline, beacon_state) do
+    timeout = receive_timeout(deadline, beacon_state)
 
     receive do
       {^port, {:data, data}} ->
-        {next_chunks, next_bytes} = append_output(chunks, bytes, data, max_output_bytes)
-        collect_port_output(port, next_chunks, next_bytes, max_output_bytes, deadline)
+        {clean_data, next_beacon_state} = filter_beacon_output(data, beacon_state)
+        {next_chunks, next_bytes} = append_output(chunks, bytes, clean_data, max_output_bytes)
+
+        collect_port_output(
+          port,
+          next_chunks,
+          next_bytes,
+          max_output_bytes,
+          deadline,
+          next_beacon_state
+        )
 
       {^port, {:exit_status, exit_code}} ->
-        {:ok, chunks |> Enum.reverse() |> IO.iodata_to_binary(), exit_code}
+        {tail, next_beacon_state} = flush_beacon_buffer(beacon_state)
+        {next_chunks, _next_bytes} = append_output(chunks, bytes, tail, max_output_bytes)
+        _ = emit_runtime_beacon(next_beacon_state, "completed")
+        {:ok, next_chunks |> Enum.reverse() |> IO.iodata_to_binary(), exit_code}
     after
       timeout ->
-        Port.close(port)
+        now = now_ms()
 
-        {:error,
-         %{
-           "error" => "host local command timed out",
-           "timeout_ms" => max(timeout || 0, 0),
-           "stdout" => chunks |> Enum.reverse() |> IO.iodata_to_binary()
-         }}
+        cond do
+          deadline && now >= deadline ->
+            Port.close(port)
+
+            {:error,
+             %{
+               "error" => "host local command timed out",
+               "timeout_ms" => max(timeout || 0, 0),
+               "stdout" => chunks |> Enum.reverse() |> IO.iodata_to_binary()
+             }}
+
+          beacon_missed?(beacon_state, now) ->
+            Port.close(port)
+            missed_payload = beacon_payload(beacon_state, "missed", "agent", now)
+            emit_beacon_event(beacon_state, :agent_beacon_missed, missed_payload)
+
+            {:error,
+             %{
+               "error" => "agent beacon deadline exceeded",
+               "timeout_ms" => beacon_state.timeout_ms,
+               "stdout" => chunks |> Enum.reverse() |> IO.iodata_to_binary(),
+               "beacon" => missed_payload
+             }}
+
+          true ->
+            next_beacon_state = maybe_emit_runtime_beacon(beacon_state, now)
+
+            collect_port_output(
+              port,
+              chunks,
+              bytes,
+              max_output_bytes,
+              deadline,
+              next_beacon_state
+            )
+        end
     end
   end
 
@@ -254,10 +303,19 @@ defmodule MirrorNeuron.Runner.HostLocal do
     end
   end
 
-  defp receive_timeout(nil), do: :infinity
+  defp receive_timeout(deadline, beacon_state) do
+    now = now_ms()
 
-  defp receive_timeout(deadline) do
-    max(deadline - System.monotonic_time(:millisecond), 0)
+    [
+      deadline,
+      if(beacon_state.enabled, do: beacon_state.next_runtime_beacon_at),
+      if(beacon_state.required, do: beacon_state.last_agent_beacon_at + beacon_state.timeout_ms)
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> :infinity
+      candidates -> max(Enum.min(candidates) - now, 0)
+    end
   end
 
   defp timeout_ms(config) do
@@ -274,6 +332,246 @@ defmodule MirrorNeuron.Runner.HostLocal do
       _ -> System.get_env("MN_MAX_ARTIFACT_BYTES", "1048576") |> String.to_integer()
     end
   end
+
+  defp beacon_env(config, opts, message) do
+    if truthy?(Map.get(config, "beacon_enabled")) do
+      interval_ms =
+        positive_int(Map.get(config, "beacon_interval_ms"), @default_beacon_interval_ms)
+
+      timeout_ms = positive_int(Map.get(config, "beacon_timeout_ms"), @default_beacon_timeout_ms)
+      required = truthy?(Map.get(config, "agent_beacon_required"))
+      environment = Map.get(config, "environment", %{})
+      workflow = workflow_context(message)
+
+      %{
+        "MN_AGENT_BEACON_STDOUT_PREFIX" => beacon_prefix(config),
+        "MN_AGENT_BEACON_INTERVAL_MS" => to_string(interval_ms),
+        "MN_AGENT_BEACON_TIMEOUT_MS" => to_string(timeout_ms),
+        "MN_AGENT_BEACON_REQUIRED" => if(required, do: "1", else: "0"),
+        "MN_AGENT_BEACON_JOB_ID" => to_string(Keyword.get(opts, :job_id, "")),
+        "MN_AGENT_BEACON_AGENT_ID" => to_string(Keyword.get(opts, :agent_id, "")),
+        "MN_AGENT_BEACON_ATTEMPT" =>
+          to_string(Map.get(workflow, "attempt") || Keyword.get(opts, :attempt, 1)),
+        "MN_AGENT_BEACON_STEP" =>
+          to_string(
+            Map.get(workflow, "step_id") ||
+              Map.get(environment, "MN_WORKFLOW_STEP_ID") ||
+              Keyword.get(opts, :agent_id, "")
+          ),
+        "MN_AGENT_BEACON_SOURCE" => "agent"
+      }
+    else
+      %{}
+    end
+  end
+
+  defp beacon_state(config, opts, message) do
+    now = now_ms()
+    interval_ms = positive_int(Map.get(config, "beacon_interval_ms"), @default_beacon_interval_ms)
+    timeout_ms = positive_int(Map.get(config, "beacon_timeout_ms"), @default_beacon_timeout_ms)
+    environment = Map.get(config, "environment", %{})
+    workflow = workflow_context(message)
+
+    %{
+      enabled: truthy?(Map.get(config, "beacon_enabled")),
+      required: truthy?(Map.get(config, "agent_beacon_required")),
+      interval_ms: interval_ms,
+      timeout_ms: timeout_ms,
+      prefix: beacon_prefix(config),
+      line_buffer: "",
+      sequence: 0,
+      job_id: to_string(Keyword.get(opts, :job_id, "")),
+      agent_id: to_string(Keyword.get(opts, :agent_id, "")),
+      step:
+        to_string(
+          Map.get(workflow, "step_id") ||
+            Map.get(environment, "MN_WORKFLOW_STEP_ID") ||
+            Keyword.get(opts, :agent_id, "")
+        ),
+      attempt: Map.get(workflow, "attempt") || Keyword.get(opts, :attempt, 1),
+      event_callback: Keyword.get(opts, :event_callback),
+      started_at: now,
+      last_agent_beacon_at: now,
+      next_runtime_beacon_at: now + interval_ms
+    }
+  end
+
+  defp beacon_prefix(config) do
+    case Map.get(config, "agent_beacon_stdout_prefix") do
+      prefix when is_binary(prefix) and prefix != "" -> prefix
+      _ -> @beacon_prefix
+    end
+  end
+
+  defp filter_beacon_output(data, %{enabled: false} = state), do: {data, state}
+
+  defp filter_beacon_output(data, state) do
+    combined = state.line_buffer <> data
+    parts = :binary.split(combined, "\n", [:global])
+    complete_count = length(parts) - 1
+    complete_lines = Enum.take(parts, complete_count)
+    trailing = List.last(parts) || ""
+
+    {clean_lines, next_state} =
+      Enum.reduce(complete_lines, {[], %{state | line_buffer: trailing}}, fn line,
+                                                                             {acc, current_state} ->
+        line = String.trim_trailing(line, "\r")
+
+        if String.starts_with?(line, current_state.prefix) do
+          {"", parsed_state} = handle_agent_beacon_line(line, current_state)
+          {acc, parsed_state}
+        else
+          {[line | acc], current_state}
+        end
+      end)
+
+    clean_output =
+      clean_lines
+      |> Enum.reverse()
+      |> Enum.map(&(&1 <> "\n"))
+      |> IO.iodata_to_binary()
+
+    {clean_output, next_state}
+  end
+
+  defp flush_beacon_buffer(%{enabled: false, line_buffer: buffer} = state),
+    do: {buffer, %{state | line_buffer: ""}}
+
+  defp flush_beacon_buffer(%{line_buffer: ""} = state), do: {"", state}
+
+  defp flush_beacon_buffer(state) do
+    line = String.trim_trailing(state.line_buffer, "\r")
+
+    if String.starts_with?(line, state.prefix) do
+      {"", next_state} = handle_agent_beacon_line(line, state)
+      {"", %{next_state | line_buffer: ""}}
+    else
+      {state.line_buffer, %{state | line_buffer: ""}}
+    end
+  end
+
+  defp handle_agent_beacon_line(line, state) do
+    raw_payload =
+      line
+      |> String.replace_prefix(state.prefix, "")
+      |> String.trim()
+
+    decoded =
+      case Jason.decode(raw_payload) do
+        {:ok, payload} when is_map(payload) -> payload
+        _ -> %{"message" => raw_payload}
+      end
+
+    now = now_ms()
+
+    payload =
+      beacon_payload(
+        state,
+        Map.get(decoded, "status", "working"),
+        Map.get(decoded, "source", "agent"),
+        now,
+        decoded
+      )
+
+    emit_beacon_event(state, :agent_beacon, payload)
+    {"", %{state | sequence: state.sequence + 1, last_agent_beacon_at: now}}
+  end
+
+  defp maybe_emit_runtime_beacon(%{enabled: false} = state, _now), do: state
+
+  defp maybe_emit_runtime_beacon(state, now) do
+    if now >= state.next_runtime_beacon_at do
+      state
+      |> emit_runtime_beacon("working", now)
+      |> Map.update!(
+        :next_runtime_beacon_at,
+        &max(&1 + state.interval_ms, now + state.interval_ms)
+      )
+    else
+      state
+    end
+  end
+
+  defp emit_runtime_beacon(state, status, now \\ now_ms())
+
+  defp emit_runtime_beacon(%{enabled: false} = state, _status, _now), do: state
+
+  defp emit_runtime_beacon(state, status, now) do
+    payload = beacon_payload(state, status, "runtime", now)
+    emit_beacon_event(state, :agent_beacon, payload)
+    %{state | sequence: state.sequence + 1}
+  end
+
+  defp beacon_payload(state, status, source, now, extra \\ %{}) do
+    Map.merge(
+      %{
+        "schema" => "mn.agent.beacon.v1",
+        "job_id" => state.job_id,
+        "agent_id" => state.agent_id,
+        "step" => state.step,
+        "attempt" => state.attempt,
+        "source" => source,
+        "status" => status,
+        "sequence" => state.sequence,
+        "message" => Map.get(extra, "message", default_beacon_message(source, status)),
+        "interval_ms" => state.interval_ms,
+        "timeout_ms" => state.timeout_ms,
+        "elapsed_ms" => max(now - state.started_at, 0),
+        "ms_since_last_agent_beacon" => max(now - state.last_agent_beacon_at, 0),
+        "emitted_at" => MirrorNeuron.Runtime.timestamp()
+      },
+      Map.drop(extra, [
+        "schema",
+        "job_id",
+        "agent_id",
+        "step",
+        "attempt",
+        "source",
+        "status",
+        "sequence",
+        "interval_ms",
+        "timeout_ms",
+        "elapsed_ms",
+        "ms_since_last_agent_beacon",
+        "emitted_at"
+      ])
+    )
+  end
+
+  defp default_beacon_message("runtime", "started"), do: "HostLocal command started"
+  defp default_beacon_message("runtime", "completed"), do: "HostLocal command completed"
+  defp default_beacon_message("runtime", _status), do: "HostLocal command is still running"
+  defp default_beacon_message("agent", "missed"), do: "Agent beacon deadline exceeded"
+  defp default_beacon_message("agent", _status), do: "Agent is still working"
+  defp default_beacon_message(_source, _status), do: "Worker is still running"
+
+  defp emit_beacon_event(%{event_callback: callback}, event_type, payload)
+       when is_function(callback, 2) do
+    callback.(event_type, payload)
+  end
+
+  defp emit_beacon_event(_state, _event_type, _payload), do: :ok
+
+  defp beacon_missed?(%{enabled: true, required: true} = state, now) do
+    now - state.last_agent_beacon_at >= state.timeout_ms
+  end
+
+  defp beacon_missed?(_state, _now), do: false
+
+  defp now_ms, do: System.monotonic_time(:millisecond)
+
+  defp positive_int(value, _default) when is_integer(value) and value > 0, do: value
+
+  defp positive_int(value, default) when is_binary(value) do
+    case Integer.parse(value) do
+      {parsed, ""} when parsed > 0 -> parsed
+      _ -> default
+    end
+  end
+
+  defp positive_int(_value, default), do: default
+
+  defp truthy?(value), do: value in [true, "true", "1", "yes"]
 
   defp extract_result(output, runner_exit_code, runner_name, workdir) do
     pattern = ~r/#{@result_start}\s*(\{.*?\})\s*#{@result_end}/s
@@ -940,6 +1238,39 @@ defmodule MirrorNeuron.Runner.HostLocal do
       "MN_AGENT_ID" => to_string(Keyword.get(opts, :agent_id, "")),
       "MN_WORKDIR" => workdir
     }
+    |> Map.merge(workflow_env(message))
+  end
+
+  defp workflow_env(message) do
+    workflow = workflow_context(message)
+
+    %{
+      "MN_WORKFLOW_RUN_ID" => Map.get(workflow, "run_id"),
+      "MN_WORKFLOW_STEP_ID" => Map.get(workflow, "step_id"),
+      "MN_WORKFLOW_ATTEMPT_ID" => Map.get(workflow, "attempt_id"),
+      "MN_WORKFLOW_ATTEMPT" => Map.get(workflow, "attempt"),
+      "MN_WORKFLOW_DEADLINE_AT" => Map.get(workflow, "deadline_at"),
+      "MN_WORKFLOW_HEARTBEAT_DEADLINE_AT" => Map.get(workflow, "heartbeat_deadline_at"),
+      "MN_WORKFLOW_IDEMPOTENCY_KEY" => Map.get(workflow, "idempotency_key")
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new(fn {key, value} -> {key, to_string(value)} end)
+  end
+
+  defp workflow_context(message) do
+    headers = Message.headers(message)
+
+    %{
+      "run_id" => Map.get(headers, "mn.workflow.run_id"),
+      "step_id" => Map.get(headers, "mn.workflow.step_id"),
+      "attempt_id" => Map.get(headers, "mn.workflow.attempt_id"),
+      "attempt" => Map.get(headers, "mn.workflow.attempt"),
+      "deadline_at" => Map.get(headers, "mn.workflow.deadline_at"),
+      "heartbeat_deadline_at" => Map.get(headers, "mn.workflow.heartbeat_deadline_at"),
+      "idempotency_key" => Map.get(headers, "mn.workflow.idempotency_key")
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
   end
 
   defp extra_env(config) do

@@ -31,9 +31,9 @@ defmodule MirrorNeuron.Builtins.Sensor do
        ]}
     ]
 
-    if observations >= state.complete_after and Map.get(state.config, "complete_job", false) do
+    if observations >= state.complete_after and Map.get(state.config, "complete_run", false) do
       {:ok, next_state,
-       actions ++ [{:complete_job, %{"count" => observations, "last_message" => payload}}]}
+       actions ++ [{:complete_run, %{"count" => observations, "last_message" => payload}}]}
     else
       {:ok, next_state, actions}
     end

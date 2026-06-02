@@ -64,7 +64,11 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcherTest do
         %{
           "node_id" => "sink",
           "agent_type" => "aggregator",
-          "config" => %{"complete_on_message" => true}
+          "config" => %{
+            "complete_on_message" => true,
+            "terminal_sink" => true,
+            "complete_run" => true
+          }
         }
       ],
       "edges" => [

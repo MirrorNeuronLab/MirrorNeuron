@@ -258,6 +258,215 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
     File.rm_rf!(tmp_dir)
   end
 
+  test "emits runtime liveness beacons while host command is alive" do
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "mirror_neuron_host_local_runtime_beacon_test_#{System.unique_integer([:positive])}"
+      )
+
+    bundle_dir = Path.join(tmp_dir, "job_bundle")
+    payloads_dir = Path.join(bundle_dir, "payloads")
+    upload_dir = Path.join(payloads_dir, "bundle")
+
+    try do
+      File.mkdir_p!(Path.join(upload_dir, "scripts"))
+
+      File.write!(
+        Path.join(upload_dir, "scripts/sleep_then_done.py"),
+        """
+        import time
+        time.sleep(0.08)
+        print("done")
+        """
+      )
+
+      config = %{
+        "upload_path" => "bundle",
+        "upload_as" => "bundle",
+        "workdir" => "/sandbox/job/bundle",
+        "command" => ["python3", "scripts/sleep_then_done.py"],
+        "beacon_enabled" => true,
+        "beacon_interval_ms" => 10,
+        "beacon_timeout_ms" => 1000,
+        "agent_beacon_required" => false
+      }
+
+      parent = self()
+
+      assert {:ok, result} =
+               HostLocal.run(
+                 %{},
+                 config,
+                 job_id: "job-runtime-beacon",
+                 agent_id: "runtime-beacon-worker",
+                 bundle_root: bundle_dir,
+                 payloads_path: payloads_dir,
+                 event_callback: fn event_type, event_payload ->
+                   send(parent, {:beacon_event, event_type, event_payload})
+                 end
+               )
+
+      assert result["stdout"] =~ "done"
+
+      assert_receive {:beacon_event, :agent_beacon,
+                      %{
+                        "source" => "runtime",
+                        "status" => "started",
+                        "agent_id" => "runtime-beacon-worker"
+                      }}
+
+      assert_receive {:beacon_event, :agent_beacon,
+                      %{
+                        "source" => "runtime",
+                        "status" => "working",
+                        "agent_id" => "runtime-beacon-worker"
+                      }}
+
+      assert_receive {:beacon_event, :agent_beacon,
+                      %{
+                        "source" => "runtime",
+                        "status" => "completed",
+                        "agent_id" => "runtime-beacon-worker"
+                      }}
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "parses agent beacon lines and strips them from captured stdout" do
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "mirror_neuron_host_local_agent_beacon_test_#{System.unique_integer([:positive])}"
+      )
+
+    bundle_dir = Path.join(tmp_dir, "job_bundle")
+    payloads_dir = Path.join(bundle_dir, "payloads")
+    upload_dir = Path.join(payloads_dir, "bundle")
+
+    try do
+      File.mkdir_p!(Path.join(upload_dir, "scripts"))
+
+      File.write!(
+        Path.join(upload_dir, "scripts/emit_beacon.py"),
+        """
+        import json
+        import os
+
+        prefix = os.environ["MN_AGENT_BEACON_STDOUT_PREFIX"]
+        print(prefix + json.dumps({"message": "custom unit of work", "progress": 0.42}), flush=True)
+        print(json.dumps({"ok": True}), flush=True)
+        """
+      )
+
+      config = %{
+        "upload_path" => "bundle",
+        "upload_as" => "bundle",
+        "workdir" => "/sandbox/job/bundle",
+        "command" => ["python3", "scripts/emit_beacon.py"],
+        "beacon_enabled" => true,
+        "beacon_interval_ms" => 1000,
+        "beacon_timeout_ms" => 1000,
+        "agent_beacon_required" => true
+      }
+
+      parent = self()
+
+      assert {:ok, result} =
+               HostLocal.run(
+                 %{},
+                 config,
+                 job_id: "job-agent-beacon",
+                 agent_id: "agent-beacon-worker",
+                 bundle_root: bundle_dir,
+                 payloads_path: payloads_dir,
+                 event_callback: fn event_type, event_payload ->
+                   send(parent, {:beacon_event, event_type, event_payload})
+                 end
+               )
+
+      assert result["stdout"] =~ ~s({"ok": true})
+      refute result["stdout"] =~ "__MN_AGENT_BEACON__"
+      refute result["raw_output"] =~ "__MN_AGENT_BEACON__"
+
+      assert_receive {:beacon_event, :agent_beacon,
+                      %{
+                        "source" => "agent",
+                        "status" => "working",
+                        "message" => "custom unit of work",
+                        "progress" => 0.42,
+                        "agent_id" => "agent-beacon-worker"
+                      }}
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "missed required agent beacon closes the command with retryable timeout-style error" do
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "mirror_neuron_host_local_missed_beacon_test_#{System.unique_integer([:positive])}"
+      )
+
+    bundle_dir = Path.join(tmp_dir, "job_bundle")
+    payloads_dir = Path.join(bundle_dir, "payloads")
+    upload_dir = Path.join(payloads_dir, "bundle")
+
+    try do
+      File.mkdir_p!(Path.join(upload_dir, "scripts"))
+
+      File.write!(
+        Path.join(upload_dir, "scripts/quiet.py"),
+        """
+        import time
+        time.sleep(0.2)
+        print("late")
+        """
+      )
+
+      config = %{
+        "upload_path" => "bundle",
+        "upload_as" => "bundle",
+        "workdir" => "/sandbox/job/bundle",
+        "command" => ["python3", "scripts/quiet.py"],
+        "beacon_enabled" => true,
+        "beacon_interval_ms" => 1000,
+        "beacon_timeout_ms" => 20,
+        "agent_beacon_required" => true
+      }
+
+      parent = self()
+
+      assert {:error, %{"error" => "agent beacon deadline exceeded", "beacon" => missed_payload}} =
+               HostLocal.run(
+                 %{},
+                 config,
+                 job_id: "job-missed-beacon",
+                 agent_id: "missed-beacon-worker",
+                 bundle_root: bundle_dir,
+                 payloads_path: payloads_dir,
+                 event_callback: fn event_type, event_payload ->
+                   send(parent, {:beacon_event, event_type, event_payload})
+                 end
+               )
+
+      assert missed_payload["source"] == "agent"
+      assert missed_payload["status"] == "missed"
+      assert missed_payload["agent_id"] == "missed-beacon-worker"
+
+      assert_receive {:beacon_event, :agent_beacon_missed,
+                      %{
+                        "source" => "agent",
+                        "status" => "missed",
+                        "agent_id" => "missed-beacon-worker"
+                      }}
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
   defp create_test_wheel(path) do
     files = [
       {~c"mn_test_pkg/__init__.py", "VALUE = 'from-wheel'\n"},

@@ -212,6 +212,8 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     state = %{state | inflight_message: message}
     persist_snapshot(state)
 
+    workflow = workflow_context(message, state)
+
     context = %{
       job_id: state.job_id,
       node: state.node,
@@ -222,8 +224,13 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       manifest_path: state.runtime_context[:manifest_path],
       payloads_path: state.runtime_context[:payloads_path],
       template_type: Map.get(state.node, :type, "generic"),
-      invocation: state.processed_messages + 1
+      invocation: state.processed_messages + 1,
+      workflow: workflow
     }
+
+    if map_size(workflow) > 0 do
+      send(state.coordinator, {:workflow_message_received, state.node.node_id, message})
+    end
 
     send(
       state.coordinator,
@@ -243,6 +250,11 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
 
         Enum.each(actions, &execute_action(&1, message, next_state))
         persist_snapshot(next_state)
+
+        if map_size(workflow) > 0 do
+          send(state.coordinator, {:workflow_message_acked, state.node.node_id, message})
+        end
+
         next_state
 
       {:error, reason, new_local_state} ->
@@ -340,20 +352,31 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     )
   end
 
-  defp execute_action({:event, event_type, payload}, _incoming, state) do
-    send(state.coordinator, {:agent_event, state.node.node_id, event_type, payload})
+  defp execute_action({:event, event_type, payload}, incoming, state) do
+    send(
+      state.coordinator,
+      {:agent_event, state.node.node_id, event_type, enrich_workflow_payload(payload, incoming)}
+    )
   end
 
   defp execute_action({:checkpoint, snapshot}, _incoming, state) do
     send(state.coordinator, {:agent_checkpoint, state.node.node_id, snapshot})
   end
 
-  defp execute_action({:complete_job, result}, _incoming, state) do
-    if agent_completion_writes_terminal_job?(state) do
+  defp execute_action({:complete_step, result}, incoming, state) do
+    send(
+      state.coordinator,
+      {:agent_event, state.node.node_id, :workflow_step_attempt_completed,
+       enrich_workflow_payload(result, incoming)}
+    )
+  end
+
+  defp execute_action({:complete_run, result}, _incoming, state) do
+    send(state.coordinator, {:agent_completed_run, state.node.node_id, result})
+
+    if agent_completion_writes_terminal_job?(state) and not coordinator_alive?(state.coordinator) do
       persist_terminal_completion(state, result)
     end
-
-    send(state.coordinator, {:agent_completed_job, state.node.node_id, result})
   end
 
   defp evaluate_route_edge(edge, message_type, route_context, state) do
@@ -570,6 +593,17 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   defp agent_completion_writes_terminal_job?(state) do
     Map.get(state.runtime_context, :job_type, "batch") == "batch"
   end
+
+  defp coordinator_alive?(pid) when is_pid(pid) and node(pid) == node(), do: Process.alive?(pid)
+
+  defp coordinator_alive?(pid) when is_pid(pid) do
+    case :rpc.call(node(pid), Process, :alive?, [pid], 5_000) do
+      true -> true
+      _ -> false
+    end
+  end
+
+  defp coordinator_alive?(_pid), do: false
 
   defp persist_terminal_job(state, updates) do
     defaults =
@@ -826,6 +860,12 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   end
 
   defp build_message(state, incoming, to_node, message_type, payload, opts) do
+    headers =
+      incoming
+      |> Message.headers()
+      |> workflow_headers_for_target(state, incoming, to_node)
+      |> Map.merge(Keyword.get(opts, :headers, %{}))
+
     Message.new(
       state.job_id,
       state.node.node_id,
@@ -837,10 +877,94 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       causation_id: Keyword.get(opts, :causation_id, Message.id(incoming)),
       content_type: Keyword.get(opts, :content_type, Message.content_type(incoming)),
       content_encoding: Keyword.get(opts, :content_encoding, Message.content_encoding(incoming)),
-      headers: Map.merge(Message.headers(incoming), Keyword.get(opts, :headers, %{})),
+      headers: headers,
       artifacts: Keyword.get(opts, :artifacts, Message.artifacts(incoming)),
       stream: Keyword.get(opts, :stream, Message.stream(incoming))
     )
+  end
+
+  defp workflow_headers_for_target(headers, state, incoming, to_node) do
+    agent_steps = Map.get(state.runtime_context, :workflow_agent_steps, %{})
+
+    case Map.get(agent_steps, to_node) do
+      nil ->
+        headers
+
+      step_id ->
+        headers
+        |> Map.drop([
+          "mn.workflow.step_id",
+          "mn.workflow.attempt_id",
+          "mn.workflow.attempt",
+          "mn.workflow.deadline_at",
+          "mn.workflow.heartbeat_deadline_at",
+          "mn.workflow.idempotency_key"
+        ])
+        |> Map.put("mn.workflow.run_id", Map.get(state.runtime_context, :workflow_run_id))
+        |> Map.put("mn.workflow.step_id", step_id)
+        |> Map.put("mn.workflow.source_step_id", workflow_step_id(incoming))
+        |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+        |> Map.new()
+    end
+  end
+
+  defp workflow_context(message, state) do
+    headers = Message.headers(message)
+
+    step_id =
+      workflow_step_id(message) ||
+        Map.get(state.runtime_context[:workflow_agent_steps] || %{}, state.node.node_id)
+
+    %{
+      "run_id" =>
+        Map.get(headers, "mn.workflow.run_id") || Map.get(state.runtime_context, :workflow_run_id),
+      "step_id" => step_id,
+      "attempt_id" => Map.get(headers, "mn.workflow.attempt_id"),
+      "attempt" => Map.get(headers, "mn.workflow.attempt"),
+      "deadline_at" => Map.get(headers, "mn.workflow.deadline_at"),
+      "heartbeat_deadline_at" => Map.get(headers, "mn.workflow.heartbeat_deadline_at"),
+      "idempotency_key" => Map.get(headers, "mn.workflow.idempotency_key")
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp enrich_workflow_payload(payload, incoming) do
+    workflow = workflow_context_from_headers(incoming)
+
+    cond do
+      map_size(workflow) == 0 ->
+        payload
+
+      is_map(payload) ->
+        Map.merge(workflow, stringify_keys(payload))
+
+      true ->
+        workflow
+    end
+  end
+
+  defp workflow_context_from_headers(message) do
+    headers = Message.headers(message)
+
+    %{
+      "workflow_run_id" => Map.get(headers, "mn.workflow.run_id"),
+      "step" => Map.get(headers, "mn.workflow.step_id"),
+      "step_id" => Map.get(headers, "mn.workflow.step_id"),
+      "attempt_id" => Map.get(headers, "mn.workflow.attempt_id"),
+      "attempt" => Map.get(headers, "mn.workflow.attempt"),
+      "deadline_at" => Map.get(headers, "mn.workflow.deadline_at"),
+      "heartbeat_deadline_at" => Map.get(headers, "mn.workflow.heartbeat_deadline_at"),
+      "idempotency_key" => Map.get(headers, "mn.workflow.idempotency_key")
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp workflow_step_id(message) do
+    message
+    |> Message.headers()
+    |> Map.get("mn.workflow.step_id")
   end
 
   defp target_backpressure_opts(state, to_node) do
