@@ -13,6 +13,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   @default_event_max_count 10_000
   @default_agent_snapshot_ttl_seconds 7 * 24 * 60 * 60
   @default_bundle_archive_ttl_seconds 7 * 24 * 60 * 60
+  @recovery_eval_statuses ["pending", "running", "blocked", "complete", "failed"]
 
   def persist_job(job_id, job_map) do
     encoded = Jason.encode!(job_map)
@@ -389,8 +390,9 @@ defmodule MirrorNeuron.Persistence.RedisStore do
          {:ok, indexed_job_ids} <- raw_job_ids(),
          {:ok, job_repair} <- repair_job_index(redis_keys, indexed_job_ids),
          {:ok, agent_repair} <- repair_agent_indexes(redis_keys, indexed_job_ids),
+         {:ok, eval_repair} <- repair_recovery_eval_indexes(),
          :ok <- wait_for_replicas() do
-      {:ok, Map.merge(job_repair, agent_repair)}
+      {:ok, job_repair |> Map.merge(agent_repair) |> Map.merge(eval_repair)}
     end
   end
 
@@ -708,8 +710,9 @@ defmodule MirrorNeuron.Persistence.RedisStore do
            transaction([
              ["SET", key("recovery", "eval", eval_id), Jason.encode!(eval)],
              ["SADD", key("recovery", "evals"), eval_id]
+             | recovery_eval_status_index_commands(eval_id, Map.get(eval, "status"))
            ]),
-         :ok <- expect_persist_job_results(results),
+         :ok <- expect_no_redis_errors(results),
          :ok <- wait_for_replicas() do
       {:ok, eval}
     else
@@ -726,24 +729,29 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
-  def list_recovery_evals do
+  def list_recovery_evals(statuses \\ :all)
+
+  def list_recovery_evals(:all) do
     case command(["SMEMBERS", key("recovery", "evals")]) do
       {:ok, eval_ids} ->
-        evals =
-          eval_ids
-          |> Enum.map(fn eval_id ->
-            case fetch_recovery_eval(eval_id) do
-              {:ok, eval} -> eval
-              {:error, _reason} -> nil
-            end
-          end)
-          |> Enum.reject(&is_nil/1)
-          |> Enum.sort_by(&Map.get(&1, "created_at", ""))
-
-        {:ok, evals}
+        fetch_recovery_evals(eval_ids)
 
       {:error, reason} ->
         {:error, format_reason(reason)}
+    end
+  end
+
+  def list_recovery_evals(statuses) do
+    statuses =
+      statuses
+      |> List.wrap()
+      |> Enum.map(&to_string/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
+
+    case recovery_eval_ids_by_status(statuses) do
+      {:ok, eval_ids} -> fetch_recovery_evals(eval_ids)
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -966,6 +974,44 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
+  defp fetch_recovery_evals([]), do: {:ok, []}
+
+  defp fetch_recovery_evals(eval_ids) do
+    keys =
+      eval_ids
+      |> Enum.sort()
+      |> Enum.map(&key("recovery", "eval", &1))
+
+    case command(["MGET" | keys]) do
+      {:ok, encoded_evals} ->
+        encoded_evals
+        |> decode_json_items()
+        |> Enum.sort_by(&Map.get(&1, "created_at", ""))
+        |> then(&{:ok, &1})
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
+    end
+  end
+
+  defp recovery_eval_ids_by_status([]), do: {:ok, []}
+
+  defp recovery_eval_ids_by_status([status]) do
+    case command(["SMEMBERS", key("recovery", "evals", "status", status)]) do
+      {:ok, eval_ids} -> {:ok, eval_ids}
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  defp recovery_eval_ids_by_status(statuses) do
+    keys = Enum.map(statuses, &key("recovery", "evals", "status", &1))
+
+    case command(["SUNION" | keys]) do
+      {:ok, eval_ids} -> {:ok, eval_ids}
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
   defp decode_json_items(items) do
     items
     |> Enum.map(fn
@@ -1062,6 +1108,65 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       end)
 
     {:ok, %{repaired_agents: repaired_agents, removed_stale_agents: removed_stale_agents}}
+  end
+
+  defp repair_recovery_eval_indexes do
+    case command(["SMEMBERS", key("recovery", "evals")]) do
+      {:ok, eval_ids} ->
+        result =
+          Enum.reduce(
+            eval_ids,
+            %{repaired_recovery_evals: 0, removed_stale_recovery_evals: 0},
+            fn eval_id, acc ->
+              case fetch_recovery_eval(eval_id) do
+                {:ok, eval} when is_map(eval) ->
+                  if repair_recovery_eval_status_index(eval_id, Map.get(eval, "status")) do
+                    Map.update!(acc, :repaired_recovery_evals, &(&1 + 1))
+                  else
+                    acc
+                  end
+
+                _ ->
+                  if remove_stale_recovery_eval_index(eval_id) do
+                    Map.update!(acc, :removed_stale_recovery_evals, &(&1 + 1))
+                  else
+                    acc
+                  end
+              end
+            end
+          )
+
+        {:ok, result}
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
+    end
+  end
+
+  defp repair_recovery_eval_status_index(eval_id, status) do
+    case transaction(recovery_eval_status_index_commands(eval_id, status)) do
+      {:ok, [count | rest]} when is_integer(count) ->
+        count > 0 or Enum.any?(rest, fn value -> is_integer(value) and value > 0 end)
+
+      _ ->
+        false
+    end
+  end
+
+  defp remove_stale_recovery_eval_index(eval_id) do
+    commands =
+      [
+        ["DEL", key("recovery", "eval", eval_id)],
+        ["SREM", key("recovery", "evals"), eval_id]
+        | Enum.map(@recovery_eval_statuses, fn status ->
+            ["SREM", key("recovery", "evals", "status", status), eval_id]
+          end)
+      ]
+
+    case transaction(commands) do
+      {:ok, [_deleted, removed | _]} when is_integer(removed) -> removed > 0
+      _ -> false
+    end
   end
 
   defp valid_job_key?(job_id) do
@@ -1500,6 +1605,29 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   defp expect_first_result([], _predicate), do: {:error, "missing Redis pipeline result"}
+
+  defp expect_no_redis_errors(results) when is_list(results) do
+    case Enum.find(results, &match?(%Redix.Error{}, &1)) do
+      nil -> :ok
+      %Redix.Error{} = error -> {:error, format_reason(error)}
+    end
+  end
+
+  defp expect_no_redis_errors(other), do: {:error, format_reason(other)}
+
+  defp recovery_eval_status_index_commands(eval_id, status) do
+    status = recovery_eval_status(status)
+
+    [
+      ["SADD", key("recovery", "evals", "status", status), eval_id]
+      | Enum.map(@recovery_eval_statuses -- [status], fn old_status ->
+          ["SREM", key("recovery", "evals", "status", old_status), eval_id]
+        end)
+    ]
+  end
+
+  defp recovery_eval_status(nil), do: "pending"
+  defp recovery_eval_status(status), do: to_string(status)
 
   defp raw_job_ids do
     case command(["SMEMBERS", key(@jobs_set)]) do

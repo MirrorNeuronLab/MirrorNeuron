@@ -52,6 +52,17 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
       {:ok, :persistent_term.get({__MODULE__, :evals}, %{}) |> Map.values()}
     end
 
+    def list_recovery_evals(statuses) do
+      statuses = MapSet.new(Enum.map(List.wrap(statuses), &to_string/1))
+
+      evals =
+        :persistent_term.get({__MODULE__, :evals}, %{})
+        |> Map.values()
+        |> Enum.filter(&(Map.get(&1, "status") in statuses))
+
+      {:ok, evals}
+    end
+
     def persist_terminal_job(job_id, updates, defaults) do
       send(Process.whereis(:reconciler_test_pid), {:job_persisted, job_id, updates, defaults})
       {:ok, defaults |> Map.merge(updates) |> Map.put("job_id", job_id)}
@@ -442,6 +453,24 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
     assert {:ok, [eval]} = RedisStoreStub.list_recovery_evals()
     assert eval["trigger"] == "restart_exhausted"
     assert eval["status"] == "complete"
+  end
+
+  test "due eval sweep ignores completed recovery eval history" do
+    RedisStoreStub.put_evals([
+      %{
+        "eval_id" => "complete-eval",
+        "job_id" => "finished-job",
+        "trigger" => "lease_lost",
+        "status" => "complete",
+        "created_at" => "2026-01-01T00:00:00Z",
+        "updated_at" => "2026-01-01T00:00:00Z",
+        "job" => running_job("finished-job")
+      }
+    ])
+
+    assert {:ok, result} = Reconciler.process_due_evals(redis_store: RedisStoreStub)
+    assert result.checked == 0
+    assert result.skipped == 0
   end
 
   test "blocks recovery when final plan validation sees stale target node" do

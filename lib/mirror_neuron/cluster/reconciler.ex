@@ -12,6 +12,7 @@ defmodule MirrorNeuron.Cluster.Reconciler do
   @active_statuses ["pending", "running", "paused"]
   @active_node_statuses ["healthy", "joining"]
   @eval_retry_statuses ["pending", "blocked"]
+  @active_eval_statuses ["pending", "running", "blocked"]
   @empty_result %{
     checked: 0,
     recovered: 0,
@@ -96,7 +97,7 @@ defmodule MirrorNeuron.Cluster.Reconciler do
   end
 
   def process_due_evals(opts \\ []) do
-    with {:ok, evals} <- list_recovery_evals(opts) do
+    with {:ok, evals} <- list_recovery_evals(opts, @eval_retry_statuses) do
       result =
         evals
         |> Enum.filter(&due_eval?/1)
@@ -111,9 +112,8 @@ defmodule MirrorNeuron.Cluster.Reconciler do
   def wake_blocked_evals(opts \\ []) do
     reason = Keyword.get(opts, :reason, "cluster capacity changed")
 
-    with {:ok, evals} <- list_recovery_evals(opts) do
+    with {:ok, evals} <- list_recovery_evals(opts, ["blocked"]) do
       evals
-      |> Enum.filter(&(Map.get(&1, "status") == "blocked"))
       |> Enum.each(fn eval ->
         _ =
           update_recovery_eval(
@@ -351,7 +351,7 @@ defmodule MirrorNeuron.Cluster.Reconciler do
   end
 
   defp find_active_eval(job_id, trigger, failed_node, opts) do
-    with {:ok, evals} <- list_recovery_evals(opts) do
+    with {:ok, evals} <- list_recovery_evals(opts, @active_eval_statuses) do
       Enum.find(evals, fn eval ->
         Map.get(eval, "job_id") == job_id and
           Map.get(eval, "trigger") == to_string(trigger) and
@@ -363,14 +363,28 @@ defmodule MirrorNeuron.Cluster.Reconciler do
     end
   end
 
-  defp list_recovery_evals(opts) do
+  defp list_recovery_evals(opts, statuses) do
     store = redis_store(opts)
 
-    if function_exported?(store, :list_recovery_evals, 0) do
-      store.list_recovery_evals()
-    else
-      {:ok, []}
+    cond do
+      statuses != :all and function_exported?(store, :list_recovery_evals, 1) ->
+        store.list_recovery_evals(statuses)
+
+      function_exported?(store, :list_recovery_evals, 0) ->
+        with {:ok, evals} <- store.list_recovery_evals() do
+          {:ok, filter_eval_statuses(evals, statuses)}
+        end
+
+      true ->
+        {:ok, []}
     end
+  end
+
+  defp filter_eval_statuses(evals, :all), do: evals
+
+  defp filter_eval_statuses(evals, statuses) do
+    statuses = MapSet.new(Enum.map(List.wrap(statuses), &to_string/1))
+    Enum.filter(evals, &(Map.get(&1, "status") in statuses))
   end
 
   defp persist_recovery_eval(%{"eval_id" => eval_id} = eval, opts) do

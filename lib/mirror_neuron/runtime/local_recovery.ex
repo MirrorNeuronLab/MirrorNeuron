@@ -25,7 +25,9 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
   end
 
   def recover_unfinished_jobs(opts \\ []) do
-    maybe_repair_recovery_indexes()
+    if Keyword.get(opts, :repair_indexes?, true) do
+      maybe_repair_recovery_indexes()
+    end
 
     with {:ok, jobs} <- RedisStore.list_jobs() do
       jobs
@@ -67,7 +69,9 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
     Map.get(result, :repaired_jobs, 0) +
       Map.get(result, :repaired_agents, 0) +
       Map.get(result, :removed_stale_jobs, 0) +
-      Map.get(result, :removed_stale_agents, 0)
+      Map.get(result, :removed_stale_agents, 0) +
+      Map.get(result, :repaired_recovery_evals, 0) +
+      Map.get(result, :removed_stale_recovery_evals, 0)
   end
 
   def recover_job(job_id, opts \\ []) when is_binary(job_id) do
@@ -82,14 +86,23 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
       Process.send_after(self(), :scan, Keyword.get(opts, :startup_delay_ms, startup_delay_ms()))
     end
 
-    {:ok, %{scan_interval_ms: Keyword.get(opts, :scan_interval_ms, scan_interval_ms())}}
+    {:ok,
+     %{
+       scan_interval_ms: Keyword.get(opts, :scan_interval_ms, scan_interval_ms()),
+       repair_indexes_on_next_scan: true
+     }}
   end
 
   @impl true
   def handle_info(:scan, state) do
-    _ = recover_unfinished_jobs(reason: "startup_or_periodic_scan")
+    _ =
+      recover_unfinished_jobs(
+        reason: "startup_or_periodic_scan",
+        repair_indexes?: state.repair_indexes_on_next_scan
+      )
+
     Process.send_after(self(), :scan, state.scan_interval_ms)
-    {:noreply, state}
+    {:noreply, %{state | repair_indexes_on_next_scan: false}}
   end
 
   @impl true

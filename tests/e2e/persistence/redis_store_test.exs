@@ -200,6 +200,71 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert {:error, _reason} = RedisStore.fetch_job(job_id)
   end
 
+  test "recovery evals can be listed by active status" do
+    pending_id = "pending-eval-#{System.unique_integer([:positive])}"
+    complete_id = "complete-eval-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _eval} =
+             RedisStore.persist_recovery_eval(pending_id, %{
+               "status" => "pending",
+               "created_at" => "2026-01-01T00:00:00Z"
+             })
+
+    assert {:ok, _eval} =
+             RedisStore.persist_recovery_eval(complete_id, %{
+               "status" => "complete",
+               "created_at" => "2026-01-02T00:00:00Z"
+             })
+
+    assert {:ok, pending_evals} = RedisStore.list_recovery_evals(["pending", "blocked"])
+    assert Enum.map(pending_evals, & &1["eval_id"]) == [pending_id]
+
+    assert {:ok, complete_evals} = RedisStore.list_recovery_evals(["complete"])
+    assert Enum.map(complete_evals, & &1["eval_id"]) == [complete_id]
+
+    assert {:ok, _eval} =
+             RedisStore.update_recovery_eval(pending_id, %{
+               "status" => "complete",
+               "completed_at" => "2026-01-03T00:00:00Z"
+             })
+
+    assert {:ok, []} = RedisStore.list_recovery_evals(["pending", "blocked"])
+    assert {:ok, complete_evals} = RedisStore.list_recovery_evals(["complete"])
+    assert Enum.map(complete_evals, & &1["eval_id"]) == [pending_id, complete_id]
+  end
+
+  test "repair_recovery_indexes rebuilds recovery eval status indexes", %{namespace: namespace} do
+    eval_id = "legacy-eval-#{System.unique_integer([:positive])}"
+
+    eval = %{
+      "eval_id" => eval_id,
+      "status" => "blocked",
+      "created_at" => "2026-01-01T00:00:00Z"
+    }
+
+    assert {:ok, "OK"} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SET",
+               redis_key(namespace, ["recovery", "eval", eval_id]),
+               Jason.encode!(eval)
+             ])
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SADD",
+               redis_key(namespace, ["recovery", "evals"]),
+               eval_id
+             ])
+
+    assert {:ok, []} = RedisStore.list_recovery_evals(["blocked"])
+
+    assert {:ok, result} = RedisStore.repair_recovery_indexes()
+    assert result.repaired_recovery_evals == 1
+
+    assert {:ok, [repaired]} = RedisStore.list_recovery_evals(["blocked"])
+    assert repaired["eval_id"] == eval_id
+  end
+
   test "repair_recovery_indexes makes orphaned checkpoints discoverable and removes stale index entries",
        %{namespace: namespace} do
     job_id = "repair-job-#{System.unique_integer([:positive])}"
