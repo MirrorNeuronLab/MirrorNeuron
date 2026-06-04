@@ -4,7 +4,7 @@ defmodule MirrorNeuron.Runtime.JobRunner do
 
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
-  alias MirrorNeuron.Runtime.{EventBus, JobCoordinator, LifecyclePolicy}
+  alias MirrorNeuron.Runtime.{ErrorEnvelope, EventBus, JobCoordinator, LifecyclePolicy}
   alias MirrorNeuron.Runtime.Naming
 
   @active_statuses ["pending", "running", "paused"]
@@ -256,6 +256,14 @@ defmodule MirrorNeuron.Runtime.JobRunner do
   defp persist_runner_failure(job_id, manifest, bundle, manifest_ref, lease, opts, reason) do
     reliability = reliability_from(manifest, opts)
 
+    error =
+      ErrorEnvelope.normalize(reason,
+        component: "job_runner",
+        code: "runtime.job_runner.failed",
+        agent_id: "job_runner",
+        node: to_string(Node.self())
+      )
+
     defaults =
       %{
         "graph_id" => manifest.graph_id,
@@ -281,8 +289,9 @@ defmodule MirrorNeuron.Runtime.JobRunner do
       "status" => "failed",
       "result" => %{
         "agent_id" => "job_runner",
-        "error" => "job coordinator exited before terminal state",
-        "reason" => inspect(reason)
+        "error" => error,
+        "reason" => ErrorEnvelope.desc(error),
+        "status_reason" => ErrorEnvelope.desc(error)
       }
     }
 

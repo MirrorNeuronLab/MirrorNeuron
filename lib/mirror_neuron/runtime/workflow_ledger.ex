@@ -3,6 +3,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
 
   alias MirrorNeuron.Message
   alias MirrorNeuron.Runtime
+  alias MirrorNeuron.Runtime.ErrorEnvelope
 
   @schema_version 1
   @default_timeout_seconds 300
@@ -306,12 +307,20 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
 
         {:error, reason} ->
           state =
-            put_step(state, Map.merge(step, %{"status" => "failed", "terminal_reason" => reason}))
+            put_step(
+              state,
+              Map.merge(step, %{
+                "status" => "failed",
+                "terminal_reason" => reason,
+                "terminal_error" => step_error(reason, step)
+              })
+            )
 
           {state,
            [
              workflow_event(:workflow_step_failed, step, %{
                "reason" => reason,
+               "error" => step_error(reason, step),
                "status" => "failed"
              })
            ], [{:fail_job, step["id"], reason}]}
@@ -330,7 +339,9 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
             |> Map.merge(%{
               "status" => "queued",
               "last_event_at" => now,
-              "terminal_reason" => nil
+              "terminal_reason" => nil,
+              "terminal_error" => nil,
+              "last_error" => nil
             })
 
           state = put_step(state, step) |> put_updated_at(now)
@@ -342,7 +353,9 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
             |> Map.merge(%{
               "status" => "ready",
               "last_event_at" => now,
-              "terminal_reason" => nil
+              "terminal_reason" => nil,
+              "terminal_error" => nil,
+              "last_error" => nil
             })
 
           {put_step(state, step) |> put_updated_at(now), [], []}
@@ -401,7 +414,9 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
         "heartbeat_deadline_at" => heartbeat_deadline_at,
         "retry_at" => nil,
         "last_message" => decorated,
-        "terminal_reason" => nil
+        "terminal_reason" => nil,
+        "terminal_error" => nil,
+        "last_error" => nil
       })
 
     state =
@@ -432,20 +447,30 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   end
 
   defp fail_current_attempt(state, %{"current_attempt" => nil} = step, reason, now) do
-    step = Map.merge(step, %{"last_event_at" => now, "terminal_reason" => reason})
+    error = step_error(reason, step)
+
+    step =
+      Map.merge(step, %{
+        "last_event_at" => now,
+        "terminal_reason" => reason,
+        "terminal_error" => error
+      })
+
     state = put_step(state, step)
     {state, [], []}
   end
 
   defp fail_current_attempt(state, step, reason, now) do
     current = Map.get(step, "current_attempt") || %{}
+    error = step_error(reason, step)
 
     finished_attempt =
       current
       |> Map.merge(%{
         "status" => "failed",
         "ended_at" => now,
-        "reason" => reason
+        "reason" => reason,
+        "error" => error
       })
 
     attempts = Map.get(step, "attempts", []) ++ [finished_attempt]
@@ -465,7 +490,8 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
             "heartbeat_deadline_at" => nil,
             "retry_at" => retry_at,
             "last_event_at" => now,
-            "terminal_reason" => reason
+            "terminal_reason" => reason,
+            "last_error" => error
           })
 
         state = put_step(state, step) |> put_updated_at(now)
@@ -473,6 +499,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
         event =
           workflow_event(:workflow_step_attempt_retry_scheduled, step, %{
             "reason" => reason,
+            "error" => error,
             "retry_at" => retry_at,
             "next_attempt" => attempt_count + 1,
             "max_attempts" => Map.get(step, "max_attempts", 1)
@@ -496,7 +523,8 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
             "retry_at" => nil,
             "ended_at" => now,
             "last_event_at" => now,
-            "terminal_reason" => reason
+            "terminal_reason" => reason,
+            "terminal_error" => error
           })
 
         state = put_step(state, step) |> put_updated_at(now)
@@ -504,6 +532,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
         event =
           workflow_event(:workflow_step_failed, step, %{
             "reason" => reason,
+            "error" => error,
             "status" => "failed"
           })
 
@@ -817,6 +846,8 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
       "ended_at" => nil,
       "last_event_at" => nil,
       "terminal_reason" => nil,
+      "terminal_error" => nil,
+      "last_error" => nil,
       "last_message" => nil,
       "output" => nil
     })
@@ -1009,20 +1040,69 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   defp put_updated_at(state, now), do: Map.put(state, "updated_at", now)
 
   defp workflow_event(type, step, extra) do
-    %{
-      type: type,
-      step: step["id"],
-      step_id: step["id"],
-      agent_id: primary_agent_id(step),
-      attempt_id: get_in(step, ["current_attempt", "attempt_id"]),
-      attempt: get_in(step, ["current_attempt", "attempt"]),
-      status: step["status"],
-      timestamp: Runtime.timestamp()
-    }
-    |> Map.merge(extra || %{})
+    event =
+      %{
+        type: type,
+        step: step["id"],
+        step_id: step["id"],
+        agent_id: primary_agent_id(step),
+        attempt_id: get_in(step, ["current_attempt", "attempt_id"]),
+        attempt: get_in(step, ["current_attempt", "attempt"]),
+        status: step["status"],
+        timestamp: Runtime.timestamp()
+      }
+      |> Map.merge(extra || %{})
+      |> maybe_put_workflow_error(type, step)
+
+    event
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()
   end
+
+  defp maybe_put_workflow_error(event, type, step) do
+    cond do
+      Map.get(event, "error") || Map.get(event, :error) ->
+        event
+
+      type in [
+        :workflow_step_failed,
+        :workflow_step_attempt_timed_out,
+        :workflow_step_attempt_retry_scheduled,
+        :workflow_message_dead_lettered
+      ] ->
+        reason =
+          Map.get(event, "reason") ||
+            Map.get(event, :reason) ||
+            Map.get(step, "terminal_reason") ||
+            "workflow step failed"
+
+        Map.put(event, "error", step_error(reason, step, severity_for_workflow_event(type)))
+
+      true ->
+        event
+    end
+  end
+
+  defp step_error(reason, step, opts \\ []) do
+    current = Map.get(step, "current_attempt") || %{}
+    attempt = Map.get(current, "attempt") || Map.get(step, "attempt_count")
+
+    ErrorEnvelope.normalize(reason,
+      component: "workflow_ledger",
+      code: Keyword.get(opts, :code),
+      severity: Keyword.get(opts, :severity, "ERROR"),
+      retryable: Keyword.get(opts, :retryable),
+      step_id: Map.get(step, "id"),
+      agent_id: primary_agent_id(step),
+      attempt: attempt,
+      max_attempts: Map.get(step, "max_attempts")
+    )
+  end
+
+  defp severity_for_workflow_event(:workflow_step_attempt_retry_scheduled),
+    do: [severity: "WARN", retryable: true]
+
+  defp severity_for_workflow_event(_type), do: []
 
   defp beacon_payload(payload, now) do
     %{

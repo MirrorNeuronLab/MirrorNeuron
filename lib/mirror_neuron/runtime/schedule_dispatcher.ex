@@ -8,6 +8,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
   alias MirrorNeuron.Manifest
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
+  alias MirrorNeuron.Runtime.ErrorEnvelope
   alias MirrorNeuron.Runtime.SchedulePolicy
 
   @lease_ttl_ms 30_000
@@ -316,12 +317,20 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     now = Runtime.timestamp()
     current = current_schedule(schedule)
 
+    error =
+      ErrorEnvelope.normalize(reason,
+        component: "schedule_dispatcher",
+        code: "scheduler.dispatch.failed",
+        severity: "ERROR"
+      )
+
     dispatch = %{
       "dispatch_id" => dispatch_id,
       "status" => "failed",
       "scheduled_for" => instance["scheduled_for"],
-      "reason" => instance["reason"],
-      "error" => inspect(reason),
+      "reason" => ErrorEnvelope.desc(error),
+      "status_reason" => ErrorEnvelope.desc(error),
+      "error" => error,
       "submitted_at" => now
     }
 

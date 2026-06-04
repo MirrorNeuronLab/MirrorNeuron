@@ -12,6 +12,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   alias MirrorNeuron.Runtime.{
     AgentWorker,
     Backpressure,
+    ErrorEnvelope,
     EventBus,
     LifecyclePolicy,
     Naming,
@@ -2110,6 +2111,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     state = cancel_policy_timers(state)
     terminate_agent_workers(state)
     ServiceRegistry.deregister_job(state.job_id)
+    {result, event_fields} = attach_failure_error(state, status, result, event_type, event_fields)
 
     next_state = %{
       state
@@ -2128,6 +2130,64 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
     EventBus.publish(state.job_id, event)
     next_state
+  end
+
+  defp attach_failure_error(state, "failed", result, _event_type, event_fields) do
+    error = failure_error(state, result, event_fields)
+    desc = ErrorEnvelope.desc(error)
+
+    event_fields =
+      event_fields
+      |> Map.put(:error, error)
+      |> Map.put(:reason, desc)
+      |> Map.put(:status_reason, desc)
+
+    {failure_result(result, error, desc, event_fields), event_fields}
+  end
+
+  defp attach_failure_error(state, _status, result, :job_failed, event_fields) do
+    attach_failure_error(state, "failed", result, :job_failed, event_fields)
+  end
+
+  defp attach_failure_error(_state, _status, result, _event_type, event_fields),
+    do: {result, event_fields}
+
+  defp failure_error(_state, result, event_fields) do
+    reason =
+      get_any(event_fields, [:error, "error", :reason, "reason", :status_reason, "status_reason"]) ||
+        get_any(result, [:error, "error", :reason, "reason", :status_reason, "status_reason"]) ||
+        "job failed"
+
+    ErrorEnvelope.normalize(reason,
+      component: "job_coordinator",
+      step_id:
+        get_any(event_fields, [:step_id, "step_id", :step, "step"]) ||
+          get_any(result, [:step_id, "step_id", :step, "step"]),
+      agent_id:
+        get_any(event_fields, [:agent_id, "agent_id"]) || get_any(result, [:agent_id, "agent_id"]),
+      node: to_string(Node.self())
+    )
+  end
+
+  defp failure_result(result, error, desc, event_fields) when is_map(result) do
+    result
+    |> stringify_map()
+    |> Map.put("error", error)
+    |> Map.put("reason", desc)
+    |> Map.put("status_reason", desc)
+    |> Map.put_new("step_id", get_any(event_fields, [:step_id, "step_id", :step, "step"]))
+    |> Map.put_new("agent_id", get_any(event_fields, [:agent_id, "agent_id"]))
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp failure_result(result, error, desc, _event_fields) do
+    %{
+      "error" => error,
+      "reason" => desc,
+      "status_reason" => desc,
+      "value" => stringify(result)
+    }
   end
 
   defp pause_for_policy_review(state, agent_id, reason) do
@@ -2514,6 +2574,15 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   defp stringify(value) when is_binary(value), do: value
   defp stringify(value), do: inspect(value)
+
+  defp get_any(map, keys) when is_map(map) do
+    Enum.find_value(keys, fn key ->
+      value = Map.get(map, key)
+      if value in [nil, ""], do: nil, else: value
+    end)
+  end
+
+  defp get_any(_value, _keys), do: nil
 
   defp stringify_map(map) when is_map(map) do
     Enum.into(map, %{}, fn {key, value} ->

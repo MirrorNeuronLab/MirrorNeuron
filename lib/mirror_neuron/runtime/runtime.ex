@@ -10,6 +10,7 @@ defmodule MirrorNeuron.Runtime do
 
   alias MirrorNeuron.Runtime.{
     Backpressure,
+    ErrorEnvelope,
     EventBus,
     JobRunner,
     LifecyclePolicy,
@@ -391,12 +392,21 @@ defmodule MirrorNeuron.Runtime do
          scheduler_plan,
          reason
        ) do
+    error =
+      ErrorEnvelope.normalize(reason,
+        component: "runtime",
+        code: "runtime.job_runner.failed",
+        agent_id: "job_runner",
+        node: to_string(Node.self())
+      )
+
     updates = %{
       "status" => "failed",
       "result" => %{
         "agent_id" => "job_runner",
-        "error" => "failed to start job runner process",
-        "reason" => inspect(reason)
+        "error" => error,
+        "reason" => ErrorEnvelope.desc(error),
+        "status_reason" => ErrorEnvelope.desc(error)
       }
     }
 
@@ -418,7 +428,22 @@ defmodule MirrorNeuron.Runtime do
       }
       |> Map.merge(policy_fields(manifest, reliability, scheduler_plan))
 
-    RedisStore.persist_terminal_job(job_id, updates, defaults)
+    case RedisStore.persist_terminal_job(job_id, updates, defaults) do
+      {:ok, _job} = ok ->
+        EventBus.publish(job_id, %{
+          type: :job_failed,
+          agent_id: "job_runner",
+          error: error,
+          reason: ErrorEnvelope.desc(error),
+          status_reason: ErrorEnvelope.desc(error),
+          timestamp: timestamp()
+        })
+
+        ok
+
+      other ->
+        other
+    end
   end
 
   defp maybe_pause_placement_failure(job_id, manifest, manifest_ref, reliability, reason) do

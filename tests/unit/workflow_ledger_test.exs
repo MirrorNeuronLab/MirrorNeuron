@@ -50,9 +50,13 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
 
     {state, events, actions} = WorkflowLedger.reconcile(state, "2026-06-02T16:00:06.000Z")
 
-    assert Enum.any?(events, &(&1.type == :workflow_step_failed))
+    failed_event = Enum.find(events, &(&1.type == :workflow_step_failed))
+    assert failed_event
+    assert failed_event["error"]["schema_version"] == "mn.error.v1"
+    assert failed_event["error"]["details"]["step_id"] == "step_a"
     assert {:fail_job, "step_a", _reason} = List.last(actions)
     assert get_in(state, ["steps", "step_a", "status"]) == "failed"
+    assert get_in(state, ["steps", "step_a", "terminal_error", "schema_version"]) == "mn.error.v1"
   end
 
   test "resolves optional steps as partial after retry exhaustion" do
