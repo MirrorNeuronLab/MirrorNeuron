@@ -7,8 +7,6 @@ services:
     restart: unless-stopped
     expose:
       - "6379"
-    ports:
-      - "${MN_REDIS_BIND_HOST:-0.0.0.0}:${MN_REDIS_PORT:-56379}:6379"
     environment:
       MN_REDIS_PASSWORD: ${MN_REDIS_PASSWORD:-}
     command: >
@@ -37,8 +35,6 @@ services:
     restart: unless-stopped
     expose:
       - "${OPENSHELL_GATEWAY_PORT:-58080}"
-    ports:
-      - "${OPENSHELL_GATEWAY_BIND_HOST:-127.0.0.1}:${OPENSHELL_GATEWAY_PORT:-58080}:${OPENSHELL_GATEWAY_PORT:-58080}"
     environment:
       HOME: ${MN_HOST_OPENSHELL_STATE_DIR:-./openshell-state}
       XDG_DATA_HOME: ${MN_HOST_OPENSHELL_STATE_DIR:-./openshell-state}/.local/share
@@ -97,9 +93,6 @@ services:
       - "${MN_DIST_PORT:-54370}"
     ports:
       - "${MN_GRPC_BIND_HOST:-127.0.0.1}:${MN_GRPC_PORT:-55051}:50051"
-      - "${MN_EPMD_BIND_HOST:-127.0.0.1}:${MN_EPMD_PORT:-54369}:${MN_EPMD_PORT:-54369}"
-      - "${MN_DIST_BIND_HOST:-127.0.0.1}:${MN_DIST_PORT:-54370}:${MN_DIST_PORT:-54370}"
-      - "${MN_BLUEPRINT_WEB_UI_PUBLISH_HOST:-127.0.0.1}:${MN_BLUEPRINT_WEB_UI_PORT_START:-58000}-${MN_BLUEPRINT_WEB_UI_PORT_END:-58049}:${MN_BLUEPRINT_WEB_UI_PORT_START:-58000}-${MN_BLUEPRINT_WEB_UI_PORT_END:-58049}"
     command: >
       sh -c 'if [ -n "$$MN_NODE_NAME" ]; then
       if [ -z "$$MN_COOKIE" ] || [ "$$MN_COOKIE" = "mirrorneuron" ]; then

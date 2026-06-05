@@ -343,6 +343,42 @@ defmodule MirrorNeuron.Cluster.NodeMonitorTest do
     assert_receive {:leader_node_down, ^node}, 500
   end
 
+  test "nodeup during disconnected grace cancels offline recovery" do
+    manager =
+      start_supervised!({LeaseManager, name: unique_name(), capacities: %{"default" => 1}})
+
+    monitor =
+      start_monitor(
+        lease_manager_server: manager,
+        node_state: NodeStateConnectedStub,
+        reconnect_attempts: 1,
+        reconnect_backoff_ms: 5,
+        disconnect_grace_ms: 80,
+        connect: fn node ->
+          send(parent_pid(), {:connect_attempted, node})
+          false
+        end
+      )
+
+    send(monitor, {:nodedown, Node.self()})
+    assert_receive {:node_state_marked, _node, "reconnecting", %{}}
+    assert_receive {:connect_attempted, _node}, 500
+
+    assert_receive {:node_state_marked, node, "disconnected", attrs}, 500
+    assert attrs["reason"] == "node reconnect failed after 1 attempts"
+    assert_receive {:reconcile_node, ^node, disconnected_opts}, 500
+    assert disconnected_opts[:node_status] == "disconnected"
+
+    send(monitor, {:nodeup, node})
+
+    assert_receive {:node_state_connected, ^node}
+    assert_receive {:wake_blocked_evals, wake_opts}
+    assert wake_opts[:reason] == "node #{node} is healthy"
+
+    refute_receive {:node_state_marked, ^node, "offline", _attrs}, 120
+    refute_received {:leader_node_down, ^node}
+  end
+
   defp start_monitor(opts) do
     start_supervised!(
       {NodeMonitor,

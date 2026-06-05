@@ -3,6 +3,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
   alias MirrorNeuron.Grpc.ClusterServer
   alias MirrorNeuron.Grpc.JobServer
+  alias MirrorNeuron.Cluster.NodeState
 
   alias Mirrorneuron.Cluster.V1.{
     CheckServicesRequest,
@@ -33,12 +34,22 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     old_grpc_port = System.get_env("MN_GRPC_PORT")
     old_dist_port = System.get_env("MN_DIST_PORT")
     old_cluster_nodes = System.get_env("MN_CLUSTER_NODES")
+    old_namespace = Application.get_env(:mirror_neuron, :redis_namespace)
+    old_system_namespace = System.get_env("MN_REDIS_NAMESPACE")
+    namespace = "mirror_neuron_grpc_job_server_test_#{System.unique_integer([:positive])}"
+
+    Application.put_env(:mirror_neuron, :redis_namespace, namespace)
+    System.put_env("MN_REDIS_NAMESPACE", namespace)
+
     System.delete_env(@admin_token_env)
     System.delete_env("MN_NETWORK_ONLY")
     System.delete_env("MN_NETWORK_JOIN_TOKEN")
     System.delete_env("MN_REDIS_URL")
 
     on_exit(fn ->
+      cleanup_namespace(namespace)
+      restore_env(:redis_namespace, old_namespace)
+      restore_system_env("MN_REDIS_NAMESPACE", old_system_namespace)
       restore_env(@admin_token_env, old_token)
       restore_env(@operator_token_env, old_operator_token)
       restore_env("MN_NETWORK_ONLY", old_network_only)
@@ -159,6 +170,140 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert is_integer(node_info["gpu_count"])
   end
 
+  test "network handshake records joining node metadata for scheduling" do
+    System.put_env("MN_NETWORK_JOIN_TOKEN", "join-secret")
+
+    joining_node = "mirror_neuron@10.0.0.42"
+
+    node_info = %{
+      "node_name" => joining_node,
+      "display_name" => "spark gb10",
+      "address" => "10.0.0.42",
+      "grpc_host" => "10.0.0.42",
+      "node_role" => "runtime",
+      "capabilities" => ["cuda", "nvidia", "nvidia-gb10"],
+      "gpu_count" => 1,
+      "hardware" => %{
+        "gpu" => %{
+          "vendor" => "NVIDIA",
+          "model" => "NVIDIA GB10",
+          "count" => 1,
+          "memory_gb" => 128,
+          "memory_source" => "shared_system_memory"
+        }
+      }
+    }
+
+    _response =
+      ClusterServer.network_handshake(
+        %NetworkHandshakeRequest{
+          token: "join-secret",
+          node_name: joining_node,
+          node_info_json: Jason.encode!(node_info)
+        },
+        nil
+      )
+
+    assert {:ok, state} = NodeState.fetch(joining_node)
+    assert state["status"] == "joining"
+    assert state["operator_disconnect"] == false
+    assert state["scheduling_eligible"] == true
+    assert state["display_name"] == "spark gb10"
+    assert state["address"] == "10.0.0.42"
+    assert state["grpc_host"] == "10.0.0.42"
+    assert state["node_role"] == "runtime"
+    assert state["capabilities"] == ["cuda", "nvidia", "nvidia-gb10"]
+    assert state["gpu_count"] == 1
+    assert get_in(state, ["hardware", "gpu", "model"]) == "NVIDIA GB10"
+    assert get_in(state, ["hardware", "gpu", "memory_gb"]) == 128
+    assert get_in(state, ["hardware", "gpu", "memory_source"]) == "shared_system_memory"
+    assert NodeState.schedulable?(joining_node)
+  end
+
+  test "network handshake clears operator disconnect when a node rejoins with a new address" do
+    System.put_env("MN_NETWORK_JOIN_TOKEN", "join-secret")
+
+    node_name = "mirror_neuron@10.0.0.42"
+
+    assert {:ok, _state} =
+             NodeState.mark(node_name, "disconnected", %{
+               "operator_disconnect" => true,
+               "scheduling_eligible" => false,
+               "address" => "10.0.0.20",
+               "grpc_host" => "10.0.0.20",
+               "capabilities" => ["cpu"]
+             })
+
+    _response =
+      ClusterServer.network_handshake(
+        %NetworkHandshakeRequest{
+          token: "join-secret",
+          node_name: node_name,
+          node_info_json:
+            Jason.encode!(%{
+              "address" => "10.0.0.84",
+              "grpc_host" => "10.0.0.84",
+              "node_role" => "runtime",
+              "capabilities" => ["cuda", "nvidia-gb10"],
+              "gpu_count" => 1
+            })
+        },
+        nil
+      )
+
+    assert {:ok, state} = NodeState.fetch(node_name)
+    assert state["status"] == "joining"
+    assert state["operator_disconnect"] == false
+    assert state["scheduling_eligible"] == true
+    assert state["address"] == "10.0.0.84"
+    assert state["grpc_host"] == "10.0.0.84"
+    assert state["capabilities"] == ["cuda", "nvidia-gb10"]
+    assert state["gpu_count"] == 1
+    assert NodeState.schedulable?(node_name)
+  end
+
+  test "network handshake refreshes cordoned node metadata without making it schedulable" do
+    System.put_env("MN_NETWORK_JOIN_TOKEN", "join-secret")
+
+    for status <- ["maintenance", "draining"] do
+      node_name = "mirror_neuron_#{status}@10.0.0.42"
+
+      assert {:ok, _state} =
+               NodeState.mark(node_name, status, %{
+                 "scheduling_eligible" => false,
+                 "address" => "10.0.0.20",
+                 "grpc_host" => "10.0.0.20",
+                 "capabilities" => ["cpu"]
+               })
+
+      _response =
+        ClusterServer.network_handshake(
+          %NetworkHandshakeRequest{
+            token: "join-secret",
+            node_name: node_name,
+            node_info_json:
+              Jason.encode!(%{
+                "address" => "10.0.0.84",
+                "grpc_host" => "10.0.0.84",
+                "node_role" => "runtime",
+                "capabilities" => ["cuda", "nvidia-gb10"],
+                "gpu_count" => 1
+              })
+          },
+          nil
+        )
+
+      assert {:ok, state} = NodeState.fetch(node_name)
+      assert state["status"] == status
+      assert state["operator_disconnect"] == false
+      assert state["address"] == "10.0.0.84"
+      assert state["grpc_host"] == "10.0.0.84"
+      assert state["capabilities"] == ["cuda", "nvidia-gb10"]
+      assert state["gpu_count"] == 1
+      refute NodeState.schedulable?(node_name)
+    end
+  end
+
   test "network handshake rejects a missing or wrong join token" do
     System.put_env("MN_NETWORK_JOIN_TOKEN", "join-secret")
 
@@ -194,8 +339,29 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
              Jason.decode!(response.result_json)
   end
 
+  defp restore_env(key, nil) when is_atom(key), do: Application.delete_env(:mirror_neuron, key)
+
+  defp restore_env(key, value) when is_atom(key),
+    do: Application.put_env(:mirror_neuron, key, value)
+
   defp restore_env(name, nil), do: System.delete_env(name)
   defp restore_env(name, value), do: System.put_env(name, value)
+  defp restore_system_env(key, nil), do: System.delete_env(key)
+  defp restore_system_env(key, value), do: System.put_env(key, value)
+
+  defp cleanup_namespace(namespace) do
+    case Redix.command(MirrorNeuron.Redis.Connection, ["KEYS", "#{namespace}:*"]) do
+      {:ok, []} ->
+        :ok
+
+      {:ok, keys} ->
+        _ = Redix.command(MirrorNeuron.Redis.Connection, ["DEL" | keys])
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
 
   defp start_tcp_server do
     {:ok, listen_socket} =

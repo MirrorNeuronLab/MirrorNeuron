@@ -570,6 +570,49 @@ defmodule MirrorNeuron.SchedulerTest do
     assert "nvidia-gb10" in model["required_capabilities"]
   end
 
+  test "runtime model inference ignores stale services on offline GPU nodes" do
+    {:ok, manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "stale-model-service",
+        "runtime" => %{
+          "models" => %{
+            "primary" => %{
+              "provider" => "docker_model_runner",
+              "model" => "otterdesk-voice-llm:default"
+            }
+          }
+        },
+        "entrypoints" => ["worker"],
+        "nodes" => [%{"node_id" => "worker", "agent_type" => "executor"}],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "cluster_recover"}
+      })
+
+    offline_h100 =
+      h100_node()
+      |> Map.put("status", "offline")
+
+    healthy_h100_without_service =
+      h100_node()
+      |> Map.put("name", "h100-fresh@lab")
+
+    assert {:error, "placement_failed: " <> reason} =
+             Scheduler.plan(manifest,
+               nodes: [small_node(), healthy_h100_without_service, offline_h100],
+               jobs: [],
+               service_instances: [
+                 model_service("otterdesk-voice-llm:default", "h100@lab")
+               ]
+             )
+
+    assert reason =~ "worker"
+    assert reason =~ "small@lab: constraints not matched"
+    assert reason =~ "h100-fresh@lab: required services not available"
+    assert reason =~ "h100@lab: status \"offline\""
+    refute reason =~ "placed"
+  end
+
   test "runtime model inference returns actionable failure when model service is not advertised" do
     {:ok, manifest} =
       Manifest.load(%{
@@ -690,6 +733,87 @@ defmodule MirrorNeuron.SchedulerTest do
     assert reason =~ "worker"
     assert reason =~ "small@lab: insufficient resources"
     assert reason =~ "large@lab: insufficient resources"
+  end
+
+  test "GPU-required placement stays blocked while GPU node is offline" do
+    {:ok, manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "gpu-required-node-left",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{
+              "devices" => [%{"kind" => "gpu", "driver" => "cuda", "count" => 1}]
+            }
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "cluster_recover"}
+      })
+
+    offline_gpu =
+      cuda_node("gpu-left@lab")
+      |> Map.put("status", "offline")
+      |> Map.put("scheduling_eligible", false)
+
+    assert {:error, "placement_failed: " <> reason} =
+             Scheduler.plan(manifest, nodes: [small_node(), offline_gpu], jobs: [])
+
+    assert reason =~ "worker"
+    assert reason =~ "small@lab: insufficient resources"
+    assert reason =~ "gpu-left@lab: status \"offline\""
+
+    assert {:ok, plan} =
+             Scheduler.plan(manifest,
+               nodes: [small_node(), cuda_node("gpu-left@lab")],
+               jobs: []
+             )
+
+    assert [%{"agent_id" => "worker", "node" => "gpu-left@lab"}] = plan["placements"]
+  end
+
+  test "GPU device placement follows refreshed node capabilities" do
+    {:ok, manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "cuda-capability-refresh",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{
+              "devices" => [%{"kind" => "gpu", "driver" => "cuda"}]
+            }
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    stale_cuda_host =
+      cuda_node()
+      |> Map.put("capabilities", ["cpu"])
+      |> put_in(["hardware", "gpu"], "Unknown or None")
+
+    assert {:error, "placement_failed: " <> reason} =
+             Scheduler.plan(manifest, nodes: [small_node(), stale_cuda_host], jobs: [])
+
+    assert reason =~ "worker"
+    assert reason =~ "small@lab: insufficient resources"
+    assert reason =~ "cuda@lab: insufficient resources"
+
+    assert {:ok, plan} = Scheduler.plan(manifest, nodes: [small_node(), cuda_node()], jobs: [])
+
+    assert [%{"node" => "cuda@lab", "allocations" => %{"devices" => [device]}}] =
+             plan["placements"]
+
+    assert device["driver"] == "cuda"
   end
 
   test "service model inference routes audio services to nodes that advertise ASR and TTS" do

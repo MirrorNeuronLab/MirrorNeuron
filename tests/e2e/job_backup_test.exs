@@ -107,6 +107,15 @@ defmodule MirrorNeuron.JobBackupTest do
     {:ok, source_job_id, _bundle} = seed_backup_job(tmp_dir, "paused")
     {:ok, backup, bundle_files} = JobBackup.export_job(source_job_id)
 
+    backup =
+      put_in(backup, ["runtime", "events"], [
+        %{
+          "type" => "job_paused",
+          "job_id" => source_job_id,
+          "run_id" => "source-run"
+        }
+      ])
+
     assert {:ok, result} =
              JobBackup.restore_job(backup, bundle_files,
                blueprint_id: "restored_blueprint",
@@ -115,6 +124,8 @@ defmodule MirrorNeuron.JobBackupTest do
 
     new_job_id = result["job_id"]
     refute new_job_id == source_job_id
+    assert result["recovery"].action == :paused_for_review
+    assert result["recovery"].reason == "job was restored from a backup and must remain paused"
 
     on_exit(fn ->
       _ = MirrorNeuron.cancel(new_job_id)
@@ -124,6 +135,11 @@ defmodule MirrorNeuron.JobBackupTest do
     assert {:ok, restored_job} = RedisStore.fetch_job(new_job_id)
     assert restored_job["status"] == "paused"
     assert restored_job["lease_owner"] != "old-node"
+    assert restored_job["recovery_status"] == "paused_for_review"
+    assert restored_job["recovery_requires_review"] == true
+    assert get_in(restored_job, ["recovery", "can_resume"]) == true
+    assert get_in(restored_job, ["recovery", "reason"]) ==
+             "job was restored from a backup and must remain paused"
 
     assert get_in(restored_job, ["manifest", "metadata", "mn_cli", "blueprint_id"]) ==
              "restored_blueprint"
@@ -143,8 +159,15 @@ defmodule MirrorNeuron.JobBackupTest do
     assert {:ok, [agent]} = RedisStore.list_agents(new_job_id)
     assert agent["parent_job_id"] == new_job_id
     assert agent["assigned_node"] != "old-node"
+    refute Map.has_key?(agent["metadata"], "lease_owner")
+    refute Map.has_key?(agent["metadata"], "lease_epoch")
 
     assert {:ok, events} = RedisStore.read_events(new_job_id)
+
+    assert Enum.any?(events, fn event ->
+             event["job_id"] == new_job_id and event["run_id"] == "restored-run"
+           end)
+
     assert Enum.any?(events, &(&1["type"] == "job_restored_from_backup"))
   end
 

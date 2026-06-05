@@ -929,6 +929,11 @@ defmodule MirrorNeuron.RuntimeTest do
     assert job["status"] == "completed"
     assert_runtime_workflow_manifest(job_id)
 
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+    assert_event_before(events, "job_pausing", "job_paused")
+    assert_event_before(events, "job_paused", "job_resumed")
+    assert_event_before(events, "job_resumed", "job_completed")
+
     RedisStore.delete_job(job_id)
   end
 
@@ -1765,7 +1770,15 @@ defmodule MirrorNeuron.RuntimeTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    {:ok, job_id} = persist_recoverable_job(manifest, "unsafe-review")
+    restore_provenance = %{
+      "source" => %{"job_id" => "backup-source-job", "run_id" => "source-run"},
+      "target" => %{"run_id" => "restored-run"}
+    }
+
+    {:ok, job_id} =
+      persist_recoverable_job(manifest, "unsafe-review", %{
+        "restore_provenance" => restore_provenance
+      })
 
     RedisStore.persist_agent(job_id, "writer", %{
       "agent_id" => "writer",
@@ -1809,6 +1822,7 @@ defmodule MirrorNeuron.RuntimeTest do
     assert job["status"] == "paused"
     assert job["recovery_requires_review"] == true
     assert get_in(job, ["recovery", "status"]) == "paused_for_review"
+    assert job["restore_provenance"] == restore_provenance
 
     assert {:ok, jobs} = MirrorNeuron.list_jobs(summary: :basic, include_terminal: false)
     summary = Enum.find(jobs, &(&1["job_id"] == job_id))
@@ -1961,6 +1975,10 @@ defmodule MirrorNeuron.RuntimeTest do
     assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 2_000)
     assert job["status"] == "cancelled"
     assert get_in(job, ["result", "reason"]) == "cancelled by operator"
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+    assert_event_before(events, "job_pausing", "job_paused")
+    assert_event_before(events, "job_paused", "job_cancelled")
 
     RedisStore.delete_job(job_id)
   end
@@ -3116,30 +3134,37 @@ defmodule MirrorNeuron.RuntimeTest do
     }
   end
 
-  defp persist_recoverable_job(manifest, suffix) do
+  defp persist_recoverable_job(manifest, suffix, extra_attrs \\ %{}) do
     with {:ok, bundle} <- MirrorNeuron.JobBundle.load(manifest) do
       job_id = "#{Runtime.generate_job_id(bundle.manifest.graph_id)}-#{suffix}"
       manifest_map = MirrorNeuron.Manifest.to_map(bundle.manifest)
 
       {:ok, _job} =
-        RedisStore.persist_job(job_id, %{
-          "job_id" => job_id,
-          "graph_id" => bundle.manifest.graph_id,
-          "job_name" => bundle.manifest.job_name,
-          "type" => bundle.manifest.type,
-          "required_context_engine" => bundle.manifest.required_context_engine,
-          "status" => "running",
-          "submitted_at" => Runtime.timestamp(),
-          "updated_at" => Runtime.timestamp(),
-          "root_agent_ids" => bundle.manifest.entrypoints,
-          "placement_policy" => Map.get(bundle.manifest.policies, "placement_policy", "local"),
-          "recovery_policy" =>
-            Map.get(bundle.manifest.policies, "recovery_mode", "local_restart"),
-          "result" => nil,
-          "topology" => MirrorNeuron.Manifest.topology(bundle.manifest),
-          "manifest" => manifest_map,
-          "manifest_ref" => %{}
-        })
+        RedisStore.persist_job(
+          job_id,
+          Map.merge(
+            %{
+              "job_id" => job_id,
+              "graph_id" => bundle.manifest.graph_id,
+              "job_name" => bundle.manifest.job_name,
+              "type" => bundle.manifest.type,
+              "required_context_engine" => bundle.manifest.required_context_engine,
+              "status" => "running",
+              "submitted_at" => Runtime.timestamp(),
+              "updated_at" => Runtime.timestamp(),
+              "root_agent_ids" => bundle.manifest.entrypoints,
+              "placement_policy" =>
+                Map.get(bundle.manifest.policies, "placement_policy", "local"),
+              "recovery_policy" =>
+                Map.get(bundle.manifest.policies, "recovery_mode", "local_restart"),
+              "result" => nil,
+              "topology" => MirrorNeuron.Manifest.topology(bundle.manifest),
+              "manifest" => manifest_map,
+              "manifest_ref" => %{}
+            },
+            extra_attrs
+          )
+        )
 
       {:ok, job_id}
     end
@@ -3191,6 +3216,24 @@ defmodule MirrorNeuron.RuntimeTest do
       {:ok, events} -> Enum.count(events, &(&1["type"] == event_type))
       _ -> 0
     end
+  end
+
+  defp assert_event_before(events, earlier_type, later_type) do
+    earlier_index = event_index(events, earlier_type)
+    later_index = event_index(events, later_type)
+
+    assert earlier_index,
+           "expected #{earlier_type} event in #{inspect(Enum.map(events, & &1["type"]))}"
+
+    assert later_index,
+           "expected #{later_type} event in #{inspect(Enum.map(events, & &1["type"]))}"
+
+    assert earlier_index < later_index,
+           "expected #{earlier_type} before #{later_type}, got #{inspect(Enum.map(events, & &1["type"]))}"
+  end
+
+  defp event_index(events, event_type) do
+    Enum.find_index(events, &(&1["type"] == event_type))
   end
 
   defp wait_until(fun, timeout \\ 1_000) do

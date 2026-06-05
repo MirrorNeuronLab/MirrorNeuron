@@ -88,6 +88,40 @@ defmodule MirrorNeuron.Cluster.NodeStateTest do
     end
   end
 
+  test "mark_connected refreshes changed address and capabilities while preserving cordon", %{
+    redis_available?: redis_available?
+  } do
+    unless redis_available?, do: :ok
+
+    if redis_available? do
+      assert {:ok, _state} =
+               NodeState.mark("node-gpu@10.0.0.20", "maintenance", %{
+                 "address" => "10.0.0.20",
+                 "grpc_host" => "10.0.0.20",
+                 "capabilities" => ["cpu"],
+                 "scheduling_eligible" => false,
+                 "maintenance" => %{"enabled" => true, "reason" => "driver upgrade"}
+               })
+
+      assert {:ok, state} =
+               NodeState.mark_connected("node-gpu@10.0.0.20", %{
+                 "address" => "10.0.0.84",
+                 "grpc_host" => "10.0.0.84",
+                 "capabilities" => ["cuda", "nvidia", "nvidia-gb10"],
+                 "gpu_count" => 1
+               })
+
+      assert state["status"] == "maintenance"
+      assert state["scheduling_eligible"] == false
+      assert state["address"] == "10.0.0.84"
+      assert state["grpc_host"] == "10.0.0.84"
+      assert state["capabilities"] == ["cuda", "nvidia", "nvidia-gb10"]
+      assert state["gpu_count"] == 1
+      assert get_in(state, ["maintenance", "reason"]) == "driver upgrade"
+      refute NodeState.schedulable?("node-gpu@10.0.0.20")
+    end
+  end
+
   test "mark_connected preserves operator disconnect until add-node clears it", %{
     redis_available?: redis_available?
   } do
