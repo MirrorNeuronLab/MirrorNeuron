@@ -6,6 +6,7 @@ defmodule MirrorNeuron.Scheduler do
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Resource
   alias MirrorNeuron.ResourceSpec
+  alias MirrorNeuron.Scheduler.ResourceInference
   alias MirrorNeuron.ServiceRegistry
   alias MirrorNeuron.ServiceSpec
 
@@ -199,15 +200,29 @@ defmodule MirrorNeuron.Scheduler do
     demands =
       Enum.map(manifest.nodes, fn node ->
         resource_request = resource_request_for_node(node)
+        constraints = global_constraints ++ constraints_for_node(node)
+        requires_services = ServiceSpec.node_requires_services(node)
+
+        inferred =
+          ResourceInference.infer(
+            manifest,
+            node,
+            resource_request,
+            constraints,
+            requires_services
+          )
+
+        resource_request = inferred["resource_request"]
 
         %{
           "agent_id" => node.node_id,
           "agent_type" => node.agent_type,
           "resources" => resource_request["resources"],
           "resource_request" => resource_request,
-          "constraints" => global_constraints ++ constraints_for_node(node),
+          "constraints" => inferred["constraints"],
           "profile" => execution_profile(node),
-          "requires_services" => ServiceSpec.node_requires_services(node)
+          "requires_services" => inferred["requires_services"],
+          "placement_requirements" => inferred["placement_requirements"]
         }
       end)
 
@@ -377,6 +392,30 @@ defmodule MirrorNeuron.Scheduler do
       end
       |> eligible_value()
 
+    capabilities =
+      []
+      |> Kernel.++(list_value(map_get(node, "capabilities")))
+      |> Kernel.++(list_value(map_get(stored, "capabilities")))
+      |> Kernel.++(list_value(map_get(hardware, "capabilities")))
+      |> Kernel.++(
+        hardware
+        |> map_get("devices")
+        |> List.wrap()
+        |> Enum.flat_map(&list_value(map_get(&1, "capabilities")))
+      )
+      |> Kernel.++(
+        hardware
+        |> map_get("gpu")
+        |> List.wrap()
+        |> Enum.flat_map(fn
+          gpu when is_map(gpu) -> list_value(map_get(gpu, "capabilities"))
+          _gpu -> []
+        end)
+      )
+      |> Enum.map(&(to_string(&1) |> String.downcase() |> String.replace("_", "-")))
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
+
     %{
       "name" => name,
       "status" => status,
@@ -384,8 +423,7 @@ defmodule MirrorNeuron.Scheduler do
       "drain" => map_get(node, "drain") || map_get(stored, "drain"),
       "hardware" => hardware,
       "profiles" => list_value(map_get(node, "profiles") || map_get(stored, "profiles")),
-      "capabilities" =>
-        list_value(map_get(node, "capabilities") || map_get(stored, "capabilities")),
+      "capabilities" => capabilities,
       "gpu" => truthy?(map_get(node, "gpu") || map_get(stored, "gpu")) || gpu_count(hardware) > 0,
       "node_role" => map_get(node, "node_role") || map_get(stored, "node_role") || "runtime",
       "capacity" => node_capacity(hardware),
@@ -700,6 +738,7 @@ defmodule MirrorNeuron.Scheduler do
       "resources" => demand["resources"],
       "allocations" => allocation,
       "constraints" => demand["constraints"],
+      "placement_requirements" => demand["placement_requirements"],
       "score" => Float.round(score, 4)
     }
   end
@@ -777,6 +816,7 @@ defmodule MirrorNeuron.Scheduler do
             "resources" => demand["resources"],
             "allocations" => allocation,
             "constraints" => demand["constraints"],
+            "placement_requirements" => demand["placement_requirements"],
             "score" => Float.round(score, 4)
           }
 
@@ -879,8 +919,42 @@ defmodule MirrorNeuron.Scheduler do
         end
       end)
 
-    "agent #{demand["agent_id"]} has no eligible node (#{Enum.join(reasons, "; ")})"
+    requirement_text = demand_requirement_text(demand)
+
+    "agent #{demand["agent_id"]}#{requirement_text} has no eligible node (#{Enum.join(reasons, "; ")})"
   end
+
+  defp demand_requirement_text(%{"placement_requirements" => %{"models" => models}})
+       when is_list(models) and models != [] do
+    details =
+      models
+      |> Enum.map(fn model ->
+        service = get_in(model, ["service", "name"])
+        capabilities = Map.get(model, "required_capabilities", [])
+        min_vram = Map.get(model, "min_vram_mb")
+
+        [
+          Map.get(model, "id") || Map.get(model, "model"),
+          if(service, do: "service #{service}", else: nil),
+          if(is_number(min_vram), do: "gpu >= #{Float.round(min_vram / 1024, 1)}GB", else: nil),
+          if(capabilities != [],
+            do: "capability any of #{Enum.join(capabilities, ",")}",
+            else: nil
+          )
+        ]
+        |> Enum.reject(&is_nil/1)
+        |> Enum.join(" ")
+      end)
+      |> Enum.reject(&(&1 == ""))
+
+    if details == [] do
+      ""
+    else
+      " requiring #{Enum.join(details, "; ")}"
+    end
+  end
+
+  defp demand_requirement_text(_demand), do: ""
 
   defp capacity_available?(node, used, ask) do
     capacity = node["capacity"] || empty_resources()

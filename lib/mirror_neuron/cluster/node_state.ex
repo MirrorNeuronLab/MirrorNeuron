@@ -1,7 +1,9 @@
 defmodule MirrorNeuron.Cluster.NodeState do
   @moduledoc false
 
+  alias MirrorNeuron.Cluster.Hardware
   alias MirrorNeuron.Execution.Profile
+  alias MirrorNeuron.ModelServices
   alias MirrorNeuron.Persistence.RedisStore
 
   @active_statuses ["healthy", "joining"]
@@ -83,10 +85,16 @@ defmodule MirrorNeuron.Cluster.NodeState do
   end
 
   def advertise_self(status \\ "healthy", attrs \\ %{}) do
+    hardware = map_get(attrs, "hardware") || Hardware.info()
+
     attrs =
       %{"node_role" => MirrorNeuron.Application.node_role()}
+      |> Map.put("hardware", hardware)
       |> Map.merge(Profile.node_advertisement())
       |> Map.merge(attrs)
+      |> merge_capabilities(hardware)
+
+    ModelServices.advertise_env_models(Node.self())
 
     if to_string(status) == "healthy" do
       mark_connected(Node.self(), Map.merge(attrs, %{"self" => Map.get(attrs, "self", true)}))
@@ -154,5 +162,54 @@ defmodule MirrorNeuron.Cluster.NodeState do
   defp clears_operator_disconnect?(attrs) do
     Map.get(attrs, "operator_disconnect") == false or
       Map.get(attrs, :operator_disconnect) == false
+  end
+
+  defp merge_capabilities(attrs, hardware) do
+    capabilities =
+      []
+      |> Kernel.++(list_value(map_get(attrs, "capabilities")))
+      |> Kernel.++(list_value(map_get(hardware, "capabilities")))
+      |> Kernel.++(
+        hardware
+        |> map_get("devices")
+        |> List.wrap()
+        |> Enum.flat_map(&list_value(map_get(&1, "capabilities")))
+      )
+      |> Enum.map(&normalize_capability/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    Map.put(attrs, "capabilities", capabilities)
+  end
+
+  defp list_value(value) when is_list(value), do: Enum.map(value, &to_string/1)
+  defp list_value(value) when is_binary(value), do: String.split(value, ",", trim: true)
+  defp list_value(nil), do: []
+  defp list_value(value), do: [to_string(value)]
+
+  defp normalize_capability(value) do
+    value
+    |> to_string()
+    |> String.trim()
+    |> String.downcase()
+    |> String.replace("_", "-")
+  end
+
+  defp map_get(map, key) when is_map(map) do
+    if Map.has_key?(map, key) do
+      Map.get(map, key)
+    else
+      existing_atom_value(map, key)
+    end
+  end
+
+  defp map_get(_map, _key), do: nil
+
+  defp existing_atom_value(map, key) do
+    atom = String.to_existing_atom(to_string(key))
+    if Map.has_key?(map, atom), do: Map.get(map, atom)
+  rescue
+    ArgumentError -> nil
   end
 end

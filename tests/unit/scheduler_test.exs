@@ -2,6 +2,7 @@ defmodule MirrorNeuron.SchedulerTest do
   use ExUnit.Case, async: false
 
   alias MirrorNeuron.Manifest
+  alias MirrorNeuron.ModelCatalog
   alias MirrorNeuron.Scheduler
 
   defmodule ResourceStore do
@@ -519,6 +520,118 @@ defmodule MirrorNeuron.SchedulerTest do
     assert reason =~ "required services not available"
   end
 
+  test "runtime model inference routes LLM workers to advertised high-end GPU model services" do
+    {:ok, manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "smart-llm-placement",
+        "runtime" => %{
+          "models" => %{
+            "primary" => %{
+              "provider" => "docker_model_runner",
+              "model" => "otterdesk-voice-llm:default"
+            }
+          }
+        },
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root"
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "cluster_recover"}
+      })
+
+    assert {:ok, plan} =
+             Scheduler.plan(manifest,
+               nodes: [small_node(), cuda_node(), h100_node()],
+               jobs: [],
+               service_instances: [
+                 model_service("otterdesk-voice-llm:default", "h100@lab")
+               ]
+             )
+
+    assert [
+             %{
+               "agent_id" => "worker",
+               "node" => "h100@lab",
+               "resources" => %{"gpu_count" => 1},
+               "allocations" => %{"devices" => [%{"driver" => "cuda"}]},
+               "placement_requirements" => %{"models" => [model]}
+             }
+           ] = plan["placements"]
+
+    assert model["id"] == "otterdesk-voice-llm:default"
+    assert get_in(model, ["service", "name"]) == "docker-model-runner"
+    assert "nvidia-h100" in model["required_capabilities"]
+  end
+
+  test "runtime model inference returns actionable failure when model service is not advertised" do
+    {:ok, manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "missing-model-service",
+        "runtime" => %{
+          "models" => %{
+            "primary" => %{
+              "provider" => "ollama",
+              "model" => "ollama/nemotron3:33b"
+            }
+          }
+        },
+        "entrypoints" => ["worker"],
+        "nodes" => [%{"node_id" => "worker", "agent_type" => "executor"}],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "cluster_recover"}
+      })
+
+    assert {:error, "placement_failed: " <> reason} =
+             Scheduler.plan(manifest,
+               nodes: [h100_node()],
+               jobs: [],
+               service_instances: []
+             )
+
+    assert reason =~ "ollama/nemotron3:33b"
+    assert reason =~ "service ollama"
+    assert reason =~ "capability any of"
+    assert reason =~ "required services not available"
+  end
+
+  test "service model inference routes audio services to nodes that advertise ASR and TTS" do
+    {:ok, manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "smart-audio-placement",
+        "runtime" => %{
+          "models" => %{
+            "asr" => %{"provider" => "nvidia_service", "model" => "otterdesk-voice-asr:default"},
+            "tts" => %{"provider" => "nvidia_service", "model" => "otterdesk-voice-tts:default"}
+          }
+        },
+        "entrypoints" => ["voice"],
+        "nodes" => [%{"node_id" => "voice", "agent_type" => "executor"}],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "cluster_recover"}
+      })
+
+    assert {:ok, plan} =
+             Scheduler.plan(manifest,
+               nodes: [small_node(), gpu_node()],
+               jobs: [],
+               service_instances: [
+                 model_service("otterdesk-voice-asr:default", "gpu@lab"),
+                 model_service("otterdesk-voice-tts:default", "gpu@lab")
+               ]
+             )
+
+    assert [%{"node" => "gpu@lab", "resources" => %{"gpu_count" => 0}}] =
+             plan["placements"]
+  end
+
   test "CUDA and Metal device requests only place on matching device drivers" do
     {:ok, cuda_manifest} =
       Manifest.load(%{
@@ -844,6 +957,41 @@ defmodule MirrorNeuron.SchedulerTest do
         ]
       }
     }
+  end
+
+  defp h100_node do
+    %{
+      "name" => "h100@lab",
+      "status" => "healthy",
+      "capabilities" => ["cuda", "nvidia", "nvidia-h100", "llm"],
+      "runtime_drivers" => ["host_local"],
+      "hardware" => %{
+        "platform" => %{"os" => "linux"},
+        "cpu" => %{"logical_processors" => 32},
+        "memory" => %{"available_mb" => 131_072},
+        "disk" => %{"available_mb" => 1_000_000},
+        "gpu" => [
+          %{
+            "id" => "h100-0",
+            "index" => 0,
+            "name" => "NVIDIA H100 80GB HBM3",
+            "kind" => "gpu",
+            "type" => "nvidia/gpu",
+            "vendor" => "nvidia",
+            "driver" => "cuda",
+            "memory_total_mb" => 81_920,
+            "memory_free_mb" => 80_000,
+            "capabilities" => ["gpu", "cuda", "nvidia", "nvidia-h100"]
+          }
+        ]
+      }
+    }
+  end
+
+  defp model_service(model, node) do
+    model
+    |> ModelCatalog.resolve!()
+    |> ModelCatalog.service_instance(node)
   end
 
   defp metal_node do

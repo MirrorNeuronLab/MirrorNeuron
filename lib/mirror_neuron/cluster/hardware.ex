@@ -10,13 +10,16 @@ defmodule MirrorNeuron.Cluster.Hardware do
     cpu = cpu_info()
     memory = memory_info()
     gpu = gpu_info(memory)
+    devices = ResourceSpec.normalize_node_devices(%{"gpu" => gpu})
+    capabilities = hardware_capabilities(gpu, devices)
 
     %{
       platform: platform,
       cpu: cpu,
       memory: memory,
       gpu: gpu,
-      devices: ResourceSpec.normalize_node_devices(%{"gpu" => gpu}),
+      devices: devices,
+      capabilities: capabilities,
       disk: disk_info(),
       host_paths: advertised_host_paths(),
       runtime_drivers: advertised_runtime_drivers()
@@ -166,7 +169,7 @@ defmodule MirrorNeuron.Cluster.Hardware do
         driver: "metal",
         memory_total_mb: number_value(map_get(memory, "total_mb")),
         memory_free_mb: number_value(map_get(memory, "available_mb")),
-        capabilities: ["gpu", "apple", "metal", "unified_memory"]
+        capabilities: ["gpu", "apple", "metal", "unified_memory"] ++ apple_gpu_capabilities(model)
       }
     end)
   end
@@ -300,7 +303,7 @@ defmodule MirrorNeuron.Cluster.Hardware do
             ),
         memory_total_mb: memory_total_mb,
         memory_used_ratio: ratio(memory_used_mb, memory_total_mb),
-        capabilities: ["gpu", "nvidia", "cuda"]
+        capabilities: ["gpu", "nvidia", "cuda"] ++ nvidia_gpu_capabilities(name)
       }
     end)
   rescue
@@ -346,6 +349,67 @@ defmodule MirrorNeuron.Cluster.Hardware do
     drivers
     |> Enum.reject(&(&1 == ""))
     |> Enum.uniq()
+  end
+
+  defp hardware_capabilities(gpu, devices) do
+    device_caps =
+      devices
+      |> List.wrap()
+      |> Enum.flat_map(&(map_get(&1, "capabilities") |> List.wrap()))
+
+    gpu_caps =
+      gpu
+      |> List.wrap()
+      |> Enum.flat_map(fn
+        device when is_map(device) -> map_get(device, "capabilities") |> List.wrap()
+        _device -> []
+      end)
+
+    (device_caps ++ gpu_caps ++ advertised_node_capabilities())
+    |> Enum.map(&normalize_capability/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  defp advertised_node_capabilities do
+    System.get_env("MN_NODE_CAPABILITIES")
+    |> split_env_list()
+  end
+
+  defp nvidia_gpu_capabilities(name) do
+    normalized = String.downcase(to_string(name || ""))
+
+    []
+    |> maybe_capability(String.contains?(normalized, "dgx spark"), "nvidia-dgx-spark")
+    |> maybe_capability(String.contains?(normalized, "gh200"), "nvidia-gh200")
+    |> maybe_capability(String.contains?(normalized, "h100"), "nvidia-h100")
+    |> maybe_capability(String.contains?(normalized, "h200"), "nvidia-h200")
+    |> maybe_capability(String.contains?(normalized, "b200"), "nvidia-b200")
+    |> maybe_capability(String.contains?(normalized, "gb200"), "nvidia-gb200")
+  end
+
+  defp apple_gpu_capabilities(name) do
+    normalized = String.downcase(to_string(name || ""))
+
+    []
+    |> maybe_capability(String.contains?(normalized, "m1"), "apple-m1")
+    |> maybe_capability(String.contains?(normalized, "m2"), "apple-m2")
+    |> maybe_capability(String.contains?(normalized, "m3"), "apple-m3")
+    |> maybe_capability(String.contains?(normalized, "m4"), "apple-m4")
+    |> maybe_capability(String.contains?(normalized, "max"), "apple-max")
+    |> maybe_capability(String.contains?(normalized, "ultra"), "apple-ultra")
+  end
+
+  defp maybe_capability(capabilities, true, capability), do: [capability | capabilities]
+  defp maybe_capability(capabilities, false, _capability), do: capabilities
+
+  defp normalize_capability(value) do
+    value
+    |> to_string()
+    |> String.trim()
+    |> String.downcase()
+    |> String.replace("_", "-")
   end
 
   defp openshell_driver do

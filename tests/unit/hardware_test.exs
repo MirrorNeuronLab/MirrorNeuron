@@ -5,7 +5,10 @@ defmodule MirrorNeuron.Cluster.HardwareTest do
 
   setup do
     saved_env =
-      Map.new(["MN_NODE_GPU", "MN_NODE_GPU_COUNT", "MN_NODE_DISPLAY_NAME"], &{&1, System.get_env(&1)})
+      Map.new(
+        ["MN_NODE_GPU", "MN_NODE_GPU_COUNT", "MN_NODE_DISPLAY_NAME", "MN_NODE_CAPABILITIES"],
+        &{&1, System.get_env(&1)}
+      )
 
     on_exit(fn ->
       Enum.each(saved_env, fn
@@ -28,6 +31,15 @@ defmodule MirrorNeuron.Cluster.HardwareTest do
     assert gpu.memory_total_mb == 24_576.0
     assert gpu.memory_free_mb == 22_528.0
     assert "cuda" in gpu.capabilities
+  end
+
+  test "derives high-end NVIDIA capability tags from GPU names" do
+    [gpu] =
+      Hardware.parse_nvidia_gpu("""
+      0, GPU-H100, NVIDIA H100 80GB HBM3, 2, 1024, 80896, 81920
+      """)
+
+    assert "nvidia-h100" in gpu.capabilities
   end
 
   test "parses legacy NVIDIA GPU inventory" do
@@ -64,6 +76,16 @@ defmodule MirrorNeuron.Cluster.HardwareTest do
     assert length(hardware.gpu) == 2
     assert Enum.all?(hardware.gpu, &(&1.kind == "gpu"))
     assert Enum.all?(hardware.gpu, &("gpu" in &1.capabilities))
+  end
+
+  test "adds operator-provided node capabilities to hardware info" do
+    System.put_env("MN_NODE_GPU_COUNT", "0")
+    System.put_env("MN_NODE_CAPABILITIES", "nvidia-b200, lab-llm")
+
+    hardware = Hardware.info()
+
+    assert "nvidia-b200" in hardware.capabilities
+    assert "lab-llm" in hardware.capabilities
   end
 
   test "adds host identity to platform info" do
