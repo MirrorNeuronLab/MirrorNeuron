@@ -19,11 +19,13 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     SubmitJobRequest
   }
 
-  @admin_token_env "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN"
+  @admin_token_env "MN_GRPC_ADMIN_TOKEN"
+  @legacy_admin_token_env "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN"
   @operator_token_env "MN_GRPC_AUTH_TOKEN"
 
   setup do
     old_token = System.get_env(@admin_token_env)
+    old_legacy_token = System.get_env(@legacy_admin_token_env)
     old_operator_token = System.get_env(@operator_token_env)
     old_network_only = System.get_env("MN_NETWORK_ONLY")
     old_network_token = System.get_env("MN_NETWORK_JOIN_TOKEN")
@@ -42,6 +44,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     System.put_env("MN_REDIS_NAMESPACE", namespace)
 
     System.delete_env(@admin_token_env)
+    System.delete_env(@legacy_admin_token_env)
     System.delete_env("MN_NETWORK_ONLY")
     System.delete_env("MN_NETWORK_JOIN_TOKEN")
     System.delete_env("MN_REDIS_URL")
@@ -51,6 +54,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       restore_env(:redis_namespace, old_namespace)
       restore_system_env("MN_REDIS_NAMESPACE", old_system_namespace)
       restore_env(@admin_token_env, old_token)
+      restore_env(@legacy_admin_token_env, old_legacy_token)
       restore_env(@operator_token_env, old_operator_token)
       restore_env("MN_NETWORK_ONLY", old_network_only)
       restore_env("MN_NETWORK_JOIN_TOKEN", old_network_token)
@@ -71,6 +75,22 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       end
 
     assert Exception.message(error) =~ "ClearJobs requires #{@admin_token_env}"
+  end
+
+  test "clear_jobs accepts admin token from canonical env" do
+    System.put_env(@admin_token_env, "admin-secret")
+
+    response = JobServer.clear_jobs(%ClearJobsRequest{admin_token: "admin-secret"}, nil)
+
+    assert response.cleared_count == 0
+  end
+
+  test "clear_jobs accepts admin token from legacy env" do
+    System.put_env(@legacy_admin_token_env, "legacy-admin-secret")
+
+    response = JobServer.clear_jobs(%ClearJobsRequest{admin_token: "legacy-admin-secret"}, nil)
+
+    assert response.cleared_count == 0
   end
 
   test "network-only mode rejects job submission" do

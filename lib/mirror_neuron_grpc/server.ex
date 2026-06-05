@@ -21,7 +21,8 @@ end
 defmodule MirrorNeuron.Grpc.JobServer do
   use GRPC.Server, service: Mirrorneuron.Job.V1.JobService.Service
 
-  @admin_token_env "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN"
+  @admin_token_env "MN_GRPC_ADMIN_TOKEN"
+  @legacy_admin_token_env "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN"
 
   alias Mirrorneuron.Job.V1.{
     SubmitJobResponse,
@@ -445,7 +446,7 @@ defmodule MirrorNeuron.Grpc.JobServer do
   end
 
   defp authorize_clear_jobs!(request) do
-    configured_token = System.get_env(@admin_token_env)
+    configured_token = configured_admin_token()
     request_token = Map.get(request, :admin_token, "")
 
     unless valid_admin_token?(configured_token, request_token) do
@@ -455,6 +456,10 @@ defmodule MirrorNeuron.Grpc.JobServer do
     end
 
     :ok
+  end
+
+  defp configured_admin_token do
+    System.get_env(@admin_token_env) || System.get_env(@legacy_admin_token_env)
   end
 
   defp request_bundle_dir(manifest_json, payloads) do
