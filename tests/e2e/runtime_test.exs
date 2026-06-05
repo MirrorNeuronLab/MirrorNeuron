@@ -619,6 +619,7 @@ defmodule MirrorNeuron.RuntimeTest do
     assert get_in(job, ["workflow_state", "steps", "step_a", "status"]) == "completed"
     assert get_in(job, ["workflow_state", "steps", "step_b", "status"]) == "completed"
 
+    wait_until(fn -> event_count(job_id, "job_completed") == 1 end, 1_000)
     assert {:ok, events} = MirrorNeuron.events(job_id)
     assert Enum.count(events, &(&1["type"] == "job_completed")) == 1
 
@@ -1120,6 +1121,7 @@ defmodule MirrorNeuron.RuntimeTest do
       2_000
     )
 
+    wait_until(fn -> event_count(job_id, "counter_step_completed") == 5 end, 1_000)
     old_coordinator = job_coordinator_pid(job_id)
     Process.exit(old_coordinator, :kill)
 
@@ -1149,6 +1151,7 @@ defmodule MirrorNeuron.RuntimeTest do
     assert get_in(job, ["result", "output", "count"]) == 12
     assert get_in(job, ["result", "output", "seen_ids"]) == Enum.to_list(1..12)
 
+    wait_until(fn -> event_count(job_id, "counter_step_completed") == 12 end, 1_000)
     assert {:ok, events} = MirrorNeuron.events(job_id)
     assert Enum.any?(events, &(&1["type"] == "job_recovered"))
     assert Enum.any?(events, &(&1["type"] == "counter_duplicate_ignored"))
@@ -1178,6 +1181,7 @@ defmodule MirrorNeuron.RuntimeTest do
 
     send_counter_messages(job_id, 1..5)
     wait_until(fn -> agent_current_count(job_id, "counter") == 5 end, 2_000)
+    wait_until(fn -> event_count(job_id, "counter_step_completed") == 5 end, 1_000)
 
     runner = job_runner_pid(job_id)
     :ok = Horde.DynamicSupervisor.terminate_child(MirrorNeuron.Runtime.JobSupervisor, runner)
@@ -1207,6 +1211,7 @@ defmodule MirrorNeuron.RuntimeTest do
     assert get_in(job, ["result", "output", "count"]) == 8
     assert get_in(job, ["result", "output", "seen_ids"]) == Enum.to_list(1..8)
 
+    wait_until(fn -> event_count(job_id, "counter_step_completed") == 8 end, 1_000)
     assert {:ok, events} = MirrorNeuron.events(job_id)
     assert Enum.any?(events, &(&1["type"] == "local_recovery_auto_resumed"))
     assert Enum.count(events, &(&1["type"] == "counter_step_completed")) == 8
@@ -1290,6 +1295,7 @@ defmodule MirrorNeuron.RuntimeTest do
 
     send_counter_messages(job_id, 1..1)
     wait_until(fn -> agent_current_count(job_id, "counter") == 1 end, 2_000)
+    wait_until(fn -> event_count(job_id, "counter_step_completed") == 1 end, 1_000)
 
     runner = job_runner_pid(job_id)
     :ok = Horde.DynamicSupervisor.terminate_child(MirrorNeuron.Runtime.JobSupervisor, runner)
@@ -1314,6 +1320,7 @@ defmodule MirrorNeuron.RuntimeTest do
     assert get_in(job, ["result", "output", "count"]) == 3
     assert get_in(job, ["result", "output", "seen_ids"]) == Enum.to_list(1..3)
 
+    wait_until(fn -> event_count(job_id, "counter_step_completed") == 3 end, 1_000)
     assert {:ok, events} = MirrorNeuron.events(job_id)
     assert Enum.any?(events, &(&1["type"] == "local_recovery_auto_resumed"))
     assert Enum.count(events, &(&1["type"] == "counter_step_completed")) == 3
@@ -3177,6 +3184,13 @@ defmodule MirrorNeuron.RuntimeTest do
                  "payload" => %{"id" => id}
                })
     end)
+  end
+
+  defp event_count(job_id, event_type) do
+    case MirrorNeuron.events(job_id) do
+      {:ok, events} -> Enum.count(events, &(&1["type"] == event_type))
+      _ -> 0
+    end
   end
 
   defp wait_until(fun, timeout \\ 1_000) do
