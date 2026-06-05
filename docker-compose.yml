@@ -19,6 +19,11 @@ services:
       fi'
     volumes:
       - redis-data:/data
+    networks:
+      runtime:
+        aliases:
+          - redis
+          - ${MN_NODE_ALIAS:-mirror-neuron}-redis
 
   openshell:
     image: ${OPENSHELL_GATEWAY_IMAGE:-ghcr.io/nvidia/openshell/gateway:0.0.47}
@@ -46,6 +51,8 @@ services:
     volumes:
       - ${MN_HOST_OPENSHELL_STATE_DIR:-./openshell-state}:${MN_HOST_OPENSHELL_STATE_DIR:-./openshell-state}
       - ${DOCKER_HOST_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+    networks:
+      - runtime
 
   membrane-context-engine:
     image: ${ENGINE_IMAGE:-mirror-neuron-memory-engine:latest}
@@ -77,6 +84,8 @@ services:
         condition: service_started
     volumes:
       - context-debug:/tmp/mn-context-engine
+    networks:
+      - runtime
 
   mirror-neuron-core:
     image: mirror-neuron-core:latest
@@ -112,6 +121,9 @@ services:
       MN_NETWORK_REDIS_PORT: ${MN_NETWORK_REDIS_PORT:-}
       MN_CONTEXT_ADDR: membrane-context-engine:50052
       MN_EXECUTOR_MAX_CONCURRENCY: ${MN_EXECUTOR_MAX_CONCURRENCY:-50}
+      MN_NODE_ALIAS: ${MN_NODE_ALIAS:-}
+      MN_DOCKER_NETWORK_MODE: ${MN_DOCKER_NETWORK_MODE:-}
+      MN_DOCKER_NETWORK_NAME: ${MN_DOCKER_NETWORK_NAME:-}
       MN_NODE_NAME: ${MN_NODE_NAME:-}
       MN_NODE_ROLE: ${MN_NODE_ROLE:-runtime}
       MN_NODE_DISPLAY_NAME: ${MN_NODE_DISPLAY_NAME:-}
@@ -148,6 +160,17 @@ services:
       - ${MN_HOST_ARTIFACTS_DIR:-./mn/runs}:/opt/mirror_neuron/.mn/runs
       - ${MN_HOST_OPENSHELL_CONFIG_DIR:-./openshell-config}:/root/.config/openshell:ro
       - ${MN_HOST_OPENSHELL_CONFIG_DIR:-./openshell-config}:/opt/mirror_neuron/.config/openshell:ro
+    networks:
+      runtime:
+        aliases:
+          - ${MN_NODE_ALIAS:-mirror-neuron-core}
+
+networks:
+  runtime:
+    name: ${MN_DOCKER_NETWORK_NAME:-mirror-neuron-runtime}
+    external: ${MN_DOCKER_NETWORK_EXTERNAL:-false}
+    driver: ${MN_DOCKER_NETWORK_DRIVER:-bridge}
+    attachable: ${MN_DOCKER_NETWORK_ATTACHABLE:-false}
 
 volumes:
   redis-data:
