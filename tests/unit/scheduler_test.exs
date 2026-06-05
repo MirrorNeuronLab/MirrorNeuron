@@ -558,8 +558,8 @@ defmodule MirrorNeuron.SchedulerTest do
              %{
                "agent_id" => "worker",
                "node" => "h100@lab",
-               "resources" => %{"gpu_count" => 1},
-               "allocations" => %{"devices" => [%{"driver" => "cuda"}]},
+               "resources" => %{},
+               "allocations" => %{"devices" => []},
                "placement_requirements" => %{"models" => [model]}
              }
            ] = plan["placements"]

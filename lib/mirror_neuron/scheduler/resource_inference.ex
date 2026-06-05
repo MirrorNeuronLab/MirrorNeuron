@@ -84,7 +84,8 @@ defmodule MirrorNeuron.Scheduler.ResourceInference do
   end
 
   defp maybe_add_gpu_request(state, entry, min_vram_mb, min_unified_mb, required_capabilities) do
-    if needs_gpu?(entry, min_vram_mb, min_unified_mb, required_capabilities) do
+    if needs_gpu?(entry, min_vram_mb, min_unified_mb, required_capabilities) and
+         not service_backed_model?(entry) do
       request =
         %{
           "kind" => "gpu",
@@ -197,6 +198,10 @@ defmodule MirrorNeuron.Scheduler.ResourceInference do
 
   defp needs_gpu?(_entry, min_vram_mb, min_unified_mb, required_capabilities) do
     is_number(min_vram_mb) or is_number(min_unified_mb) or required_capabilities != []
+  end
+
+  defp service_backed_model?(entry) do
+    ModelCatalog.provider(entry) in @service_model_providers
   end
 
   defp nvidia_required?(entry, required_capabilities) do
