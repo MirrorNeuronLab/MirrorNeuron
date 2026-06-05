@@ -116,6 +116,38 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     assert get_in(state, ["steps", "join_step", "status"]) == "queued"
   end
 
+  test "pause emits blocked events and resume preserves active attempt state" do
+    {state, []} = WorkflowLedger.new(manifest(), runtime_nodes()) |> WorkflowLedger.job_running()
+    message = Message.new("job-1", "runtime", "step_a", "init", %{"value" => "start"})
+    decorated = WorkflowLedger.decorate_message(state, "step_a", message)
+
+    {state, [_started]} =
+      WorkflowLedger.on_message_received(
+        state,
+        "step_a",
+        decorated,
+        "2026-06-02T16:00:00.000Z"
+      )
+
+    {paused, [blocked]} = WorkflowLedger.pause(state, "2026-06-02T16:00:01.000Z")
+
+    assert paused["status"] == "paused"
+    assert blocked.type == :workflow_step_blocked
+    assert blocked.step == "step_a"
+    assert blocked["reason"] == "job paused"
+    assert blocked["blocked_at"] == "2026-06-02T16:00:01.000Z"
+    assert get_in(paused, ["steps", "step_a", "status"]) == "running"
+
+    {resumed, []} = WorkflowLedger.resume(paused, "2026-06-02T16:00:02.000Z")
+
+    assert resumed["status"] == "running"
+
+    assert get_in(resumed, ["steps", "step_a", "current_attempt", "attempt_id"]) ==
+             "step_a:attempt:1"
+
+    assert get_in(resumed, ["steps", "step_a", "attempt_count"]) == 1
+  end
+
   test "restores persisted workflow state after coordinator restart" do
     existing_job = %{
       "workflow_state" => %{
