@@ -368,38 +368,22 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   defp reconcile_step(state, _step, _now), do: {state, [], []}
 
   defp start_attempt(state, step, agent_id, message, now) do
-    attempt_number = Map.get(step, "attempt_count", 0) + 1
-    attempt_id = attempt_id(step["id"], attempt_number)
-
-    deadline_at =
-      iso_after_seconds(now, Map.get(step, "timeout_seconds", @default_timeout_seconds))
-
-    heartbeat_deadline_at =
-      iso_after_ms(now, Map.get(step, "beacon_timeout_ms", @default_beacon_timeout_ms))
-
-    idempotency_key = idempotency_key(state, step["id"], attempt_number, message)
+    metadata = attempt_metadata(state, step, message, now)
 
     attempt = %{
-      "attempt_id" => attempt_id,
-      "attempt" => attempt_number,
+      "attempt_id" => metadata.attempt_id,
+      "attempt" => metadata.attempt_number,
       "agent_id" => agent_id,
       "message_id" => safe_message_id(message),
-      "idempotency_key" => idempotency_key,
+      "idempotency_key" => metadata.idempotency_key,
       "started_at" => now,
-      "deadline_at" => deadline_at,
-      "heartbeat_deadline_at" => heartbeat_deadline_at,
+      "deadline_at" => metadata.deadline_at,
+      "heartbeat_deadline_at" => metadata.heartbeat_deadline_at,
       "last_beacon_at" => now,
       "status" => "running"
     }
 
-    decorated =
-      decorate_message(state, agent_id, message, %{
-        "mn.workflow.attempt_id" => attempt_id,
-        "mn.workflow.attempt" => attempt_number,
-        "mn.workflow.deadline_at" => deadline_at,
-        "mn.workflow.heartbeat_deadline_at" => heartbeat_deadline_at,
-        "mn.workflow.idempotency_key" => idempotency_key
-      })
+    decorated = decorate_message(state, agent_id, message, metadata.headers)
 
     step =
       step
@@ -408,10 +392,10 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
         "started_at" => Map.get(step, "started_at") || now,
         "ended_at" => nil,
         "last_event_at" => now,
-        "attempt_count" => attempt_number,
+        "attempt_count" => metadata.attempt_number,
         "current_attempt" => attempt,
-        "deadline_at" => deadline_at,
-        "heartbeat_deadline_at" => heartbeat_deadline_at,
+        "deadline_at" => metadata.deadline_at,
+        "heartbeat_deadline_at" => metadata.heartbeat_deadline_at,
         "retry_at" => nil,
         "last_message" => decorated,
         "terminal_reason" => nil,
@@ -423,9 +407,9 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
       state
       |> put_step(step)
       |> put_message_status(decorated, step["id"], "running", now, %{
-        "attempt_id" => attempt_id,
-        "attempt" => attempt_number,
-        "idempotency_key" => idempotency_key,
+        "attempt_id" => metadata.attempt_id,
+        "attempt" => metadata.attempt_number,
+        "idempotency_key" => metadata.idempotency_key,
         "from" => Message.from(decorated),
         "to" => Message.to(decorated),
         "type" => Message.type(decorated)
@@ -435,11 +419,11 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
     event =
       workflow_event(:workflow_step_attempt_started, step, %{
         "agent_id" => agent_id,
-        "attempt_id" => attempt_id,
-        "attempt" => attempt_number,
-        "deadline_at" => deadline_at,
-        "heartbeat_deadline_at" => heartbeat_deadline_at,
-        "idempotency_key" => idempotency_key,
+        "attempt_id" => metadata.attempt_id,
+        "attempt" => metadata.attempt_number,
+        "deadline_at" => metadata.deadline_at,
+        "heartbeat_deadline_at" => metadata.heartbeat_deadline_at,
+        "idempotency_key" => metadata.idempotency_key,
         "message_id" => safe_message_id(decorated)
       })
 
@@ -681,25 +665,8 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   defp retry_message(state, step, now) do
     case Map.get(step, "last_message") do
       message when is_map(message) ->
-        attempt_number = Map.get(step, "attempt_count", 0) + 1
-        attempt_id = attempt_id(step["id"], attempt_number)
-
-        deadline_at =
-          iso_after_seconds(now, Map.get(step, "timeout_seconds", @default_timeout_seconds))
-
-        heartbeat_deadline_at =
-          iso_after_ms(now, Map.get(step, "beacon_timeout_ms", @default_beacon_timeout_ms))
-
-        idempotency_key = idempotency_key(state, step["id"], attempt_number, message)
-
-        decorated =
-          decorate_message(state, primary_agent_id(step), message, %{
-            "mn.workflow.attempt_id" => attempt_id,
-            "mn.workflow.attempt" => attempt_number,
-            "mn.workflow.deadline_at" => deadline_at,
-            "mn.workflow.heartbeat_deadline_at" => heartbeat_deadline_at,
-            "mn.workflow.idempotency_key" => idempotency_key
-          })
+        metadata = attempt_metadata(state, step, message, now)
+        decorated = decorate_message(state, primary_agent_id(step), message, metadata.headers)
 
         step =
           step
@@ -715,6 +682,34 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
       _ ->
         {:error, "workflow retry has no saved message"}
     end
+  end
+
+  defp attempt_metadata(state, step, message, now) do
+    attempt_number = Map.get(step, "attempt_count", 0) + 1
+    attempt_id = attempt_id(step["id"], attempt_number)
+
+    deadline_at =
+      iso_after_seconds(now, Map.get(step, "timeout_seconds", @default_timeout_seconds))
+
+    heartbeat_deadline_at =
+      iso_after_ms(now, Map.get(step, "beacon_timeout_ms", @default_beacon_timeout_ms))
+
+    idempotency_key = idempotency_key(state, step["id"], attempt_number, message)
+
+    %{
+      attempt_number: attempt_number,
+      attempt_id: attempt_id,
+      deadline_at: deadline_at,
+      heartbeat_deadline_at: heartbeat_deadline_at,
+      idempotency_key: idempotency_key,
+      headers: %{
+        "mn.workflow.attempt_id" => attempt_id,
+        "mn.workflow.attempt" => attempt_number,
+        "mn.workflow.deadline_at" => deadline_at,
+        "mn.workflow.heartbeat_deadline_at" => heartbeat_deadline_at,
+        "mn.workflow.idempotency_key" => idempotency_key
+      }
+    }
   end
 
   defp dependencies_satisfied?(state, step) do
