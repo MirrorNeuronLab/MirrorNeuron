@@ -598,6 +598,72 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
     assert eval["attempt"] == 2
   end
 
+  test "GPU recovery stays blocked on CPU-only nodes and resumes on a rejoined GPU node with a new name" do
+    {:ok, bundle} = JobBundle.load(gpu_manifest())
+
+    job =
+      running_job("gpu-wake-job")
+      |> put_in(["scheduler", "placements"], [
+        %{
+          "agent_id" => "worker",
+          "agent_type" => "executor",
+          "node" => "gpu-old@lab",
+          "resources" => %{
+            "cpu_cores" => 1,
+            "memory_mb" => 512,
+            "disk_mb" => 0,
+            "gpu_count" => 1
+          },
+          "allocations" => %{
+            "devices" => [%{"id" => "cuda-0", "driver" => "cuda"}]
+          }
+        }
+      ])
+
+    RedisStoreStub.put_jobs([job])
+    RedisStoreStub.put_agents("gpu-wake-job", [agent_snapshot("worker")])
+    {:ok, coordinator} = CoordinatorStub.start_link(self())
+
+    assert {:ok, blocked_result} =
+             Reconciler.reconcile_node("gpu-old@lab",
+               redis_store: RedisStoreStub,
+               event_bus: EventBusStub,
+               bundle_loader: fn _job -> {:ok, bundle} end,
+               lookup_coordinator: fn "gpu-wake-job" -> {:ok, coordinator} end,
+               scheduler_opts: [nodes: [small_node(), large_node()], jobs: [job]],
+               retry_base_ms: 10
+             )
+
+    assert blocked_result.blocked == 1
+    assert_receive {:job_persisted, "gpu-wake-job", blocked_updates, _}
+    assert blocked_updates["recovery_status"] == "blocked_no_placement"
+    refute_received {:coordinator_rescheduled, _, _, _}
+
+    assert {:ok, wake_result} =
+             Reconciler.wake_blocked_evals(
+               redis_store: RedisStoreStub,
+               event_bus: EventBusStub,
+               bundle_loader: fn _job -> {:ok, bundle} end,
+               lookup_coordinator: fn "gpu-wake-job" -> {:ok, coordinator} end,
+               scheduler_opts: [
+                 nodes: [small_node(), gpu_rejoin_node("gpu-new@lab")],
+                 jobs: [job]
+               ],
+               retry_base_ms: 10,
+               reason: "gpu node rejoined"
+             )
+
+    assert wake_result.recovered == 1
+    assert_receive {:coordinator_rescheduled, ["worker"], scheduler_plan, reason}
+    assert reason == "node gpu-old@lab is unavailable"
+    assert [%{"agent_id" => "worker", "node" => "gpu-new@lab"}] = scheduler_plan["placements"]
+
+    assert {:ok, [eval]} = RedisStoreStub.list_recovery_evals()
+    assert eval["status"] == "complete"
+    assert eval["attempt"] == 2
+    assert eval["wake_reason"] == "gpu node rejoined"
+  end
+
   defp running_job(job_id) do
     %{
       "job_id" => job_id,
@@ -659,6 +725,29 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
     }
   end
 
+  defp gpu_manifest do
+    %{
+      "manifest_version" => "1.0",
+      "graph_id" => "gpu-reconcile-test",
+      "entrypoints" => ["worker"],
+      "nodes" => [
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "role" => "root",
+          "resources" => %{
+            "cpu_cores" => 1,
+            "memory_mb" => 512,
+            "devices" => [%{"kind" => "gpu", "driver" => "cuda", "count" => 1}]
+          },
+          "config" => %{"safe_to_retry" => true}
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "cluster_recover"}
+    }
+  end
+
   defp small_node do
     %{
       "name" => "small@lab",
@@ -681,6 +770,34 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
         "memory" => %{"available_mb" => 16_384},
         "disk" => %{"available_mb" => 100_000},
         "gpu" => "Unknown or None"
+      }
+    }
+  end
+
+  defp gpu_rejoin_node(name) do
+    %{
+      "name" => name,
+      "status" => "healthy",
+      "capabilities" => ["cuda", "llm"],
+      "runtime_drivers" => ["host_local"],
+      "hardware" => %{
+        "cpu" => %{"logical_processors" => 16},
+        "memory" => %{"available_mb" => 65_536},
+        "disk" => %{"available_mb" => 500_000},
+        "gpu" => [
+          %{
+            "id" => "cuda-0",
+            "index" => 0,
+            "name" => "NVIDIA RTX 4090",
+            "kind" => "gpu",
+            "type" => "nvidia/gpu",
+            "vendor" => "nvidia",
+            "driver" => "cuda",
+            "memory_total_mb" => 24_576,
+            "memory_free_mb" => 20_000,
+            "capabilities" => ["gpu", "cuda", "nvidia"]
+          }
+        ]
       }
     }
   end

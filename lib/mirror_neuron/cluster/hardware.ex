@@ -96,7 +96,7 @@ defmodule MirrorNeuron.Cluster.Hardware do
                    "--format=csv,noheader,nounits"
                  ]) do
               {output, 0} ->
-                parse_nvidia_gpu(output)
+                parse_nvidia_gpu(output, memory)
 
               _ ->
                 "Unknown or None"
@@ -255,7 +255,7 @@ defmodule MirrorNeuron.Cluster.Hardware do
     }
   end
 
-  def parse_nvidia_gpu(output) do
+  def parse_nvidia_gpu(output, memory \\ %{}) do
     output
     |> String.split("\n", trim: true)
     |> Enum.with_index()
@@ -283,7 +283,8 @@ defmodule MirrorNeuron.Cluster.Hardware do
       utilization_ratio = utilization |> parse_float() |> ratio(100)
       memory_used_mb = parse_float(memory_used)
       memory_free_mb = parse_float(memory_free)
-      memory_total_mb = parse_float(memory_total)
+      memory_total_mb = parse_float(memory_total) || shared_nvidia_memory_total_mb(name, memory)
+      shared_memory_free_mb = shared_nvidia_memory_free_mb(name, memory)
 
       %{
         id: uuid || "nvidia-#{index}",
@@ -297,6 +298,7 @@ defmodule MirrorNeuron.Cluster.Hardware do
         memory_used_mb: memory_used_mb,
         memory_free_mb:
           memory_free_mb ||
+            shared_memory_free_mb ||
             if(is_number(memory_total_mb) and is_number(memory_used_mb),
               do: max(memory_total_mb - memory_used_mb, 0),
               else: nil
@@ -386,7 +388,23 @@ defmodule MirrorNeuron.Cluster.Hardware do
     |> maybe_capability(String.contains?(normalized, "h100"), "nvidia-h100")
     |> maybe_capability(String.contains?(normalized, "h200"), "nvidia-h200")
     |> maybe_capability(String.contains?(normalized, "b200"), "nvidia-b200")
+    |> maybe_capability(String.contains?(normalized, "gb10"), "nvidia-gb10")
     |> maybe_capability(String.contains?(normalized, "gb200"), "nvidia-gb200")
+  end
+
+  defp shared_nvidia_memory_total_mb(name, memory) do
+    if gb10_gpu?(name), do: number_value(map_get(memory, "total_mb"))
+  end
+
+  defp shared_nvidia_memory_free_mb(name, memory) do
+    if gb10_gpu?(name), do: number_value(map_get(memory, "available_mb"))
+  end
+
+  defp gb10_gpu?(name) do
+    name
+    |> to_string()
+    |> String.downcase()
+    |> String.contains?("gb10")
   end
 
   defp apple_gpu_capabilities(name) do

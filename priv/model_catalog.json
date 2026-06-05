@@ -42,11 +42,12 @@
           "nvidia-h100",
           "nvidia-h200",
           "nvidia-b200",
+          "nvidia-gb10",
           "nvidia-gb200"
         ]
       },
       "hardware_notes": [
-        "Requires a high-end NVIDIA CUDA node advertised as DGX Spark, GH200, H100, H200, B200, or GB200 class.",
+        "Requires a high-end NVIDIA CUDA node advertised as DGX Spark, GH200, H100, H200, B200, GB10, or GB200 class.",
         "Docker Model Runner should be configured for NVIDIA acceleration before live video runs."
       ]
     },
@@ -69,11 +70,12 @@
           "nvidia-h100",
           "nvidia-h200",
           "nvidia-b200",
+          "nvidia-gb10",
           "nvidia-gb200"
         ]
       },
       "hardware_notes": [
-        "Requires a high-end NVIDIA CUDA node advertised as DGX Spark, GH200, H100, H200, B200, or GB200 class.",
+        "Requires a high-end NVIDIA CUDA node advertised as DGX Spark, GH200, H100, H200, B200, GB10, or GB200 class.",
         "ASR and TTS are tracked as NVIDIA service model dependencies until Docker Model Runner exposes audio endpoints."
       ]
     },
@@ -118,6 +120,7 @@
           "nvidia-h100",
           "nvidia-h200",
           "nvidia-b200",
+          "nvidia-gb10",
           "nvidia-gb200"
         ]
       },

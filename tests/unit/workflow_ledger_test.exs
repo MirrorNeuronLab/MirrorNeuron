@@ -116,6 +116,46 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     assert get_in(state, ["steps", "join_step", "status"]) == "queued"
   end
 
+  test "restores persisted workflow state after coordinator restart" do
+    existing_job = %{
+      "workflow_state" => %{
+        "enabled" => true,
+        "run_id" => "run-persisted",
+        "created_at" => "2026-06-02T15:59:00.000Z",
+        "updated_at" => "2026-06-02T16:00:01.000Z",
+        "status" => "running",
+        "messages" => %{
+          "msg-1" => %{"status" => "acked", "step_id" => "step_a"}
+        },
+        "steps" => %{
+          "step_a" => %{
+            "status" => "retry_wait",
+            "attempt_count" => 1,
+            "current_attempt" => %{"attempt_id" => "step_a:attempt:1"},
+            "retry_at" => "2026-06-02T16:00:04.000Z"
+          },
+          "removed_step" => %{"status" => "running"}
+        }
+      }
+    }
+
+    state = WorkflowLedger.new(manifest(), runtime_nodes(), existing_job)
+
+    assert state["run_id"] == "run-persisted"
+    assert state["created_at"] == "2026-06-02T15:59:00.000Z"
+    assert state["status"] == "running"
+    assert get_in(state, ["messages", "msg-1", "status"]) == "acked"
+
+    assert get_in(state, ["steps", "step_a", "status"]) == "retry_wait"
+    assert get_in(state, ["steps", "step_a", "attempt_count"]) == 1
+    assert get_in(state, ["steps", "step_a", "timeout_seconds"]) == 1
+
+    assert get_in(state, ["steps", "step_a", "current_attempt", "attempt_id"]) ==
+             "step_a:attempt:1"
+
+    refute Map.has_key?(state["steps"], "removed_step")
+  end
+
   defp manifest(opts \\ []) do
     required? = Keyword.get(opts, :required?, true)
 

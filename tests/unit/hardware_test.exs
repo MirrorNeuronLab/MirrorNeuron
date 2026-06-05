@@ -42,6 +42,21 @@ defmodule MirrorNeuron.Cluster.HardwareTest do
     assert "nvidia-h100" in gpu.capabilities
   end
 
+  test "treats NVIDIA GB10 shared memory as CUDA GPU memory" do
+    [gpu] =
+      Hardware.parse_nvidia_gpu(
+        """
+        0, GPU-GB10, NVIDIA GB10, [N/A], [N/A], [N/A], [N/A]
+        """,
+        %{"total_mb" => 131_072, "available_mb" => 120_000}
+      )
+
+    assert gpu.name == "NVIDIA GB10"
+    assert gpu.memory_total_mb == 131_072
+    assert gpu.memory_free_mb == 120_000
+    assert "nvidia-gb10" in gpu.capabilities
+  end
+
   test "parses legacy NVIDIA GPU inventory" do
     [gpu] =
       Hardware.parse_nvidia_gpu("""
@@ -67,6 +82,20 @@ defmodule MirrorNeuron.Cluster.HardwareTest do
     assert gpu.driver == "metal"
     assert gpu.memory_total_mb == 32_768
     assert "unified_memory" in gpu.capabilities
+  end
+
+  test "derives Apple GPU capability tags from GPU names" do
+    [gpu] =
+      Hardware.parse_darwin_gpu(
+        """
+        Graphics/Displays:
+            Chipset Model: Apple M4 Max
+        """,
+        %{"total_mb" => 65_536, "available_mb" => 40_000}
+      )
+
+    assert "apple-m4" in gpu.capabilities
+    assert "apple-max" in gpu.capabilities
   end
 
   test "uses runtime-provided GPU count when host detection happened outside the container" do

@@ -567,6 +567,7 @@ defmodule MirrorNeuron.SchedulerTest do
     assert model["id"] == "otterdesk-voice-llm:default"
     assert get_in(model, ["service", "name"]) == "docker-model-runner"
     assert "nvidia-h100" in model["required_capabilities"]
+    assert "nvidia-gb10" in model["required_capabilities"]
   end
 
   test "runtime model inference returns actionable failure when model service is not advertised" do
@@ -599,6 +600,96 @@ defmodule MirrorNeuron.SchedulerTest do
     assert reason =~ "service ollama"
     assert reason =~ "capability any of"
     assert reason =~ "required services not available"
+  end
+
+  test "hardware-derived GPU capabilities are enough for NVIDIA-specific and Metal placement" do
+    {:ok, nvidia_manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "hardware-derived-nvidia",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{"gpu_count" => 1},
+            "constraints" => [
+              %{
+                "attribute" => "capabilities",
+                "operator" => "contains",
+                "value" => "nvidia-h100"
+              }
+            ]
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    assert {:ok, nvidia_plan} =
+             Scheduler.plan(nvidia_manifest,
+               nodes: [small_node(), capabilityless_h100_node()],
+               jobs: []
+             )
+
+    assert [%{"node" => "h100@lab"}] = nvidia_plan["placements"]
+
+    {:ok, metal_manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "hardware-derived-metal",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{"gpu_count" => 1},
+            "constraints" => [
+              %{"attribute" => "capabilities", "operator" => "contains", "value" => "metal"}
+            ]
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    assert {:ok, metal_plan} =
+             Scheduler.plan(metal_manifest,
+               nodes: [small_node(), capabilityless_metal_node()],
+               jobs: []
+             )
+
+    assert [%{"node" => "metal@lab"}] = metal_plan["placements"]
+  end
+
+  test "GPU-required placement fails instead of falling back to CPU-only nodes" do
+    {:ok, manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "gpu-required-no-cpu-fallback",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{
+              "devices" => [%{"kind" => "gpu", "driver" => "cuda", "count" => 1}]
+            }
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    assert {:error, "placement_failed: " <> reason} =
+             Scheduler.plan(manifest, nodes: [small_node(), large_node()], jobs: [])
+
+    assert reason =~ "worker"
+    assert reason =~ "small@lab: insufficient resources"
+    assert reason =~ "large@lab: insufficient resources"
   end
 
   test "service model inference routes audio services to nodes that advertise ASR and TTS" do
@@ -988,6 +1079,11 @@ defmodule MirrorNeuron.SchedulerTest do
     }
   end
 
+  defp capabilityless_h100_node do
+    h100_node()
+    |> Map.delete("capabilities")
+  end
+
   defp model_service(model, node) do
     model
     |> ModelCatalog.resolve!()
@@ -1021,5 +1117,10 @@ defmodule MirrorNeuron.SchedulerTest do
         ]
       }
     }
+  end
+
+  defp capabilityless_metal_node do
+    metal_node()
+    |> Map.delete("capabilities")
   end
 end
