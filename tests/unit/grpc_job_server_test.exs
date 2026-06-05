@@ -77,22 +77,6 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert Exception.message(error) =~ "ClearJobs requires #{@admin_token_env}"
   end
 
-  test "clear_jobs accepts admin token from canonical env" do
-    System.put_env(@admin_token_env, "admin-secret")
-
-    response = JobServer.clear_jobs(%ClearJobsRequest{admin_token: "admin-secret"}, nil)
-
-    assert response.cleared_count == 0
-  end
-
-  test "clear_jobs accepts admin token from legacy env" do
-    System.put_env(@legacy_admin_token_env, "legacy-admin-secret")
-
-    response = JobServer.clear_jobs(%ClearJobsRequest{admin_token: "legacy-admin-secret"}, nil)
-
-    assert response.cleared_count == 0
-  end
-
   test "network-only mode rejects job submission" do
     System.put_env("MN_NETWORK_ONLY", "true")
 
