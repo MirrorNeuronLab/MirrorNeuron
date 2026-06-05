@@ -149,8 +149,8 @@ services:
     volumes:
       - ${MN_HOST_STATE_DIR:-./state}:/root/.mirror_neuron
       - ${MN_HOST_STATE_DIR:-./state}:/opt/mirror_neuron/.mirror_neuron
-      - ${MN_HOST_MN_DIR:-./mn}:/root/.mn
-      - ${MN_HOST_MN_DIR:-./mn}:/opt/mirror_neuron/.mn
+      - ${MN_HOST_HOME_DIR:-${MN_HOST_MN_DIR:-./mn}}:/root/.mn
+      - ${MN_HOST_HOME_DIR:-${MN_HOST_MN_DIR:-./mn}}:/opt/mirror_neuron/.mn
       - ${MN_HOST_ARTIFACTS_DIR:-./mn/runs}:/root/.mn/runs
       - ${MN_HOST_ARTIFACTS_DIR:-./mn/runs}:/opt/mirror_neuron/.mn/runs
       - ${MN_HOST_OPENSHELL_CONFIG_DIR:-./openshell-config}:/root/.config/openshell:ro
