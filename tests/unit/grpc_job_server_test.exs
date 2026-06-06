@@ -174,6 +174,25 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert is_integer(node_info["gpu_count"])
   end
 
+  test "network-only handshake does not record joining node metadata" do
+    System.put_env("MN_NETWORK_ONLY", "true")
+    System.put_env("MN_NETWORK_JOIN_TOKEN", "join-secret")
+
+    joining_node = "mirror_neuron@10.0.0.90"
+
+    _response =
+      ClusterServer.network_handshake(
+        %NetworkHandshakeRequest{
+          token: "join-secret",
+          node_name: joining_node,
+          node_info_json: Jason.encode!(%{"address" => "10.0.0.90"})
+        },
+        nil
+      )
+
+    assert {:error, _reason} = NodeState.fetch(joining_node)
+  end
+
   test "network handshake records joining node metadata for scheduling" do
     System.put_env("MN_NETWORK_JOIN_TOKEN", "join-secret")
 

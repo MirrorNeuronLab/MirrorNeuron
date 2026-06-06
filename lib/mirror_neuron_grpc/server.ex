@@ -568,7 +568,10 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
 
   def network_handshake(request, _stream) do
     authorize_network_join!(Map.get(request, :token, ""))
-    maybe_record_joining_node(request)
+
+    unless MirrorNeuron.Grpc.NetworkOnly.enabled?() do
+      maybe_record_joining_node(request)
+    end
 
     %NetworkHandshakeResponse{
       node_name: to_string(Node.self()),
