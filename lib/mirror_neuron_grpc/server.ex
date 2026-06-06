@@ -619,15 +619,25 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
 
   def add_node(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("AddNode")
-    maybe_set_remote_cookie(request.node_name, Map.get(request, :token, ""))
+    token = Map.get(request, :token, "")
+    maybe_set_remote_cookie(request.node_name, token)
 
     case MirrorNeuron.add_node(request.node_name) do
       {:ok, %{status: status}} ->
+        sync_remote_cookie_with_cluster(request.node_name, token)
         %AddNodeResponse{node_name: request.node_name, status: status}
 
       {:error, reason} ->
         raise GRPC.RPCError, status: GRPC.Status.internal(), message: reason
     end
+  end
+
+  @doc false
+  def set_peer_cookie(node_name, cookie_text)
+      when is_binary(node_name) and is_binary(cookie_text) and
+             node_name != "" and cookie_text != "" do
+    Node.set_cookie(String.to_atom(node_name), String.to_atom(cookie_text))
+    :ok
   end
 
   def remove_node(request, _stream) do
@@ -913,10 +923,7 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
 
   defp maybe_set_remote_cookie(node_name, token)
        when is_binary(node_name) and is_binary(token) and token != "" do
-    cookie =
-      :crypto.hash(:sha256, "mirror-neuron:cookie:#{token}")
-      |> Base.encode16(case: :lower)
-      |> String.to_atom()
+    cookie = cookie_from_token(token) |> String.to_atom()
 
     node_name
     |> String.to_atom()
@@ -926,6 +933,36 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
   end
 
   defp maybe_set_remote_cookie(_node_name, _token), do: :ok
+
+  defp sync_remote_cookie_with_cluster(node_name, token)
+       when is_binary(node_name) and is_binary(token) and node_name != "" and token != "" do
+    remote_node = String.to_atom(node_name)
+    cookie = cookie_from_token(token)
+
+    Node.list()
+    |> Enum.reject(&(&1 == remote_node))
+    |> Enum.each(fn peer ->
+      _ = :rpc.call(peer, __MODULE__, :set_peer_cookie, [node_name, cookie], 2_000)
+
+      _ =
+        :rpc.call(
+          remote_node,
+          __MODULE__,
+          :set_peer_cookie,
+          [Atom.to_string(peer), cookie],
+          2_000
+        )
+    end)
+
+    :ok
+  end
+
+  defp sync_remote_cookie_with_cluster(_node_name, _token), do: :ok
+
+  defp cookie_from_token(token) do
+    :crypto.hash(:sha256, "mirror-neuron:cookie:#{token}")
+    |> Base.encode16(case: :lower)
+  end
 
   defp advertised_host do
     System.get_env("MN_NETWORK_ADVERTISE_HOST") ||
