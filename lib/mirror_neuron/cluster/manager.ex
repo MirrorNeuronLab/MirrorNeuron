@@ -88,12 +88,6 @@ defmodule MirrorNeuron.Cluster.Manager do
     [self_node | Node.list()]
     |> Enum.uniq()
     |> Enum.reject(&(&1 == Node.self() and self_node != Node.self()))
-    |> Enum.filter(fn node ->
-      case fetch_node_info(node) do
-        {:ok, _info} -> true
-        {:error, _reason} -> false
-      end
-    end)
     |> Enum.map(&to_string/1)
   end
 
