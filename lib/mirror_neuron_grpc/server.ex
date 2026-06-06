@@ -911,7 +911,10 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
       "display_name" => map_value(platform, "display_name"),
       "hostname" => map_value(platform, "hostname"),
       "cpu_cores" => map_value(cpu, "logical_processors"),
+      "cpu_model" => map_value(cpu, "model"),
       "gpu_count" => gpu_count(gpu),
+      "gpu_model" => List.first(gpu_models(gpu)),
+      "gpu_models" => gpu_models(gpu),
       "memory_gb" => memory_gb(memory)
     }
   end
@@ -925,6 +928,32 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
   defp gpu_count(gpu) when is_list(gpu), do: length(gpu)
   defp gpu_count(%{} = gpu), do: map_value(gpu, "count") || 0
   defp gpu_count(_gpu), do: 0
+
+  defp gpu_models(gpus) when is_list(gpus) do
+    gpus
+    |> Enum.map(fn
+      gpu when is_map(gpu) -> map_value(gpu, "model") || map_value(gpu, "name")
+      gpu when is_binary(gpu) -> gpu
+      _gpu -> nil
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&to_string/1)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == "" or unknown_gpu?(&1)))
+    |> Enum.uniq()
+  end
+
+  defp gpu_models(%{} = gpu), do: gpu_models([gpu])
+  defp gpu_models(gpu) when is_binary(gpu), do: if(unknown_gpu?(gpu), do: [], else: [gpu])
+  defp gpu_models(_gpu), do: []
+
+  defp unknown_gpu?(gpu) do
+    normalized = String.downcase(to_string(gpu || ""))
+
+    Enum.any?(["unknown", "none", "unsupported", "not available"], fn marker ->
+      String.contains?(normalized, marker)
+    end)
+  end
 
   defp memory_gb(memory) do
     case map_value(memory, "total_mb") do

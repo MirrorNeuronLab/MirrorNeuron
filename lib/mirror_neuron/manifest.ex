@@ -429,7 +429,7 @@ defmodule MirrorNeuron.Manifest do
   defp validate_required(errors, manifest) do
     errors
     |> maybe_add_error(is_nil(manifest.manifest_version), "manifest_version is required")
-    |> maybe_add_error(is_nil(manifest.graph_id), "graph_id is required")
+    |> maybe_add_error(is_nil(manifest.graph_id), "workflow id (graph_id) is required")
     |> maybe_add_error(manifest.nodes == [], "nodes must not be empty")
   end
 

@@ -63,7 +63,12 @@ defmodule MirrorNeuron.ResourceSpecTest do
         }
       })
 
-    assert Enum.any?(devices, &(&1["id"] == "GPU-abc" and &1["driver"] == "cuda"))
+    assert Enum.any?(
+             devices,
+             &(&1["id"] == "GPU-abc" and &1["driver"] == "cuda" and
+                 &1["model"] == "NVIDIA RTX")
+           )
+
     assert Enum.any?(devices, &("metal" in &1["capabilities"]))
   end
 

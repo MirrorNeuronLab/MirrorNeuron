@@ -46,6 +46,7 @@ defmodule MirrorNeuron.Cluster.Hardware do
     %{
       logical_processors: logical_processors,
       architecture: to_string(:erlang.system_info(:system_architecture)),
+      model: cpu_model(),
       load_average_1m: load_average_1m,
       load_ratio: ratio(load_average_1m, logical_processors)
     }
@@ -99,7 +100,10 @@ defmodule MirrorNeuron.Cluster.Hardware do
                 parse_nvidia_gpu(output, memory, %{"cuda_version" => nvidia_cuda_version()})
 
               _ ->
-                "Unknown or None"
+                case linux_pci_gpu_info(memory) do
+                  [] -> "Unknown or None"
+                  devices -> devices
+                end
             end
 
           _ ->
@@ -163,6 +167,7 @@ defmodule MirrorNeuron.Cluster.Hardware do
         id: "metal-#{index}",
         index: index,
         name: model,
+        model: model,
         kind: "gpu",
         type: "apple/gpu",
         vendor: "apple",
@@ -205,6 +210,64 @@ defmodule MirrorNeuron.Cluster.Hardware do
     end
   rescue
     _ -> nil
+  end
+
+  defp cpu_model do
+    blank_to_nil(System.get_env("MN_NODE_CPU_MODEL")) ||
+      case :os.type() do
+        {:unix, :darwin} -> darwin_cpu_model()
+        {:unix, :linux} -> linux_cpu_model()
+        {:win32, _name} -> windows_cpu_model()
+        _ -> nil
+      end
+  rescue
+    _ -> nil
+  end
+
+  defp darwin_cpu_model do
+    case System.cmd("sysctl", ["-n", "machdep.cpu.brand_string"]) do
+      {output, 0} -> blank_to_nil(output)
+      _ -> nil
+    end
+  end
+
+  defp linux_cpu_model do
+    with {:ok, cpuinfo} <- File.read("/proc/cpuinfo") do
+      cpuinfo
+      |> String.split("\n")
+      |> Enum.find_value(fn line ->
+        case String.split(line, ":", parts: 2) do
+          [key, value] ->
+            key = key |> String.trim() |> String.downcase()
+
+            if key in ["model name", "hardware", "processor", "cpu model"] do
+              blank_to_nil(value)
+            end
+
+          _ ->
+            nil
+        end
+      end)
+    else
+      _ -> nil
+    end
+  end
+
+  defp windows_cpu_model do
+    case System.cmd("wmic", ["cpu", "get", "Name", "/value"]) do
+      {output, 0} ->
+        output
+        |> String.split("\n")
+        |> Enum.find_value(fn line ->
+          case String.split(line, "=", parts: 2) do
+            ["Name", value] -> blank_to_nil(value)
+            _ -> nil
+          end
+        end)
+
+      _ ->
+        nil
+    end
   end
 
   defp darwin_total_memory do
@@ -302,6 +365,7 @@ defmodule MirrorNeuron.Cluster.Hardware do
         id: uuid || "nvidia-#{index}",
         index: index,
         name: name,
+        model: name,
         kind: "gpu",
         type: "nvidia/gpu",
         vendor: "nvidia",
@@ -328,6 +392,122 @@ defmodule MirrorNeuron.Cluster.Hardware do
     _ -> String.split(output, "\n", trim: true)
   end
 
+  def parse_lspci_gpu(output, rocm_version \\ nil) do
+    output
+    |> String.split("\n", trim: true)
+    |> Enum.map(&parse_lspci_gpu_line(&1, rocm_version))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.with_index()
+    |> Enum.map(fn {device, index} -> Map.put(device, :index, index) end)
+  end
+
+  defp parse_lspci_gpu_line(line, rocm_version) do
+    normalized = String.downcase(line)
+
+    if pci_gpu_line?(normalized) do
+      {slot, class, vendor_name, device_name} = parse_lspci_fields(line)
+      search_text = String.downcase("#{vendor_name} #{device_name} #{line}")
+      vendor = lspci_gpu_vendor(search_text)
+
+      if vendor do
+        api_version = if(vendor == "amd", do: rocm_version)
+        driver = driver_from_gpu_vendor(vendor)
+        api = api_from_gpu_driver(driver)
+        name = blank_to_nil("#{vendor_name} #{device_name}") || blank_to_nil(device_name) || line
+
+        %{
+          id: "pci-#{slot}",
+          name: name,
+          model: name,
+          kind: "gpu",
+          type: type_from_gpu_vendor(vendor),
+          vendor: vendor,
+          driver: driver,
+          api: api,
+          api_version: api_version,
+          driver_version: nil,
+          gpu_type: gpu_type(vendor, api || driver, api_version),
+          memory_total_mb: nil,
+          memory_free_mb: nil,
+          capabilities: configured_gpu_capabilities(vendor, driver, search_text <> " " <> class)
+        }
+      end
+    end
+  end
+
+  defp pci_gpu_line?(line) do
+    String.contains?(line, "vga compatible controller") or
+      String.contains?(line, "3d controller") or
+      String.contains?(line, "display controller")
+  end
+
+  defp parse_lspci_fields(line) do
+    slot = line |> String.split(" ", parts: 2) |> List.first() |> String.trim_trailing(":")
+
+    quoted =
+      ~r/"([^"]*)"/
+      |> Regex.scan(line, capture: :all_but_first)
+      |> Enum.map(&List.first/1)
+
+    case quoted do
+      [class, vendor, device | _rest] ->
+        {slot, class, vendor, device}
+
+      _ ->
+        {before_colon, after_colon} =
+          case String.split(line, ":", parts: 2) do
+            [before, after_value] -> {before, after_value}
+            [before] -> {before, ""}
+          end
+
+        class = before_colon |> String.replace(slot, "") |> String.trim()
+        {vendor, device} = split_lspci_vendor_device(after_colon)
+        {slot, class, vendor, device}
+    end
+  end
+
+  defp split_lspci_vendor_device(value) do
+    value = String.trim(value)
+
+    cond do
+      String.match?(value, ~r/advanced micro devices|amd|ati/i) ->
+        split_known_vendor(value, ~r/(advanced micro devices[^\[]*|amd|ati)/i)
+
+      String.match?(value, ~r/intel/i) ->
+        split_known_vendor(value, ~r/(intel[^\[]*)/i)
+
+      String.match?(value, ~r/nvidia/i) ->
+        split_known_vendor(value, ~r/(nvidia[^\[]*)/i)
+
+      true ->
+        {"", value}
+    end
+  end
+
+  defp split_known_vendor(value, regex) do
+    case Regex.run(regex, value, return: :index) do
+      [{start, length} | _rest] ->
+        vendor = value |> String.slice(start, length) |> String.trim()
+        device = value |> String.replace(vendor, "", global: false) |> String.trim()
+        {vendor, device}
+
+      _ ->
+        {"", value}
+    end
+  end
+
+  defp lspci_gpu_vendor(text) do
+    cond do
+      String.contains?(text, "nvidia") -> "nvidia"
+      String.contains?(text, "advanced micro devices") -> "amd"
+      String.contains?(text, "amd") -> "amd"
+      Regex.match?(~r/\bati\b|\[amd\/ati\]/, text) -> "amd"
+      String.contains?(text, "radeon") -> "amd"
+      String.contains?(text, "intel") -> "intel"
+      true -> nil
+    end
+  end
+
   defp generic_gpu_devices(0, _memory), do: []
 
   defp generic_gpu_devices(count, memory) when is_integer(count) and count > 0 do
@@ -338,6 +518,7 @@ defmodule MirrorNeuron.Cluster.Hardware do
         id: "gpu-#{index}",
         index: index,
         name: profile.name || "GPU #{index + 1}",
+        model: profile.name || "GPU #{index + 1}",
         kind: "gpu",
         type: profile.type,
         vendor: profile.vendor,
@@ -554,21 +735,55 @@ defmodule MirrorNeuron.Cluster.Hardware do
     |> Enum.sort()
   end
 
+  defp linux_pci_gpu_info(_memory) do
+    case System.cmd("lspci", ["-mm"]) do
+      {output, 0} -> parse_lspci_gpu(output, rocm_version())
+      _ -> []
+    end
+  rescue
+    _ -> []
+  end
+
   defp advertised_node_capabilities do
     System.get_env("MN_NODE_CAPABILITIES")
     |> split_env_list()
   end
 
   defp nvidia_cuda_version do
-    case System.cmd("nvidia-smi", []) do
-      {output, 0} ->
-        version_after(output, "CUDA Version:")
+    blank_to_nil(System.get_env("CUDA_VERSION")) ||
+      case System.cmd("nvidia-smi", []) do
+        {output, 0} ->
+          version_after(output, "CUDA Version:")
 
-      _ ->
-        nil
-    end
+        _ ->
+          nil
+      end
   rescue
     _ -> nil
+  end
+
+  defp rocm_version do
+    blank_to_nil(System.get_env("ROCM_VERSION")) ||
+      blank_to_nil(System.get_env("HIP_VERSION")) ||
+      rocm_version_file() ||
+      case System.cmd("rocminfo", []) do
+        {output, 0} ->
+          version_after(output, "ROCm Version") ||
+            version_after(output, "ROCM Version") ||
+            version_after(output, "HSA Runtime Version")
+
+        _ ->
+          nil
+      end
+  rescue
+    _ -> nil
+  end
+
+  defp rocm_version_file do
+    case File.read("/opt/rocm/.info/version") do
+      {:ok, value} -> blank_to_nil(value)
+      _ -> nil
+    end
   end
 
   defp nvidia_gpu_capabilities(name) do

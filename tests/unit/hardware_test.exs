@@ -10,6 +10,7 @@ defmodule MirrorNeuron.Cluster.HardwareTest do
           "MN_NODE_GPU",
           "MN_NODE_GPU_COUNT",
           "MN_NODE_DISPLAY_NAME",
+          "MN_NODE_CPU_MODEL",
           "MN_NODE_CAPABILITIES",
           "MN_NODE_GPU_VENDOR",
           "MN_NODE_GPU_DRIVER",
@@ -39,6 +40,7 @@ defmodule MirrorNeuron.Cluster.HardwareTest do
     assert gpu.index == 0
     assert gpu.vendor == "nvidia"
     assert gpu.driver == "cuda"
+    assert gpu.model == "NVIDIA RTX 4090"
     assert gpu.memory_total_mb == 24_576.0
     assert gpu.memory_free_mb == 22_528.0
     assert "cuda" in gpu.capabilities
@@ -58,6 +60,25 @@ defmodule MirrorNeuron.Cluster.HardwareTest do
     assert gpu.api == "cuda"
     assert gpu.api_version == "12.4"
     assert gpu.gpu_type == "nvidia-cuda-12.4"
+  end
+
+  test "parses AMD and Intel Linux PCI GPU inventory" do
+    [amd, intel] =
+      Hardware.parse_lspci_gpu(
+        ~s(03:00.0 "VGA compatible controller" "Advanced Micro Devices, Inc. [AMD/ATI]" "Navi 31 [Radeon RX 7900 XTX]"\n00:02.0 "VGA compatible controller" "Intel Corporation" "Arc Graphics"),
+        "6.1"
+      )
+
+    assert amd.vendor == "amd"
+    assert amd.driver == "rocm"
+    assert amd.api_version == "6.1"
+    assert amd.gpu_type == "amd-rocm-6.1"
+    assert amd.model == "Advanced Micro Devices, Inc. [AMD/ATI] Navi 31 [Radeon RX 7900 XTX]"
+
+    assert intel.vendor == "intel"
+    assert intel.driver == "intel"
+    assert intel.gpu_type == "intel"
+    assert intel.model == "Intel Corporation Arc Graphics"
   end
 
   test "derives high-end NVIDIA capability tags from GPU names" do
@@ -122,6 +143,7 @@ defmodule MirrorNeuron.Cluster.HardwareTest do
     assert gpu.id == "metal-0"
     assert gpu.vendor == "apple"
     assert gpu.driver == "metal"
+    assert gpu.model == "Apple M2 Max"
     assert gpu.api == "metal"
     assert gpu.gpu_type == "mac-metal"
     assert gpu.memory_total_mb == 32_768
@@ -148,7 +170,17 @@ defmodule MirrorNeuron.Cluster.HardwareTest do
 
     assert length(hardware.gpu) == 2
     assert Enum.all?(hardware.gpu, &(&1.kind == "gpu"))
+    assert Enum.all?(hardware.gpu, &is_binary(&1.model))
     assert Enum.all?(hardware.gpu, &("gpu" in &1.capabilities))
+  end
+
+  test "adds CPU model to hardware info" do
+    System.put_env("MN_NODE_GPU_COUNT", "0")
+    System.put_env("MN_NODE_CPU_MODEL", "AMD Ryzen AI Max+ 395")
+
+    hardware = Hardware.info()
+
+    assert hardware.cpu.model == "AMD Ryzen AI Max+ 395"
   end
 
   test "annotates runtime-provided Spark GPU count with NVIDIA identity" do

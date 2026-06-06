@@ -10,7 +10,7 @@ defmodule MirrorNeuron.RuntimeIdTest do
     assert String.length(job_id) == 13
   end
 
-  test "falls back to job prefix when graph id has no alphanumeric words" do
+  test "falls back to job prefix when workflow id has no alphanumeric words" do
     assert Runtime.generate_job_id("!!!") =~ ~r/^job-[a-f0-9]{8}$/
   end
 

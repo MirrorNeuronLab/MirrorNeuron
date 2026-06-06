@@ -91,6 +91,7 @@ defmodule MirrorNeuron.Resource do
     memory_available_gb = memory_available_gb(memory)
     gpu_memory_total_mb = gpu_memory_total_mb(devices)
     gpu_memory_free_mb = gpu_memory_free_mb(devices)
+    gpu_models = gpu_models(devices, gpu)
 
     %{
       "name" => name,
@@ -103,7 +104,10 @@ defmodule MirrorNeuron.Resource do
       "scheduling_eligible" => node_attr(node, :scheduling_eligible, true),
       "drain" => Map.get(node, :drain) || Map.get(node, "drain"),
       "cpu_cores" => integer_value(map_get(cpu, "logical_processors")),
+      "cpu_model" => cpu_model(cpu),
       "gpu_count" => gpu_count(gpu),
+      "gpu_model" => List.first(gpu_models),
+      "gpu_models" => gpu_models,
       "memory_gb" => memory_total_gb,
       "memory_total_gb" => memory_total_gb,
       "memory_available_gb" => memory_available_gb,
@@ -126,7 +130,10 @@ defmodule MirrorNeuron.Resource do
       "name" => "unknown",
       "platform" => %{},
       "cpu_cores" => 0,
+      "cpu_model" => nil,
       "gpu_count" => 0,
+      "gpu_model" => nil,
+      "gpu_models" => [],
       "memory_gb" => 0.0,
       "memory_total_gb" => 0.0,
       "memory_available_gb" => 0.0,
@@ -256,6 +263,28 @@ defmodule MirrorNeuron.Resource do
   end
 
   defp gpu_summary(_gpu), do: []
+
+  defp cpu_model(cpu) when is_map(cpu) do
+    map_get(cpu, "model") ||
+      map_get(cpu, "model_name") ||
+      map_get(cpu, "brand") ||
+      map_get(cpu, "processor")
+  end
+
+  defp cpu_model(_cpu), do: nil
+
+  defp gpu_models(devices, gpu) do
+    device_models =
+      devices
+      |> Enum.map(&(map_get(&1, "model") || map_get(&1, "name")))
+
+    (device_models ++ gpu_summary(gpu))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&to_string/1)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == "" or unknown_gpu?(&1)))
+    |> Enum.uniq()
+  end
 
   defp gpu_memory_total_mb(devices),
     do: devices |> Enum.map(&(&1["memory_total_mb"] || 0)) |> Enum.sum()

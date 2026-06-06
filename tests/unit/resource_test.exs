@@ -34,7 +34,7 @@ defmodule MirrorNeuron.ResourceTest do
               "hostname" => "local-lab",
               "display_name" => "Local Lab"
             },
-            "cpu" => %{"logical_processors" => 8},
+            "cpu" => %{"logical_processors" => 8, "model" => "AMD Ryzen AI Max+ 395"},
             "memory" => %{
               "total_bytes" => 16 * 1024 * 1024 * 1024,
               "available_bytes" => 12 * 1024 * 1024 * 1024
@@ -47,6 +47,7 @@ defmodule MirrorNeuron.ResourceTest do
               %{
                 "id" => "gpu-1",
                 "name" => "NVIDIA RTX 4090",
+                "model" => "NVIDIA RTX 4090",
                 "api" => "cuda",
                 "api_version" => "12.4",
                 "driver_version" => "550.54",
@@ -158,8 +159,12 @@ defmodule MirrorNeuron.ResourceTest do
     assert draining["scheduling_eligible"] == false
     assert draining["drain"] == %{"status" => "blocked_no_placement", "reason" => "kernel update"}
     assert draining["platform"]["os"] == "linux"
+    assert draining["cpu_model"] == "AMD Ryzen AI Max+ 395"
+    assert draining["gpu_model"] == "NVIDIA RTX 4090"
+    assert draining["gpu_models"] == ["NVIDIA RTX 4090", "NVIDIA RTX 6000 Ada"]
     assert length(draining["devices"]) == 2
     assert hd(draining["devices"])["vendor"] == "nvidia"
+    assert hd(draining["devices"])["model"] == "NVIDIA RTX 4090"
     assert hd(draining["devices"])["gpu_type"] == "nvidia-cuda-12.4"
     assert hd(draining["devices"])["api_version"] == "12.4"
     assert hd(draining["devices"])["memory_total_mb"] == 12_288
