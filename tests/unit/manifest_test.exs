@@ -12,6 +12,20 @@ defmodule MirrorNeuron.ManifestTest do
     assert {:error, "unexpected byte" <> _} = Manifest.load("invalid json string {")
   end
 
+  test "rejects legacy top-level nodes and edges" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "legacy-topology",
+      "entrypoints" => ["router"],
+      "nodes" => [%{"node_id" => "router", "agent_type" => "router", "role" => "root"}],
+      "edges" => []
+    }
+
+    assert {:error, errors} = Manifest.load(manifest)
+    assert Enum.any?(errors, &String.contains?(&1, "top-level nodes"))
+    assert Enum.any?(errors, &String.contains?(&1, "top-level edges"))
+  end
+
   test "fails when edge is missing message_type" do
     manifest = %{
       "manifest_version" => "1.0",
@@ -26,7 +40,7 @@ defmodule MirrorNeuron.ManifestTest do
       ]
     }
 
-    assert {:error, errors} = Manifest.load(manifest)
+    assert {:error, errors} = Manifest.load(flow_manifest(manifest))
     assert Enum.any?(errors, &String.contains?(&1, "must define message_type"))
   end
 
@@ -44,7 +58,7 @@ defmodule MirrorNeuron.ManifestTest do
       ]
     }
 
-    assert {:error, errors} = Manifest.load(manifest)
+    assert {:error, errors} = Manifest.load(flow_manifest(manifest))
     assert Enum.any?(errors, &String.contains?(&1, "missing from_node"))
     assert Enum.any?(errors, &String.contains?(&1, "missing to_node"))
   end
@@ -59,7 +73,7 @@ defmodule MirrorNeuron.ManifestTest do
       "edges" => []
     }
 
-    assert {:ok, norm} = Manifest.load(manifest)
+    assert {:ok, norm} = Manifest.load(flow_manifest(manifest))
     assert norm.entrypoints == ["router"]
 
     # Missing entirely uses root role node
@@ -70,7 +84,7 @@ defmodule MirrorNeuron.ManifestTest do
       "edges" => []
     }
 
-    assert {:ok, norm2} = Manifest.load(manifest_no_entry)
+    assert {:ok, norm2} = Manifest.load(flow_manifest(manifest_no_entry))
     assert norm2.entrypoints == ["root"]
   end
 
@@ -84,7 +98,7 @@ defmodule MirrorNeuron.ManifestTest do
       "initial_inputs" => [%{"payload" => 1}, %{"payload" => 2}]
     }
 
-    assert {:ok, norm} = Manifest.load(manifest)
+    assert {:ok, norm} = Manifest.load(flow_manifest(manifest))
     # The default entrypoint is router, list inputs map to first entrypoint
     assert norm.initial_inputs == %{"__entrypoints__" => [%{"payload" => 1}, %{"payload" => 2}]}
   end
@@ -140,7 +154,7 @@ defmodule MirrorNeuron.ManifestTest do
       "edges" => []
     }
 
-    assert {:ok, normalized} = Manifest.load(manifest)
+    assert {:ok, normalized} = Manifest.load(flow_manifest(manifest))
     durable = Manifest.to_map(normalized)
 
     assert durable["apiVersion"] == "mn.workflow/v1"
@@ -155,7 +169,7 @@ defmodule MirrorNeuron.ManifestTest do
              "worker"
 
     assert durable["term"]["privacy"] == "local"
-    assert {:ok, _reloaded} = Manifest.load(durable)
+    assert {:ok, _reloaded} = Manifest.load(flow_manifest(durable))
   end
 
   test "topology remains runtime agent topology while flow graph remains problem DAG" do
@@ -200,7 +214,7 @@ defmodule MirrorNeuron.ManifestTest do
       ]
     }
 
-    assert {:ok, normalized} = Manifest.load(manifest)
+    assert {:ok, normalized} = Manifest.load(flow_manifest(manifest))
 
     topology = Manifest.topology(normalized)
     assert Enum.map(topology["nodes"], & &1["node_id"]) == ["router", "executor"]
@@ -227,7 +241,7 @@ defmodule MirrorNeuron.ManifestTest do
       "edges" => []
     }
 
-    assert {:error, errors} = Manifest.load(manifest)
+    assert {:error, errors} = Manifest.load(flow_manifest(manifest))
     assert Enum.any?(errors, &String.contains?(&1, "unsupported agent_type nil"))
   end
 
@@ -252,7 +266,7 @@ defmodule MirrorNeuron.ManifestTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:ok, normalized} = Manifest.load(manifest)
+    assert {:ok, normalized} = Manifest.load(flow_manifest(manifest))
     assert normalized.graph_id == "simple"
     assert normalized.type == "batch"
     assert normalized.required_context_engine == true
@@ -291,14 +305,23 @@ defmodule MirrorNeuron.ManifestTest do
       "edges" => []
     }
 
-    assert {:ok, normalized} = Manifest.load(manifest)
+    assert {:ok, normalized} = Manifest.load(flow_manifest(manifest))
     assert [%{"name" => "ollama"}] = normalized.required_services
     assert [%{"name" => "agent-api", "port" => 8080}] = hd(normalized.nodes).services
 
     serialized = Manifest.to_map(normalized)
 
-    assert get_in(serialized, ["nodes", Access.at(0), "requires_services", Access.at(0), "name"]) ==
-             "ollama"
+    refute Map.has_key?(serialized, "nodes")
+    refute Map.has_key?(serialized, "edges")
+
+    assert get_in(serialized, [
+             "flow",
+             "nodes",
+             Access.at(0),
+             "requires_services",
+             Access.at(0),
+             "name"
+           ]) == "ollama"
   end
 
   test "rejects malformed service declarations" do
@@ -313,7 +336,7 @@ defmodule MirrorNeuron.ManifestTest do
       "edges" => []
     }
 
-    assert {:error, errors} = Manifest.load(manifest)
+    assert {:error, errors} = Manifest.load(flow_manifest(manifest))
     assert Enum.any?(errors, &String.contains?(&1, "required_services.0.name"))
     assert Enum.any?(errors, &String.contains?(&1, "checks.0.type"))
   end
@@ -328,7 +351,7 @@ defmodule MirrorNeuron.ManifestTest do
       "policies" => %{"recovery_mode" => "auto"}
     }
 
-    assert {:ok, normalized} = Manifest.load(manifest)
+    assert {:ok, normalized} = Manifest.load(flow_manifest(manifest))
     assert normalized.policies["recovery_mode"] == "auto"
   end
 
@@ -354,7 +377,7 @@ defmodule MirrorNeuron.ManifestTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:ok, normalized} = Manifest.load(manifest)
+    assert {:ok, normalized} = Manifest.load(flow_manifest(manifest))
     edge = hd(normalized.edges)
     assert edge.routing_mode == "first_match"
     assert edge.conditions == %{"expr" => "${payload.domain} == \"finance\""}
@@ -383,7 +406,7 @@ defmodule MirrorNeuron.ManifestTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:error, errors} = Manifest.load(manifest)
+    assert {:error, errors} = Manifest.load(flow_manifest(manifest))
     assert Enum.any?(errors, &String.contains?(&1, "unsupported routing_mode"))
     assert Enum.any?(errors, &String.contains?(&1, "invalid conditions"))
   end
@@ -409,10 +432,10 @@ defmodule MirrorNeuron.ManifestTest do
       "initial_inputs" => %{"worker" => [%{"id" => 1}]}
     }
 
-    assert {:ok, normalized} = Manifest.load(manifest)
+    assert {:ok, normalized} = Manifest.load(flow_manifest(manifest))
     durable = Manifest.to_map(normalized)
 
-    assert {:ok, reloaded} = Manifest.load(durable)
+    assert {:ok, reloaded} = Manifest.load(flow_manifest(durable))
     assert reloaded.graph_id == normalized.graph_id
     assert reloaded.entrypoints == ["worker"]
     assert reloaded.initial_inputs == %{"worker" => [%{"id" => 1}]}
@@ -460,12 +483,14 @@ defmodule MirrorNeuron.ManifestTest do
       }
     }
 
-    assert {:ok, normalized} = Manifest.load(manifest)
+    assert {:ok, normalized} = Manifest.load(flow_manifest(manifest))
     durable = Manifest.to_map(normalized)
 
     assert durable["policies"]["restart"]["attempts"] == 3
-    assert durable["nodes"] |> hd() |> get_in(["policies", "restart", "attempts"]) == 1
-    assert {:ok, _reloaded} = Manifest.load(durable)
+    refute Map.has_key?(durable, "nodes")
+    refute Map.has_key?(durable, "edges")
+    assert durable["flow"]["nodes"] |> hd() |> get_in(["policies", "restart", "attempts"]) == 1
+    assert {:ok, _reloaded} = Manifest.load(flow_manifest(durable))
   end
 
   test "rejects invalid lifecycle policies" do
@@ -492,7 +517,7 @@ defmodule MirrorNeuron.ManifestTest do
       }
     }
 
-    assert {:error, errors} = Manifest.load(manifest)
+    assert {:error, errors} = Manifest.load(flow_manifest(manifest))
     assert Enum.any?(errors, &String.contains?(&1, "policies.restart.attempts"))
     assert Enum.any?(errors, &String.contains?(&1, "policies.restart.mode"))
     assert Enum.any?(errors, &String.contains?(&1, "policies.restart.delay_function"))
@@ -509,7 +534,7 @@ defmodule MirrorNeuron.ManifestTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:ok, normalized} = Manifest.load(manifest)
+    assert {:ok, normalized} = Manifest.load(flow_manifest(manifest))
     assert normalized.required_context_engine == false
   end
 
@@ -524,7 +549,7 @@ defmodule MirrorNeuron.ManifestTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:error, errors} = Manifest.load(manifest)
+    assert {:error, errors} = Manifest.load(flow_manifest(manifest))
     assert "requiredContextEngine must be a boolean" in errors
   end
 
@@ -541,7 +566,7 @@ defmodule MirrorNeuron.ManifestTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:error, errors} = Manifest.load(manifest)
+    assert {:error, errors} = Manifest.load(flow_manifest(manifest))
     assert Enum.any?(errors, &String.contains?(&1, "daemon is no longer supported"))
   end
 
@@ -558,7 +583,7 @@ defmodule MirrorNeuron.ManifestTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:ok, normalized} = Manifest.load(manifest)
+    assert {:ok, normalized} = Manifest.load(flow_manifest(manifest))
     assert normalized.type == "service"
   end
 
@@ -581,7 +606,7 @@ defmodule MirrorNeuron.ManifestTest do
         "policies" => %{"recovery_mode" => "local_restart"}
       }
 
-      assert {:error, errors} = Manifest.load(manifest)
+      assert {:error, errors} = Manifest.load(flow_manifest(manifest))
       assert Enum.any?(errors, &String.contains?(&1, "type must be service or omitted for batch"))
     end
   end
@@ -606,7 +631,7 @@ defmodule MirrorNeuron.ManifestTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:ok, normalized} = Manifest.load(manifest)
+    assert {:ok, normalized} = Manifest.load(flow_manifest(manifest))
     assert Enum.find(normalized.nodes, &(&1.node_id == "source")).type == "stream"
     assert Enum.find(normalized.nodes, &(&1.node_id == "sink")).type == "reduce"
   end
@@ -628,7 +653,7 @@ defmodule MirrorNeuron.ManifestTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:error, errors} = Manifest.load(manifest)
+    assert {:error, errors} = Manifest.load(flow_manifest(manifest))
     assert Enum.any?(errors, &String.contains?(&1, "unsupported template type"))
   end
 
@@ -649,7 +674,7 @@ defmodule MirrorNeuron.ManifestTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:error, errors} = Manifest.load(manifest)
+    assert {:error, errors} = Manifest.load(flow_manifest(manifest))
     assert Enum.any?(errors, &String.contains?(&1, "template type"))
     assert Enum.any?(errors, &String.contains?(&1, "agent_type"))
   end
@@ -669,7 +694,7 @@ defmodule MirrorNeuron.ManifestTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:error, errors} = Manifest.load(manifest)
+    assert {:error, errors} = Manifest.load(flow_manifest(manifest))
     assert Enum.any?(errors, &String.contains?(&1, "duplicate node_id router"))
     assert Enum.any?(errors, &String.contains?(&1, "missing to_node missing"))
   end
@@ -689,7 +714,7 @@ defmodule MirrorNeuron.ManifestTest do
       "edges" => []
     }
 
-    assert {:error, errors} = Manifest.load(manifest)
+    assert {:error, errors} = Manifest.load(flow_manifest(manifest))
     assert Enum.any?(errors, &String.contains?(&1, "unsupported complete_job"))
   end
 
@@ -708,7 +733,7 @@ defmodule MirrorNeuron.ManifestTest do
       "edges" => []
     }
 
-    assert {:error, errors} = Manifest.load(manifest)
+    assert {:error, errors} = Manifest.load(flow_manifest(manifest))
     assert Enum.any?(errors, &String.contains?(&1, "complete_on_message requires"))
   end
 
@@ -727,7 +752,7 @@ defmodule MirrorNeuron.ManifestTest do
       "edges" => []
     }
 
-    assert {:error, errors} = Manifest.load(manifest)
+    assert {:error, errors} = Manifest.load(flow_manifest(manifest))
     assert Enum.any?(errors, &String.contains?(&1, "complete_after requires"))
   end
 
@@ -750,7 +775,7 @@ defmodule MirrorNeuron.ManifestTest do
       "edges" => []
     }
 
-    assert {:error, errors} = Manifest.load(manifest)
+    assert {:error, errors} = Manifest.load(flow_manifest(manifest))
 
     assert Enum.any?(
              errors,
@@ -780,7 +805,7 @@ defmodule MirrorNeuron.ManifestTest do
       ]
     }
 
-    assert {:error, errors} = Manifest.load(manifest)
+    assert {:error, errors} = Manifest.load(flow_manifest(manifest))
 
     assert Enum.any?(
              errors,
@@ -801,7 +826,7 @@ defmodule MirrorNeuron.ManifestTest do
 
     File.write!(
       Path.join(tmp_dir, "manifest.json"),
-      Jason.encode!(%{
+      flow_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "bundle-test",
         "entrypoints" => ["router"],
@@ -819,6 +844,7 @@ defmodule MirrorNeuron.ManifestTest do
         ],
         "policies" => %{"recovery_mode" => "local_restart"}
       })
+      |> Jason.encode!()
     )
 
     assert {:ok, bundle} = JobBundle.load(tmp_dir)
@@ -828,4 +854,25 @@ defmodule MirrorNeuron.ManifestTest do
 
     File.rm_rf!(tmp_dir)
   end
+
+  defp flow_manifest(manifest) do
+    {nodes, manifest} = Map.pop(manifest, "nodes")
+    {edges, manifest} = Map.pop(manifest, "edges")
+
+    if is_list(nodes) or is_list(edges) do
+      flow = Map.get(manifest, "flow", %{}) || %{}
+
+      flow =
+        flow
+        |> maybe_put_topology("nodes", nodes)
+        |> maybe_put_topology("edges", edges)
+
+      Map.put(manifest, "flow", flow)
+    else
+      manifest
+    end
+  end
+
+  defp maybe_put_topology(flow, _key, nil), do: flow
+  defp maybe_put_topology(flow, key, value), do: Map.put(flow, key, value)
 end

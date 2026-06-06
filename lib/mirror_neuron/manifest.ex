@@ -130,20 +130,20 @@ defmodule MirrorNeuron.Manifest do
       "triggers" => json_safe(manifest.triggers),
       "parameterized" => json_safe(manifest.parameterized),
       "metadata" => json_safe(manifest.metadata),
-      "nodes" => Enum.map(manifest.nodes, &node_to_map/1),
-      "edges" => Enum.map(manifest.edges, &edge_to_map/1),
       "policies" => json_safe(manifest.policies),
       "entrypoints" => manifest.entrypoints,
       "initial_inputs" => json_safe(manifest.initial_inputs),
       "reload" => json_safe(manifest.reload)
     })
     |> maybe_put("contract", manifest.contract)
-    |> maybe_put("flow", manifest.flow)
+    |> maybe_put("flow", flow_to_map(manifest))
     |> maybe_put("runtime", manifest.runtime)
   end
 
   defp normalize_and_validate(raw) do
-    raw = materialize_workflow_runtime(raw)
+    raw = materialize_flow_topology(raw)
+    raw_nodes = raw_nodes(raw)
+    raw_edges = raw_edges(raw)
 
     manifest = %__MODULE__{
       api_version: Map.get(raw, "apiVersion"),
@@ -171,10 +171,10 @@ defmodule MirrorNeuron.Manifest do
       triggers: normalize_triggers(Map.get(raw, "triggers", [])),
       parameterized: normalize_parameterized(Map.get(raw, "parameterized", %{})),
       metadata: Map.get(raw, "metadata", %{}),
-      nodes: Enum.map(Map.get(raw, "nodes", []), &normalize_node/1),
-      edges: Enum.map(Map.get(raw, "edges", []), &normalize_edge/1),
+      nodes: Enum.map(raw_nodes, &normalize_node/1),
+      edges: Enum.map(raw_edges, &normalize_edge/1),
       policies: Map.get(raw, "policies", %{}),
-      entrypoints: normalize_entrypoints(Map.get(raw, "entrypoints"), Map.get(raw, "nodes", [])),
+      entrypoints: normalize_entrypoints(Map.get(raw, "entrypoints"), raw_nodes),
       initial_inputs: normalize_initial_inputs(Map.get(raw, "initial_inputs", %{})),
       reload: normalize_reload(Map.get(raw, "reload", %{})),
       extensions: extension_fields(raw)
@@ -190,24 +190,21 @@ defmodule MirrorNeuron.Manifest do
     end
   end
 
-  defp materialize_workflow_runtime(%{} = raw) do
-    if Map.get(raw, "nodes", []) != [] do
+  defp materialize_flow_topology(%{} = raw) do
+    if raw_nodes(raw) != [] do
       raw
     else
-      binding = get_in(raw, ["runtime", "bindings", "run_workflow"])
-      workers = if is_map(binding), do: Map.get(binding, "workers", []), else: []
+      topology = runtime_binding_topology(raw)
 
-      if is_list(workers) and workers != [] do
-        nodes = Enum.map(workers, &workflow_worker_to_node/1)
-        entrypoints = workflow_entrypoints(binding, nodes)
+      if topology.nodes != [] do
+        entrypoints = workflow_entrypoints(raw, topology.bindings, topology.nodes)
 
         raw
-        |> Map.put("nodes", nodes)
-        |> Map.put("edges", Map.get(binding, "routes", Map.get(binding, "worker_edges", [])))
+        |> put_flow_topology(topology.nodes, topology.edges)
         |> Map.put("entrypoints", entrypoints)
         |> Map.put(
           "initial_inputs",
-          Map.get(binding, "seed_inputs", Map.get(binding, "initial_inputs", %{}))
+          topology.initial_inputs
         )
       else
         raw
@@ -215,18 +212,76 @@ defmodule MirrorNeuron.Manifest do
     end
   end
 
-  defp materialize_workflow_runtime(raw), do: raw
+  defp materialize_flow_topology(raw), do: raw
+
+  defp runtime_binding_topology(raw) do
+    bindings =
+      raw
+      |> get_in(["runtime", "bindings"])
+      |> case do
+        bindings when is_map(bindings) -> bindings
+        _ -> %{}
+      end
+
+    {nodes, edges, initial_inputs} =
+      bindings
+      |> Enum.reduce({[], [], %{}}, fn {step_id, binding}, {nodes, edges, inputs} ->
+        binding = if is_map(binding), do: binding, else: %{}
+        workers = Map.get(binding, "workers", [])
+        worker_nodes = Enum.map(List.wrap(workers), &workflow_worker_to_node/1)
+        routes = Map.get(binding, "routes", Map.get(binding, "worker_edges", []))
+        binding_inputs = Map.get(binding, "seed_inputs", Map.get(binding, "initial_inputs", %{}))
+
+        {
+          nodes ++ worker_nodes,
+          edges ++ normalize_binding_routes(routes),
+          Map.merge(inputs, normalize_binding_initial_inputs(step_id, binding_inputs))
+        }
+      end)
+
+    %{
+      bindings: bindings,
+      nodes: Enum.uniq_by(nodes, &Map.get(&1, "node_id")),
+      edges: edges,
+      initial_inputs: initial_inputs
+    }
+  end
+
+  defp normalize_binding_routes(routes) when is_list(routes), do: routes
+  defp normalize_binding_routes(_routes), do: []
+
+  defp normalize_binding_initial_inputs(_step_id, inputs) when is_map(inputs), do: inputs
+
+  defp normalize_binding_initial_inputs(step_id, inputs) when is_list(inputs),
+    do: %{step_id => inputs}
+
+  defp normalize_binding_initial_inputs(_step_id, _inputs), do: %{}
+
+  defp put_flow_topology(raw, nodes, edges) do
+    flow =
+      raw
+      |> Map.get("flow", %{})
+      |> case do
+        flow when is_map(flow) -> flow
+        _ -> %{}
+      end
+      |> Map.put("nodes", nodes)
+      |> Map.put("edges", edges)
+
+    Map.put(raw, "flow", flow)
+  end
 
   defp workflow_worker_to_node(%{} = worker) do
     config = Map.get(worker, "with", Map.get(worker, "config", %{}))
     uses = Map.get(worker, "uses", "")
     kind = Map.get(worker, "kind", "")
+    role = Map.get(config, "role", Map.get(worker, "role"))
 
     %{
-      "node_id" => Map.get(worker, "id"),
-      "agent_type" => workflow_agent_type(uses, kind),
+      "node_id" => Map.get(worker, "node_id", Map.get(worker, "node", Map.get(worker, "id"))),
+      "agent_type" => workflow_agent_type(uses, kind, role),
       "type" => workflow_node_type(config, uses, kind),
-      "role" => Map.get(config, "role", Map.get(worker, "role")),
+      "role" => role,
       "config" => config,
       "resources" => Map.get(worker, "resources", %{}),
       "constraints" => Map.get(worker, "constraints", []),
@@ -242,11 +297,15 @@ defmodule MirrorNeuron.Manifest do
 
   defp workflow_worker_to_node(worker), do: workflow_worker_to_node(%{"id" => inspect(worker)})
 
-  defp workflow_agent_type(uses, kind) do
+  defp workflow_agent_type(uses, kind, role) do
+    role = role |> to_string() |> String.downcase()
+
     cond do
       String.contains?(to_string(uses), "control_router") -> "router"
       String.contains?(to_string(uses), "control_join") -> "aggregator"
       String.contains?(to_string(uses), "data_module") -> "module"
+      role == "router" -> "router"
+      role in ["aggregator", "sink", "join"] -> "aggregator"
       kind == "stream" -> "module"
       true -> "executor"
     end
@@ -262,7 +321,30 @@ defmodule MirrorNeuron.Manifest do
     end
   end
 
-  defp workflow_entrypoints(binding, nodes) when is_map(binding) do
+  defp workflow_entrypoints(raw, bindings, nodes) when is_map(raw) and is_map(bindings) do
+    explicit = Map.get(raw, "entrypoints")
+    flow = Map.get(raw, "flow", %{})
+    flow_entrypoint = if is_map(flow), do: Map.get(flow, "entrypoint"), else: nil
+    binding = Map.get(bindings, flow_entrypoint, %{})
+
+    cond do
+      is_list(explicit) and explicit != [] ->
+        explicit
+
+      is_binary(explicit) and explicit != "" ->
+        [explicit]
+
+      is_map(binding) ->
+        binding_entrypoints(binding, nodes)
+
+      true ->
+        default_workflow_entrypoints(nodes)
+    end
+  end
+
+  defp workflow_entrypoints(_raw, _bindings, nodes), do: default_workflow_entrypoints(nodes)
+
+  defp binding_entrypoints(binding, nodes) when is_map(binding) do
     case Map.get(binding, "start_workers", Map.get(binding, "entrypoints")) do
       entrypoints when is_list(entrypoints) and entrypoints != [] ->
         entrypoints
@@ -271,22 +353,50 @@ defmodule MirrorNeuron.Manifest do
         [entrypoint]
 
       _ ->
-        nodes
-        |> Enum.filter(&(Map.get(&1, "role") in ["root", "root_coordinator"]))
-        |> Enum.map(&Map.get(&1, "node_id"))
-        |> case do
-          [] -> nodes |> List.first(%{}) |> Map.get("node_id") |> List.wrap()
-          entrypoints -> entrypoints
-        end
+        default_workflow_entrypoints(nodes)
     end
   end
 
-  defp workflow_entrypoints(_binding, nodes) do
-    nodes |> List.first(%{}) |> Map.get("node_id") |> List.wrap()
+  defp binding_entrypoints(_binding, nodes), do: default_workflow_entrypoints(nodes)
+
+  defp default_workflow_entrypoints(nodes) do
+    nodes
+    |> Enum.filter(&(Map.get(&1, "role") in ["root", "root_coordinator"]))
+    |> Enum.map(&Map.get(&1, "node_id"))
+    |> case do
+      [] -> nodes |> List.first(%{}) |> Map.get("node_id") |> List.wrap()
+      entrypoints -> entrypoints
+    end
+  end
+
+  defp raw_nodes(raw) do
+    flow_nodes = get_in(raw, ["flow", "nodes"])
+
+    cond do
+      is_list(flow_nodes) -> flow_nodes
+      true -> []
+    end
+  end
+
+  defp raw_edges(raw) do
+    flow_edges = get_in(raw, ["flow", "edges"])
+
+    cond do
+      is_list(flow_edges) -> flow_edges
+      true -> []
+    end
   end
 
   defp legacy_manifest_errors(raw) do
     []
+    |> maybe_collect_error(
+      Map.has_key?(raw, "nodes"),
+      "top-level nodes is no longer supported; use flow.nodes"
+    )
+    |> maybe_collect_error(
+      Map.has_key?(raw, "edges"),
+      "top-level edges is no longer supported; use flow.edges"
+    )
     |> maybe_collect_error(
       Map.has_key?(raw, "daemon"),
       "daemon is no longer supported; use type service"
@@ -613,9 +723,9 @@ defmodule MirrorNeuron.Manifest do
 
   defp normalize_node(raw) do
     %{
-      node_id: Map.get(raw, "node_id"),
-      agent_type: Map.get(raw, "agent_type"),
-      type: AgentTemplates.canonical_type(Map.get(raw, "type")),
+      node_id: Map.get(raw, "node_id", Map.get(raw, "id")),
+      agent_type: Map.get(raw, "agent_type", Map.get(raw, "agentType")),
+      type: AgentTemplates.canonical_type(Map.get(raw, "type", Map.get(raw, "kind"))),
       role: Map.get(raw, "role"),
       config: Map.get(raw, "config", %{}),
       resources: Map.get(raw, "resources", get_in(raw, ["config", "resources"]) || %{}),
@@ -665,13 +775,25 @@ defmodule MirrorNeuron.Manifest do
 
   defp normalize_edge(raw) do
     %{
-      edge_id: Map.get(raw, "edge_id"),
-      from_node: Map.get(raw, "from_node"),
-      to_node: Map.get(raw, "to_node"),
-      message_type: Map.get(raw, "message_type"),
+      edge_id: Map.get(raw, "edge_id", Map.get(raw, "id")),
+      from_node: Map.get(raw, "from_node", Map.get(raw, "from")),
+      to_node: Map.get(raw, "to_node", Map.get(raw, "to")),
+      message_type: Map.get(raw, "message_type", Map.get(raw, "event")),
       routing_mode: Map.get(raw, "routing_mode", "broadcast"),
       conditions: Map.get(raw, "conditions", %{})
     }
+  end
+
+  defp flow_to_map(%__MODULE__{} = manifest) do
+    flow =
+      case manifest.flow do
+        flow when is_map(flow) -> json_safe(flow)
+        _ -> %{}
+      end
+
+    flow
+    |> Map.put("nodes", Enum.map(manifest.nodes, &node_to_map/1))
+    |> Map.put("edges", Enum.map(manifest.edges, &edge_to_map/1))
   end
 
   defp normalize_entrypoints(nil, raw_nodes) do
