@@ -319,7 +319,9 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert Exception.message(error) =~ "valid MN_NETWORK_JOIN_TOKEN is required"
   end
 
-  test "cluster disconnect helpers tolerate absent peer links" do
+  test "cluster peer helpers tolerate absent peer links" do
+    assert :ok = ClusterServer.connect_peer("mirror_neuron@10.0.0.99")
+
     assert :ok = ClusterServer.disconnect_peer("mirror_neuron@10.0.0.99")
 
     assert :ok =

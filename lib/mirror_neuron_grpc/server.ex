@@ -641,6 +641,17 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
   end
 
   @doc false
+  def connect_peer(node_name) when is_binary(node_name) and node_name != "" do
+    node_name
+    |> String.to_atom()
+    |> Node.connect()
+
+    :ok
+  end
+
+  def connect_peer(_node_name), do: :ok
+
+  @doc false
   def disconnect_peer(node_name) when is_binary(node_name) and node_name != "" do
     node_name
     |> String.to_atom()
@@ -968,6 +979,17 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
           __MODULE__,
           :set_peer_cookie,
           [Atom.to_string(peer), cookie],
+          2_000
+        )
+
+      _ = :rpc.call(peer, __MODULE__, :connect_peer, [node_name], 2_000)
+
+      _ =
+        :rpc.call(
+          remote_node,
+          __MODULE__,
+          :connect_peer,
+          [Atom.to_string(peer)],
           2_000
         )
     end)
