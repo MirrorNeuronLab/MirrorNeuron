@@ -19,7 +19,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     WorkflowLedger
   }
 
-  alias MirrorNeuron.Sandbox.JobSandbox
+  alias MirrorNeuron.Sandbox.{DockerJobSandbox, OpenShellJobSandbox}
 
   @default_health_check_interval_ms 2_000
 
@@ -2373,19 +2373,24 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     [Node.self() | Node.list()]
     |> Enum.uniq()
     |> Enum.each(fn node ->
-      case :rpc.call(node, JobSandbox, :cleanup_job_local, [state.job_id], 15_000) do
-        :ok ->
-          :ok
-
-        {:badrpc, reason} ->
-          Logger.warning(
-            "failed to clean up shared sandbox for #{state.job_id} on #{node}: #{inspect(reason)}"
-          )
-
-        _other ->
-          :ok
-      end
+      cleanup_sandbox_on_node(node, OpenShellJobSandbox, state.job_id, "OpenShell")
+      cleanup_sandbox_on_node(node, DockerJobSandbox, state.job_id, "DockerWorker")
     end)
+  end
+
+  defp cleanup_sandbox_on_node(node, module, job_id, label) do
+    case :rpc.call(node, module, :cleanup_job_local, [job_id], 15_000) do
+      :ok ->
+        :ok
+
+      {:badrpc, reason} ->
+        Logger.warning(
+          "failed to clean up #{label} sandbox for #{job_id} on #{node}: #{inspect(reason)}"
+        )
+
+      _other ->
+        :ok
+    end
   end
 
   defp existing_recovery_fields(job_id) do

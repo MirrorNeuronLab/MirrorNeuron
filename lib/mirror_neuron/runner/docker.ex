@@ -3,6 +3,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
 
   alias MirrorNeuron.Config
   alias MirrorNeuron.Message
+  alias MirrorNeuron.Sandbox.DockerJobSandbox
 
   @default_container_workdir "/mn/job"
   @default_payloads_dir "/mn/payloads"
@@ -24,8 +25,8 @@ defmodule MirrorNeuron.Runner.DockerWorker do
            :ok <- copy_uploads(base_dir, config, opts),
            :ok <- write_runtime_files(base_dir, message, opts),
            {:ok, image} <- resolve_image(config, base_dir),
-           {:ok, docker_args, command_name} <- build_docker_args(image, base_dir, config, opts),
-           {:ok, output, exit_code} <- run_docker(docker_args, command_name, config) do
+           {:ok, output, exit_code, command_name} <-
+             run_worker_command(image, base_dir, config, opts) do
         result =
           sanitize_result(%{
             "sandbox_name" => runner_name,
@@ -226,6 +227,122 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     {:ok, args, container_name}
   end
 
+  defp run_worker_command(image, base_dir, config, opts) do
+    if shared_container?(config, opts) do
+      run_shared_docker(image, base_dir, config, opts)
+    else
+      with {:ok, docker_args, command_name} <- build_docker_args(image, base_dir, config, opts),
+           {:ok, output, exit_code} <- run_docker(docker_args, command_name, config) do
+        {:ok, output, exit_code, command_name}
+      end
+    end
+  end
+
+  defp run_shared_docker(image, base_dir, config, opts) do
+    job_id = Keyword.fetch!(opts, :job_id)
+
+    with {:ok, sandbox} <- DockerJobSandbox.ensure(job_id, image, config, opts) do
+      container_name = sandbox["container_name"]
+      remote_dir = build_shared_remote_dir(config, opts)
+
+      try do
+        with :ok <- prepare_shared_remote_dir(container_name, remote_dir, config),
+             :ok <- copy_to_shared_container(container_name, base_dir, remote_dir, config),
+             {:ok, docker_args} <-
+               build_docker_exec_args(container_name, remote_dir, config, opts),
+             {:ok, output, exit_code} <- run_docker(docker_args, container_name, config) do
+          {:ok, output, exit_code, container_name}
+        end
+      after
+        cleanup_shared_remote_dir(container_name, remote_dir, config)
+      end
+    end
+  end
+
+  defp build_docker_exec_args(container_name, remote_dir, config, opts) do
+    workdir = resolve_shared_workdir(config, remote_dir)
+    command = normalize_command(Map.get(config, "command"))
+    env = runtime_env(workdir, remote_dir, config, opts, remote_dir)
+
+    args =
+      ["exec", "-w", workdir]
+      |> put_env_args(env)
+      |> Kernel.++([container_name])
+      |> Kernel.++(command)
+
+    {:ok, args}
+  end
+
+  defp prepare_shared_remote_dir(container_name, remote_dir, config) do
+    case System.cmd(docker_bin(config), ["exec", container_name, "mkdir", "-p", remote_dir],
+           stderr_to_stdout: true
+         ) do
+      {_output, 0} -> :ok
+      {output, exit_code} -> {:error, %{"exit_code" => exit_code, "logs" => output}}
+    end
+  rescue
+    error in ErlangError ->
+      {:error, "failed to prepare shared DockerWorker workspace: #{Exception.message(error)}"}
+  end
+
+  defp copy_to_shared_container(container_name, base_dir, remote_dir, config) do
+    source = Path.join(Path.expand(base_dir), ".")
+
+    case System.cmd(docker_bin(config), ["cp", source, "#{container_name}:#{remote_dir}"],
+           stderr_to_stdout: true
+         ) do
+      {_output, 0} -> :ok
+      {output, exit_code} -> {:error, %{"exit_code" => exit_code, "logs" => output}}
+    end
+  rescue
+    error in ErlangError ->
+      {:error,
+       "failed to copy DockerWorker workspace into shared container: #{Exception.message(error)}"}
+  end
+
+  defp cleanup_shared_remote_dir(container_name, remote_dir, config) do
+    if cleanup_remote_dir?(config) do
+      _ =
+        System.cmd(docker_bin(config), ["exec", container_name, "rm", "-rf", remote_dir],
+          stderr_to_stdout: true
+        )
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp resolve_shared_workdir(config, remote_dir) do
+    configured = container_workdir(config)
+
+    cond do
+      configured == @default_container_workdir ->
+        remote_dir
+
+      String.starts_with?(configured, @default_container_workdir <> "/") ->
+        suffix = String.replace_prefix(configured, @default_container_workdir, "")
+        remote_dir <> suffix
+
+      true ->
+        configured
+    end
+  end
+
+  defp build_shared_remote_dir(_config, opts) do
+    agent = safe_name(Keyword.get(opts, :agent_id, "agent"))
+    attempt = Keyword.get(opts, :attempt, 1)
+    invocation = Keyword.get(opts, :invocation, 1)
+    unique = Integer.to_string(System.unique_integer([:positive]))
+
+    Path.join([
+      @default_container_workdir,
+      "runs",
+      agent,
+      "i#{invocation}-a#{attempt}-#{unique}"
+    ])
+  end
+
   defp container_workdir(config) do
     case Map.get(config, "workdir") || get_in(config, ["docker", "workdir"]) do
       value when is_binary(value) and value != "" -> value
@@ -238,17 +355,23 @@ defmodule MirrorNeuron.Runner.DockerWorker do
   defp normalize_command(command) when is_list(command), do: Enum.map(command, &to_string/1)
   defp normalize_command(command), do: ["sh", "-lc", to_string(command)]
 
-  defp runtime_env(container_workdir, payloads_dir, config, opts) do
+  defp runtime_env(
+         container_workdir,
+         payloads_dir,
+         config,
+         opts,
+         bundle_root \\ @default_container_workdir
+       ) do
     allocation =
       Keyword.get(opts, :allocation) || Map.get(config, "__mirror_neuron_allocation", %{})
 
     base = %{
-      "MN_INPUT_FILE" => "#{@default_container_workdir}/mirror_neuron_input.json",
-      "MN_CONTEXT_FILE" => "#{@default_container_workdir}/mirror_neuron_context.json",
-      "MN_MESSAGE_FILE" => "#{@default_container_workdir}/mirror_neuron_message.json",
-      "MN_BODY_FILE" => "#{@default_container_workdir}/mirror_neuron_body.bin",
+      "MN_INPUT_FILE" => "#{bundle_root}/mirror_neuron_input.json",
+      "MN_CONTEXT_FILE" => "#{bundle_root}/mirror_neuron_context.json",
+      "MN_MESSAGE_FILE" => "#{bundle_root}/mirror_neuron_message.json",
+      "MN_BODY_FILE" => "#{bundle_root}/mirror_neuron_body.bin",
       "MN_WORKDIR" => container_workdir,
-      "MN_BUNDLE_ROOT" => @default_container_workdir,
+      "MN_BUNDLE_ROOT" => bundle_root,
       "MN_PAYLOADS_DIR" => payloads_dir,
       "MN_JOB_ID" => to_string(Keyword.get(opts, :job_id, "")),
       "MN_AGENT_ID" => to_string(Keyword.get(opts, :agent_id, "")),
@@ -259,6 +382,17 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     base
     |> Map.merge(MirrorNeuron.ResourceSpec.allocation_env(allocation))
     |> Map.merge(extra_env(config))
+  end
+
+  defp shared_container?(config, opts) do
+    shared? =
+      Map.get(config, "reuse_shared_container", Map.get(config, "shared_container", true))
+
+    Keyword.get(opts, :job_id) not in [nil, ""] and truthy?(shared?)
+  end
+
+  defp cleanup_remote_dir?(config) do
+    Map.get(config, "cleanup_remote_dir", true) |> truthy?()
   end
 
   defp put_network_args(args, config) do
@@ -353,7 +487,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
   end
 
   defp run_docker(args, container_name, config) do
-    docker_bin = docker_bin()
+    docker_bin = docker_bin(config)
     executable = System.find_executable(docker_bin) || docker_bin
     timeout_ms = timeout_ms(config)
     deadline = if timeout_ms, do: System.monotonic_time(:millisecond) + timeout_ms
@@ -369,13 +503,21 @@ defmodule MirrorNeuron.Runner.DockerWorker do
         ]
       )
 
-    collect_docker_output(port, container_name, [], 0, max_output_bytes(config), deadline)
+    collect_docker_output(port, container_name, config, [], 0, max_output_bytes(config), deadline)
   rescue
     error in ErlangError ->
       {:error, "failed to invoke docker worker: #{Exception.message(error)}"}
   end
 
-  defp collect_docker_output(port, container_name, chunks, bytes, max_output_bytes, deadline) do
+  defp collect_docker_output(
+         port,
+         container_name,
+         config,
+         chunks,
+         bytes,
+         max_output_bytes,
+         deadline
+       ) do
     receive do
       {^port, {:data, data}} ->
         {next_chunks, next_bytes} = append_output(chunks, bytes, data, max_output_bytes)
@@ -383,6 +525,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
         collect_docker_output(
           port,
           container_name,
+          config,
           next_chunks,
           next_bytes,
           max_output_bytes,
@@ -394,7 +537,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     after
       receive_timeout(deadline) ->
         Port.close(port)
-        cleanup_container(container_name)
+        cleanup_container(container_name, config)
 
         {:error,
          %{
@@ -432,8 +575,8 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     max(deadline - System.monotonic_time(:millisecond), 0)
   end
 
-  defp cleanup_container(container_name) do
-    _ = System.cmd(docker_bin(), ["rm", "-f", container_name], stderr_to_stdout: true)
+  defp cleanup_container(container_name, config) do
+    _ = System.cmd(docker_bin(config), ["rm", "-f", container_name], stderr_to_stdout: true)
     :ok
   rescue
     _ -> :ok
@@ -600,7 +743,13 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     |> String.trim("-")
   end
 
-  defp docker_bin, do: System.get_env("MN_DOCKER_BIN", "docker")
+  defp docker_bin(config \\ %{}) do
+    Map.get(config, "docker_bin") ||
+      get_in(config, ["docker", "bin"]) ||
+      System.get_env("MN_DOCKER_BIN") ||
+      System.find_executable("docker") ||
+      "docker"
+  end
 
   defp timeout_ms(config) do
     case Map.get(config, "timeout_seconds") do

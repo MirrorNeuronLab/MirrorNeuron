@@ -1,4 +1,4 @@
-defmodule MirrorNeuron.Sandbox.JobSandbox do
+defmodule MirrorNeuron.Sandbox.OpenShellJobSandbox do
   alias MirrorNeuron.Config
   use GenServer
   require Logger
@@ -8,7 +8,7 @@ defmodule MirrorNeuron.Sandbox.JobSandbox do
 
   def child_spec({job_id, config}) do
     %{
-      id: {:job_sandbox, job_id},
+      id: {:openshell_job_sandbox, job_id},
       start: {__MODULE__, :start_link, [{job_id, config}]},
       restart: :temporary
     }

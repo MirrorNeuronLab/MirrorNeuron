@@ -6,19 +6,11 @@ defmodule MirrorNeuron.Scheduler.ResourceInference do
 
   @model_env_keys [
     "MN_LLM_RUNTIME_MODEL",
-    "MN_LLM_MODEL",
-    "LITELLM_MODEL",
-    "OLLAMA_MODEL",
-    "VL_MODEL_NAME"
+    "MN_CONTEXT_ENGINE_MODEL"
   ]
 
   @service_model_providers [
-    "docker_model_runner",
-    "docker-model-runner",
-    "dmr",
-    "ollama",
-    "nvidia_service",
-    "nvidia-service"
+    "docker_model_runner"
   ]
 
   def infer(manifest, node, resource_request, constraints, requires_services) do
@@ -63,8 +55,11 @@ defmodule MirrorNeuron.Scheduler.ResourceInference do
     |> Enum.uniq_by(&(to_string(&1) |> String.downcase()))
     |> Enum.flat_map(fn model_ref ->
       case ModelCatalog.resolve(model_ref, catalog) do
-        {:ok, entry} -> [entry]
-        {:error, _reason} -> []
+        {:ok, entry} ->
+          if service_backed_model?(entry), do: [entry], else: []
+
+        {:error, _reason} ->
+          []
       end
     end)
     |> Enum.uniq_by(&(ModelCatalog.model_id(&1) || ModelCatalog.docker_model_name(&1)))
@@ -89,11 +84,10 @@ defmodule MirrorNeuron.Scheduler.ResourceInference do
       request =
         %{
           "kind" => "gpu",
-          "type" =>
-            if(nvidia_required?(entry, required_capabilities), do: "nvidia/gpu", else: "gpu"),
+          "type" => if(nvidia_required?(required_capabilities), do: "nvidia/gpu", else: "gpu"),
           "count" => 1,
-          "vendor" => if(nvidia_required?(entry, required_capabilities), do: "nvidia", else: nil),
-          "driver" => if(nvidia_required?(entry, required_capabilities), do: "cuda", else: nil),
+          "vendor" => if(nvidia_required?(required_capabilities), do: "nvidia", else: nil),
+          "driver" => if(nvidia_required?(required_capabilities), do: "cuda", else: nil),
           "min_memory_mb" => min_vram_mb || min_unified_mb,
           "capabilities" => [],
           "ids" => []
@@ -204,12 +198,8 @@ defmodule MirrorNeuron.Scheduler.ResourceInference do
     ModelCatalog.provider(entry) in @service_model_providers
   end
 
-  defp nvidia_required?(entry, required_capabilities) do
-    provider = ModelCatalog.provider(entry)
-
-    provider in ["nvidia_service", "nvidia-service"] or
-      Enum.any?(required_capabilities, &String.contains?(&1, "nvidia"))
-  end
+  defp nvidia_required?(required_capabilities),
+    do: Enum.any?(required_capabilities, &String.contains?(&1, "nvidia"))
 
   defp required_capabilities(requirements) when is_map(requirements) do
     requirements
@@ -243,7 +233,12 @@ defmodule MirrorNeuron.Scheduler.ResourceInference do
         map_get(entry, "model") ||
         map_get(entry, "api_model")
 
-    provider = map_get(entry, "provider") |> to_string() |> String.downcase()
+    provider =
+      entry
+      |> map_get("provider")
+      |> to_string()
+      |> String.trim()
+      |> String.downcase()
 
     cond do
       blank?(ref) ->
@@ -252,11 +247,14 @@ defmodule MirrorNeuron.Scheduler.ResourceInference do
       provider in @service_model_providers ->
         [ref]
 
-      match?({:ok, _entry}, ModelCatalog.resolve(ref, catalog)) ->
-        [ref]
+      provider != "" ->
+        []
 
       true ->
-        []
+        case ModelCatalog.resolve(ref, catalog) do
+          {:ok, entry} -> if service_backed_model?(entry), do: [ref], else: []
+          {:error, _reason} -> []
+        end
     end
   end
 

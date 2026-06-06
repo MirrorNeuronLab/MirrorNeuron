@@ -1,7 +1,7 @@
-defmodule MirrorNeuron.Sandbox.OpenShell do
+defmodule MirrorNeuron.Runner.OpenShell do
   alias MirrorNeuron.Config
   alias MirrorNeuron.Message
-  alias MirrorNeuron.Sandbox.JobSandbox
+  alias MirrorNeuron.Sandbox.OpenShellJobSandbox
 
   @result_start "__MN_RESULT_START__"
   @result_end "__MN_RESULT_END__"
@@ -42,7 +42,7 @@ defmodule MirrorNeuron.Sandbox.OpenShell do
   defp run_in_shared_sandbox(payload, config, opts) do
     executable = sandbox_cli(config)
 
-    with {:ok, sandbox} <- JobSandbox.ensure(Keyword.fetch!(opts, :job_id), config),
+    with {:ok, sandbox} <- OpenShellJobSandbox.ensure(Keyword.fetch!(opts, :job_id), config),
          {:ok, staged_dir} <- stage_workspace(payload, config, opts) do
       remote_dir = build_shared_remote_dir(config, opts)
 

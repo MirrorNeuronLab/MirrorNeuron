@@ -6,7 +6,7 @@ defmodule MirrorNeuron.Runtime do
   alias MirrorNeuron.ContextEnginePreflight
   alias MirrorNeuron.JobId
   alias MirrorNeuron.Scheduler
-  alias MirrorNeuron.Sandbox.JobSandbox
+  alias MirrorNeuron.Sandbox.{DockerJobSandbox, OpenShellJobSandbox}
 
   alias MirrorNeuron.Runtime.{
     Backpressure,
@@ -146,7 +146,7 @@ defmodule MirrorNeuron.Runtime do
           end)
           |> Enum.map(& &1["job_id"])
           |> Enum.map(fn job_id ->
-            JobSandbox.cleanup_job_local(job_id)
+            cleanup_job_sandboxes(job_id)
             MirrorNeuron.Persistence.RedisStore.delete_job(job_id)
             job_id
           end)
@@ -160,6 +160,12 @@ defmodule MirrorNeuron.Runtime do
 
   def send_message(job_id, agent_id, message) when is_map(message) do
     call_job(job_id, {:send_message, agent_id, message})
+  end
+
+  defp cleanup_job_sandboxes(job_id) do
+    _ = OpenShellJobSandbox.cleanup_job_local(job_id)
+    _ = DockerJobSandbox.cleanup_job_local(job_id)
+    :ok
   end
 
   def deploy_agents(job_id, agent_ids, manifest, scheduler_plan, deployment_context) do

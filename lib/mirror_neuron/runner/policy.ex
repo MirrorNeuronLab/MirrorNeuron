@@ -1,7 +1,7 @@
 defmodule MirrorNeuron.Runner.Policy do
   @moduledoc false
 
-  @openshell_modules ["MirrorNeuron.Sandbox.OpenShell", "MirrorNeuron.Runner.OpenShell"]
+  @openshell_module "MirrorNeuron.Runner.OpenShell"
   @forward_keys [
     "forward",
     "forwards",
@@ -41,11 +41,11 @@ defmodule MirrorNeuron.Runner.Policy do
 
     cond do
       is_atom(runner) ->
-        runner in [MirrorNeuron.Sandbox.OpenShell] or
+        runner == MirrorNeuron.Runner.OpenShell or
           String.ends_with?(Atom.to_string(runner), ".OpenShell")
 
       is_binary(runner) ->
-        runner in @openshell_modules or String.ends_with?(runner, ".OpenShell")
+        runner == @openshell_module or String.ends_with?(runner, ".OpenShell")
 
       true ->
         false

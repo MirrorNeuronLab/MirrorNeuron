@@ -4,7 +4,7 @@ defmodule MirrorNeuron do
   alias MirrorNeuron.Monitor
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
-  alias MirrorNeuron.Sandbox.JobSandbox
+  alias MirrorNeuron.Sandbox.{DockerJobSandbox, OpenShellJobSandbox}
 
   def validate_manifest(input) do
     with {:ok, bundle} <- JobBundle.load(input) do
@@ -373,7 +373,7 @@ defmodule MirrorNeuron do
         }
 
         RedisStore.persist_terminal_job(job_id, updates, defaults)
-        JobSandbox.cleanup_job_local(job_id)
+        cleanup_job_sandboxes(job_id)
 
         MirrorNeuron.Runtime.EventBus.publish(job_id, %{
           type: :job_cancelled,
@@ -384,7 +384,7 @@ defmodule MirrorNeuron do
         {:ok, "force cancelled"}
 
       {:ok, _job} ->
-        JobSandbox.cleanup_job_local(job_id)
+        cleanup_job_sandboxes(job_id)
         {:error, "job is already in a terminal state"}
 
       {:error, reason} ->
@@ -394,6 +394,12 @@ defmodule MirrorNeuron do
           {:error, original_error}
         end
     end
+  end
+
+  defp cleanup_job_sandboxes(job_id) do
+    _ = OpenShellJobSandbox.cleanup_job_local(job_id)
+    _ = DockerJobSandbox.cleanup_job_local(job_id)
+    :ok
   end
 
   def cleanup_jobs(opts \\ []) do

@@ -1,9 +1,9 @@
-defmodule MirrorNeuron.Sandbox.OpenShellTest do
+defmodule MirrorNeuron.Runner.OpenShellTest do
   use ExUnit.Case, async: false
 
   alias MirrorNeuron.Message
-  alias MirrorNeuron.Sandbox.JobSandbox
-  alias MirrorNeuron.Sandbox.OpenShell
+  alias MirrorNeuron.Runner.OpenShell
+  alias MirrorNeuron.Sandbox.OpenShellJobSandbox
 
   test "stages uploads and executes a command through the configured sandbox cli" do
     tmp_dir =
@@ -707,7 +707,7 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
       assert policy_text =~ "network_policies:"
       assert policy_text =~ "/dev/null"
 
-      assert :ok = JobSandbox.cleanup_job_local("job-shared-1")
+      assert :ok = OpenShellJobSandbox.cleanup_job_local("job-shared-1")
       refute File.exists?(Path.join(sandboxes_dir, result1["sandbox_name"]))
       assert File.read!(deleted_log) =~ result1["sandbox_name"]
     after
@@ -841,11 +841,11 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
       System.put_env("FAKE_DOCKER_REMOVED_LOG", removed_log)
       System.put_env("MN_DOCKER_BIN", fake_docker)
 
-      assert {:ok, sandbox} = JobSandbox.ensure(job_id, config)
+      assert {:ok, sandbox} = OpenShellJobSandbox.ensure(job_id, config)
       container_name = "openshell-#{sandbox["sandbox_name"]}-port-mapping"
       File.touch!(Path.join(containers_dir, container_name))
 
-      assert :ok = JobSandbox.cleanup_job_local(job_id)
+      assert :ok = OpenShellJobSandbox.cleanup_job_local(job_id)
       refute File.exists?(Path.join(containers_dir, container_name))
       assert File.read!(removed_log) =~ container_name
 
@@ -853,10 +853,10 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
         "openshell-mirror-neuron-job-#{String.downcase(job_id)}-old-node-port-mapping"
 
       File.touch!(Path.join(containers_dir, changed_node_container_name))
-      assert :ok = JobSandbox.cleanup_job_local(job_id, config)
+      assert :ok = OpenShellJobSandbox.cleanup_job_local(job_id, config)
       refute File.exists?(Path.join(containers_dir, changed_node_container_name))
     after
-      JobSandbox.cleanup_job_local(job_id)
+      OpenShellJobSandbox.cleanup_job_local(job_id)
 
       Enum.each(env_backup, fn
         {key, nil} -> System.delete_env(key)
@@ -1072,7 +1072,7 @@ defmodule MirrorNeuron.Sandbox.OpenShellTest do
 
       assert result1["stdout"] =~ "\"count\": 1"
       assert result2["stdout"] =~ "\"count\": 2"
-      assert :ok = JobSandbox.cleanup_job_local("job-persistent-1")
+      assert :ok = OpenShellJobSandbox.cleanup_job_local("job-persistent-1")
     after
       Enum.each(env_backup, fn
         {key, nil} -> System.delete_env(key)

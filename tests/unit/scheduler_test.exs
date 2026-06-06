@@ -684,7 +684,7 @@ defmodule MirrorNeuron.SchedulerTest do
     refute reason =~ "placed"
   end
 
-  test "runtime model inference returns actionable failure when model service is not advertised" do
+  test "runtime model inference ignores non-DMR model providers" do
     {:ok, manifest} =
       Manifest.load(%{
         "manifest_version" => "1.0",
@@ -703,17 +703,64 @@ defmodule MirrorNeuron.SchedulerTest do
         "policies" => %{"recovery_mode" => "cluster_recover"}
       })
 
-    assert {:error, "placement_failed: " <> reason} =
+    assert {:ok, plan} =
              Scheduler.plan(manifest,
                nodes: [h100_node()],
                jobs: [],
                service_instances: []
              )
 
-    assert reason =~ "ollama/nemotron3:33b"
-    assert reason =~ "service ollama"
-    assert reason =~ "capability any of"
-    assert reason =~ "required services not available"
+    assert [
+             %{
+               "agent_id" => "worker",
+               "node" => "h100@lab",
+               "resources" => %{},
+               "allocations" => %{"devices" => []},
+               "placement_requirements" => %{"models" => []}
+             }
+           ] = plan["placements"]
+  end
+
+  test "runtime model inference only reads runtime model environment keys" do
+    {:ok, manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "runtime-env-model-placement",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "config" => %{
+              "environment" => %{
+                "MN_LLM_RUNTIME_MODEL" => "otterdesk-voice-llm:default",
+                "MN_CONTEXT_ENGINE_MODEL" => "gemma4:e2b",
+                "MN_LLM_MODEL" => "ollama/nemotron3:33b",
+                "OLLAMA_MODEL" => "ollama/nemotron3:33b",
+                "LITELLM_MODEL" => "ollama/nemotron3:33b",
+                "VL_MODEL_NAME" => "ollama/nemotron3:33b"
+              }
+            }
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "cluster_recover"}
+      })
+
+    assert {:ok, plan} =
+             Scheduler.plan(manifest,
+               nodes: [h100_node()],
+               jobs: [],
+               service_instances: [
+                 model_service("otterdesk-voice-llm:default", "h100@lab"),
+                 model_service("gemma4:e2b", "h100@lab")
+               ]
+             )
+
+    assert [%{"placement_requirements" => %{"models" => models}}] = plan["placements"]
+    assert Enum.map(models, & &1["id"]) == ["otterdesk-voice-llm:default", "gemma4:e2b"]
+    refute Enum.any?(models, &(&1["id"] == "ollama/nemotron3:33b"))
   end
 
   test "hardware-derived GPU capabilities are enough for NVIDIA-specific and Metal placement" do
@@ -887,7 +934,7 @@ defmodule MirrorNeuron.SchedulerTest do
     assert device["driver"] == "cuda"
   end
 
-  test "service model inference routes audio services to nodes that advertise ASR and TTS" do
+  test "service model inference ignores NVIDIA service providers" do
     {:ok, manifest} =
       Manifest.load(%{
         "manifest_version" => "1.0",
@@ -906,15 +953,12 @@ defmodule MirrorNeuron.SchedulerTest do
 
     assert {:ok, plan} =
              Scheduler.plan(manifest,
-               nodes: [small_node(), gpu_node()],
+               nodes: [small_node()],
                jobs: [],
-               service_instances: [
-                 model_service("otterdesk-voice-asr:default", "gpu@lab"),
-                 model_service("otterdesk-voice-tts:default", "gpu@lab")
-               ]
+               service_instances: []
              )
 
-    assert [%{"node" => "gpu@lab", "resources" => %{"gpu_count" => 0}}] =
+    assert [%{"node" => "small@lab", "resources" => %{}}] =
              plan["placements"]
   end
 

@@ -4,7 +4,7 @@ defmodule MirrorNeuron.Builtins.Executor do
   alias MirrorNeuron.Execution.Profile
   alias MirrorNeuron.Execution.LeaseManager
   alias MirrorNeuron.Message
-  alias MirrorNeuron.Sandbox.OpenShell
+  alias MirrorNeuron.Runner.OpenShell
 
   @transient_markers [
     "h2 protocol error",
