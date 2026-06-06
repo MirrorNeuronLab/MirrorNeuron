@@ -640,8 +640,26 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
     :ok
   end
 
+  @doc false
+  def disconnect_peer(node_name) when is_binary(node_name) and node_name != "" do
+    node_name
+    |> String.to_atom()
+    |> Node.disconnect()
+
+    :ok
+  end
+
+  def disconnect_peer(_node_name), do: :ok
+
+  @doc false
+  def disconnect_peers(node_names) when is_list(node_names) do
+    Enum.each(node_names, &disconnect_peer/1)
+    :ok
+  end
+
   def remove_node(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("RemoveNode")
+    disconnect_node_from_cluster(request.node_name)
 
     case MirrorNeuron.remove_node(request.node_name) do
       {:ok, %{status: status}} ->
@@ -958,6 +976,25 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
   end
 
   defp sync_remote_cookie_with_cluster(_node_name, _token), do: :ok
+
+  defp disconnect_node_from_cluster(node_name) when is_binary(node_name) and node_name != "" do
+    remote_node = String.to_atom(node_name)
+    connected_nodes = Node.list()
+    peer_nodes = Enum.reject(connected_nodes, &(&1 == remote_node))
+    peer_names = Enum.map(peer_nodes, &Atom.to_string/1)
+
+    if remote_node in connected_nodes do
+      _ = :rpc.call(remote_node, __MODULE__, :disconnect_peers, [peer_names], 2_000)
+    end
+
+    Enum.each(peer_nodes, fn peer ->
+      _ = :rpc.call(peer, __MODULE__, :disconnect_peer, [node_name], 2_000)
+    end)
+
+    :ok
+  end
+
+  defp disconnect_node_from_cluster(_node_name), do: :ok
 
   defp cookie_from_token(token) do
     :crypto.hash(:sha256, "mirror-neuron:cookie:#{token}")
