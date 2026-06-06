@@ -154,6 +154,8 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     System.put_env("MN_GRPC_PORT", "50055")
     System.put_env("MN_DIST_PORT", "4500")
     System.put_env("MN_CLUSTER_NODES", "mirror_neuron@192.168.4.10")
+    System.put_env(@operator_token_env, "primary-auth-token")
+    System.put_env(@admin_token_env, "primary-admin-token")
 
     response =
       ClusterServer.network_handshake(%NetworkHandshakeRequest{token: "join-secret"}, nil)
@@ -167,6 +169,8 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert response.redis_port == 6_380
     assert response.redis_url == "redis://192.168.4.10:6380/0"
     assert response.cluster_nodes == "mirror_neuron@192.168.4.10"
+    assert response.grpc_auth_token == "primary-auth-token"
+    assert response.grpc_admin_token == "primary-admin-token"
 
     node_info = Jason.decode!(response.node_info_json)
     assert node_info["node_name"] == to_string(Node.self())

@@ -549,6 +549,9 @@ end
 defmodule MirrorNeuron.Grpc.ClusterServer do
   use GRPC.Server, service: Mirrorneuron.Cluster.V1.ClusterService.Service
 
+  @admin_token_env "MN_GRPC_ADMIN_TOKEN"
+  @legacy_admin_token_env "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN"
+
   alias Mirrorneuron.Cluster.V1.{
     AddNodeResponse,
     CancelNodeDrainResponse,
@@ -585,7 +588,9 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
       redis_url: redis_url(),
       cluster_nodes: System.get_env("MN_CLUSTER_NODES", ""),
       network_only: MirrorNeuron.Grpc.NetworkOnly.enabled?(),
-      node_info_json: Jason.encode!(handshake_node_info())
+      node_info_json: Jason.encode!(handshake_node_info()),
+      grpc_auth_token: System.get_env("MN_GRPC_AUTH_TOKEN", ""),
+      grpc_admin_token: configured_admin_token() || ""
     }
   end
 
@@ -973,6 +978,10 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
     end
 
     :ok
+  end
+
+  defp configured_admin_token do
+    System.get_env(@admin_token_env) || System.get_env(@legacy_admin_token_env)
   end
 
   defp secure_compare(left, right) when is_binary(left) and is_binary(right) do

@@ -30,6 +30,8 @@ defmodule Mirrorneuron.Cluster.V1.NetworkHandshakeResponse do
   field(:cluster_nodes, 9, type: :string, json_name: "clusterNodes")
   field(:network_only, 10, type: :bool, json_name: "networkOnly")
   field(:node_info_json, 11, type: :string, json_name: "nodeInfoJson")
+  field(:grpc_auth_token, 12, type: :string, json_name: "grpcAuthToken")
+  field(:grpc_admin_token, 13, type: :string, json_name: "grpcAdminToken")
 end
 
 defmodule Mirrorneuron.Cluster.V1.GetSystemSummaryRequest do
