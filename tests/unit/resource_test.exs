@@ -47,6 +47,10 @@ defmodule MirrorNeuron.ResourceTest do
               %{
                 "id" => "gpu-1",
                 "name" => "NVIDIA RTX 4090",
+                "api" => "cuda",
+                "api_version" => "12.4",
+                "driver_version" => "550.54",
+                "gpu_type" => "nvidia-cuda-12.4",
                 "memory_total_mb" => 12_288,
                 "memory_free_mb" => 8_192
               },
@@ -156,6 +160,8 @@ defmodule MirrorNeuron.ResourceTest do
     assert draining["platform"]["os"] == "linux"
     assert length(draining["devices"]) == 2
     assert hd(draining["devices"])["vendor"] == "nvidia"
+    assert hd(draining["devices"])["gpu_type"] == "nvidia-cuda-12.4"
+    assert hd(draining["devices"])["api_version"] == "12.4"
     assert hd(draining["devices"])["memory_total_mb"] == 12_288
     assert "host_local" in draining["runtime_drivers"]
   end

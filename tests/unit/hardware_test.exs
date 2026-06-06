@@ -14,7 +14,9 @@ defmodule MirrorNeuron.Cluster.HardwareTest do
           "MN_NODE_GPU_VENDOR",
           "MN_NODE_GPU_DRIVER",
           "MN_NODE_GPU_TYPE",
-          "MN_NODE_GPU_NAME"
+          "MN_NODE_GPU_NAME",
+          "MN_NODE_GPU_API_VERSION",
+          "MN_NODE_GPU_DRIVER_VERSION"
         ],
         &{&1, System.get_env(&1)}
       )
@@ -40,6 +42,22 @@ defmodule MirrorNeuron.Cluster.HardwareTest do
     assert gpu.memory_total_mb == 24_576.0
     assert gpu.memory_free_mb == 22_528.0
     assert "cuda" in gpu.capabilities
+  end
+
+  test "adds NVIDIA CUDA version to GPU type" do
+    [gpu] =
+      Hardware.parse_nvidia_gpu(
+        """
+        0, GPU-123, NVIDIA RTX 4090, 550.54, 12, 2048, 22528, 24576
+        """,
+        %{},
+        %{"cuda_version" => "12.4"}
+      )
+
+    assert gpu.driver_version == "550.54"
+    assert gpu.api == "cuda"
+    assert gpu.api_version == "12.4"
+    assert gpu.gpu_type == "nvidia-cuda-12.4"
   end
 
   test "derives high-end NVIDIA capability tags from GPU names" do
@@ -104,6 +122,8 @@ defmodule MirrorNeuron.Cluster.HardwareTest do
     assert gpu.id == "metal-0"
     assert gpu.vendor == "apple"
     assert gpu.driver == "metal"
+    assert gpu.api == "metal"
+    assert gpu.gpu_type == "mac-metal"
     assert gpu.memory_total_mb == 32_768
     assert "unified_memory" in gpu.capabilities
   end
@@ -134,6 +154,7 @@ defmodule MirrorNeuron.Cluster.HardwareTest do
   test "annotates runtime-provided Spark GPU count with NVIDIA identity" do
     System.put_env("MN_NODE_GPU_COUNT", "1")
     System.put_env("MN_NODE_DISPLAY_NAME", "spark")
+    System.put_env("MN_NODE_GPU_API_VERSION", "12.6")
 
     hardware = Hardware.info()
     [gpu] = hardware.gpu
@@ -142,6 +163,8 @@ defmodule MirrorNeuron.Cluster.HardwareTest do
     assert gpu.vendor == "nvidia"
     assert gpu.driver == "cuda"
     assert gpu.type == "nvidia/gpu"
+    assert gpu.api_version == "12.6"
+    assert gpu.gpu_type == "nvidia-cuda-12.6"
     assert "nvidia-dgx-spark" in gpu.capabilities
     assert "nvidia" in hardware.capabilities
   end
@@ -157,6 +180,7 @@ defmodule MirrorNeuron.Cluster.HardwareTest do
     assert gpu.vendor == "apple"
     assert gpu.driver == "metal"
     assert gpu.type == "apple/gpu"
+    assert gpu.gpu_type == "mac-metal"
     assert "unified-memory" in hardware.capabilities
   end
 

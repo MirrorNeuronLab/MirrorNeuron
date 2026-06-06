@@ -92,11 +92,11 @@ defmodule MirrorNeuron.Cluster.Hardware do
 
           {:unix, :linux} ->
             case System.cmd("nvidia-smi", [
-                   "--query-gpu=index,uuid,name,utilization.gpu,memory.used,memory.free,memory.total",
+                   "--query-gpu=index,uuid,name,driver_version,utilization.gpu,memory.used,memory.free,memory.total",
                    "--format=csv,noheader,nounits"
                  ]) do
               {output, 0} ->
-                parse_nvidia_gpu(output, memory)
+                parse_nvidia_gpu(output, memory, %{"cuda_version" => nvidia_cuda_version()})
 
               _ ->
                 "Unknown or None"
@@ -167,6 +167,10 @@ defmodule MirrorNeuron.Cluster.Hardware do
         type: "apple/gpu",
         vendor: "apple",
         driver: "metal",
+        api: "metal",
+        api_version: nil,
+        driver_version: nil,
+        gpu_type: "mac-metal",
         memory_total_mb: number_value(map_get(memory, "total_mb")),
         memory_free_mb: number_value(map_get(memory, "available_mb")),
         capabilities: ["gpu", "apple", "metal", "unified_memory"] ++ apple_gpu_capabilities(model)
@@ -255,7 +259,7 @@ defmodule MirrorNeuron.Cluster.Hardware do
     }
   end
 
-  def parse_nvidia_gpu(output, memory \\ %{}) do
+  def parse_nvidia_gpu(output, memory \\ %{}, driver_info \\ %{}) do
     output
     |> String.split("\n", trim: true)
     |> Enum.with_index()
@@ -267,17 +271,24 @@ defmodule MirrorNeuron.Cluster.Hardware do
         |> String.split(",", trim: true)
         |> Enum.map(&String.trim/1)
 
-      {index, uuid, name, utilization, memory_used, memory_free, memory_total} =
+      {index, uuid, name, driver_version, utilization, memory_used, memory_free, memory_total} =
         case columns do
+          [index, uuid, name, driver_version, utilization, memory_used, memory_free, memory_total] ->
+            {parse_integer(index) || fallback_index, uuid, name, driver_version, utilization,
+             memory_used, memory_free, memory_total}
+
           [index, uuid, name, utilization, memory_used, memory_free, memory_total] ->
-            {parse_integer(index) || fallback_index, uuid, name, utilization, memory_used,
-             memory_free, memory_total}
+            {parse_integer(index) || fallback_index, uuid, name,
+             map_get(driver_info, "driver_version"), utilization, memory_used, memory_free,
+             memory_total}
 
           [name, utilization, memory_used, memory_total] ->
-            {fallback_index, nil, name, utilization, memory_used, nil, memory_total}
+            {fallback_index, nil, name, map_get(driver_info, "driver_version"), utilization,
+             memory_used, nil, memory_total}
 
           _ ->
-            {fallback_index, nil, Enum.join(columns, ", "), nil, nil, nil, nil}
+            {fallback_index, nil, Enum.join(columns, ", "),
+             map_get(driver_info, "driver_version"), nil, nil, nil, nil}
         end
 
       utilization_ratio = utilization |> parse_float() |> ratio(100)
@@ -285,6 +296,7 @@ defmodule MirrorNeuron.Cluster.Hardware do
       memory_free_mb = parse_float(memory_free)
       memory_total_mb = parse_float(memory_total) || shared_nvidia_memory_total_mb(name, memory)
       shared_memory_free_mb = shared_nvidia_memory_free_mb(name, memory)
+      cuda_version = map_get(driver_info, "cuda_version")
 
       %{
         id: uuid || "nvidia-#{index}",
@@ -294,6 +306,10 @@ defmodule MirrorNeuron.Cluster.Hardware do
         type: "nvidia/gpu",
         vendor: "nvidia",
         driver: "cuda",
+        api: "cuda",
+        api_version: cuda_version,
+        driver_version: blank_to_nil(driver_version),
+        gpu_type: gpu_type("nvidia", "cuda", cuda_version),
         utilization_ratio: utilization_ratio,
         memory_used_mb: memory_used_mb,
         memory_free_mb:
@@ -328,6 +344,10 @@ defmodule MirrorNeuron.Cluster.Hardware do
         driver: profile.driver,
         memory_total_mb: number_value(map_get(memory, "total_mb")),
         memory_free_mb: number_value(map_get(memory, "available_mb")),
+        api: profile.api,
+        api_version: profile.api_version,
+        driver_version: profile.driver_version,
+        gpu_type: profile.gpu_type,
         capabilities: profile.capabilities
       }
     end
@@ -342,6 +362,8 @@ defmodule MirrorNeuron.Cluster.Hardware do
         System.get_env("MN_NODE_GPU_VENDOR"),
         System.get_env("MN_NODE_GPU_DRIVER"),
         System.get_env("MN_NODE_GPU_TYPE"),
+        System.get_env("MN_NODE_GPU_API_VERSION"),
+        System.get_env("MN_NODE_GPU_DRIVER_VERSION"),
         System.get_env("MN_NODE_CAPABILITIES"),
         System.get_env("MN_NODE_DISPLAY_NAME")
       ]
@@ -360,12 +382,22 @@ defmodule MirrorNeuron.Cluster.Hardware do
 
     type = System.get_env("MN_NODE_GPU_TYPE") || type_from_gpu_vendor(vendor)
     name = System.get_env("MN_NODE_GPU_NAME") || inferred_gpu_name(vendor, normalized)
+    api = api_from_gpu_driver(driver)
+
+    api_version =
+      System.get_env("MN_NODE_GPU_API_VERSION") || inferred_api_version(driver, normalized)
+
+    driver_version = System.get_env("MN_NODE_GPU_DRIVER_VERSION")
 
     %{
       name: name,
       type: type,
       vendor: vendor || "generic",
       driver: driver || "generic",
+      api: api,
+      api_version: api_version,
+      driver_version: driver_version,
+      gpu_type: gpu_type(vendor, api || driver, api_version),
       capabilities: configured_gpu_capabilities(vendor, driver, normalized)
     }
   end
@@ -454,6 +486,29 @@ defmodule MirrorNeuron.Cluster.Hardware do
   defp driver_from_gpu_vendor("intel"), do: "intel"
   defp driver_from_gpu_vendor(_vendor), do: "generic"
 
+  defp api_from_gpu_driver("cuda"), do: "cuda"
+  defp api_from_gpu_driver("rocm"), do: "rocm"
+  defp api_from_gpu_driver("metal"), do: "metal"
+  defp api_from_gpu_driver(_driver), do: nil
+
+  defp inferred_api_version(driver, normalized) do
+    cond do
+      driver == "cuda" -> version_after(normalized, "cuda")
+      driver == "rocm" -> version_after(normalized, "rocm")
+      true -> nil
+    end
+  end
+
+  defp gpu_type("nvidia", "cuda", version), do: versioned_type("nvidia-cuda", version)
+  defp gpu_type("amd", "rocm", version), do: versioned_type("amd-rocm", version)
+  defp gpu_type("apple", "metal", _version), do: "mac-metal"
+  defp gpu_type("intel", _api, _version), do: "intel"
+  defp gpu_type(_vendor, _api, _version), do: "generic"
+
+  defp versioned_type(prefix, nil), do: prefix
+  defp versioned_type(prefix, ""), do: prefix
+  defp versioned_type(prefix, version), do: "#{prefix}-#{version}"
+
   defp type_from_gpu_vendor(nil), do: "generic/gpu"
   defp type_from_gpu_vendor("generic"), do: "generic/gpu"
   defp type_from_gpu_vendor(vendor), do: "#{vendor}/gpu"
@@ -502,6 +557,18 @@ defmodule MirrorNeuron.Cluster.Hardware do
   defp advertised_node_capabilities do
     System.get_env("MN_NODE_CAPABILITIES")
     |> split_env_list()
+  end
+
+  defp nvidia_cuda_version do
+    case System.cmd("nvidia-smi", []) do
+      {output, 0} ->
+        version_after(output, "CUDA Version:")
+
+      _ ->
+        nil
+    end
+  rescue
+    _ -> nil
   end
 
   defp nvidia_gpu_capabilities(name) do
@@ -559,6 +626,24 @@ defmodule MirrorNeuron.Cluster.Hardware do
     |> String.trim()
     |> String.downcase()
     |> String.replace("_", "-")
+  end
+
+  defp blank_to_nil(nil), do: nil
+
+  defp blank_to_nil(value) do
+    value = String.trim(to_string(value))
+    if value == "" or String.downcase(value) == "[n/a]", do: nil, else: value
+  end
+
+  defp version_after(nil, _label), do: nil
+
+  defp version_after(value, label) do
+    label = Regex.escape(to_string(label))
+
+    case Regex.run(~r/#{label}\s*[:=\- ]*\s*([0-9]+(?:\.[0-9]+)*)/i, to_string(value)) do
+      [_match, version] -> version
+      _ -> nil
+    end
   end
 
   defp openshell_driver do
