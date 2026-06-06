@@ -315,23 +315,148 @@ defmodule MirrorNeuron.Cluster.Hardware do
   defp generic_gpu_devices(0, _memory), do: []
 
   defp generic_gpu_devices(count, memory) when is_integer(count) and count > 0 do
+    profile = configured_gpu_profile()
+
     for index <- 0..(count - 1) do
       %{
         id: "gpu-#{index}",
         index: index,
-        name: "GPU #{index + 1}",
+        name: profile.name || "GPU #{index + 1}",
         kind: "gpu",
-        type: "generic/gpu",
-        vendor: "generic",
-        driver: "generic",
+        type: profile.type,
+        vendor: profile.vendor,
+        driver: profile.driver,
         memory_total_mb: number_value(map_get(memory, "total_mb")),
         memory_free_mb: number_value(map_get(memory, "available_mb")),
-        capabilities: ["gpu"]
+        capabilities: profile.capabilities
       }
     end
   end
 
   defp generic_gpu_devices(_count, _memory), do: []
+
+  defp configured_gpu_profile do
+    identity =
+      [
+        System.get_env("MN_NODE_GPU_NAME"),
+        System.get_env("MN_NODE_GPU_VENDOR"),
+        System.get_env("MN_NODE_GPU_DRIVER"),
+        System.get_env("MN_NODE_GPU_TYPE"),
+        System.get_env("MN_NODE_CAPABILITIES"),
+        System.get_env("MN_NODE_DISPLAY_NAME")
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(" ")
+
+    normalized = String.downcase(identity)
+
+    vendor =
+      normalize_gpu_vendor(System.get_env("MN_NODE_GPU_VENDOR")) ||
+        inferred_gpu_vendor(normalized)
+
+    driver =
+      normalize_gpu_driver(System.get_env("MN_NODE_GPU_DRIVER")) ||
+        driver_from_gpu_vendor(vendor)
+
+    type = System.get_env("MN_NODE_GPU_TYPE") || type_from_gpu_vendor(vendor)
+    name = System.get_env("MN_NODE_GPU_NAME") || inferred_gpu_name(vendor, normalized)
+
+    %{
+      name: name,
+      type: type,
+      vendor: vendor || "generic",
+      driver: driver || "generic",
+      capabilities: configured_gpu_capabilities(vendor, driver, normalized)
+    }
+  end
+
+  defp configured_gpu_capabilities(vendor, driver, normalized) do
+    (["gpu", vendor, driver] ++
+       split_env_list(System.get_env("MN_NODE_CAPABILITIES")) ++
+       inferred_gpu_capabilities(vendor, normalized))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&normalize_capability/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp inferred_gpu_capabilities("nvidia", normalized),
+    do: ["nvidia", "cuda"] ++ nvidia_gpu_capabilities(normalized)
+
+  defp inferred_gpu_capabilities("apple", normalized),
+    do: ["apple", "metal", "unified_memory"] ++ apple_gpu_capabilities(normalized)
+
+  defp inferred_gpu_capabilities("amd", _normalized), do: ["amd", "rocm"]
+  defp inferred_gpu_capabilities("intel", _normalized), do: ["intel"]
+  defp inferred_gpu_capabilities(_vendor, _normalized), do: ["generic"]
+
+  defp inferred_gpu_vendor(normalized) do
+    cond do
+      String.contains?(normalized, "nvidia") or String.contains?(normalized, "cuda") or
+        String.contains?(normalized, "dgx spark") or String.contains?(normalized, "gb10") or
+          String.contains?(normalized, "spark") ->
+        "nvidia"
+
+      String.contains?(normalized, "apple") or String.contains?(normalized, "metal") or
+        String.contains?(normalized, "macbook") or String.contains?(normalized, "mac mini") or
+          String.contains?(normalized, "mac studio") ->
+        "apple"
+
+      String.contains?(normalized, "amd") or String.contains?(normalized, "radeon") or
+          String.contains?(normalized, "rocm") ->
+        "amd"
+
+      String.contains?(normalized, "intel") ->
+        "intel"
+
+      true ->
+        nil
+    end
+  end
+
+  defp inferred_gpu_name("nvidia", normalized) do
+    cond do
+      String.contains?(normalized, "dgx spark") or String.contains?(normalized, "spark") ->
+        "NVIDIA DGX Spark"
+
+      String.contains?(normalized, "gb10") ->
+        "NVIDIA GB10"
+
+      true ->
+        nil
+    end
+  end
+
+  defp inferred_gpu_name("apple", _normalized), do: "Apple Metal GPU"
+  defp inferred_gpu_name(_vendor, _normalized), do: nil
+
+  defp normalize_gpu_vendor(nil), do: nil
+
+  defp normalize_gpu_vendor(value) do
+    case normalize_capability(value) do
+      value when value in ["nvidia", "amd", "apple", "intel"] -> value
+      _ -> nil
+    end
+  end
+
+  defp normalize_gpu_driver(nil), do: nil
+
+  defp normalize_gpu_driver(value) do
+    case normalize_capability(value) do
+      value when value in ["cuda", "rocm", "metal", "intel", "generic"] -> value
+      _ -> nil
+    end
+  end
+
+  defp driver_from_gpu_vendor("nvidia"), do: "cuda"
+  defp driver_from_gpu_vendor("amd"), do: "rocm"
+  defp driver_from_gpu_vendor("apple"), do: "metal"
+  defp driver_from_gpu_vendor("intel"), do: "intel"
+  defp driver_from_gpu_vendor(_vendor), do: "generic"
+
+  defp type_from_gpu_vendor(nil), do: "generic/gpu"
+  defp type_from_gpu_vendor("generic"), do: "generic/gpu"
+  defp type_from_gpu_vendor(vendor), do: "#{vendor}/gpu"
 
   defp advertised_host_paths do
     System.get_env("MN_NODE_HOST_PATHS")
@@ -383,7 +508,10 @@ defmodule MirrorNeuron.Cluster.Hardware do
     normalized = String.downcase(to_string(name || ""))
 
     []
-    |> maybe_capability(String.contains?(normalized, "dgx spark"), "nvidia-dgx-spark")
+    |> maybe_capability(
+      String.contains?(normalized, "dgx spark") or String.contains?(normalized, "spark"),
+      "nvidia-dgx-spark"
+    )
     |> maybe_capability(String.contains?(normalized, "gh200"), "nvidia-gh200")
     |> maybe_capability(String.contains?(normalized, "h100"), "nvidia-h100")
     |> maybe_capability(String.contains?(normalized, "h200"), "nvidia-h200")
@@ -393,18 +521,21 @@ defmodule MirrorNeuron.Cluster.Hardware do
   end
 
   defp shared_nvidia_memory_total_mb(name, memory) do
-    if gb10_gpu?(name), do: number_value(map_get(memory, "total_mb"))
+    if shared_nvidia_memory_gpu?(name), do: number_value(map_get(memory, "total_mb"))
   end
 
   defp shared_nvidia_memory_free_mb(name, memory) do
-    if gb10_gpu?(name), do: number_value(map_get(memory, "available_mb"))
+    if shared_nvidia_memory_gpu?(name), do: number_value(map_get(memory, "available_mb"))
   end
 
-  defp gb10_gpu?(name) do
-    name
-    |> to_string()
-    |> String.downcase()
-    |> String.contains?("gb10")
+  defp shared_nvidia_memory_gpu?(name) do
+    normalized =
+      name
+      |> to_string()
+      |> String.downcase()
+
+    String.contains?(normalized, "gb10") or String.contains?(normalized, "dgx spark") or
+      String.contains?(normalized, "spark")
   end
 
   defp apple_gpu_capabilities(name) do

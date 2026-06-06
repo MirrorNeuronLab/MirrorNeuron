@@ -6,7 +6,16 @@ defmodule MirrorNeuron.Cluster.HardwareTest do
   setup do
     saved_env =
       Map.new(
-        ["MN_NODE_GPU", "MN_NODE_GPU_COUNT", "MN_NODE_DISPLAY_NAME", "MN_NODE_CAPABILITIES"],
+        [
+          "MN_NODE_GPU",
+          "MN_NODE_GPU_COUNT",
+          "MN_NODE_DISPLAY_NAME",
+          "MN_NODE_CAPABILITIES",
+          "MN_NODE_GPU_VENDOR",
+          "MN_NODE_GPU_DRIVER",
+          "MN_NODE_GPU_TYPE",
+          "MN_NODE_GPU_NAME"
+        ],
         &{&1, System.get_env(&1)}
       )
 
@@ -57,6 +66,21 @@ defmodule MirrorNeuron.Cluster.HardwareTest do
     assert "nvidia-gb10" in gpu.capabilities
   end
 
+  test "treats NVIDIA DGX Spark shared memory as CUDA GPU memory" do
+    [gpu] =
+      Hardware.parse_nvidia_gpu(
+        """
+        0, GPU-SPARK, NVIDIA DGX Spark, [N/A], [N/A], [N/A], [N/A]
+        """,
+        %{"total_mb" => 165_000, "available_mb" => 128_000}
+      )
+
+    assert gpu.name == "NVIDIA DGX Spark"
+    assert gpu.memory_total_mb == 165_000
+    assert gpu.memory_free_mb == 128_000
+    assert "nvidia-dgx-spark" in gpu.capabilities
+  end
+
   test "parses legacy NVIDIA GPU inventory" do
     [gpu] =
       Hardware.parse_nvidia_gpu("""
@@ -105,6 +129,35 @@ defmodule MirrorNeuron.Cluster.HardwareTest do
     assert length(hardware.gpu) == 2
     assert Enum.all?(hardware.gpu, &(&1.kind == "gpu"))
     assert Enum.all?(hardware.gpu, &("gpu" in &1.capabilities))
+  end
+
+  test "annotates runtime-provided Spark GPU count with NVIDIA identity" do
+    System.put_env("MN_NODE_GPU_COUNT", "1")
+    System.put_env("MN_NODE_DISPLAY_NAME", "spark")
+
+    hardware = Hardware.info()
+    [gpu] = hardware.gpu
+
+    assert gpu.name == "NVIDIA DGX Spark"
+    assert gpu.vendor == "nvidia"
+    assert gpu.driver == "cuda"
+    assert gpu.type == "nvidia/gpu"
+    assert "nvidia-dgx-spark" in gpu.capabilities
+    assert "nvidia" in hardware.capabilities
+  end
+
+  test "annotates runtime-provided Apple GPU count with Metal identity" do
+    System.put_env("MN_NODE_GPU_COUNT", "1")
+    System.put_env("MN_NODE_DISPLAY_NAME", "Homers-MacBook-Air")
+
+    hardware = Hardware.info()
+    [gpu] = hardware.gpu
+
+    assert gpu.name == "Apple Metal GPU"
+    assert gpu.vendor == "apple"
+    assert gpu.driver == "metal"
+    assert gpu.type == "apple/gpu"
+    assert "unified-memory" in hardware.capabilities
   end
 
   test "adds operator-provided node capabilities to hardware info" do

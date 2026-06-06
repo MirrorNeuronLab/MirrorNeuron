@@ -28,21 +28,42 @@ defmodule MirrorNeuron.ResourceTest do
           "self?" => true,
           "drain" => %{"status" => "blocked_no_placement", "reason" => "kernel update"},
           "hardware" => %{
-            "platform" => %{"hostname" => "local-lab", "display_name" => "Local Lab"},
+            "platform" => %{
+              "family" => "unix",
+              "os" => "linux",
+              "hostname" => "local-lab",
+              "display_name" => "Local Lab"
+            },
             "cpu" => %{"logical_processors" => 8},
-            "memory" => %{"total_bytes" => 16 * 1024 * 1024 * 1024},
+            "memory" => %{
+              "total_bytes" => 16 * 1024 * 1024 * 1024,
+              "available_bytes" => 12 * 1024 * 1024 * 1024
+            },
             "disk" => %{
               "total_bytes" => 100 * 1024 * 1024 * 1024,
               "available_bytes" => 80 * 1024 * 1024 * 1024
             },
-            "gpu" => [%{"name" => "GPU 1"}, %{"name" => "GPU 2"}]
+            "gpu" => [
+              %{
+                "id" => "gpu-1",
+                "name" => "NVIDIA RTX 4090",
+                "memory_total_mb" => 12_288,
+                "memory_free_mb" => 8_192
+              },
+              %{
+                "id" => "gpu-2",
+                "name" => "NVIDIA RTX 6000 Ada",
+                "memory_total_mb" => 24_576,
+                "memory_free_mb" => 16_384
+              }
+            ]
           }
         },
         %{
           "name" => "mn2@127.0.0.1",
           "hardware" => %{
             "cpu" => %{"logical_processors" => 4},
-            "memory" => %{"total_mb" => 8192},
+            "memory" => %{"total_mb" => 8192, "available_mb" => 4096},
             "disk" => %{"total_mb" => 50 * 1024, "available_mb" => 30 * 1024},
             "gpu" => "Unknown or None"
           }
@@ -92,9 +113,13 @@ defmodule MirrorNeuron.ResourceTest do
     assert report["totals"] == %{
              "cpu_cores" => 12,
              "gpu_count" => 2,
-             "gpu_memory_total_mb" => 0.0,
-             "gpu_memory_free_mb" => 0.0,
+             "gpu_memory_total_mb" => 36_864.0,
+             "gpu_memory_free_mb" => 24_576.0,
+             "gpu_memory_total_gb" => 36.0,
+             "gpu_memory_free_gb" => 24.0,
              "memory_gb" => 24.0,
+             "memory_total_gb" => 24.0,
+             "memory_available_gb" => 16.0,
              "disk_gb" => 150.0,
              "disk_available_gb" => 110.0
            }
@@ -105,9 +130,13 @@ defmodule MirrorNeuron.ResourceTest do
     assert report["usable"] == %{
              "cpu_cores" => 12,
              "gpu_count" => 2,
-             "gpu_memory_total_mb" => 0.0,
-             "gpu_memory_free_mb" => 0.0,
+             "gpu_memory_total_mb" => 36_864.0,
+             "gpu_memory_free_mb" => 24_576.0,
+             "gpu_memory_total_gb" => 36.0,
+             "gpu_memory_free_gb" => 24.0,
              "memory_gb" => 24.0,
+             "memory_total_gb" => 24.0,
+             "memory_available_gb" => 16.0,
              "disk_gb" => 150.0,
              "disk_available_gb" => 110.0
            }
@@ -124,7 +153,10 @@ defmodule MirrorNeuron.ResourceTest do
     assert draining["status"] == "draining"
     assert draining["scheduling_eligible"] == false
     assert draining["drain"] == %{"status" => "blocked_no_placement", "reason" => "kernel update"}
+    assert draining["platform"]["os"] == "linux"
     assert length(draining["devices"]) == 2
+    assert hd(draining["devices"])["vendor"] == "nvidia"
+    assert hd(draining["devices"])["memory_total_mb"] == 12_288
     assert "host_local" in draining["runtime_drivers"]
   end
 
@@ -142,7 +174,11 @@ defmodule MirrorNeuron.ResourceTest do
              "gpu_count" => 1,
              "gpu_memory_total_mb" => 0.0,
              "gpu_memory_free_mb" => 0.0,
+             "gpu_memory_total_gb" => 0.0,
+             "gpu_memory_free_gb" => 0.0,
              "memory_gb" => 16.0,
+             "memory_total_gb" => 16.0,
+             "memory_available_gb" => 0.0,
              "disk_gb" => 100.0,
              "disk_available_gb" => 80.0
            }
@@ -158,9 +194,13 @@ defmodule MirrorNeuron.ResourceTest do
     assert report["usable"] == %{
              "cpu_cores" => 6,
              "gpu_count" => 0,
-             "gpu_memory_total_mb" => 0.0,
-             "gpu_memory_free_mb" => 0.0,
+             "gpu_memory_total_mb" => 9_216.0,
+             "gpu_memory_free_mb" => 6_144.0,
+             "gpu_memory_total_gb" => 9.0,
+             "gpu_memory_free_gb" => 6.0,
              "memory_gb" => 18.0,
+             "memory_total_gb" => 18.0,
+             "memory_available_gb" => 12.0,
              "disk_gb" => 75.0,
              "disk_available_gb" => 55.0
            }

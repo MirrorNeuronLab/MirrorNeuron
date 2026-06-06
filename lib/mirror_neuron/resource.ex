@@ -64,7 +64,11 @@ defmodule MirrorNeuron.Resource do
       "gpu_count" => percent_of(totals["gpu_count"], limits["gpu"]),
       "gpu_memory_total_mb" => percent_of(totals["gpu_memory_total_mb"], limits["gpu"]),
       "gpu_memory_free_mb" => percent_of(totals["gpu_memory_free_mb"], limits["gpu"]),
-      "memory_gb" => percent_of(totals["memory_gb"], limits["memory"]),
+      "gpu_memory_total_gb" => percent_of(totals["gpu_memory_total_gb"], limits["gpu"]),
+      "gpu_memory_free_gb" => percent_of(totals["gpu_memory_free_gb"], limits["gpu"]),
+      "memory_gb" => percent_of(totals["memory_total_gb"], limits["memory"]),
+      "memory_total_gb" => percent_of(totals["memory_total_gb"], limits["memory"]),
+      "memory_available_gb" => percent_of(totals["memory_available_gb"], limits["memory"]),
       "disk_gb" => percent_of(totals["disk_gb"], limits["disk"]),
       "disk_available_gb" => percent_of(totals["disk_available_gb"], limits["disk"])
     }
@@ -83,25 +87,34 @@ defmodule MirrorNeuron.Resource do
     host_paths = ResourceSpec.normalize_node_host_paths(node, hardware)
     runtime_drivers = ResourceSpec.normalize_node_runtime_drivers(node, hardware)
     name = Map.get(node, :name) || Map.get(node, "name") || "unknown"
+    memory_total_gb = memory_gb(memory)
+    memory_available_gb = memory_available_gb(memory)
+    gpu_memory_total_mb = gpu_memory_total_mb(devices)
+    gpu_memory_free_mb = gpu_memory_free_mb(devices)
 
     %{
       "name" => name,
       "display_name" => node_display_name(node, platform, name),
       "hostname" =>
         Map.get(node, :hostname) || Map.get(node, "hostname") || map_get(platform, "hostname"),
+      "platform" => platform_summary(platform),
       "self" => node_attr(node, :self?, false) || node_attr(node, :self, false),
       "status" => Map.get(node, :status) || Map.get(node, "status") || "healthy",
       "scheduling_eligible" => node_attr(node, :scheduling_eligible, true),
       "drain" => Map.get(node, :drain) || Map.get(node, "drain"),
       "cpu_cores" => integer_value(map_get(cpu, "logical_processors")),
       "gpu_count" => gpu_count(gpu),
-      "memory_gb" => memory_gb(memory),
+      "memory_gb" => memory_total_gb,
+      "memory_total_gb" => memory_total_gb,
+      "memory_available_gb" => memory_available_gb,
       "disk_gb" => disk_gb(disk),
       "disk_available_gb" => disk_available_gb(disk),
       "gpu" => gpu_summary(gpu),
       "devices" => devices,
-      "gpu_memory_total_mb" => gpu_memory_total_mb(devices),
-      "gpu_memory_free_mb" => gpu_memory_free_mb(devices),
+      "gpu_memory_total_mb" => gpu_memory_total_mb,
+      "gpu_memory_free_mb" => gpu_memory_free_mb,
+      "gpu_memory_total_gb" => mb_to_gb(gpu_memory_total_mb),
+      "gpu_memory_free_gb" => mb_to_gb(gpu_memory_free_mb),
       "drivers" => device_drivers(devices, runtime_drivers),
       "runtime_drivers" => runtime_drivers,
       "host_paths" => host_paths
@@ -111,15 +124,20 @@ defmodule MirrorNeuron.Resource do
   defp node_resource(_node) do
     %{
       "name" => "unknown",
+      "platform" => %{},
       "cpu_cores" => 0,
       "gpu_count" => 0,
       "memory_gb" => 0.0,
+      "memory_total_gb" => 0.0,
+      "memory_available_gb" => 0.0,
       "disk_gb" => 0.0,
       "disk_available_gb" => 0.0,
       "gpu" => [],
       "devices" => [],
       "gpu_memory_total_mb" => 0,
       "gpu_memory_free_mb" => 0,
+      "gpu_memory_total_gb" => 0.0,
+      "gpu_memory_free_gb" => 0.0,
       "drivers" => [],
       "runtime_drivers" => [],
       "host_paths" => []
@@ -143,13 +161,21 @@ defmodule MirrorNeuron.Resource do
   end
 
   defp totals(nodes) do
+    gpu_memory_total_mb = round_float(Enum.sum(Enum.map(nodes, & &1["gpu_memory_total_mb"])))
+    gpu_memory_free_mb = round_float(Enum.sum(Enum.map(nodes, & &1["gpu_memory_free_mb"])))
+    memory_total_gb = round_float(Enum.sum(Enum.map(nodes, & &1["memory_total_gb"])))
+    memory_available_gb = round_float(Enum.sum(Enum.map(nodes, & &1["memory_available_gb"])))
+
     %{
       "cpu_cores" => Enum.sum(Enum.map(nodes, & &1["cpu_cores"])),
       "gpu_count" => Enum.sum(Enum.map(nodes, & &1["gpu_count"])),
-      "gpu_memory_total_mb" =>
-        round_float(Enum.sum(Enum.map(nodes, & &1["gpu_memory_total_mb"]))),
-      "gpu_memory_free_mb" => round_float(Enum.sum(Enum.map(nodes, & &1["gpu_memory_free_mb"]))),
-      "memory_gb" => round_float(Enum.sum(Enum.map(nodes, & &1["memory_gb"]))),
+      "gpu_memory_total_mb" => gpu_memory_total_mb,
+      "gpu_memory_free_mb" => gpu_memory_free_mb,
+      "gpu_memory_total_gb" => mb_to_gb(gpu_memory_total_mb),
+      "gpu_memory_free_gb" => mb_to_gb(gpu_memory_free_mb),
+      "memory_gb" => memory_total_gb,
+      "memory_total_gb" => memory_total_gb,
+      "memory_available_gb" => memory_available_gb,
       "disk_gb" => round_float(Enum.sum(Enum.map(nodes, & &1["disk_gb"]))),
       "disk_available_gb" => round_float(Enum.sum(Enum.map(nodes, & &1["disk_available_gb"])))
     }
@@ -237,6 +263,9 @@ defmodule MirrorNeuron.Resource do
   defp gpu_memory_free_mb(devices),
     do: devices |> Enum.map(&(&1["memory_free_mb"] || 0)) |> Enum.sum()
 
+  defp mb_to_gb(value) when is_number(value), do: round_float(value / 1024)
+  defp mb_to_gb(_value), do: 0.0
+
   defp device_drivers(devices, runtime_drivers) do
     (runtime_drivers ++ Enum.map(devices, & &1["driver"]))
     |> Enum.reject(&is_nil/1)
@@ -252,6 +281,20 @@ defmodule MirrorNeuron.Resource do
     end)
   end
 
+  defp platform_summary(platform) when is_map(platform) do
+    %{
+      "family" => map_get(platform, "family"),
+      "os" => map_get(platform, "os"),
+      "node" => map_get(platform, "node"),
+      "hostname" => map_get(platform, "hostname"),
+      "display_name" => map_get(platform, "display_name")
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new(fn {key, value} -> {key, to_string(value)} end)
+  end
+
+  defp platform_summary(_platform), do: %{}
+
   defp memory_gb(memory) when is_map(memory) do
     cond do
       bytes = map_get(memory, "total_bytes") ->
@@ -266,6 +309,21 @@ defmodule MirrorNeuron.Resource do
   end
 
   defp memory_gb(_memory), do: 0.0
+
+  defp memory_available_gb(memory) when is_map(memory) do
+    cond do
+      bytes = map_get(memory, "available_bytes") ->
+        round_float(bytes / (1024 * 1024 * 1024))
+
+      mb = map_get(memory, "available_mb") ->
+        round_float(mb / 1024)
+
+      true ->
+        0.0
+    end
+  end
+
+  defp memory_available_gb(_memory), do: 0.0
 
   defp disk_gb(disk) when is_map(disk) do
     cond do
