@@ -8,6 +8,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
   alias MirrorNeuron.Manifest
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
+  alias MirrorNeuron.Scheduler
   alias MirrorNeuron.Runtime.ErrorEnvelope
   alias MirrorNeuron.Runtime.SchedulePolicy
 
@@ -16,7 +17,8 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
 
   def create_schedule(input, schedule_attrs \\ %{}, opts \\ []) do
     with {:ok, bundle} <- JobBundle.load(input),
-         {:ok, schedule} <- normalize_schedule(bundle, schedule_attrs, opts) do
+         {:ok, schedule} <- normalize_schedule(bundle, schedule_attrs, opts),
+         {:ok, schedule} <- maybe_attach_resource_availability(schedule, bundle.manifest) do
       schedule_id = Keyword.get(opts, :schedule_id) || generate_schedule_id()
       manifest_map = Manifest.to_map(bundle.manifest)
       bundle_ref = Runtime.bundle_ref(bundle.manifest, bundle)
@@ -171,6 +173,9 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
 
   defp process_due_schedule(schedule, now) do
     cond do
+      schedule["kind"] == "resource_wait" ->
+        process_resource_wait_schedule(schedule, now)
+
       SchedulePolicy.missed?(schedule, now) ->
         mark_missed(schedule, now)
 
@@ -195,6 +200,31 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
         "reason" => "event",
         "event" => event
       })
+    end
+  end
+
+  defp process_resource_wait_schedule(schedule, now) do
+    cond do
+      overlap_blocked?(schedule) ->
+        postpone_resource_wait(schedule, now, "overlap")
+
+      true ->
+        case resource_wait_ready?(schedule) do
+          {:ok, availability} ->
+            schedule
+            |> SchedulePolicy.due_instances(now)
+            |> Enum.map(
+              &dispatch_with_lease(Map.put(schedule, "resource_availability", availability), &1)
+            )
+            |> reduce_results()
+
+          {:blocked, availability} ->
+            postpone_resource_wait(schedule, now, Map.get(availability, "reason"), availability)
+
+          {:error, availability} ->
+            availability = availability_error(availability)
+            postpone_resource_wait(schedule, now, Map.get(availability, "reason"), availability)
+        end
     end
   end
 
@@ -309,7 +339,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     |> prepend_dispatch(dispatch)
     |> Map.update("active_job_ids", [job_id], &Enum.uniq([job_id | &1]))
     |> increment_counter("dispatched")
-    |> maybe_complete_delayed()
+    |> maybe_complete_one_shot()
     |> then(&RedisStore.persist_schedule(schedule["schedule_id"], &1))
   end
 
@@ -373,6 +403,24 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
       schedule
       |> Map.put("last_blocked_reason", reason)
       |> Map.put("updated_at", Runtime.timestamp())
+      |> then(&RedisStore.persist_schedule(schedule["schedule_id"], &1))
+
+    %{checked: 1, dispatched: 0, skipped: 0, failed: 0, missed: 0, blocked: 1}
+  end
+
+  defp postpone_resource_wait(schedule, now, reason, availability \\ %{}) do
+    next_run_at =
+      now
+      |> DateTime.add(Map.get(schedule, "retry_interval_ms", 30_000), :millisecond)
+      |> DateTime.to_iso8601()
+
+    _ =
+      schedule
+      |> Map.put("next_run_at", next_run_at)
+      |> Map.put("last_blocked_reason", reason || "resources unavailable")
+      |> Map.put("resource_availability", availability)
+      |> Map.put("updated_at", Runtime.timestamp())
+      |> increment_counter("blocked")
       |> then(&RedisStore.persist_schedule(schedule["schedule_id"], &1))
 
     %{checked: 1, dispatched: 0, skipped: 0, failed: 0, missed: 0, blocked: 1}
@@ -449,14 +497,50 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     end
   end
 
-  defp maybe_complete_delayed(%{"kind" => "delayed"} = schedule) do
+  defp maybe_complete_one_shot(%{"kind" => kind} = schedule)
+       when kind in ["delayed", "resource_wait"] do
     schedule
     |> Map.put("enabled", false)
     |> Map.put("status", "completed")
     |> Map.put("next_run_at", nil)
   end
 
-  defp maybe_complete_delayed(schedule), do: schedule
+  defp maybe_complete_one_shot(schedule), do: schedule
+
+  defp maybe_attach_resource_availability(%{"kind" => "resource_wait"} = schedule, manifest) do
+    case Scheduler.availability(manifest) do
+      {:ok, availability} ->
+        {:ok, Map.put(schedule, "resource_availability", availability)}
+
+      {:blocked, availability} ->
+        {:ok, Map.put(schedule, "resource_availability", availability)}
+
+      {:error, %{"reason" => reason} = availability} ->
+        {:error,
+         "resource requirements cannot be satisfied by the current cluster: #{reason} (#{availability["status"]})"}
+    end
+  end
+
+  defp maybe_attach_resource_availability(schedule, _manifest), do: {:ok, schedule}
+
+  defp resource_wait_ready?(schedule) do
+    case Manifest.load(Map.get(schedule, "manifest", %{})) do
+      {:ok, manifest} -> Scheduler.availability(manifest)
+      {:error, reason} -> {:error, availability_error(reason)}
+    end
+  end
+
+  defp availability_error(%{} = availability), do: availability
+
+  defp availability_error(reason) do
+    %{
+      "status" => "not_runnable",
+      "reason" => reason_to_string(reason)
+    }
+  end
+
+  defp reason_to_string(reason) when is_binary(reason), do: reason
+  defp reason_to_string(reason), do: inspect(reason)
 
   defp current_schedule(schedule) do
     case RedisStore.fetch_schedule(schedule["schedule_id"]) do

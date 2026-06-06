@@ -346,7 +346,7 @@ defmodule MirrorNeuron.Cluster.Hardware do
       |> split_env_list()
       |> Enum.map(&String.downcase/1)
 
-    drivers = ["host_local"] ++ configured ++ openshell_driver()
+    drivers = ["host_local"] ++ configured ++ openshell_driver() ++ docker_worker_driver()
 
     drivers
     |> Enum.reject(&(&1 == ""))
@@ -435,6 +435,20 @@ defmodule MirrorNeuron.Cluster.Hardware do
       ["openshell"]
     else
       []
+    end
+  end
+
+  defp docker_worker_driver do
+    case System.get_env("MN_DOCKER_WORKER_ENABLED") do
+      value when value in ["0", "false", "FALSE", "no", "NO", "off", "OFF"] ->
+        []
+
+      value when value in ["1", "true", "TRUE", "yes", "YES", "on", "ON"] ->
+        ["docker_worker"]
+
+      _ ->
+        docker_bin = System.get_env("MN_DOCKER_BIN", "docker")
+        if System.find_executable(docker_bin), do: ["docker_worker"], else: []
     end
   end
 

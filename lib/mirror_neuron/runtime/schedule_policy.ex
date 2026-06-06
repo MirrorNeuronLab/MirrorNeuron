@@ -3,7 +3,7 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
 
   @default_grace_ms 60_000
   @default_catchup_limit 10
-  @supported_kinds ["periodic", "delayed", "event"]
+  @supported_kinds ["periodic", "delayed", "event", "resource_wait"]
   @supported_missed_policies ["skip", "catchup_one", "catchup_all"]
   @supported_end_actions ["cancel", "none"]
 
@@ -33,6 +33,8 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
         "missed_grace_ms" => positive_int(Map.get(raw, "missed_grace_ms"), @default_grace_ms),
         "window" => normalize_window(Map.get(raw, "window", %{})),
         "trigger" => normalize_trigger(raw),
+        "retry_interval_ms" => resource_wait_interval(kind, raw),
+        "max_wait_ms" => resource_wait_max_wait(kind, raw),
         "parameterized" => normalize_parameterized(Map.get(raw, "parameterized", %{})),
         "metadata" => Map.get(raw, "metadata", %{})
       }
@@ -51,7 +53,7 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
       []
       |> add_error(
         Map.get(schedule, "kind") not in @supported_kinds,
-        "schedule.kind must be periodic, delayed, or event"
+        "schedule.kind must be periodic, delayed, event, or resource_wait"
       )
       |> validate_kind(schedule)
       |> validate_window(schedule)
@@ -102,6 +104,9 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
 
       Map.get(schedule, "kind") == "delayed" ->
         [%{"scheduled_for" => DateTime.to_iso8601(next_dt), "reason" => "delayed"}]
+
+      Map.get(schedule, "kind") == "resource_wait" ->
+        [%{"scheduled_for" => DateTime.to_iso8601(next_dt), "reason" => "resource_wait"}]
 
       true ->
         []
@@ -160,6 +165,14 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
   defp put_next_run(%{"kind" => "delayed"} = schedule, _now),
     do: Map.put(schedule, "next_run_at", Map.get(schedule, "run_at"))
 
+  defp put_next_run(%{"kind" => "resource_wait"} = schedule, now),
+    do:
+      Map.put(
+        schedule,
+        "next_run_at",
+        Map.get(schedule, "next_run_at") || DateTime.to_iso8601(now)
+      )
+
   defp put_next_run(%{"kind" => "periodic"} = schedule, now) do
     Map.put(
       schedule,
@@ -169,6 +182,7 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
   end
 
   defp infer_kind(%{"kind" => kind}) when is_binary(kind), do: String.downcase(kind)
+  defp infer_kind(%{"auto_schedule" => true}), do: "resource_wait"
   defp infer_kind(%{"event_type" => _}), do: "event"
   defp infer_kind(%{"trigger" => _}), do: "event"
   defp infer_kind(%{"run_at" => _}), do: "delayed"
@@ -271,6 +285,14 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
 
     errors
     |> add_error(not valid_name?(event_type), "event schedules require trigger.event_type")
+  end
+
+  defp validate_kind(errors, %{"kind" => "resource_wait"} = schedule) do
+    add_error(
+      errors,
+      Map.get(schedule, "retry_interval_ms", 30_000) <= 0,
+      "resource_wait schedules require retry_interval_ms greater than zero"
+    )
   end
 
   defp validate_kind(errors, _schedule), do: errors
@@ -515,6 +537,16 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
   end
 
   defp positive_int(_value, default), do: default
+
+  defp resource_wait_interval("resource_wait", raw),
+    do: positive_int(Map.get(raw, "retry_interval_ms"), 30_000)
+
+  defp resource_wait_interval(_kind, _raw), do: nil
+
+  defp resource_wait_max_wait("resource_wait", raw),
+    do: positive_int(Map.get(raw, "max_wait_ms"), nil)
+
+  defp resource_wait_max_wait(_kind, _raw), do: nil
 
   defp manifest_map(%MirrorNeuron.Manifest{} = manifest),
     do: MirrorNeuron.Manifest.to_map(manifest)

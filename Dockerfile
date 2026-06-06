@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     protobuf-compiler \
     curl \
+    docker.io \
     python3 \
     python3-venv \
     && rm -rf /var/lib/apt/lists/*

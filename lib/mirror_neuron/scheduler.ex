@@ -20,6 +20,29 @@ defmodule MirrorNeuron.Scheduler do
   def supported_job_types, do: @supported_job_types
   def supported_strategies, do: @supported_strategies
 
+  def availability(%Manifest{} = manifest, opts \\ []) do
+    case plan(manifest, opts) do
+      {:ok, plan} ->
+        {:ok, %{"status" => "runnable_now", "plan" => plan}}
+
+      {:error, reason} ->
+        free_opts = Keyword.put(opts, :jobs, [])
+
+        case plan(manifest, free_opts) do
+          {:ok, free_plan} ->
+            {:blocked,
+             %{
+               "status" => "runnable_later",
+               "reason" => reason,
+               "plan_when_free" => free_plan
+             }}
+
+          {:error, free_reason} ->
+            {:error, %{"status" => "not_runnable", "reason" => free_reason}}
+        end
+    end
+  end
+
   def plan(%Manifest{} = manifest, opts \\ []) do
     if Keyword.get(opts, :scheduler, true) do
       do_plan(manifest, opts)
@@ -798,6 +821,107 @@ defmodule MirrorNeuron.Scheduler do
   end
 
   defp place_demands(demands, nodes, usage, strategy, service_instances) do
+    case preferred_local_plan(demands, nodes, usage, strategy, service_instances) do
+      {:ok, placements, next_usage} ->
+        {:ok, placements, next_usage}
+
+      :error ->
+        place_spillover_demands(demands, nodes, usage, strategy, service_instances)
+    end
+  end
+
+  defp preferred_local_plan([], _nodes, usage, _strategy, _service_instances),
+    do: {:ok, [], usage}
+
+  defp preferred_local_plan(demands, nodes, usage, strategy, service_instances) do
+    nodes
+    |> Enum.filter(&schedulable_node?/1)
+    |> Enum.reduce([], fn node, acc ->
+      used = usage_for_node(usage, node["name"])
+
+      case local_node_plan(node, demands, used, service_instances) do
+        {:ok, group_plan} ->
+          score = score_node(node, used, group_plan["resources"], strategy)
+          [{node, group_plan, score} | acc]
+
+        :error ->
+          acc
+      end
+    end)
+    |> Enum.reverse()
+    |> case do
+      [] ->
+        :error
+
+      candidates ->
+        {node, group_plan, score} =
+          Enum.max_by(candidates, fn {_node, _group_plan, score} -> score end)
+
+        placements =
+          Enum.map(demands, fn demand ->
+            %{
+              "agent_id" => demand["agent_id"],
+              "agent_type" => demand["agent_type"],
+              "node" => node["name"],
+              "resources" => demand["resources"],
+              "allocations" =>
+                get_in(group_plan, ["allocations", demand["agent_id"]]) || empty_allocation(),
+              "constraints" => demand["constraints"],
+              "placement_requirements" => demand["placement_requirements"],
+              "score" => Float.round(score, 4),
+              "locality" => "job_colocated"
+            }
+          end)
+
+        next_usage =
+          Map.update(
+            usage,
+            node["name"],
+            group_plan["usage"],
+            &merge_usage(&1, group_plan["usage"])
+          )
+
+        {:ok, placements, next_usage}
+    end
+  end
+
+  defp local_node_plan(node, demands, used, service_instances) do
+    if Enum.all?(demands, &normal_demand_eligible?(&1, node, service_instances)) do
+      demands
+      |> Enum.reduce_while(
+        {:ok, empty_resources(), %{}, normalize_usage(used)},
+        fn demand, {:ok, resources_acc, allocations, used_acc} ->
+          case fit_allocation(node, used_acc, demand) do
+            {:ok, allocation} ->
+              {:cont,
+               {:ok, add_resources(resources_acc, demand["resources"]),
+                Map.put(allocations, demand["agent_id"], allocation),
+                add_usage(used_acc, demand["resources"], allocation)}}
+
+            {:error, _reason} ->
+              {:halt, :error}
+          end
+        end
+      )
+      |> case do
+        {:ok, group_resources, allocations, next_usage} ->
+          {:ok,
+           %{"resources" => group_resources, "allocations" => allocations, "usage" => next_usage}}
+
+        :error ->
+          :error
+      end
+    else
+      :error
+    end
+  end
+
+  defp normal_demand_eligible?(demand, node, service_instances) do
+    profile_match?(demand["profile"], node) and constraints_match?(demand["constraints"], node) and
+      service_requirements_match?(demand, node, service_instances)
+  end
+
+  defp place_spillover_demands(demands, nodes, usage, strategy, service_instances) do
     Enum.reduce_while(demands, {:ok, [], usage}, fn demand, {:ok, placements, usage_acc} ->
       case choose_node(demand, nodes, usage_acc, strategy, service_instances) do
         {:ok, node, score, allocation} ->
@@ -817,7 +941,8 @@ defmodule MirrorNeuron.Scheduler do
             "allocations" => allocation,
             "constraints" => demand["constraints"],
             "placement_requirements" => demand["placement_requirements"],
-            "score" => Float.round(score, 4)
+            "score" => Float.round(score, 4),
+            "locality" => "agent_spillover"
           }
 
           {:cont, {:ok, [placement | placements], next_usage}}

@@ -180,6 +180,77 @@ defmodule MirrorNeuron.SchedulerTest do
     assert [%{"agent_id" => "worker", "node" => "large@lab"}] = plan["placements"]
   end
 
+  test "batch jobs colocate agents on one node before spilling over" do
+    {:ok, manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "locality-bias",
+        "entrypoints" => ["alpha"],
+        "nodes" => [
+          %{
+            "node_id" => "alpha",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{"cpu_cores" => 3, "memory_mb" => 1024}
+          },
+          %{
+            "node_id" => "beta",
+            "agent_type" => "executor",
+            "resources" => %{"cpu_cores" => 3, "memory_mb" => 1024}
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart", "scheduler" => %{"strategy" => "binpack"}}
+      })
+
+    assert {:ok, plan} = Scheduler.plan(manifest, nodes: [small_node(), large_node()], jobs: [])
+
+    assert Enum.map(plan["placements"], & &1["node"]) == ["large@lab", "large@lab"]
+    assert Enum.all?(plan["placements"], &(&1["locality"] == "job_colocated"))
+  end
+
+  test "availability distinguishes busy resources from impossible requirements" do
+    {:ok, manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "resource-wait",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{"cpu_cores" => 3, "memory_mb" => 1024}
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    busy_jobs = [
+      %{
+        "status" => "running",
+        "scheduler" => %{
+          "placements" => [
+            %{
+              "agent_id" => "busy",
+              "node" => "small@lab",
+              "resources" => %{"cpu_cores" => 2, "memory_mb" => 1024}
+            }
+          ]
+        }
+      }
+    ]
+
+    assert {:blocked, %{"status" => "runnable_later"}} =
+             Scheduler.availability(manifest, nodes: [small_node()], jobs: busy_jobs)
+
+    impossible = %{manifest | nodes: [%{hd(manifest.nodes) | resources: %{"gpu_count" => 1}}]}
+
+    assert {:error, %{"status" => "not_runnable"}} =
+             Scheduler.availability(impossible, nodes: [small_node()], jobs: [])
+  end
+
   test "ignore_job_ids removes stale capacity from replans" do
     {:ok, manifest} =
       Manifest.load(%{
@@ -1041,6 +1112,46 @@ defmodule MirrorNeuron.SchedulerTest do
                  "runtime_driver" => "openshell",
                  "volumes" => [%{"name" => "models", "source" => "/srv/models"}]
                }
+             }
+           ] = plan["placements"]
+  end
+
+  test "docker worker runner infers docker_worker runtime driver" do
+    {:ok, manifest} =
+      Manifest.load(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "docker-worker-driver",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "config" => %{
+              "runner_module" => "MirrorNeuron.Runner.DockerWorker",
+              "image" => "example/worker:latest"
+            }
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    assert {:ok, plan} =
+             Scheduler.plan(manifest,
+               nodes: [
+                 Map.put(large_node(), "runtime_drivers", ["host_local"]),
+                 large_node()
+                 |> Map.put("name", "docker@lab")
+                 |> Map.put("runtime_drivers", ["host_local", "docker_worker"])
+               ],
+               jobs: []
+             )
+
+    assert [
+             %{
+               "node" => "docker@lab",
+               "allocations" => %{"runtime_driver" => "docker_worker"}
              }
            ] = plan["placements"]
   end

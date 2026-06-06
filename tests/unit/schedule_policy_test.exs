@@ -13,6 +13,7 @@ defmodule MirrorNeuron.Runtime.SchedulePolicyTest do
     assert schedule["prohibit_overlap"] == true
     assert schedule["missed_policy"] == "skip"
     assert schedule["next_run_at"] == "2026-05-24T10:05:00Z"
+    refute Map.has_key?(schedule, "retry_interval_ms")
   end
 
   test "normalizes delayed schedules from delay_ms" do
@@ -23,6 +24,23 @@ defmodule MirrorNeuron.Runtime.SchedulePolicyTest do
 
     assert schedule["run_at"] == "2026-05-24T10:01:00.000Z"
     assert schedule["next_run_at"] == "2026-05-24T10:01:00.000Z"
+    refute Map.has_key?(schedule, "retry_interval_ms")
+  end
+
+  test "normalizes resource wait schedules as active one-shot queue items" do
+    now = ~U[2026-05-24 10:00:00Z]
+
+    assert {:ok, schedule} =
+             SchedulePolicy.normalize(
+               %{"kind" => "resource_wait", "retry_interval_ms" => 5_000},
+               nil,
+               now: now
+             )
+
+    assert schedule["kind"] == "resource_wait"
+    assert schedule["retry_interval_ms"] == 5_000
+    assert schedule["next_run_at"] == "2026-05-24T10:00:00Z"
+    assert [%{"reason" => "resource_wait"}] = SchedulePolicy.due_instances(schedule, now)
   end
 
   test "matches generic event triggers with payload filters" do

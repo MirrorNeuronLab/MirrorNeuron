@@ -29,6 +29,7 @@ defmodule MirrorNeuron.Manifest do
   ]
 
   alias MirrorNeuron.{AgentRegistry, AgentTemplates, ResourceSpec}
+  alias MirrorNeuron.Runner.Policy, as: RunnerPolicy
   alias MirrorNeuron.ServiceSpec
   alias MirrorNeuron.Runtime.{DeploymentPolicy, LifecyclePolicy, RouteCondition, SchedulePolicy}
 
@@ -480,6 +481,7 @@ defmodule MirrorNeuron.Manifest do
     |> validate_scheduler_policy(manifest)
     |> validate_node_scheduling(manifest)
     |> add_errors(ResourceSpec.validate_manifest(manifest))
+    |> add_errors(RunnerPolicy.validate_manifest(manifest))
     |> add_errors(LifecyclePolicy.validate_manifest(manifest))
   end
 
