@@ -984,17 +984,6 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
           [Atom.to_string(peer), cookie],
           2_000
         )
-
-      _ = :rpc.call(peer, __MODULE__, :connect_peer, [node_name], 2_000)
-
-      _ =
-        :rpc.call(
-          remote_node,
-          __MODULE__,
-          :connect_peer,
-          [Atom.to_string(peer)],
-          2_000
-        )
     end)
 
     :ok
