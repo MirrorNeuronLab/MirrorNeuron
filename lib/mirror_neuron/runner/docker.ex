@@ -614,40 +614,60 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     Enum.reduce_while(entries, :ok, fn entry, :ok ->
       with {:ok, source} <- resolve_upload_source(entry["source"], payloads_path),
            {:ok, target} <- resolve_upload_target(base_dir, entry["target"]) do
-        copy_upload_entry(source, target, coordinator_node)
+        copy_upload_entry(source, target, coordinator_node, config, opts)
       else
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
   end
 
-  defp copy_upload_entry(source, target, coordinator_node) do
+  defp copy_upload_entry(source, target, coordinator_node, config, opts) do
     is_local = coordinator_node == Node.self()
+
+    artifact_result =
+      MirrorNeuron.Runner.Uploads.materialize_artifacts(source, target, config, opts)
 
     cond do
       is_local and File.dir?(source) ->
         File.mkdir_p!(Path.dirname(target))
 
-        case File.cp_r(source, target) do
-          {:ok, _files} -> {:cont, :ok}
+        File.cp_r(source, target)
+        |> case do
+          {:ok, _files} -> artifact_upload_result(artifact_result)
           {:error, reason, _file} -> {:halt, {:error, inspect(reason)}}
         end
 
       is_local and File.exists?(source) ->
         File.mkdir_p!(Path.dirname(target))
 
-        case File.cp(source, target) do
-          :ok -> {:cont, :ok}
+        File.cp(source, target)
+        |> case do
+          :ok -> artifact_upload_result(artifact_result)
           {:error, reason} -> {:halt, {:error, inspect(reason)}}
         end
 
       not is_local ->
-        copy_remote_upload(source, target, coordinator_node)
+        case copy_remote_upload(source, target, coordinator_node) do
+          {:cont, :ok} -> artifact_upload_result(artifact_result)
+          {:halt, {:error, _reason}} when artifact_result == :ok -> {:cont, :ok}
+          other -> other
+        end
+
+      artifact_result == :ok ->
+        {:cont, :ok}
+
+      match?({:error, _reason}, artifact_result) ->
+        {:error, reason} = artifact_result
+        {:halt, {:error, reason}}
 
       true ->
         {:halt, {:error, "upload source does not exist locally: #{source}"}}
     end
   end
+
+  defp artifact_upload_result(:ok), do: {:cont, :ok}
+  defp artifact_upload_result(:not_found), do: {:cont, :ok}
+  defp artifact_upload_result({:error, reason}), do: {:halt, {:error, reason}}
 
   defp copy_remote_upload(source, target, coordinator_node) do
     is_dir = :rpc.call(coordinator_node, File, :dir?, [source], 30_000)

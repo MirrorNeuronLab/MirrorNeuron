@@ -62,4 +62,21 @@ defmodule MirrorNeuron.ModelCatalogTest do
     assert Enum.map(services, & &1["name"]) == ["docker-model-runner", "ollama"]
     assert Enum.all?(services, &(&1["node"] == "node@lab"))
   end
+
+  test "model services use advertised host identity when docker hostname differs" do
+    env = %{"MN_NETWORK_ADVERTISE_HOST" => "192.168.4.173"}
+
+    assert ModelServices.advertised_node_name(:"mirror_neuron@mn-c13e508c", env) ==
+             "mirror_neuron@192.168.4.173"
+  end
+
+  test "explicit model service node identity overrides advertised host" do
+    env = %{
+      "MN_MODEL_SERVICE_NODE_NAME" => "mirror_neuron@gpu-node",
+      "MN_NETWORK_ADVERTISE_HOST" => "192.168.4.173"
+    }
+
+    assert ModelServices.advertised_node_name(:"mirror_neuron@mn-c13e508c", env) ==
+             "mirror_neuron@gpu-node"
+  end
 end

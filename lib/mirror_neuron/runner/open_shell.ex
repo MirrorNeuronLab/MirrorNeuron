@@ -476,35 +476,51 @@ defmodule MirrorNeuron.Runner.OpenShell do
     Enum.reduce_while(entries, :ok, fn entry, :ok ->
       with {:ok, source} <- resolve_upload_source(entry["source"], payloads_path),
            {:ok, target} <- resolve_upload_target(base_dir, entry["target"]) do
-        copy_upload_entry(source, target)
+        copy_upload_entry(source, target, config, opts)
       else
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
   end
 
-  defp copy_upload_entry(source, target) do
+  defp copy_upload_entry(source, target, config, opts) do
+    artifact_result =
+      MirrorNeuron.Runner.Uploads.materialize_artifacts(source, target, config, opts)
+
     cond do
       File.dir?(source) ->
         File.mkdir_p!(Path.dirname(target))
 
-        case File.cp_r(source, target) do
-          {:ok, _files} -> {:cont, :ok}
+        File.cp_r(source, target)
+        |> case do
+          {:ok, _files} -> artifact_upload_result(artifact_result)
           {:error, reason, _file} -> {:halt, {:error, inspect(reason)}}
         end
 
       File.exists?(source) ->
         File.mkdir_p!(Path.dirname(target))
 
-        case File.cp(source, target) do
-          :ok -> {:cont, :ok}
+        File.cp(source, target)
+        |> case do
+          :ok -> artifact_upload_result(artifact_result)
           {:error, reason} -> {:halt, {:error, inspect(reason)}}
         end
+
+      artifact_result == :ok ->
+        {:cont, :ok}
+
+      match?({:error, _reason}, artifact_result) ->
+        {:error, reason} = artifact_result
+        {:halt, {:error, reason}}
 
       true ->
         {:halt, {:error, "upload source does not exist: #{source}"}}
     end
   end
+
+  defp artifact_upload_result(:ok), do: {:cont, :ok}
+  defp artifact_upload_result(:not_found), do: {:cont, :ok}
+  defp artifact_upload_result({:error, reason}), do: {:halt, {:error, reason}}
 
   defp resolve_upload_source(source, nil), do: {:ok, Path.expand(source)}
 

@@ -91,6 +91,7 @@ defmodule MirrorNeuron.Cluster.NodeState do
       %{"node_role" => MirrorNeuron.Application.node_role()}
       |> Map.put("hardware", hardware)
       |> Map.merge(Profile.node_advertisement())
+      |> Map.merge(MirrorNeuron.Artifacts.Registry.node_advertisement())
       |> Map.merge(attrs)
       |> merge_capabilities(hardware)
 

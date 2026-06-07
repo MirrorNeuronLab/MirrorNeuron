@@ -223,6 +223,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       bundle_root: state.runtime_context[:bundle_root],
       manifest_path: state.runtime_context[:manifest_path],
       payloads_path: state.runtime_context[:payloads_path],
+      artifact_refs: state.runtime_context[:artifact_refs] || [],
       template_type: Map.get(state.node, :type, "generic"),
       invocation: state.processed_messages + 1,
       workflow: workflow
@@ -695,7 +696,9 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       |> Map.put("__bundle_root", runtime_context[:bundle_root])
       |> Map.put("__manifest_path", runtime_context[:manifest_path])
       |> Map.put("__payloads_path", runtime_context[:payloads_path])
+      |> Map.put("__artifact_refs", runtime_context[:artifact_refs] || [])
       |> Map.put("__mirror_neuron_allocation", allocation)
+      |> put_artifact_environment(runtime_context[:artifact_refs] || [])
       |> put_allocation_environment(allocation)
 
     %{node | config: runtime_config}
@@ -707,6 +710,15 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     Map.update(config, "environment", allocation_env, fn
       env when is_map(env) -> Map.merge(env, allocation_env)
       _env -> allocation_env
+    end)
+  end
+
+  defp put_artifact_environment(config, artifact_refs) do
+    artifact_env = %{"MN_ARTIFACTS_JSON" => Jason.encode!(artifact_refs || [])}
+
+    Map.update(config, "environment", artifact_env, fn
+      env when is_map(env) -> Map.merge(env, artifact_env)
+      _env -> artifact_env
     end)
   end
 
@@ -723,6 +735,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
         bundle_root: state.runtime_context[:bundle_root],
         manifest_path: state.runtime_context[:manifest_path],
         payloads_path: state.runtime_context[:payloads_path],
+        artifact_refs: state.runtime_context[:artifact_refs] || [],
         template_type: Map.get(state.node, :type, "generic")
       }
 

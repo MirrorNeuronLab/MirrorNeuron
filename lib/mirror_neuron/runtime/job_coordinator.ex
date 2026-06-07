@@ -2419,6 +2419,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       bundle_root: state.bundle && state.bundle.root_path,
       manifest_path: state.bundle && state.bundle.manifest_path,
       payloads_path: state.bundle && state.bundle.payloads_path,
+      artifact_refs:
+        MirrorNeuron.Artifacts.BlobRef.collect(MirrorNeuron.Manifest.to_map(state.manifest)),
       manifest_ref: manifest_ref(state),
       manifest: MirrorNeuron.Manifest.to_map(state.manifest),
       graph_id: state.manifest.graph_id,

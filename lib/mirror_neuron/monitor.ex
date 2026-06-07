@@ -4,6 +4,8 @@ defmodule MirrorNeuron.Monitor do
   @default_live_window_ms 300_000
   @summary_event_window 25
   @terminal_statuses ["completed", "failed", "cancelled"]
+  @compact_string_bytes 8_192
+  @compact_list_items 50
 
   def list_jobs(opts \\ []) do
     with {:ok, jobs} <- RedisStore.list_jobs() do
@@ -69,17 +71,23 @@ defmodule MirrorNeuron.Monitor do
 
       {:ok,
        %{
-         "job" => public_job(job),
+         "job" => public_job(job, opts),
          "summary" => summary,
          "agents" => Enum.sort_by(agent_summaries, &{&1["assigned_node"], &1["agent_id"]}),
-         "recent_events" => recent_events(events, event_limit),
+         "recent_events" => recent_events(events, event_limit, opts),
          "sandboxes" => sandboxes
        }}
     end
   end
 
-  defp public_job(job) do
-    Map.drop(job, ["manifest"])
+  defp public_job(job, opts) do
+    job = Map.drop(job, ["manifest"])
+
+    if Keyword.get(opts, :compact, false) do
+      compact_value(job)
+    else
+      job
+    end
   end
 
   def cluster_overview(opts \\ []) do
@@ -303,13 +311,51 @@ defmodule MirrorNeuron.Monitor do
 
   defp scheduler_summary(_job), do: nil
 
-  defp recent_events(events, limit) when is_integer(limit) and limit > 0 do
+  defp recent_events(events, limit, opts) when is_integer(limit) and limit > 0 do
     events
     |> Enum.reverse()
     |> Enum.take(limit)
+    |> maybe_compact_values(opts)
   end
 
-  defp recent_events(events, _limit), do: Enum.reverse(events)
+  defp recent_events(events, _limit, opts),
+    do: events |> Enum.reverse() |> maybe_compact_values(opts)
+
+  defp maybe_compact_values(values, opts) do
+    if Keyword.get(opts, :compact, false) do
+      compact_value(values)
+    else
+      values
+    end
+  end
+
+  defp compact_value(value) when is_binary(value) do
+    if byte_size(value) > @compact_string_bytes do
+      binary_part(value, 0, @compact_string_bytes) <>
+        "\n[truncated #{byte_size(value) - @compact_string_bytes} bytes]"
+    else
+      value
+    end
+  end
+
+  defp compact_value(value) when is_list(value) do
+    compacted =
+      value
+      |> Enum.take(@compact_list_items)
+      |> Enum.map(&compact_value/1)
+
+    if length(value) > @compact_list_items do
+      compacted ++ [%{"truncated_items" => length(value) - @compact_list_items}]
+    else
+      compacted
+    end
+  end
+
+  defp compact_value(value) when is_map(value) do
+    Enum.into(value, %{}, fn {key, child} -> {key, compact_value(child)} end)
+  end
+
+  defp compact_value(value), do: value
 
   defp summarize_agent(agent) do
     current_state = Map.get(agent, "current_state", %{})

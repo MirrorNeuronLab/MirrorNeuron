@@ -40,6 +40,11 @@ defmodule MirrorNeuron.Runtime do
     manifest_ref = bundle_ref(manifest, bundle)
     reliability = ReliabilityStrategy.resolve(manifest, manifest_ref: manifest_ref)
 
+    :ok =
+      MirrorNeuron.Artifacts.Registry.register_manifest_refs(
+        MirrorNeuron.Manifest.to_map(manifest)
+      )
+
     case Scheduler.plan(manifest, opts) do
       {:ok, scheduler_plan} ->
         start_planned_job(

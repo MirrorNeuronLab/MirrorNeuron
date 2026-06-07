@@ -5,6 +5,9 @@ defmodule MirrorNeuron.ModelServices do
   alias MirrorNeuron.ServiceRegistry
 
   @model_env_vars ["MN_NODE_MODELS", "MN_NODE_RUNTIME_MODELS"]
+  @model_service_node_env "MN_MODEL_SERVICE_NODE_NAME"
+  @network_advertise_host_env "MN_NETWORK_ADVERTISE_HOST"
+  @default_node_name "mirror_neuron"
 
   def env_model_refs(env \\ System.get_env()) when is_map(env) do
     @model_env_vars
@@ -27,9 +30,9 @@ defmodule MirrorNeuron.ModelServices do
     end)
   end
 
-  def advertise_env_models(node_name \\ Node.self()) do
-    node_name = to_string(node_name)
-    services = service_instances_for_models(env_model_refs(), node_name)
+  def advertise_env_models(node_name \\ Node.self(), env \\ System.get_env()) when is_map(env) do
+    node_name = advertised_node_name(node_name, env)
+    services = service_instances_for_models(env_model_refs(env), node_name)
 
     case services do
       [] -> :ok
@@ -37,6 +40,20 @@ defmodule MirrorNeuron.ModelServices do
     end
   rescue
     _ -> :ok
+  end
+
+  @doc false
+  def advertised_node_name(node_name \\ Node.self(), env \\ System.get_env()) when is_map(env) do
+    cond do
+      explicit = normalized_env(env, @model_service_node_env) ->
+        explicit
+
+      host = normalized_env(env, @network_advertise_host_env) ->
+        "#{node_prefix(node_name)}@#{host}"
+
+      true ->
+        to_string(node_name)
+    end
   end
 
   defp split_env_list(nil), do: []
@@ -47,5 +64,26 @@ defmodule MirrorNeuron.ModelServices do
     |> String.split(",", trim: true)
     |> Enum.map(&String.trim/1)
     |> Enum.reject(&(&1 == ""))
+  end
+
+  defp normalized_env(env, key) do
+    env
+    |> Map.get(key)
+    |> to_string()
+    |> String.trim()
+    |> case do
+      "" -> nil
+      value -> value
+    end
+  end
+
+  defp node_prefix(node_name) do
+    node_name
+    |> to_string()
+    |> String.split("@", parts: 2)
+    |> case do
+      [prefix, _host] when prefix != "" -> prefix
+      _ -> @default_node_name
+    end
   end
 end

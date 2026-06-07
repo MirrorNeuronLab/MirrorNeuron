@@ -27,9 +27,26 @@ defmodule MirrorNeuron.SchedulerTest do
     :ok
   end
 
+  defp load_manifest(raw) when is_map(raw) do
+    raw =
+      if Map.has_key?(raw, "flow") do
+        raw
+      else
+        raw
+        |> Map.put("flow", %{
+          "nodes" => Map.get(raw, "nodes", []),
+          "edges" => Map.get(raw, "edges", [])
+        })
+        |> Map.delete("nodes")
+        |> Map.delete("edges")
+      end
+
+    Manifest.load(raw)
+  end
+
   test "binpack chooses the tightest healthy node that satisfies resources" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "binpack",
         "entrypoints" => ["worker"],
@@ -56,9 +73,55 @@ defmodule MirrorNeuron.SchedulerTest do
     assert [%{"agent_id" => "worker", "node" => "small@lab"}] = plan["placements"]
   end
 
+  test "prefers nodes with required blob refs after hard requirements match" do
+    sha256 = String.duplicate("b", 64)
+
+    {:ok, manifest} =
+      load_manifest(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "blob-locality",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{"node_id" => "worker", "agent_type" => "executor", "config" => %{}}
+        ],
+        "edges" => [],
+        "metadata" => %{
+          "mn_artifacts" => %{
+            "blob_refs" => [
+              %{
+                "type" => "blob_ref",
+                "sha256" => sha256,
+                "size_bytes" => 10,
+                "payload_path" => "input/video.mp4",
+                "locations" => [
+                  %{"node" => "node-b@lab", "url" => "http://node-b/blobs/#{sha256}"}
+                ]
+              }
+            ]
+          }
+        }
+      })
+
+    assert {:ok, plan} =
+             Scheduler.plan(manifest,
+               nodes: [
+                 %{"name" => "node-a@lab", "status" => "healthy", "hardware" => %{}},
+                 %{"name" => "node-b@lab", "status" => "healthy", "hardware" => %{}}
+               ],
+               jobs: [],
+               lookup_node_state: false
+             )
+
+    assert [%{"agent_id" => "worker", "node" => "node-b@lab", "blob_locality" => locality}] =
+             plan["placements"]
+
+    assert locality["local_count"] == 1
+    assert locality["required_count"] == 1
+  end
+
   test "manifest type service is the default scheduler job type" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "service-default",
         "type" => "service",
@@ -81,7 +144,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "constraints and GPU requirements filter candidate nodes" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "cuda-only",
         "entrypoints" => ["worker"],
@@ -107,7 +170,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "device-style GPU resources are counted during placement" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "multi-gpu-device",
         "entrypoints" => ["worker"],
@@ -144,7 +207,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "active job placements reserve capacity for new plans" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "reserved-capacity",
         "entrypoints" => ["worker"],
@@ -182,7 +245,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "batch jobs colocate agents on one node before spilling over" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "locality-bias",
         "entrypoints" => ["alpha"],
@@ -200,7 +263,10 @@ defmodule MirrorNeuron.SchedulerTest do
           }
         ],
         "edges" => [],
-        "policies" => %{"recovery_mode" => "local_restart", "scheduler" => %{"strategy" => "binpack"}}
+        "policies" => %{
+          "recovery_mode" => "local_restart",
+          "scheduler" => %{"strategy" => "binpack"}
+        }
       })
 
     assert {:ok, plan} = Scheduler.plan(manifest, nodes: [small_node(), large_node()], jobs: [])
@@ -211,7 +277,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "availability distinguishes busy resources from impossible requirements" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "resource-wait",
         "entrypoints" => ["worker"],
@@ -253,7 +319,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "ignore_job_ids removes stale capacity from replans" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "ignore-self",
         "entrypoints" => ["worker"],
@@ -297,7 +363,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "exclude_nodes prevents placement on failed node" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "exclude-node",
         "entrypoints" => ["worker"],
@@ -325,7 +391,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "maintenance draining and ineligible nodes are not schedulable" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "cordoned-node",
         "entrypoints" => ["worker"],
@@ -361,7 +427,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "only_agent_ids creates partial plans for affected agents" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "partial-plan",
         "entrypoints" => ["first"],
@@ -394,7 +460,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "system jobs place one copy on every eligible node" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "system-everywhere",
         "entrypoints" => ["worker"],
@@ -426,7 +492,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "sysbatch schedules the whole group only on nodes that can fit it" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "sysbatch-group-fit",
         "entrypoints" => ["first"],
@@ -464,7 +530,7 @@ defmodule MirrorNeuron.SchedulerTest do
     })
 
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "profile-placement",
         "entrypoints" => ["worker"],
@@ -495,7 +561,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "returns placement failure when no node has enough resources" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "too-large",
         "entrypoints" => ["worker"],
@@ -520,7 +586,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "node-scoped service requirements filter candidate nodes" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "service-aware-placement",
         "entrypoints" => ["worker"],
@@ -558,7 +624,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "node-scoped service requirements fail when no healthy service matches" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "service-blocked-placement",
         "entrypoints" => ["worker"],
@@ -593,7 +659,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "runtime model inference routes LLM workers to advertised high-end GPU model services" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "smart-llm-placement",
         "runtime" => %{
@@ -641,9 +707,57 @@ defmodule MirrorNeuron.SchedulerTest do
     assert "nvidia-gb10" in model["required_capabilities"]
   end
 
+  test "runtime model inference co-locates default DMR workers with model service node" do
+    {:ok, manifest} =
+      load_manifest(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "co-located-dmr-worker",
+        "runtime" => %{
+          "models" => %{
+            "primary" => %{
+              "provider" => "docker_model_runner",
+              "model" => "gemma4:e2b"
+            }
+          }
+        },
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root"
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "cluster_recover"}
+      })
+
+    assert {:ok, plan} =
+             Scheduler.plan(manifest,
+               nodes: [large_node(), small_node()],
+               jobs: [],
+               service_instances: [
+                 model_service("gemma4:e2b", "small@lab")
+               ]
+             )
+
+    assert [
+             %{
+               "agent_id" => "worker",
+               "node" => "small@lab",
+               "resources" => %{},
+               "allocations" => %{"devices" => []},
+               "placement_requirements" => %{"models" => [model]}
+             }
+           ] = plan["placements"]
+
+    assert model["id"] == "gemma4:e2b"
+    assert get_in(model, ["service", "name"]) == "docker-model-runner"
+  end
+
   test "runtime model inference ignores stale services on offline GPU nodes" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "stale-model-service",
         "runtime" => %{
@@ -686,7 +800,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "runtime model inference ignores non-DMR model providers" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "missing-model-service",
         "runtime" => %{
@@ -723,7 +837,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "runtime model inference only reads runtime model environment keys" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "runtime-env-model-placement",
         "entrypoints" => ["worker"],
@@ -765,7 +879,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "hardware-derived GPU capabilities are enough for NVIDIA-specific and Metal placement" do
     {:ok, nvidia_manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "hardware-derived-nvidia",
         "entrypoints" => ["worker"],
@@ -797,7 +911,7 @@ defmodule MirrorNeuron.SchedulerTest do
     assert [%{"node" => "h100@lab"}] = nvidia_plan["placements"]
 
     {:ok, metal_manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "hardware-derived-metal",
         "entrypoints" => ["worker"],
@@ -827,7 +941,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "GPU-required placement fails instead of falling back to CPU-only nodes" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "gpu-required-no-cpu-fallback",
         "entrypoints" => ["worker"],
@@ -855,7 +969,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "GPU-required placement stays blocked while GPU node is offline" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "gpu-required-node-left",
         "entrypoints" => ["worker"],
@@ -896,7 +1010,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "GPU device placement follows refreshed node capabilities" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "cuda-capability-refresh",
         "entrypoints" => ["worker"],
@@ -936,7 +1050,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "service model inference ignores NVIDIA service providers" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "smart-audio-placement",
         "runtime" => %{
@@ -964,7 +1078,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "CUDA and Metal device requests only place on matching device drivers" do
     {:ok, cuda_manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "cuda-device",
         "entrypoints" => ["worker"],
@@ -994,7 +1108,7 @@ defmodule MirrorNeuron.SchedulerTest do
     assert cuda_device["driver"] == "cuda"
 
     {:ok, metal_manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "metal-device",
         "entrypoints" => ["worker"],
@@ -1021,7 +1135,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "vendor-qualified GPU device type avoids mismatched advertised vendors" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "vendor-device-type",
         "entrypoints" => ["worker"],
@@ -1043,7 +1157,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "allocated device ids and explicit ports are exclusive across active placements" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "exclusive-allocation",
         "entrypoints" => ["worker"],
@@ -1088,7 +1202,7 @@ defmodule MirrorNeuron.SchedulerTest do
     assert [%{"node" => "cuda-2@lab"}] = plan["placements"]
 
     {:ok, device_manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "exclusive-device",
         "entrypoints" => ["worker"],
@@ -1110,7 +1224,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "host volumes and runtime drivers filter candidate nodes" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "volume-driver",
         "entrypoints" => ["worker"],
@@ -1162,7 +1276,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "docker worker runner infers docker_worker runtime driver" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "docker-worker-driver",
         "entrypoints" => ["worker"],
@@ -1202,7 +1316,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   test "manifests serialize scheduler resources and constraints" do
     {:ok, manifest} =
-      Manifest.load(%{
+      load_manifest(%{
         "manifest_version" => "1.0",
         "graph_id" => "serialize-scheduling",
         "entrypoints" => ["worker"],
@@ -1219,7 +1333,7 @@ defmodule MirrorNeuron.SchedulerTest do
         "policies" => %{"recovery_mode" => "local_restart"}
       })
 
-    worker = Manifest.to_map(manifest)["nodes"] |> List.first()
+    worker = Manifest.to_map(manifest) |> get_in(["flow", "nodes"]) |> List.first()
 
     assert worker["resources"] == %{"cpu_cores" => 1}
 

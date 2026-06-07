@@ -121,7 +121,7 @@ defmodule MirrorNeuron.Grpc.JobServer do
 
     job_id = request.job_id
 
-    case MirrorNeuron.job_details(job_id) do
+    case MirrorNeuron.job_details(job_id, compact: true, event_limit: 10) do
       {:ok, details_map} ->
         %GetJobResponse{job_json: Jason.encode!(details_map)}
 

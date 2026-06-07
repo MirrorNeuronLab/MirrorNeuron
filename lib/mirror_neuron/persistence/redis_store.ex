@@ -13,6 +13,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   @default_event_max_count 10_000
   @default_agent_snapshot_ttl_seconds 7 * 24 * 60 * 60
   @default_bundle_archive_ttl_seconds 7 * 24 * 60 * 60
+  @default_blob_ref_ttl_seconds 7 * 24 * 60 * 60
   @recovery_eval_statuses ["pending", "running", "blocked", "complete", "failed"]
 
   def persist_job(job_id, job_map) do
@@ -656,6 +657,52 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
+  def register_blob_ref(ref) when is_map(ref) do
+    ref = stringify_map(ref)
+    sha256 = Map.get(ref, "sha256")
+
+    with true <- is_binary(sha256) and sha256 != "",
+         existing <- existing_blob_ref(sha256),
+         blob <- merge_blob_ref(existing, ref),
+         {:ok, "OK"} <- command(["SET", key("blob", sha256), Jason.encode!(blob)]),
+         {:ok, _count} <- command(["SADD", key("blobs"), sha256]),
+         :ok <- expire_key(key("blob", sha256), blob_ref_ttl_seconds()),
+         :ok <- wait_for_replicas() do
+      {:ok, blob}
+    else
+      false -> {:error, "blob ref requires sha256"}
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
+    end
+  end
+
+  def fetch_blob_ref(sha256) when is_binary(sha256) do
+    case command(["GET", key("blob", sha256)]) do
+      {:ok, nil} -> {:error, "blob #{sha256} was not found"}
+      {:ok, encoded} -> Jason.decode(encoded)
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  def list_blob_refs do
+    with {:ok, sha_values} <- command(["SMEMBERS", key("blobs")]) do
+      refs =
+        sha_values
+        |> Enum.sort()
+        |> Enum.map(fn sha256 ->
+          case fetch_blob_ref(sha256) do
+            {:ok, ref} -> ref
+            {:error, _reason} -> nil
+          end
+        end)
+        |> Enum.reject(&is_nil/1)
+
+      {:ok, refs}
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
   def persist_node_state(node_name, attrs) do
     state =
       attrs
@@ -896,6 +943,34 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     |> maybe_service_index(operation, service, instance_id, "job_id", ["service", "job"])
     |> maybe_service_index(operation, service, instance_id, "node", ["service", "node"])
     |> maybe_service_index(operation, service, instance_id, "agent_id", ["service", "agent"])
+  end
+
+  defp existing_blob_ref(sha256) do
+    case fetch_blob_ref(sha256) do
+      {:ok, existing} when is_map(existing) -> existing
+      _ -> %{}
+    end
+  end
+
+  defp merge_blob_ref(existing, incoming) do
+    now = timestamp()
+
+    existing
+    |> Map.merge(Map.drop(incoming, ["locations"]))
+    |> Map.put("sha256", incoming["sha256"])
+    |> Map.put_new("created_at", now)
+    |> Map.put("updated_at", now)
+    |> Map.put("locations", merge_blob_locations(existing["locations"], incoming["locations"]))
+  end
+
+  defp merge_blob_locations(existing, incoming) do
+    (List.wrap(existing) ++ List.wrap(incoming))
+    |> Enum.filter(&is_map/1)
+    |> Enum.map(&stringify_map/1)
+    |> Enum.reject(&(Map.get(&1, "url") in [nil, ""]))
+    |> Enum.reverse()
+    |> Enum.uniq_by(fn location -> {Map.get(location, "node"), Map.get(location, "url")} end)
+    |> Enum.reverse()
   end
 
   defp schedule_due_commands(
@@ -1450,6 +1525,14 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       "MN_BUNDLE_ARCHIVE_TTL_SECONDS",
       :bundle_archive_ttl_seconds,
       @default_bundle_archive_ttl_seconds
+    )
+  end
+
+  defp blob_ref_ttl_seconds do
+    config_integer(
+      "MN_BLOB_REF_TTL_SECONDS",
+      :blob_ref_ttl_seconds,
+      @default_blob_ref_ttl_seconds
     )
   end
 

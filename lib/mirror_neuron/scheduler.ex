@@ -2,6 +2,7 @@ defmodule MirrorNeuron.Scheduler do
   @moduledoc false
 
   alias MirrorNeuron.Cluster.{Hardware, NodeState}
+  alias MirrorNeuron.Artifacts.BlobRef
   alias MirrorNeuron.Manifest
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Resource
@@ -123,6 +124,7 @@ defmodule MirrorNeuron.Scheduler do
            |> normalize_nodes(lookup_node_state),
          nodes <- exclude_nodes(nodes, Keyword.get(opts, :exclude_nodes, [])),
          :ok <- ensure_nodes(nodes),
+         blob_refs <- BlobRef.collect(Manifest.to_map(manifest)),
          usage <-
            opts
            |> Keyword.get_lazy(:jobs, &active_jobs/0)
@@ -137,7 +139,8 @@ defmodule MirrorNeuron.Scheduler do
              usage,
              strategy,
              only_agent_ids,
-             service_instances
+             service_instances,
+             blob_refs
            ) do
       {:ok,
        %{
@@ -616,10 +619,19 @@ defmodule MirrorNeuron.Scheduler do
          usage,
          strategy,
          only_agent_ids,
-         service_instances
+         service_instances,
+         blob_refs
        )
        when job_type in @system_job_types do
-    place_system_demands(demands, nodes, usage, strategy, only_agent_ids, service_instances)
+    place_system_demands(
+      demands,
+      nodes,
+      usage,
+      strategy,
+      only_agent_ids,
+      service_instances,
+      blob_refs
+    )
   end
 
   defp place_workloads(
@@ -629,17 +641,26 @@ defmodule MirrorNeuron.Scheduler do
          usage,
          strategy,
          only_agent_ids,
-         service_instances
+         service_instances,
+         blob_refs
        ) do
     demands = filter_demands(demands, only_agent_ids)
 
     with {:ok, placements, usage} <-
-           place_demands(demands, nodes, usage, strategy, service_instances) do
+           place_demands(demands, nodes, usage, strategy, service_instances, blob_refs) do
       {:ok, placements, demands, usage}
     end
   end
 
-  defp place_system_demands(demands, nodes, usage, strategy, only_agent_ids, service_instances) do
+  defp place_system_demands(
+         demands,
+         nodes,
+         usage,
+         strategy,
+         only_agent_ids,
+         service_instances,
+         blob_refs
+       ) do
     only_agent_ids = normalize_agent_id_filter(only_agent_ids)
 
     eligible =
@@ -658,7 +679,8 @@ defmodule MirrorNeuron.Scheduler do
                 node,
                 usage_for_node(usage, node["name"]),
                 group_plan["resources"],
-                strategy
+                strategy,
+                blob_refs
               )
 
             [{node, group_plan, score} | acc]
@@ -686,6 +708,7 @@ defmodule MirrorNeuron.Scheduler do
                   &1,
                   target_node,
                   score,
+                  blob_locality_summary(node, blob_refs),
                   get_in(group_plan, ["allocations", &1["agent_id"]]) || empty_allocation()
                 )
               )
@@ -751,7 +774,7 @@ defmodule MirrorNeuron.Scheduler do
       service_requirements_match?(demand, node, service_instances)
   end
 
-  defp system_placement(demand, target_node, score, allocation) do
+  defp system_placement(demand, target_node, score, blob_locality, allocation) do
     %{
       "agent_id" => system_agent_id(demand["agent_id"], target_node),
       "source_agent_id" => demand["agent_id"],
@@ -762,6 +785,7 @@ defmodule MirrorNeuron.Scheduler do
       "allocations" => allocation,
       "constraints" => demand["constraints"],
       "placement_requirements" => demand["placement_requirements"],
+      "blob_locality" => blob_locality,
       "score" => Float.round(score, 4)
     }
   end
@@ -820,20 +844,20 @@ defmodule MirrorNeuron.Scheduler do
     "system job agents #{demand_ids} have no eligible nodes (#{Enum.join(reasons, "; ")})"
   end
 
-  defp place_demands(demands, nodes, usage, strategy, service_instances) do
-    case preferred_local_plan(demands, nodes, usage, strategy, service_instances) do
+  defp place_demands(demands, nodes, usage, strategy, service_instances, blob_refs) do
+    case preferred_local_plan(demands, nodes, usage, strategy, service_instances, blob_refs) do
       {:ok, placements, next_usage} ->
         {:ok, placements, next_usage}
 
       :error ->
-        place_spillover_demands(demands, nodes, usage, strategy, service_instances)
+        place_spillover_demands(demands, nodes, usage, strategy, service_instances, blob_refs)
     end
   end
 
-  defp preferred_local_plan([], _nodes, usage, _strategy, _service_instances),
+  defp preferred_local_plan([], _nodes, usage, _strategy, _service_instances, _blob_refs),
     do: {:ok, [], usage}
 
-  defp preferred_local_plan(demands, nodes, usage, strategy, service_instances) do
+  defp preferred_local_plan(demands, nodes, usage, strategy, service_instances, blob_refs) do
     nodes
     |> Enum.filter(&schedulable_node?/1)
     |> Enum.reduce([], fn node, acc ->
@@ -841,7 +865,7 @@ defmodule MirrorNeuron.Scheduler do
 
       case local_node_plan(node, demands, used, service_instances) do
         {:ok, group_plan} ->
-          score = score_node(node, used, group_plan["resources"], strategy)
+          score = score_node(node, used, group_plan["resources"], strategy, blob_refs)
           [{node, group_plan, score} | acc]
 
         :error ->
@@ -868,6 +892,7 @@ defmodule MirrorNeuron.Scheduler do
                 get_in(group_plan, ["allocations", demand["agent_id"]]) || empty_allocation(),
               "constraints" => demand["constraints"],
               "placement_requirements" => demand["placement_requirements"],
+              "blob_locality" => blob_locality_summary(node, blob_refs),
               "score" => Float.round(score, 4),
               "locality" => "job_colocated"
             }
@@ -921,9 +946,9 @@ defmodule MirrorNeuron.Scheduler do
       service_requirements_match?(demand, node, service_instances)
   end
 
-  defp place_spillover_demands(demands, nodes, usage, strategy, service_instances) do
+  defp place_spillover_demands(demands, nodes, usage, strategy, service_instances, blob_refs) do
     Enum.reduce_while(demands, {:ok, [], usage}, fn demand, {:ok, placements, usage_acc} ->
-      case choose_node(demand, nodes, usage_acc, strategy, service_instances) do
+      case choose_node(demand, nodes, usage_acc, strategy, service_instances, blob_refs) do
         {:ok, node, score, allocation} ->
           next_usage =
             Map.update(
@@ -941,6 +966,7 @@ defmodule MirrorNeuron.Scheduler do
             "allocations" => allocation,
             "constraints" => demand["constraints"],
             "placement_requirements" => demand["placement_requirements"],
+            "blob_locality" => blob_locality_summary(node, blob_refs),
             "score" => Float.round(score, 4),
             "locality" => "agent_spillover"
           }
@@ -971,7 +997,7 @@ defmodule MirrorNeuron.Scheduler do
 
   defp maybe_put_system_targets(plan, _job_type, _placements), do: plan
 
-  defp choose_node(demand, nodes, usage, strategy, service_instances) do
+  defp choose_node(demand, nodes, usage, strategy, service_instances, blob_refs) do
     candidates =
       nodes
       |> Enum.filter(&schedulable_node?/1)
@@ -1000,7 +1026,8 @@ defmodule MirrorNeuron.Scheduler do
                node,
                usage_for_node(usage, node["name"]),
                demand["resources"],
-               strategy
+               strategy,
+               blob_refs
              )}
           end)
           |> Enum.max_by(fn {_node, _allocation, score} -> score end)
@@ -1304,28 +1331,85 @@ defmodule MirrorNeuron.Scheduler do
     end
   end
 
-  defp score_node(node, used, ask, "spread") do
+  defp score_node(node, used, ask, "spread", blob_refs) do
     capacity = node["capacity"] || empty_resources()
 
-    @resource_keys
-    |> Enum.map(&resource_ratio(capacity, used, ask, &1))
-    |> Enum.reject(&is_nil/1)
-    |> case do
-      [] -> 1.0
-      ratios -> 1.0 - Enum.sum(ratios) / length(ratios)
+    base =
+      @resource_keys
+      |> Enum.map(&resource_ratio(capacity, used, ask, &1))
+      |> Enum.reject(&is_nil/1)
+      |> case do
+        [] -> 1.0
+        ratios -> 1.0 - Enum.sum(ratios) / length(ratios)
+      end
+
+    base + blob_locality_bonus(node, blob_refs)
+  end
+
+  defp score_node(node, used, ask, _binpack, blob_refs) do
+    capacity = node["capacity"] || empty_resources()
+
+    base =
+      @resource_keys
+      |> Enum.map(&resource_ratio(capacity, used, ask, &1))
+      |> Enum.reject(&is_nil/1)
+      |> case do
+        [] -> 0.0
+        ratios -> Enum.sum(ratios) / length(ratios)
+      end
+
+    base + blob_locality_bonus(node, blob_refs)
+  end
+
+  defp blob_locality_bonus(_node, []), do: 0.0
+
+  defp blob_locality_bonus(node, blob_refs) do
+    summary = blob_locality_summary(node, blob_refs)
+    required = Map.get(summary, "required_count", 0)
+    local = Map.get(summary, "local_count", 0)
+
+    if required > 0 do
+      0.25 * (local / required)
+    else
+      0.0
     end
   end
 
-  defp score_node(node, used, ask, _binpack) do
-    capacity = node["capacity"] || empty_resources()
+  defp blob_locality_summary(_node, []),
+    do: %{"required_count" => 0, "local_count" => 0, "missing_count" => 0}
 
-    @resource_keys
-    |> Enum.map(&resource_ratio(capacity, used, ask, &1))
-    |> Enum.reject(&is_nil/1)
-    |> case do
-      [] -> 0.0
-      ratios -> Enum.sum(ratios) / length(ratios)
-    end
+  defp blob_locality_summary(node, blob_refs) do
+    node_name = Map.get(node, "name")
+    refs = Enum.map(blob_refs, &BlobRef.normalize/1) |> Enum.filter(&BlobRef.valid?/1)
+
+    local_count =
+      Enum.count(refs, fn ref ->
+        blob_available_on_node?(ref, node_name)
+      end)
+
+    %{
+      "required_count" => length(refs),
+      "local_count" => local_count,
+      "missing_count" => max(length(refs) - local_count, 0)
+    }
+  end
+
+  defp blob_available_on_node?(ref, node_name) do
+    ref
+    |> blob_locations()
+    |> Enum.any?(&(Map.get(&1, "node") == node_name))
+  end
+
+  defp blob_locations(ref) do
+    registry_locations =
+      case RedisStore.fetch_blob_ref(Map.get(ref, "sha256")) do
+        {:ok, %{"locations" => locations}} when is_list(locations) -> locations
+        _ -> []
+      end
+
+    List.wrap(Map.get(ref, "locations", [])) ++ registry_locations
+  rescue
+    _ -> List.wrap(Map.get(ref, "locations", []))
   end
 
   defp resource_ratio(capacity, used, ask, key) do
