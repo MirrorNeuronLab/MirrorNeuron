@@ -1,11 +1,13 @@
 <h1 align="center">MirrorNeuron Core 🧠</h1>
 
 <p align="center">
-  <strong>Durable agent runtime for self-organizing workflow software.</strong>
+  <strong>Desktop-first runtime for durable, self-organizing AI workflows.</strong>
 </p>
 
 <p align="center">
   <a href="https://github.com/MirrorNeuronLab/mn-docs"><img src="https://img.shields.io/badge/Docs-mn--docs-4D7CFE?style=for-the-badge" alt="MirrorNeuron documentation"></a>
+  <a href="https://github.com/MirrorNeuronLab/MirrorNeuron/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-22C55E?style=for-the-badge" alt="License: MIT"></a>
+  <a href="https://github.com/MirrorNeuronLab/MirrorNeuron/security/policy"><img src="https://img.shields.io/badge/Security-Report%20a%20Vulnerability-EF4444?style=for-the-badge" alt="Security policy"></a>
   <img src="https://img.shields.io/badge/Runtime-Elixir%2FOTP-6E4A7E?style=for-the-badge&logo=elixir&logoColor=white" alt="Elixir/OTP runtime">
   <img src="https://img.shields.io/badge/State-Redis-DC382D?style=for-the-badge&logo=redis&logoColor=white" alt="Redis-backed state">
   <img src="https://img.shields.io/badge/API-gRPC-00ADD8?style=for-the-badge" alt="gRPC services">
@@ -14,68 +16,189 @@
 
 MirrorNeuron Core is the Elixir/OTP runtime at the center of the MirrorNeuron
 project: a durable, message-driven foundation for AI workflows that need to keep
-running, recover cleanly, and coordinate work across agents and services.
+running, recover cleanly, and coordinate work across agents, services, and local
+machines.
 
-The project is built around a simple direction: software is moving from
-hardcoded workflows and static UIs toward reusable intelligence. Agents should be
-able to assemble the workflow logic and task-specific interface they need at
-runtime, while the infrastructure underneath stays deterministic, observable, and
-reliable.
+MirrorNeuron is built around a simple direction: software is moving from
+hardcoded workflows and static UIs toward reusable intelligence. An agent should
+be able to assemble the workflow logic and task-specific interface it needs at
+runtime, while the infrastructure underneath stays deterministic, observable,
+and reliable.
 
-Core is that infrastructure layer. It schedules workflow agents, routes messages,
-records events, persists job state through Redis, manages clustered runtime
-behavior, and exposes gRPC services for the broader MirrorNeuron ecosystem.
+Core is that infrastructure layer. It runs workflow graphs, stores job state,
+routes messages between runtime nodes and agents, records events, coordinates
+local or clustered execution, and exposes gRPC services for the surrounding
+MirrorNeuron ecosystem.
 
-> **Alpha notice:** MirrorNeuron is in alpha. APIs, manifests, release artifacts,
-> and ecosystem components may change between releases.
+> [!IMPORTANT]
+> MirrorNeuron is in alpha. APIs, manifests, release artifacts, and ecosystem
+> components may change between releases.
+
+## Contents
+
+- [Why MirrorNeuron Core exists](#why-mirrorneuron-core-exists)
+- [Desktop runtime, not cloud runtime](#desktop-runtime-not-cloud-runtime)
+- [Private swarm model](#private-swarm-model)
+- [Hardware strategy](#hardware-strategy)
+- [The idea: generated software, deterministic runtime](#the-idea-generated-software-deterministic-runtime)
+- [Features](#features)
+- [Architecture at a glance](#architecture-at-a-glance)
+- [When to use this repository](#when-to-use-this-repository)
+- [Quick install](#quick-install)
+- [Local development](#local-development)
+- [Usage](#usage)
+- [Resource-aware scheduling preview](#resource-aware-scheduling-preview)
+- [Adaptive runtime reliability](#adaptive-runtime-reliability)
+- [Execution profiles](#execution-profiles)
+- [Configuration highlights](#configuration-highlights)
+- [API boundary](#api-boundary)
+- [Project structure](#project-structure)
+- [Testing](#testing)
+- [Deployment and releases](#deployment-and-releases)
+- [Troubleshooting](#troubleshooting)
+- [Ecosystem](#ecosystem)
+- [Documentation](#documentation)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [Security](#security)
+- [License](#license)
 
 ---
 
 ## Why MirrorNeuron Core exists
 
 Most agent prototypes begin as a prompt, a script, or a tightly coupled workflow
-UI. The same pressure shows up in desktop and workflow software: users want
-interfaces and processes that can reorganize around the task instead of forcing
-every task through a pre-baked path. That works until the work becomes long-running, multi-step, interruptible, or
-shared across services. At that point, the agent needs more than model calls: it
-needs runtime guarantees.
+UI. That works until the work becomes long-running, multi-step, interruptible, or
+spread across more than one process. At that point, the agent needs more than a
+model call: it needs a runtime.
 
-MirrorNeuron Core focuses on the deterministic side of agentic software:
+MirrorNeuron Core focuses on the deterministic side of agentic software.
 
 <table>
 <tr>
-<td><b>Durable workflow execution</b></td>
-<td>Keep agent work moving through a runtime designed for long-running workflows, clean recovery, and persisted job state.</td>
+<td><b>Durable execution</b></td>
+<td>Run workflow graphs with persisted job state, event history, terminal state, and recovery-aware runtime behavior.</td>
+</tr>
+<tr>
+<td><b>Desktop-first operation</b></td>
+<td>Target local desktops, workstations, and private multi-computer swarms instead of requiring a managed cloud control plane.</td>
 </tr>
 <tr>
 <td><b>Message-driven coordination</b></td>
-<td>Route work across agents and services through explicit runtime messaging instead of hidden in-process coupling.</td>
+<td>Route work between agents and services through explicit runtime messages instead of hidden in-process coupling.</td>
 </tr>
 <tr>
-<td><b>Event recording</b></td>
-<td>Record workflow events so the system can reason about what happened, recover from failures, and expose runtime behavior to surrounding services.</td>
+<td><b>Resource-aware placement</b></td>
+<td>Plan service and batch agents onto eligible runtime nodes using CPU, memory, disk, GPU, constraints, and execution profiles.</td>
 </tr>
 <tr>
-<td><b>Redis-backed state</b></td>
-<td>Persist job state outside the process for workflows that should survive ordinary runtime boundaries.</td>
+<td><b>Self-healing by design</b></td>
+<td>Use OTP supervision, reconnect policies, reliability strategies, persisted state, and cluster health checks to keep local workflow execution recoverable.</td>
 </tr>
 <tr>
-<td><b>gRPC service boundary</b></td>
-<td>Expose protobuf-backed services so CLIs, SDKs, API services, agents, blueprints, and skills can integrate with the same runtime core.</td>
-</tr>
-<tr>
-<td><b>OTP foundation</b></td>
-<td>Use Elixir/OTP as the runtime substrate for supervised, message-oriented systems that are expected to stay alive.</td>
+<td><b>Stable service boundary</b></td>
+<td>Expose protobuf-backed gRPC services so CLIs, SDKs, APIs, agents, blueprints, and tools can share the same runtime core.</td>
 </tr>
 </table>
+
+The goal is to let the edge of the system stay flexible — generated interfaces,
+generated workflow logic, task-specific agents — while the center of the system
+stays boring in the best possible way: stateful, testable, recoverable, and
+explicit.
+
+---
+
+## Desktop runtime, not cloud runtime
+
+MirrorNeuron Core is designed for developers who want AI workflows to run on the
+machines they already own: a laptop, a workstation, a home lab box, a local GPU
+machine, or a small private swarm of trusted computers.
+
+You should not need a complete Kubernetes-style platform to make desktop
+workflows reliable. Core borrows useful ideas from systems like **Airflow** and
+**Nomad** — durable runs, explicit job state, scheduling, placement constraints,
+resource admission, observability, and recovery — and reshapes them for local
+runtime environments.
+
+```text
+Cloud-first orchestration
+  cluster account + hosted control plane + infrastructure team + remote workers
+
+MirrorNeuron Core
+  desktop PC + local Redis + runtime nodes + private swarm when needed
+```
+
+This repository is not trying to be a cloud platform. The focus is local
+reliability: workflows that are easy to start, easy to inspect, and able to
+recover from ordinary desktop failures such as process restarts, flaky peer
+nodes, resource contention, or unavailable executors.
+
+---
+
+## Private swarm model
+
+A single desktop should be enough for many workflows. When more capacity is
+needed, Core can coordinate local or clustered execution across private machines.
+Think of it as a small, trusted runtime fabric for developer-owned hardware.
+
+```mermaid
+flowchart LR
+  App[CLI / SDK / API / Local UI] --> GRPC[gRPC services]
+  GRPC --> Core[MirrorNeuron Core]
+
+  Core --> Scheduler[Resource-aware scheduler]
+  Core --> Router[Message router]
+  Core --> Events[Event log]
+  Core --> State[(Redis job state)]
+  Core --> Reliability[Reliability observer]
+
+  Scheduler --> Local[Desktop runtime node]
+  Scheduler --> Mac[Apple Silicon node]
+  Scheduler --> GPU[NVIDIA / AMD GPU node]
+  Scheduler --> CPU[Intel / AMD CPU node]
+
+  Local --> Agents[Agents / Skills / Blueprints]
+  Mac --> Agents
+  GPU --> Agents
+  CPU --> Agents
+```
+
+A private swarm is not a requirement. It is the scaling path when a workflow
+needs another machine: attach the node, advertise its capabilities, and let the
+runtime decide where eligible work can run.
+
+---
+
+## Hardware strategy
+
+MirrorNeuron Core aims to reduce the amount of hardware-specific work developers
+need to do. The workflow should describe what it needs; the runtime should match
+that need to available local capacity.
+
+The current runtime surface already includes node capabilities, GPU advertising,
+resource admission, scheduler constraints, and execution profiles. The hardware
+target is ordinary developer-owned compute:
+
+| Hardware class | Runtime direction |
+| --- | --- |
+| Intel / AMD CPUs | Treat standard CPU machines as first-class runtime nodes for generic workflow and model work. |
+| Apple Silicon | Treat local macOS arm64 machines as useful runtime capacity when the execution profile and model backend fit. |
+| NVIDIA GPUs | Advertise GPU capacity and capabilities so accelerator-heavy agents can be placed on eligible nodes. |
+| AMD GPUs | Keep GPU placement generic enough that supported backends can advertise AMD GPU capacity where available. |
+| Specialized boxes | When a workflow needs dedicated acceleration, surface that requirement clearly so the user can attach a capable machine — for example, a dedicated NVIDIA workstation or accelerator box — to the private swarm instead of rewriting the workflow. |
+
+The intended developer experience is simple: run the workflow. If the workflow
+can run on available generic hardware, the runtime should allocate resources and
+use the right execution profile. If it needs special hardware, the runtime should
+make that visible early and tell the developer what kind of node must be added.
 
 ---
 
 ## The idea: generated software, deterministic runtime
 
 MirrorNeuron is designed for a different shape of application: one where the
-agent can create or adapt the logic it needs while the runtime remains explicit
-and dependable.
+agent can generate or adapt the logic and interface it needs while the runtime
+remains explicit and dependable.
 
 ```text
 Traditional app
@@ -85,32 +208,51 @@ Agent-native app
   generated task interface + generated workflow logic + deterministic runtime
 ```
 
-For developers, this means MirrorNeuron Core is not trying to be a monolithic
-agent app. It is the lower-level runtime that other pieces build on: scheduling,
-coordination, events, persistence, clustering behavior, and service contracts.
+For developers, MirrorNeuron Core is the lower-level runtime that other pieces
+build on: scheduling, coordination, events, persistence, clustering behavior,
+resource admission, reliability policies, and service contracts.
 
-The goal is to make agent workflows feel flexible at the edge while keeping the
-center of the system boring in the best possible way: stateful, testable,
-recoverable, and explicit.
+That separation matters. Agents can reorganize the software experience at
+runtime, but workflow execution should still have clear state, clear ownership,
+clear placement, and clear recovery behavior.
+
+---
+
+## Features
+
+| Feature | Status | Notes |
+| --- | ---: | --- |
+| Workflow manifest validation | Available | Validates graph structure and supported runtime primitives. |
+| Message-driven execution | Available | Routes workflow messages between runtime nodes and agents. |
+| Built-in runtime primitives | Available | Includes `router`, `executor`, `aggregator`, `sensor`, and `module`. |
+| Durable job state | Available | Persists job metadata, events, agents, and terminal state through Redis. |
+| Runtime monitoring | Available | Lists jobs, job details, cluster overview, metrics, and dead letters. |
+| Cluster coordination | Available | Uses Erlang distribution plus `libcluster` and Horde. |
+| Redis high-availability helpers | Available | Includes scripts and config for Redis Sentinel development workflows. |
+| Shared run artifacts | Available | Supports host-mounted run storage so large JSON, Markdown, PDF, and log blobs can move by filesystem reference instead of oversized RPC payloads. |
+| gRPC services | Available | Job, cluster, and observability protobuf services are included. |
+| Resource-aware scheduling | Preview | Plans service and batch agents onto eligible nodes using CPU, memory, disk, GPU, constraints, and execution profiles. |
+| REST API, CLI, Web UI, SDK | External components | Provided by separate ecosystem repositories. |
 
 ---
 
 ## Architecture at a glance
 
 ```mermaid
-flowchart LR
-  Clients[CLI / Python SDK / API services] --> Contracts[gRPC / Protobuf contracts]
-  Contracts --> Core[MirrorNeuron Core]
+flowchart TB
+  Manifest[Workflow manifest] --> Validate[Manifest validation]
+  Validate --> Plan[Scheduler planning]
+  Plan --> Run[Runtime-managed job]
 
-  Core --> Scheduler[Workflow agent scheduling]
-  Core --> Router[Message routing]
-  Core --> Events[Event recording]
-  Core --> State[Redis-backed job state]
-  Core --> Cluster[Clustered runtime behavior]
+  Run --> Agents[Workflow agents]
+  Run --> Events[Event recording]
+  Run --> State[(Redis-backed state)]
+  Run --> GRPC[gRPC services]
 
-  Scheduler --> Ecosystem[Agents / Blueprints / Skills]
-  Router --> Ecosystem
-  Events --> Ecosystem
+  Agents --> Router[Message routing]
+  Router --> Agents
+
+  GRPC --> Clients[CLI / Python SDK / API / Web UI]
 ```
 
 Core sits between higher-level developer surfaces and the operational substrate
@@ -126,94 +268,380 @@ Use MirrorNeuron Core when you are building or extending systems that need:
 
 - AI workflows that continue across multiple steps instead of completing in one
   request-response turn.
+- Desktop or workstation execution with durable runtime behavior.
+- A private multi-computer swarm without adopting a cloud-first orchestration
+  stack.
 - Agent coordination through messages and explicit runtime services.
 - Redis-backed job state for durable execution.
 - Event recording around workflow execution.
+- Resource-aware scheduling across CPU, memory, disk, GPU, constraints, and
+  execution profiles.
 - A gRPC/protobuf boundary for integrating runtimes, SDKs, API services, agents,
   blueprints, or skills.
-- A runtime layer that can support clustered behavior rather than only local
-  single-process orchestration.
 
-If you are evaluating the whole MirrorNeuron project, start with the
-[MirrorNeuron documentation repo](https://github.com/MirrorNeuronLab/mn-docs).
-It explains the overall architecture, component responsibilities, runtime model,
-deployment expectations, and how Core fits with the rest of the stack.
+Core is not a model provider, hosted cloud service, monolithic desktop app, or
+complete Kubernetes replacement. It is the dependable runtime layer underneath
+agent-native workflow software.
 
 ---
 
-## Quick start
+## Quick install
 
-Install dependencies and run the core test suite:
+Use the deployment repository installer when installing MirrorNeuron as a
+user-facing local system:
+
+```bash
+curl -fsSL https://mirrorneuron.io/install.sh | bash
+```
+
+For the released-package installer, use `mn-deploy/install_new.sh` from the
+deployment repository:
+
+```bash
+git clone https://github.com/MirrorNeuronLab/mn-deploy.git
+cd mn-deploy
+./install_new.sh
+```
+
+That installer uses released packages instead of source checkouts:
+
+- Core runtime from GitHub Release OTP tarballs
+- Python CLI/API/SDK packages from PyPI
+- Web UI package from npm
+
+---
+
+## Local development
+
+Clone the core repository and install dependencies:
+
+```bash
+git clone https://github.com/MirrorNeuronLab/MirrorNeuron.git
+cd MirrorNeuron
+mix deps.get
+```
+
+Start Redis locally or with Docker:
+
+```bash
+docker run --rm --name mirror-neuron-redis -p 6379:6379 redis:7
+```
+
+Run the runtime in development mode:
+
+```bash
+mix run --no-halt
+```
+
+Build a local OTP release:
+
+```bash
+MIX_PROJECT_VERSION=1.0.0 MIX_ENV=prod mix release --overwrite
+_build/prod/rel/mirror_neuron/bin/mirror_neuron start
+```
+
+---
+
+## Usage
+
+### Validate a manifest
+
+```elixir
+MirrorNeuron.validate_manifest("path/to/manifest.json")
+```
+
+### Plan placement before running
+
+```elixir
+MirrorNeuron.plan_manifest("path/to/manifest.json")
+```
+
+### Run a manifest
+
+```elixir
+MirrorNeuron.run_manifest("path/to/manifest.json")
+```
+
+### Inspect jobs and events
+
+```elixir
+MirrorNeuron.list_jobs()
+MirrorNeuron.inspect_job("job-id")
+MirrorNeuron.inspect_agents("job-id")
+MirrorNeuron.events("job-id")
+```
+
+### Pause, resume, or cancel a job
+
+```elixir
+MirrorNeuron.pause("job-id")
+MirrorNeuron.resume("job-id")
+MirrorNeuron.cancel("job-id")
+```
+
+---
+
+## Resource-aware scheduling preview
+
+MirrorNeuron can plan service and batch workflow agents onto eligible runtime
+nodes before starting a job. Node-level `resources` and `constraints` may be
+declared in the manifest, and `policies.scheduler.strategy` can be `binpack` or
+`spread`.
+
+```json
+{
+  "policies": {
+    "job_type": "batch",
+    "scheduler": { "strategy": "binpack" }
+  },
+  "nodes": [
+    {
+      "node_id": "worker",
+      "agent_type": "executor",
+      "resources": {
+        "cpu_cores": 2,
+        "memory_mb": 4096,
+        "gpu_count": 1
+      },
+      "constraints": [
+        { "attribute": "capabilities", "operator": "contains", "value": "cuda" }
+      ]
+    }
+  ]
+}
+```
+
+Submitted jobs persist their scheduler plan under the job's `scheduler` field so
+API and monitoring clients can inspect where agents were intended to run.
+
+---
+
+## Adaptive runtime reliability
+
+Manifests may set `"recovery_mode": "auto"` or omit `recovery_mode`. For new
+jobs, the runtime resolves the requested policy into an effective policy based
+on observed cluster health:
+
+| Runtime condition | Effective behavior |
+| --- | --- |
+| Single node or uncertain/flapping cluster | Use `local_restart`. |
+| Healthy multi-node cluster with a durable bundle and eligible placement | Use `cluster_recover`. |
+| Explicit `manual_recover` | Keep manual recovery. |
+| Explicit `cluster_recover` on an unsafe single-node cluster | Start degraded as `local_restart`. |
+
+The runtime persists both `requested_recovery_policy` and effective
+`recovery_policy`, plus a compact `reliability` map for observability. Running
+job policies are not rewritten when cluster health changes; reliability events
+are emitted instead.
+
+This is especially important for desktop environments, where machines sleep,
+restart, disconnect, run out of local resources, or appear and disappear from a
+private network more often than cloud workers do.
+
+---
+
+## Execution profiles
+
+Dependency-heavy agents should reference an execution profile instead of
+installing native packages during each run. Configure the profile on runtime
+nodes, then reference it from the worker config.
+
+```bash
+MN_EXECUTION_PROFILES_JSON='{"opencv-video-guardian":{"image":"registry.local/business_facility_safety_video_guardian:2026-05","pool":"opencv_gpu","pool_slots":1,"gpu":true,"required_capabilities":["video-codec:h264"],"policy":"policies/video-egress.yaml","reuse_shared_sandbox":true,"persistent_workspace":true,"warmup_command":"python -c \"import cv2\""}}' \
+MN_NODE_EXECUTION_PROFILES=opencv-video-guardian \
+MN_NODE_CAPABILITIES=video-codec:h264,ffmpeg \
+mix run --no-halt
+```
+
+```json
+{
+  "node_id": "video_guardian",
+  "agent_type": "sandbox_worker",
+  "config": {
+    "execution_profile": "opencv-video-guardian"
+  }
+}
+```
+
+The BEAM runtime keeps orchestration, leases, placement, reconnect, and manual
+recovery. Heavy dependencies such as OpenCV, ffmpeg, and model runtimes stay in
+the profile image or a prewarmed node cache. When a manifest selects an
+execution profile, the profile owns OpenShell security settings such as image,
+policy, remote access, SSH key, workspace reuse, upload path, pool, GPU, and
+capability settings.
+
+---
+
+## Configuration highlights
+
+Runtime configuration is read from environment variables in `config/runtime.exs`.
+
+| Variable | Purpose |
+| --- | --- |
+| `MN_REDIS_URL` | Redis connection URL for persisted runtime data. |
+| `MN_REDIS_NAMESPACE` | Prefix/namespace for stored MirrorNeuron runtime data. |
+| `MN_CORE_HOST` | Host/IP used by the gRPC listener; defaults to loopback-style local binding. |
+| `MN_GRPC_PORT` | gRPC service port. |
+| `MN_GRPC_AUTH_TOKEN` | Bearer token for protected gRPC calls such as pause, resume, and resource updates. |
+| `MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN` | Required token for destructive administrative calls such as `ClearJobs`. |
+| `MN_NODE_NAME` | Erlang node name used by release and cluster scripts. |
+| `MN_CLUSTER_NODES` | Comma-separated Erlang node names for cluster discovery. |
+| `MN_COOKIE` | Erlang distribution cookie; use a strong non-default value for distributed nodes. |
+| `MN_RELIABILITY_STRATEGY` | Conservative runtime strategy resolver for new jobs. |
+| `MN_NODE_RECONNECT_ATTEMPTS` | Runtime node reconnect attempts before jobs are paused for manual restart. |
+| `MN_NODE_EXECUTION_PROFILES` | Comma-separated execution profiles this runtime node may advertise after warmup. |
+| `MN_NODE_CAPABILITIES` | Comma-separated runtime capabilities such as `video-codec:h264` or `ffmpeg`. |
+| `MN_NODE_GPU` | Optional override for whether this runtime node advertises GPU capacity. |
+| `MN_RESOURCE_ADMISSION_ENABLED` | Enables local resource checks before accepting work. |
+
+For Redis Sentinel, resource thresholds, network-only nodes, execution profiles,
+and release deployment settings, check `config/runtime.exs` and the documentation
+repo.
+
+---
+
+## API boundary
+
+MirrorNeuron Core includes protobuf definitions and generated Elixir modules for:
+
+- `proto/job.proto`
+- `proto/cluster.proto`
+- `proto/observability.proto`
+
+Generated modules live under `lib/mirror_neuron_grpc/`. The gRPC listener is
+controlled by `MN_API_ENABLED` and binds to `MN_CORE_HOST`.
+
+`JobService.ClearJobs` is a destructive administrative RPC. It is denied unless
+the server has `MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN` set and the request includes
+the same value in `admin_token`.
+
+`ClusterService.NetworkHandshake` is used by cluster join flows to verify the
+join token and keep network-facing nodes scoped to cluster/resource inspection
+when `MN_NETWORK_ONLY=true`.
+
+---
+
+## Project structure
+
+```text
+.
+├── config/                  # Mix and runtime configuration
+├── lib/
+│   ├── mirror_neuron/       # Core runtime modules
+│   └── mirror_neuron_grpc/  # Generated gRPC/protobuf modules
+├── proto/                   # gRPC protobuf definitions
+├── scripts/                 # Local, cluster, Redis, and release helper scripts
+├── tests/                   # ExUnit tests and script-based regression checks
+├── mix.exs                  # Mix project definition
+├── mix.lock                 # Locked dependencies
+├── RELEASE.md              # Release policy and tag workflow
+└── LICENSE                 # MIT license
+```
+
+---
+
+## Testing
+
+Install dependencies:
 
 ```bash
 mix deps.get
+```
+
+Check formatting:
+
+```bash
+mix format --check-formatted
+```
+
+Run tests:
+
+```bash
 mix test
 ```
 
-For Redis-backed runtime tests, start Redis first:
+Compile with warnings as errors:
 
 ```bash
-docker run -d --name mirror-neuron-redis -p 6379:6379 redis:7
-mix test
+mix compile --warnings-as-errors
 ```
 
-Clean up the local Redis container when you are done:
+Run a local production release build:
 
 ```bash
-docker rm -f mirror-neuron-redis
+MIX_PROJECT_VERSION=1.2.3 MIX_ENV=prod mix release --overwrite
+```
+
+Run shell syntax checks:
+
+```bash
+while IFS= read -r -d '' script; do
+  bash -n "$script"
+done < <(find scripts -name '*.sh' -print0)
 ```
 
 ---
 
-## Repository map
+## Deployment and releases
 
-| Path | Purpose |
-| --- | --- |
-| `lib/mirror_neuron/` | Core runtime modules. |
-| `lib/mirror_neuron_grpc/` | gRPC service implementation. |
-| `proto/` | Protobuf contracts. |
-| `config/` | Runtime configuration. |
-| `tests/` | Unit, regression, API, and e2e tests. |
+MirrorNeuron Core is released from Git tags. Tags must use SemVer with a leading
+`v`, for example:
 
----
+- `v1.0.1`
+- `v1.1.0`
+- `v2.0.0`
+- `v1.0.1-rc.1`
 
-## Runtime responsibilities
+The release workflow builds platform-specific OTP tarballs:
 
-MirrorNeuron Core is intentionally narrow. Its job is to provide the dependable
-runtime primitives that agent-facing tools can share.
+- `MirrorNeuron-vX.Y.Z-darwin-arm64-otp-release.tar.gz`
+- `MirrorNeuron-vX.Y.Z-linux-x64-otp-release.tar.gz`
+- `MirrorNeuron-vX.Y.Z-linux-arm64-otp-release.tar.gz`
+- `SHA256SUMS.txt`
 
-| Responsibility | What it means in this repo |
-| --- | --- |
-| Workflow agent scheduling | Core coordinates workflow agents as runtime-managed work. |
-| Message routing | Services and agents communicate through explicit message paths. |
-| Event recording | Runtime events are captured as part of workflow execution. |
-| Job state persistence | Redis is used for persisted job state in runtime-backed flows. |
-| Cluster behavior | Core manages clustered runtime behavior for the MirrorNeuron system. |
-| gRPC services | External components integrate through protobuf-backed service contracts. |
-
----
-
-## Developer workflow
-
-A typical local development loop is intentionally small:
+Create a stable release:
 
 ```bash
+git checkout main
+git pull
 mix deps.get
+mix format --check-formatted
 mix test
+git tag v1.0.1
+git push origin v1.0.1
 ```
 
-When touching Redis-backed behavior, run the Redis-backed test path as well:
+See [RELEASE.md](RELEASE.md) for the full release process.
 
-```bash
-docker run -d --name mirror-neuron-redis -p 6379:6379 redis:7
-mix test
-docker rm -f mirror-neuron-redis
-```
+---
 
-When changing service boundaries, check the protobuf contracts in `proto/` and
-the gRPC implementation under `lib/mirror_neuron_grpc/` together. Runtime changes
-should generally be accompanied by tests under `tests/`, especially for
-scheduling, routing, persistence, API behavior, and regression coverage.
+## Troubleshooting
+
+| Problem | Check |
+| --- | --- |
+| Runtime cannot connect to Redis | Confirm Redis is running and `MN_REDIS_URL` points to the correct host, port, and database. |
+| gRPC port is already in use | Change `MN_GRPC_PORT` or stop the process using port `50051`. |
+| Cluster nodes do not join | Verify `MN_NODE_NAME`, `MN_CLUSTER_NODES`, `MN_COOKIE`, EPMD connectivity, and Erlang distribution ports. |
+| Resource admission rejects jobs | Check `MN_RESOURCE_ADMISSION_ENABLED` and resource threshold variables. |
+| Expected GPU work is not placed on a node | Check `MN_NODE_GPU`, `MN_NODE_CAPABILITIES`, execution profiles, and manifest constraints. |
+| Redis Sentinel failover is not resolving | Verify `MN_REDIS_SENTINELS`, `MN_REDIS_SENTINEL_MASTER`, credentials, and optional host mapping. |
+| OTP release fails after extraction | Make sure the release asset matches the target OS and CPU architecture. |
+
+---
+
+## Ecosystem
+
+| Component | Repository |
+| --- | --- |
+| Core runtime | <https://github.com/MirrorNeuronLab/MirrorNeuron> |
+| REST API | <https://github.com/MirrorNeuronLab/mn-api> |
+| CLI | <https://github.com/MirrorNeuronLab/mn-cli> |
+| Web UI | <https://github.com/MirrorNeuronLab/mn-web-ui> |
+| Python SDK | <https://github.com/MirrorNeuronLab/mn-python-sdk> |
+| Deployment tooling | <https://github.com/MirrorNeuronLab/mn-deploy> |
+| System tests | <https://github.com/MirrorNeuronLab/mn-system-tests> |
+| Blueprints | <https://github.com/MirrorNeuronLab/mirrorneuron-blueprints> |
+| Documentation | <https://github.com/MirrorNeuronLab/mn-docs> |
 
 ---
 
@@ -223,18 +651,61 @@ scheduling, routing, persistence, API behavior, and regression coverage.
 | --- | --- |
 | [MirrorNeuron documentation](https://github.com/MirrorNeuronLab/mn-docs) | Project-level architecture, component responsibilities, runtime model, and deployment expectations. |
 | [Component guide](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/component-guide.md#mirrorneuron-core) | How MirrorNeuron Core fits into the broader MirrorNeuron stack. |
-| [Runtime architecture](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/runtime-architecture.md) | The runtime model and execution architecture. |
+| [Runtime architecture](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/runtime-architecture.md) | Runtime model and execution architecture. |
 | [Cluster architecture](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/cluster_architecture.md) | Clustered runtime behavior and deployment shape. |
 | [Reliability guide](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/reliability.md) | Reliability expectations and operational model. |
 | [Security model](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/security.md) | Security assumptions and boundaries. |
 
 ---
 
-## Project status
+## Roadmap
 
-MirrorNeuron Core is public alpha software. Expect changes in APIs, manifests,
-release artifacts, and ecosystem integration points as the runtime evolves.
+Current roadmap items should be tracked in issues or the documentation
+repository. Useful future additions to this README include:
 
-For now, the best way to understand the project is to read this repository next
-to the documentation repo, run the tests, and inspect the protobuf and runtime
-modules that define the current service boundary.
+- A maintained compatibility matrix for OS, CPU architecture, model backend,
+  accelerator type, and OTP release artifact.
+- A manifest schema reference.
+- A complete gRPC API reference.
+- More desktop and private-swarm deployment examples.
+- Screenshots or short recordings for CLI, Web UI, and workflow execution.
+
+---
+
+## Contributing
+
+Contributions are welcome. Before opening a pull request:
+
+1. Run formatting and tests.
+2. Keep changes scoped.
+3. Add or update tests for behavior changes.
+4. Update documentation when configuration, commands, or release behavior
+   changes.
+
+References:
+
+- [Contributing guide](https://github.com/MirrorNeuronLab/mn-docs/blob/main/contributing.md)
+- [Testing guide](https://github.com/MirrorNeuronLab/mn-docs/blob/main/testing.md)
+- [Documentation style guide](https://github.com/MirrorNeuronLab/mn-docs/blob/main/documentation-style.md)
+
+---
+
+## Security
+
+Do not disclose vulnerabilities in public issues.
+
+- Security model: <https://github.com/MirrorNeuronLab/mn-docs/blob/main/security.md>
+- Report a vulnerability: <https://github.com/MirrorNeuronLab/MirrorNeuron/security>
+
+---
+
+## Acknowledgments
+
+MirrorNeuron Core uses the Elixir/OTP ecosystem, Redis, gRPC, protobuf, Horde,
+and libcluster. See `mix.exs` and `mix.lock` for the current dependency list.
+
+---
+
+## License
+
+MirrorNeuron Core is licensed under the MIT License. See [LICENSE](LICENSE).
