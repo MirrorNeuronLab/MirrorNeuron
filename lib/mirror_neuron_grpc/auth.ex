@@ -37,8 +37,8 @@ defmodule MirrorNeuron.Grpc.Auth do
   def authorized?(_stream, _expected_token), do: false
 
   defp operator_token do
-    case System.get_env(@auth_token_env, "") |> String.trim() do
-      "" -> :error
+    case MirrorNeuron.Grpc.Tokens.auth_token() do
+      nil -> :error
       token -> {:ok, token}
     end
   end

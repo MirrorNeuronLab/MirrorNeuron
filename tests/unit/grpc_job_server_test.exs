@@ -14,19 +14,24 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
   alias Mirrorneuron.Job.V1.{
     ClearJobsRequest,
+    ClearJobsResponse,
     GetDeploymentRequest,
     ListDeploymentsRequest,
     SubmitJobRequest
   }
 
   @admin_token_env "MN_GRPC_ADMIN_TOKEN"
+  @admin_token_file_env "MN_GRPC_ADMIN_TOKEN_FILE"
   @legacy_admin_token_env "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN"
   @operator_token_env "MN_GRPC_AUTH_TOKEN"
+  @operator_token_file_env "MN_GRPC_AUTH_TOKEN_FILE"
 
   setup do
     old_token = System.get_env(@admin_token_env)
+    old_token_file = System.get_env(@admin_token_file_env)
     old_legacy_token = System.get_env(@legacy_admin_token_env)
     old_operator_token = System.get_env(@operator_token_env)
+    old_operator_token_file = System.get_env(@operator_token_file_env)
     old_network_only = System.get_env("MN_NETWORK_ONLY")
     old_network_token = System.get_env("MN_NETWORK_JOIN_TOKEN")
     old_advertise_host = System.get_env("MN_NETWORK_ADVERTISE_HOST")
@@ -44,7 +49,9 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     System.put_env("MN_REDIS_NAMESPACE", namespace)
 
     System.delete_env(@admin_token_env)
+    System.delete_env(@admin_token_file_env)
     System.delete_env(@legacy_admin_token_env)
+    System.delete_env(@operator_token_file_env)
     System.delete_env("MN_NETWORK_ONLY")
     System.delete_env("MN_NETWORK_JOIN_TOKEN")
     System.delete_env("MN_REDIS_URL")
@@ -54,8 +61,10 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       restore_env(:redis_namespace, old_namespace)
       restore_system_env("MN_REDIS_NAMESPACE", old_system_namespace)
       restore_env(@admin_token_env, old_token)
+      restore_env(@admin_token_file_env, old_token_file)
       restore_env(@legacy_admin_token_env, old_legacy_token)
       restore_env(@operator_token_env, old_operator_token)
+      restore_env(@operator_token_file_env, old_operator_token_file)
       restore_env("MN_NETWORK_ONLY", old_network_only)
       restore_env("MN_NETWORK_JOIN_TOKEN", old_network_token)
       restore_env("MN_NETWORK_ADVERTISE_HOST", old_advertise_host)
@@ -72,6 +81,35 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     error =
       assert_raise GRPC.RPCError, fn ->
         JobServer.clear_jobs(%ClearJobsRequest{}, nil)
+      end
+
+    assert Exception.message(error) =~ "ClearJobs requires #{@admin_token_env}"
+  end
+
+  test "clear_jobs accepts admin token from token file before stale env token" do
+    token_file = write_token_file("mn-admin-token", "file-admin-token")
+    System.put_env(@admin_token_env, "stale-admin-token")
+    System.put_env(@admin_token_file_env, token_file)
+
+    try do
+      response = JobServer.clear_jobs(%ClearJobsRequest{admin_token: "file-admin-token"}, nil)
+
+      assert %ClearJobsResponse{} = response
+      assert is_integer(response.cleared_count)
+    rescue
+      error in GRPC.RPCError ->
+        refute Exception.message(error) =~ "ClearJobs requires #{@admin_token_env}"
+    end
+  end
+
+  test "clear_jobs rejects stale env token when token file is authoritative" do
+    token_file = write_token_file("mn-admin-token", "file-admin-token")
+    System.put_env(@admin_token_env, "stale-admin-token")
+    System.put_env(@admin_token_file_env, token_file)
+
+    error =
+      assert_raise GRPC.RPCError, fn ->
+        JobServer.clear_jobs(%ClearJobsRequest{admin_token: "stale-admin-token"}, nil)
       end
 
     assert Exception.message(error) =~ "ClearJobs requires #{@admin_token_env}"
@@ -176,6 +214,24 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert node_info["node_name"] == to_string(Node.self())
     assert is_binary(node_info["display_name"])
     assert is_integer(node_info["gpu_count"])
+  end
+
+  test "network handshake returns file-backed grpc tokens before stale env tokens" do
+    auth_file = write_token_file("mn-auth-token", "file-auth-token")
+    admin_file = write_token_file("mn-admin-token", "file-admin-token")
+
+    System.put_env("MN_NETWORK_ONLY", "true")
+    System.put_env("MN_NETWORK_JOIN_TOKEN", "join-secret")
+    System.put_env(@operator_token_env, "stale-auth-token")
+    System.put_env(@operator_token_file_env, auth_file)
+    System.put_env(@admin_token_env, "stale-admin-token")
+    System.put_env(@admin_token_file_env, admin_file)
+
+    response =
+      ClusterServer.network_handshake(%NetworkHandshakeRequest{token: "join-secret"}, nil)
+
+    assert response.grpc_auth_token == "file-auth-token"
+    assert response.grpc_admin_token == "file-admin-token"
   end
 
   test "network-only handshake does not record joining node metadata" do
@@ -388,6 +444,13 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
   defp restore_env(name, value), do: System.put_env(name, value)
   defp restore_system_env(key, nil), do: System.delete_env(key)
   defp restore_system_env(key, value), do: System.put_env(key, value)
+
+  defp write_token_file(prefix, token) do
+    path = Path.join(System.tmp_dir!(), "#{prefix}-#{System.unique_integer([:positive])}")
+    File.write!(path, token <> "\n")
+    on_exit(fn -> File.rm(path) end)
+    path
+  end
 
   defp cleanup_namespace(namespace) do
     case Redix.command(MirrorNeuron.Redis.Connection, ["KEYS", "#{namespace}:*"]) do
