@@ -316,10 +316,19 @@ defmodule MirrorNeuron.Scheduler.ResourceInference do
     config = map_get(node, "config") || %{}
     env = map_get(config, "environment") || %{}
 
-    []
-    |> Kernel.++(config_model_refs(config))
-    |> Kernel.++(env_model_refs(env))
-    |> Kernel.++(blueprint_config_model_refs(env))
+    explicit_refs =
+      []
+      |> Kernel.++(config_model_refs(config))
+      |> Kernel.++(env_model_refs(env))
+
+    refs =
+      if explicit_refs != [] do
+        explicit_refs
+      else
+        blueprint_config_model_refs(env)
+      end
+
+    refs
     |> Enum.reject(&blank?/1)
     |> Enum.uniq()
   end

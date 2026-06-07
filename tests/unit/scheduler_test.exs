@@ -44,7 +44,7 @@ defmodule MirrorNeuron.SchedulerTest do
     Manifest.load(raw)
   end
 
-  test "binpack chooses the tightest healthy node that satisfies resources" do
+  test "binpack prefers the more powerful healthy node by default" do
     {:ok, manifest} =
       load_manifest(%{
         "manifest_version" => "1.0",
@@ -70,7 +70,171 @@ defmodule MirrorNeuron.SchedulerTest do
 
     assert plan["status"] == "planned"
     assert plan["job_type"] == "batch"
-    assert [%{"agent_id" => "worker", "node" => "small@lab"}] = plan["placements"]
+
+    assert [
+             %{
+               "agent_id" => "worker",
+               "node" => "large@lab",
+               "power_score" => power_score
+             }
+           ] = placements = plan["placements"]
+
+    assert power_score > 0
+    refute Map.has_key?(hd(placements), "preferred_node_status")
+  end
+
+  test "valid preferred node hint wins when the hinted node can fit the agent" do
+    {:ok, manifest} =
+      load_manifest(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "preferred-node",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{"cpu_cores" => 1, "memory_mb" => 512},
+            "policies" => %{
+              "scheduler" => %{"preferred_node" => "small@lab"}
+            }
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    assert {:ok, plan} = Scheduler.plan(manifest, nodes: [large_node(), small_node()], jobs: [])
+
+    assert [
+             %{
+               "agent_id" => "worker",
+               "node" => "small@lab",
+               "preferred_node" => "small@lab",
+               "preferred_node_status" => "honored"
+             }
+           ] = plan["placements"]
+  end
+
+  test "missing or exhausted preferred node hint falls back to automatic placement" do
+    {:ok, manifest} =
+      load_manifest(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "preferred-node-fallback",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{"cpu_cores" => 2, "memory_mb" => 2048},
+            "policies" => %{
+              "scheduler" => %{"preferred_node" => "missing@lab"}
+            }
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    assert {:ok, plan} = Scheduler.plan(manifest, nodes: [small_node(), large_node()], jobs: [])
+
+    assert [
+             %{
+               "agent_id" => "worker",
+               "node" => "large@lab",
+               "preferred_node" => "missing@lab",
+               "preferred_node_status" => "fallback"
+             }
+           ] = plan["placements"]
+
+    busy_jobs = [
+      %{
+        "status" => "running",
+        "scheduler" => %{
+          "placements" => [
+            %{
+              "agent_id" => "busy",
+              "node" => "small@lab",
+              "resources" => %{"cpu_cores" => 4, "memory_mb" => 4096}
+            }
+          ]
+        }
+      }
+    ]
+
+    {:ok, preferred_small_manifest} =
+      load_manifest(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "preferred-node-exhausted",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{"cpu_cores" => 1, "memory_mb" => 512},
+            "policies" => %{
+              "scheduler" => %{"preferred_node" => "small@lab"}
+            }
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    assert {:ok, exhausted_plan} =
+             Scheduler.plan(preferred_small_manifest,
+               nodes: [small_node(), large_node()],
+               jobs: busy_jobs
+             )
+
+    assert [
+             %{
+               "agent_id" => "worker",
+               "node" => "large@lab",
+               "preferred_node" => "small@lab",
+               "preferred_node_status" => "fallback"
+             }
+           ] = exhausted_plan["placements"]
+  end
+
+  test "valid per-agent hints skip whole-job co-location and place agents separately" do
+    {:ok, manifest} =
+      load_manifest(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "conflicting-preferred-nodes",
+        "entrypoints" => ["video"],
+        "nodes" => [
+          %{
+            "node_id" => "video",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{"cpu_cores" => 1, "memory_mb" => 512},
+            "policies" => %{"scheduler" => %{"preferred_node" => "large@lab"}}
+          },
+          %{
+            "node_id" => "report",
+            "agent_type" => "executor",
+            "resources" => %{"cpu_cores" => 1, "memory_mb" => 512},
+            "policies" => %{"scheduler" => %{"preferred_node" => "small@lab"}}
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    assert {:ok, plan} = Scheduler.plan(manifest, nodes: [small_node(), large_node()], jobs: [])
+
+    placements = Map.new(plan["placements"], &{&1["agent_id"], &1})
+
+    assert placements["video"]["node"] == "large@lab"
+    assert placements["video"]["locality"] == "agent_spillover"
+    assert placements["video"]["preferred_node_status"] == "honored"
+
+    assert placements["report"]["node"] == "small@lab"
+    assert placements["report"]["locality"] == "agent_spillover"
+    assert placements["report"]["preferred_node_status"] == "honored"
   end
 
   test "prefers nodes with required blob refs after hard requirements match" do
@@ -116,6 +280,49 @@ defmodule MirrorNeuron.SchedulerTest do
              plan["placements"]
 
     assert locality["local_count"] == 1
+    assert locality["required_count"] == 1
+  end
+
+  test "power-first scoring beats blob locality when both nodes are eligible" do
+    sha256 = String.duplicate("c", 64)
+
+    {:ok, manifest} =
+      load_manifest(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "power-before-blob",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{"node_id" => "worker", "agent_type" => "executor", "config" => %{}}
+        ],
+        "edges" => [],
+        "metadata" => %{
+          "mn_artifacts" => %{
+            "blob_refs" => [
+              %{
+                "type" => "blob_ref",
+                "sha256" => sha256,
+                "size_bytes" => 10,
+                "payload_path" => "input/video.mp4",
+                "locations" => [
+                  %{"node" => "small@lab", "url" => "http://small/blobs/#{sha256}"}
+                ]
+              }
+            ]
+          }
+        }
+      })
+
+    assert {:ok, plan} =
+             Scheduler.plan(manifest,
+               nodes: [small_node(), large_node()],
+               jobs: [],
+               lookup_node_state: false
+             )
+
+    assert [%{"agent_id" => "worker", "node" => "large@lab", "blob_locality" => locality}] =
+             plan["placements"]
+
+    assert locality["local_count"] == 0
     assert locality["required_count"] == 1
   end
 
@@ -358,7 +565,7 @@ defmodule MirrorNeuron.SchedulerTest do
                ignore_job_ids: ["same-job"]
              )
 
-    assert [%{"agent_id" => "worker", "node" => "small@lab"}] = plan["placements"]
+    assert [%{"agent_id" => "worker", "node" => "large@lab"}] = plan["placements"]
   end
 
   test "exclude_nodes prevents placement on failed node" do
@@ -875,6 +1082,51 @@ defmodule MirrorNeuron.SchedulerTest do
     assert [%{"placement_requirements" => %{"models" => models}}] = plan["placements"]
     assert Enum.map(models, & &1["id"]) == ["otterdesk-voice-llm:default", "gemma4:e2b"]
     refute Enum.any?(models, &(&1["id"] == "ollama/nemotron3:33b"))
+  end
+
+  test "runtime model inference lets explicit node model override blueprint default llm" do
+    blueprint_config =
+      Jason.encode!(%{
+        "llm" => %{
+          "enabled" => true,
+          "provider" => "docker_model_runner",
+          "model" => "gemma4:e2b"
+        }
+      })
+
+    {:ok, manifest} =
+      load_manifest(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "runtime-env-model-override",
+        "entrypoints" => ["video_worker"],
+        "nodes" => [
+          %{
+            "node_id" => "video_worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "config" => %{
+              "environment" => %{
+                "MN_LLM_RUNTIME_MODEL" => "otterdesk-video-watch:default",
+                "MN_BLUEPRINT_CONFIG_JSON" => blueprint_config
+              }
+            }
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "cluster_recover"}
+      })
+
+    assert {:ok, plan} =
+             Scheduler.plan(manifest,
+               nodes: [h100_node()],
+               jobs: [],
+               service_instances: [
+                 model_service("otterdesk-video-watch:default", "h100@lab")
+               ]
+             )
+
+    assert [%{"placement_requirements" => %{"models" => [model]}}] = plan["placements"]
+    assert model["id"] == "otterdesk-video-watch:default"
   end
 
   test "hardware-derived GPU capabilities are enough for NVIDIA-specific and Metal placement" do
