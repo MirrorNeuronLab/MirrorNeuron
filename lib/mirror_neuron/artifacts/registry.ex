@@ -94,15 +94,6 @@ defmodule MirrorNeuron.Artifacts.Registry do
     end
   end
 
-  def auth_token do
-    [
-      System.get_env("MN_ARTIFACT_AUTH_TOKEN"),
-      System.get_env("MN_NETWORK_JOIN_TOKEN"),
-      System.get_env("MN_GRPC_AUTH_TOKEN")
-    ]
-    |> Enum.find(&(is_binary(&1) and String.trim(&1) != ""))
-  end
-
   defp with_local_location(ref) do
     case local_location(ref) do
       nil ->

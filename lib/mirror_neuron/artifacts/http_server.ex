@@ -4,7 +4,7 @@ defmodule MirrorNeuron.Artifacts.HttpServer do
   use GenServer
   require Logger
 
-  alias MirrorNeuron.Artifacts.{BlobStore, Registry}
+  alias MirrorNeuron.Artifacts.BlobStore
 
   @default_port 55_660
   @max_header_bytes 16_384
@@ -96,7 +96,6 @@ defmodule MirrorNeuron.Artifacts.HttpServer do
   defp handle_socket(socket) do
     with {:ok, raw} <- read_headers(socket, ""),
          {:ok, request} <- parse_request(raw),
-         :ok <- authorize(request),
          :ok <- serve_request(socket, request) do
       :ok
     else
@@ -142,24 +141,6 @@ defmodule MirrorNeuron.Artifacts.HttpServer do
       {:ok, %{method: String.upcase(method), path: path, headers: headers}}
     else
       _ -> {:error, {:http, 400, "invalid request"}}
-    end
-  end
-
-  defp authorize(%{headers: headers}) do
-    token = Registry.auth_token()
-
-    cond do
-      not is_binary(token) or String.trim(token) == "" ->
-        {:error, {:http, 503, "artifact auth token is not configured"}}
-
-      Map.get(headers, "authorization") == "Bearer #{token}" ->
-        :ok
-
-      Map.get(headers, "x-mn-artifact-token") == token ->
-        :ok
-
-      true ->
-        {:error, {:http, 401, "unauthorized"}}
     end
   end
 

@@ -83,11 +83,9 @@ defmodule MirrorNeuron.Artifacts.Resolver do
     tmp_path =
       Path.join(System.tmp_dir!(), "mn_blob_#{sha256}_#{System.unique_integer([:positive])}")
 
-    headers = auth_headers()
-
     :inets.start()
 
-    request = {String.to_charlist(url), headers}
+    request = {String.to_charlist(url), []}
 
     result =
       case :httpc.request(:get, request, [timeout: @http_timeout_ms],
@@ -121,16 +119,6 @@ defmodule MirrorNeuron.Artifacts.Resolver do
 
       {:error, reason} ->
         {:error, reason}
-    end
-  end
-
-  defp auth_headers do
-    case Registry.auth_token() do
-      token when is_binary(token) and token != "" ->
-        [{~c"authorization", String.to_charlist("Bearer #{token}")}]
-
-      _ ->
-        []
     end
   end
 

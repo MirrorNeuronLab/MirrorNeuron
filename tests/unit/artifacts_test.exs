@@ -5,7 +5,10 @@ defmodule MirrorNeuron.ArtifactsTest do
 
   setup do
     old_root = System.get_env("MN_BLOB_STORE_ROOT")
-    root = Path.join(System.tmp_dir!(), "mn_blob_store_test_#{System.unique_integer([:positive])}")
+
+    root =
+      Path.join(System.tmp_dir!(), "mn_blob_store_test_#{System.unique_integer([:positive])}")
+
     System.put_env("MN_BLOB_STORE_ROOT", root)
 
     on_exit(fn ->
@@ -63,6 +66,42 @@ defmodule MirrorNeuron.ArtifactsTest do
 
     assert :ok = Resolver.materialize_payload_refs(refs, "docs", target)
     assert File.read!(Path.join(target, "input.txt")) == "large doc"
+  end
+
+  test "artifact HTTP server serves blobs without authorization", %{root: root} do
+    old_token = System.get_env("MN_ARTIFACT_AUTH_TOKEN")
+    System.put_env("MN_ARTIFACT_AUTH_TOKEN", "ignored-artifact-token")
+
+    on_exit(fn ->
+      restore_env("MN_ARTIFACT_AUTH_TOKEN", old_token)
+    end)
+
+    assert {:ok, %{sha256: sha256}} = BlobStore.put_bytes("remote doc")
+
+    port = free_tcp_port()
+    name = :"artifact_http_#{System.unique_integer([:positive])}"
+
+    start_supervised!(
+      {MirrorNeuron.Artifacts.HttpServer,
+       [enabled: true, port: port, bind_host: "127.0.0.1", name: name]}
+    )
+
+    :inets.start()
+
+    request = {String.to_charlist("http://127.0.0.1:#{port}/blobs/#{sha256}"), []}
+
+    assert {:ok, {{_version, 200, _reason}, _headers, body}} =
+             :httpc.request(:get, request, [], body_format: :binary)
+
+    assert body == "remote doc"
+    assert File.regular?(Path.join([root, binary_part(sha256, 0, 2), sha256]))
+  end
+
+  defp free_tcp_port do
+    {:ok, socket} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+    {:ok, port} = :inet.port(socket)
+    :gen_tcp.close(socket)
+    port
   end
 
   defp restore_env(key, nil), do: System.delete_env(key)
