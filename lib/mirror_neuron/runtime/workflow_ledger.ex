@@ -149,8 +149,26 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
          step_id when is_binary(step_id) <- step_id_for_message(state, agent_id, message),
          step when is_map(step) <- get_step(state, step_id) do
       cond do
+        step_terminal?(step) ->
+          ignore_duplicate_step_message(
+            state,
+            step,
+            message,
+            now,
+            "workflow step already terminal"
+          )
+
         not dependencies_satisfied?(state, step) ->
           block_step_for_dependencies(state, step, message, now)
+
+        step_running_with_different_message?(step, message) ->
+          ignore_duplicate_step_message(
+            state,
+            step,
+            message,
+            now,
+            "workflow step already running"
+          )
 
         not should_start_attempt?(step, message) ->
           {put_message_status(state, message, step_id, "running", now), []}
@@ -176,48 +194,60 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
     with true <- enabled?(state),
          step_id when is_binary(step_id) <- step_id_from_payload(state, agent_id, payload),
          step when is_map(step) <- get_step(state, step_id) do
-      case normalize_event_type(event_type) do
-        "agent_beacon" ->
-          step = refresh_beacon(step, payload, now)
-          state = put_step(state, step)
-          {state, [workflow_event(:workflow_step_beacon, step, beacon_payload(payload, now))], []}
+      normalized_event_type = normalize_event_type(event_type)
 
-        "agent_beacon_missed" ->
-          fail_current_attempt(state, step, "agent beacon deadline exceeded", now)
+      cond do
+        step_terminal?(step) ->
+          ignore_terminal_step_event(state, step, normalized_event_type, payload, now)
 
-        "workflow_step_started" ->
-          step = mark_step_running(step, agent_id, now)
-          state = put_step(state, step)
-
-          {state,
-           [workflow_event(:workflow_step_attempt_started, step, %{"agent_id" => agent_id})], []}
-
-        "workflow_step_completed" ->
-          complete_step_if_ready(state, step, payload, now) |> without_actions()
-
-        "workflow_step_partial" ->
-          resolve_step(state, step, "partial", payload, now) |> without_actions()
-
-        "workflow_step_skipped" ->
-          resolve_step(state, step, "skipped", payload, now) |> without_actions()
-
-        "workflow_step_failed" ->
-          fail_current_attempt(
-            state,
-            step,
-            stringify(payload["reason"] || payload["error"] || "step failed"),
-            now
-          )
-
-        "workflow_step_attempt_completed" ->
-          complete_step_if_ready(state, step, payload, now) |> without_actions()
-
-        _other ->
-          step = touch_step(step, now)
-          {put_step(state, step), [], []}
+        true ->
+          handle_step_agent_event(state, agent_id, step, normalized_event_type, payload, now)
       end
     else
       _ -> {state, [], []}
+    end
+  end
+
+  defp handle_step_agent_event(state, agent_id, step, event_type, payload, now) do
+    case event_type do
+      "agent_beacon" ->
+        step = refresh_beacon(step, payload, now)
+        state = put_step(state, step)
+        {state, [workflow_event(:workflow_step_beacon, step, beacon_payload(payload, now))], []}
+
+      "agent_beacon_missed" ->
+        fail_current_attempt(state, step, "agent beacon deadline exceeded", now)
+
+      "workflow_step_started" ->
+        step = mark_step_running(step, agent_id, now)
+        state = put_step(state, step)
+
+        {state, [workflow_event(:workflow_step_attempt_started, step, %{"agent_id" => agent_id})],
+         []}
+
+      "workflow_step_completed" ->
+        complete_step_if_ready(state, step, payload, now) |> without_actions()
+
+      "workflow_step_partial" ->
+        resolve_step(state, step, "partial", payload, now) |> without_actions()
+
+      "workflow_step_skipped" ->
+        resolve_step(state, step, "skipped", payload, now) |> without_actions()
+
+      "workflow_step_failed" ->
+        fail_current_attempt(
+          state,
+          step,
+          stringify(payload["reason"] || payload["error"] || "step failed"),
+          now
+        )
+
+      "workflow_step_attempt_completed" ->
+        complete_step_if_ready(state, step, payload, now) |> without_actions()
+
+      _other ->
+        step = touch_step(step, now)
+        {put_step(state, step), [], []}
     end
   end
 
@@ -588,6 +618,44 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
     {state, [event]}
   end
 
+  defp ignore_duplicate_step_message(state, step, message, now, reason) do
+    step = touch_step(step, now)
+
+    state =
+      state
+      |> put_step(step)
+      |> put_message_status(message, step["id"], "ignored", now, %{
+        "reason" => reason,
+        "step_status" => Map.get(step, "status")
+      })
+      |> put_updated_at(now)
+
+    event =
+      workflow_event(:workflow_step_duplicate_message_ignored, step, %{
+        "reason" => reason,
+        "message_id" => safe_message_id(message),
+        "step_status" => Map.get(step, "status")
+      })
+
+    {state, [event]}
+  end
+
+  defp ignore_terminal_step_event(state, step, event_type, payload, now) do
+    step = touch_step(step, now)
+    state = put_step(state, step) |> put_updated_at(now)
+
+    event =
+      workflow_event(:workflow_step_stale_event_ignored, step, %{
+        "reason" => "workflow step already terminal",
+        "event_type" => event_type,
+        "step_status" => Map.get(step, "status"),
+        "attempt_id" => payload_attempt_id(payload),
+        "idempotency_key" => payload_idempotency_key(payload)
+      })
+
+    {state, [event], []}
+  end
+
   defp block_step_for_dependencies(state, step, message, now) do
     reason = "waiting for workflow dependencies"
 
@@ -917,7 +985,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
     current = Map.get(step, "current_attempt")
 
     cond do
-      Map.get(step, "status") in ["completed", "partial", "skipped", "failed"] ->
+      step_terminal?(step) ->
         false
 
       not is_map(current) ->
@@ -927,8 +995,18 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
         false
 
       true ->
-        true
+        false
     end
+  end
+
+  defp step_terminal?(step),
+    do: Map.get(step, "status") in (@successful_step_statuses ++ ["failed"])
+
+  defp step_running_with_different_message?(step, message) do
+    current = Map.get(step, "current_attempt")
+
+    Map.get(step, "status") == "running" and is_map(current) and
+      Map.get(current, "message_id") != safe_message_id(message)
   end
 
   defp mark_step_running(step, agent_id, now) do

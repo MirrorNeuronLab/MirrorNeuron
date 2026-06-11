@@ -24,8 +24,9 @@ defmodule MirrorNeuron.AgentTemplates.Reduce do
       |> Kernel.++(extra_actions)
 
     if should_complete?(next_state, messages) do
-      {:ok, next_state,
-       actions ++ [{:complete_run, build_result.(messages, state.config, payload)}]}
+      result = build_result.(messages, state.config, payload)
+
+      {:ok, next_state, actions ++ maybe_complete_step(opts, result) ++ [{:complete_run, result}]}
     else
       {:ok, next_state, actions}
     end
@@ -35,5 +36,12 @@ defmodule MirrorNeuron.AgentTemplates.Reduce do
     state.complete_on_message or
       (is_integer(state.complete_after) and state.complete_after > 0 and
          length(messages) >= state.complete_after)
+  end
+
+  defp maybe_complete_step(opts, result) do
+    case Keyword.get(opts, :workflow) do
+      workflow when is_map(workflow) and map_size(workflow) > 0 -> [{:complete_step, result}]
+      _other -> []
+    end
   end
 end

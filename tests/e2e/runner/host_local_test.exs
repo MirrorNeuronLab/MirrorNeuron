@@ -334,6 +334,67 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
     end
   end
 
+  test "emits runtime liveness beacons while host command produces frequent output" do
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "mirror_neuron_host_local_noisy_runtime_beacon_test_#{System.unique_integer([:positive])}"
+      )
+
+    bundle_dir = Path.join(tmp_dir, "job_bundle")
+    payloads_dir = Path.join(bundle_dir, "payloads")
+    upload_dir = Path.join(payloads_dir, "bundle")
+
+    try do
+      File.mkdir_p!(Path.join(upload_dir, "scripts"))
+
+      File.write!(
+        Path.join(upload_dir, "scripts/noisy.py"),
+        """
+        import time
+        deadline = time.time() + 0.08
+        while time.time() < deadline:
+            print("tick", flush=True)
+            time.sleep(0.001)
+        print("done", flush=True)
+        """
+      )
+
+      config = %{
+        "upload_path" => "bundle",
+        "upload_as" => "bundle",
+        "workdir" => "/sandbox/job/bundle",
+        "command" => ["python3", "scripts/noisy.py"],
+        "beacon_enabled" => true,
+        "beacon_interval_ms" => 10,
+        "beacon_timeout_ms" => 1000,
+        "agent_beacon_required" => false
+      }
+
+      parent = self()
+
+      assert {:ok, result} =
+               HostLocal.run(
+                 %{},
+                 config,
+                 job_id: "job-noisy-runtime-beacon",
+                 agent_id: "noisy-runtime-beacon-worker",
+                 bundle_root: bundle_dir,
+                 payloads_path: payloads_dir,
+                 event_callback: fn event_type, event_payload ->
+                   send(parent, {:beacon_event, event_type, event_payload})
+                 end
+               )
+
+      assert result["stdout"] =~ "done"
+
+      assert_receive {:beacon_event, :agent_beacon,
+                      %{"source" => "runtime", "status" => "working"}}
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
   test "parses agent beacon lines and strips them from captured stdout" do
     tmp_dir =
       Path.join(

@@ -228,7 +228,9 @@ defmodule MirrorNeuron.Runner.HostLocal do
 
     receive do
       {^port, {:data, data}} ->
+        now = now_ms()
         {clean_data, next_beacon_state} = filter_beacon_output(data, beacon_state)
+        next_beacon_state = maybe_emit_runtime_beacon(next_beacon_state, now)
         {next_chunks, next_bytes} = append_output(chunks, bytes, clean_data, max_output_bytes)
 
         collect_port_output(

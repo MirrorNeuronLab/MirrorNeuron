@@ -148,6 +148,108 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     assert get_in(resumed, ["steps", "step_a", "attempt_count"]) == 1
   end
 
+  test "ignores additional messages while a step attempt is already running" do
+    {state, []} = WorkflowLedger.new(manifest(), runtime_nodes()) |> WorkflowLedger.job_running()
+    first_message = Message.new("job-1", "runtime", "step_a", "init", %{"value" => "first"})
+    second_message = Message.new("job-1", "runtime", "step_a", "init", %{"value" => "second"})
+
+    {state, [_started]} =
+      WorkflowLedger.on_message_received(
+        state,
+        "step_a",
+        WorkflowLedger.decorate_message(state, "step_a", first_message),
+        "2026-06-02T16:00:00.000Z"
+      )
+
+    {state, [ignored]} =
+      WorkflowLedger.on_message_received(
+        state,
+        "step_a",
+        second_message,
+        "2026-06-02T16:00:00.100Z"
+      )
+
+    assert ignored.type == :workflow_step_duplicate_message_ignored
+    assert ignored["reason"] == "workflow step already running"
+    assert get_in(state, ["steps", "step_a", "attempt_count"]) == 1
+
+    assert get_in(state, ["steps", "step_a", "current_attempt", "message_id"]) !=
+             Message.id(second_message)
+  end
+
+  test "ignores late messages after a step is completed" do
+    {state, []} = WorkflowLedger.new(manifest(), runtime_nodes()) |> WorkflowLedger.job_running()
+    message = Message.new("job-1", "runtime", "step_a", "init", %{"value" => "first"})
+
+    {state, [_started]} =
+      WorkflowLedger.on_message_received(
+        state,
+        "step_a",
+        WorkflowLedger.decorate_message(state, "step_a", message),
+        "2026-06-02T16:00:00.000Z"
+      )
+
+    {state, [_completed], []} =
+      WorkflowLedger.on_agent_event(
+        state,
+        "step_a",
+        :workflow_step_attempt_completed,
+        %{"status" => "completed"},
+        "2026-06-02T16:00:01.000Z"
+      )
+
+    late_message = Message.new("job-1", "runtime", "step_a", "init", %{"value" => "late"})
+
+    {state, [ignored]} =
+      WorkflowLedger.on_message_received(
+        state,
+        "step_a",
+        late_message,
+        "2026-06-02T16:00:02.000Z"
+      )
+
+    assert ignored.type == :workflow_step_duplicate_message_ignored
+    assert ignored["reason"] == "workflow step already terminal"
+    assert get_in(state, ["steps", "step_a", "status"]) == "completed"
+    assert get_in(state, ["steps", "step_a", "attempt_count"]) == 1
+  end
+
+  test "ignores late agent events after a step is completed" do
+    {state, []} = WorkflowLedger.new(manifest(), runtime_nodes()) |> WorkflowLedger.job_running()
+    message = Message.new("job-1", "runtime", "step_a", "init", %{"value" => "first"})
+
+    {state, [_started]} =
+      WorkflowLedger.on_message_received(
+        state,
+        "step_a",
+        WorkflowLedger.decorate_message(state, "step_a", message),
+        "2026-06-02T16:00:00.000Z"
+      )
+
+    {state, [_completed], []} =
+      WorkflowLedger.on_agent_event(
+        state,
+        "step_a",
+        :workflow_step_attempt_completed,
+        %{"status" => "completed"},
+        "2026-06-02T16:00:01.000Z"
+      )
+
+    {state, [ignored], []} =
+      WorkflowLedger.on_agent_event(
+        state,
+        "step_a",
+        :agent_beacon,
+        %{"status" => "working"},
+        "2026-06-02T16:00:02.000Z"
+      )
+
+    assert ignored.type == :workflow_step_stale_event_ignored
+    assert ignored["reason"] == "workflow step already terminal"
+    assert get_in(state, ["steps", "step_a", "status"]) == "completed"
+    refute get_in(state, ["steps", "step_a", "heartbeat_deadline_at"])
+  end
+
   test "restores persisted workflow state after coordinator restart" do
     existing_job = %{
       "workflow_state" => %{

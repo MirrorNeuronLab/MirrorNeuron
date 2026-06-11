@@ -14,7 +14,7 @@ defmodule MirrorNeuron.Builtins.Aggregator do
   end
 
   @impl true
-  def handle_message(message, state, _context) do
+  def handle_message(message, state, context) do
     payload = payload(message) || %{}
     agent_id = if is_map(payload), do: Map.get(payload, "agent_id"), else: nil
 
@@ -38,7 +38,8 @@ defmodule MirrorNeuron.Builtins.Aggregator do
         result = aggregate(messages, state.config, payload)
 
         completion_actions =
-          maybe_emit_aggregate(state.config, result) ++ maybe_complete_run(state.config, result)
+          maybe_complete_step(context, result) ++
+            maybe_emit_aggregate(state.config, result) ++ maybe_complete_run(state.config, result)
 
         {:ok, next_state, actions ++ completion_actions}
       else
@@ -75,6 +76,13 @@ defmodule MirrorNeuron.Builtins.Aggregator do
       [{:complete_run, result}]
     else
       []
+    end
+  end
+
+  defp maybe_complete_step(context, result) do
+    case Map.get(context, :workflow) do
+      workflow when is_map(workflow) and map_size(workflow) > 0 -> [{:complete_step, result}]
+      _other -> []
     end
   end
 

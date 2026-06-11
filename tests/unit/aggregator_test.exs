@@ -85,4 +85,31 @@ defmodule MirrorNeuron.AggregatorTest do
     assert result["count"] == 2
     assert Enum.map(result["messages"], & &1["agent_id"]) == ["worker-1", "worker-2"]
   end
+
+  test "completes the workflow step before emitting aggregate output" do
+    node = %{
+      config: %{
+        "complete_on_message" => true,
+        "output_message_type" => "collected"
+      }
+    }
+
+    {:ok, state0} = Aggregator.init(node)
+
+    {:ok, _state1, actions} =
+      Aggregator.handle_message(
+        %{type: "executor_result", payload: %{"agent_id" => "worker-1", "value" => 1}},
+        state0,
+        %{workflow: %{"step_id" => "join_step"}}
+      )
+
+    assert [
+             {:event, :aggregator_received, _},
+             {:complete_step, result},
+             {:emit, "collected", emitted, _opts}
+           ] =
+             actions
+
+    assert emitted == result
+  end
 end

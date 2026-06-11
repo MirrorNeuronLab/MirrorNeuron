@@ -75,7 +75,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
           :job_health_check_interval_ms,
           @default_health_check_interval_ms
         ),
-      reliability: reliability_from(opts, existing_job)
+      reliability: reliability_from(opts, existing_job),
+      pending_workflow_completion: pending_workflow_completion_from(existing_job)
     }
 
     if status == "pending" do
@@ -437,8 +438,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
     case apply_workflow_actions(state, workflow_actions) do
       {:ok, next_state} ->
-        persist_job(next_state)
-        {:noreply, next_state}
+        continue_or_complete_workflow(next_state)
 
       {:fail_job, step_id, reason, failed_state} ->
         failed_state =
@@ -460,8 +460,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
     next_state = %{state | workflow_state: workflow_state}
     publish_workflow_events(next_state, workflow_events)
-    persist_job(next_state)
-    {:noreply, next_state}
+    continue_or_complete_workflow(next_state)
   end
 
   def handle_info({:workflow_message_acked, agent_id, message}, state) do
@@ -470,8 +469,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
     next_state = %{state | workflow_state: workflow_state}
     publish_workflow_events(next_state, workflow_events)
-    persist_job(next_state)
-    {:noreply, next_state}
+    continue_or_complete_workflow(next_state)
   end
 
   def handle_info({:agent_checkpoint, agent_id, snapshot}, state) do
@@ -595,8 +593,14 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       {:ok, next_state} ->
         case reconcile_workflow(next_state) do
           {:ok, reconciled_state} ->
-            schedule_health_check(reconciled_state.health_check_interval_ms)
-            {:noreply, reconciled_state}
+            case continue_or_complete_workflow(reconciled_state) do
+              {:noreply, continued_state} ->
+                schedule_health_check(continued_state.health_check_interval_ms)
+                {:noreply, continued_state}
+
+              {:stop, _reason, _completed_state} = stop ->
+                stop
+            end
 
           {:fail_job, step_id, reason, failed_state} ->
             failed_state =
@@ -704,8 +708,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
     case apply_workflow_actions(next_state, workflow_actions) do
       {:ok, recovered_state} ->
-        persist_job(recovered_state)
-        {:noreply, recovered_state}
+        continue_or_complete_workflow(recovered_state)
 
       {:fail_job, step_id, failed_reason, failed_state} ->
         failed_state =
@@ -786,20 +789,77 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         {:stop, :normal, next_state}
 
       true ->
+        timestamp = Runtime.timestamp()
+
         EventBus.publish(state.job_id, %{
-          type: :workflow_completion_ignored,
+          type: :workflow_completion_deferred,
           agent_id: agent_id,
           payload: %{
             reason: "workflow steps are not terminal",
             result: result
           },
-          timestamp: Runtime.timestamp()
+          timestamp: timestamp
         })
 
-        persist_job(state)
-        {:noreply, state}
+        next_state = %{
+          state
+          | pending_workflow_completion: %{
+              "agent_id" => agent_id,
+              "result" => result,
+              "received_at" => timestamp
+            }
+        }
+
+        persist_job(next_state)
+        {:noreply, next_state}
     end
   end
+
+  defp continue_or_complete_workflow(state) do
+    case pending_workflow_completion(state) do
+      nil ->
+        persist_job(state)
+        {:noreply, state}
+
+      %{"agent_id" => agent_id, "result" => result}
+      when is_binary(agent_id) ->
+        if WorkflowLedger.completed?(state.workflow_state) and terminal_sink?(state, agent_id) do
+          EventBus.publish(state.job_id, %{
+            type: :workflow_completion_resumed,
+            agent_id: agent_id,
+            payload: %{"reason" => "workflow steps are terminal"},
+            timestamp: Runtime.timestamp()
+          })
+
+          next_state =
+            state
+            |> Map.put(:pending_workflow_completion, nil)
+            |> finalize_job(
+              "completed",
+              %{agent_id: agent_id, output: result, workflow_state: state.workflow_state},
+              :job_completed,
+              %{agent_id: agent_id, result: result, workflow: true, deferred: true}
+            )
+
+          {:stop, :normal, next_state}
+        else
+          persist_job(state)
+          {:noreply, state}
+        end
+
+      _other ->
+        next_state = %{state | pending_workflow_completion: nil}
+        persist_job(next_state)
+        {:noreply, next_state}
+    end
+  end
+
+  defp pending_workflow_completion(%{pending_workflow_completion: pending})
+       when is_map(pending) do
+    pending
+  end
+
+  defp pending_workflow_completion(_state), do: nil
 
   defp handle_runtime_agent_failed(state, agent_id, reason) do
     case restart_failed_agent(state, agent_id, reason) do
@@ -2117,7 +2177,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       state
       | status: status,
         result: result,
-        workflow_state: WorkflowLedger.finish(state.workflow_state, status)
+        workflow_state: WorkflowLedger.finish(state.workflow_state, status),
+        pending_workflow_completion: nil
     }
 
     persist_job(next_state)
@@ -2279,6 +2340,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         reschedule_policy: job_reschedule_policy(state),
         policy_state: state.policy_state,
         workflow_state: state.workflow_state,
+        pending_workflow_completion: state.pending_workflow_completion,
         deployment: deployment_job_fields(state),
         result: state.result,
         topology: MirrorNeuron.Manifest.topology(state.manifest),
@@ -2337,6 +2399,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         reschedule_policy: job_reschedule_policy(state),
         policy_state: state.policy_state,
         workflow_state: state.workflow_state,
+        pending_workflow_completion: state.pending_workflow_completion,
         deployment: deployment_job_fields(state)
       }
       |> maybe_put_lease(Keyword.get(state.opts, :job_lease))
@@ -2565,6 +2628,12 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   defp normalize_reliability(reliability) when is_map(reliability), do: reliability
   defp normalize_reliability(_reliability), do: %{}
+
+  defp pending_workflow_completion_from(%{"pending_workflow_completion" => pending})
+       when is_map(pending),
+       do: pending
+
+  defp pending_workflow_completion_from(_existing_job), do: nil
 
   defp node_backpressure_opts(state, agent_id) do
     state.nodes_by_id

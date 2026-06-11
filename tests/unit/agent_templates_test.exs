@@ -88,6 +88,27 @@ defmodule MirrorNeuron.AgentTemplatesTest do
            ]
   end
 
+  test "reduce template can complete a workflow step before completing the run" do
+    node = %{config: %{"complete_on_message" => true}, type: "reduce"}
+    message = Message.new("job-1", "source", "collector", "sample", %{"value" => 1})
+
+    assert {:ok, state0} = Reduce.init(node, complete_on_message: true)
+
+    assert {:ok, _state1, actions} =
+             Reduce.collect(message, state0,
+               workflow: %{"step_id" => "collector"},
+               build_result: fn messages, _config, last ->
+                 %{"count" => length(messages), "last" => last}
+               end
+             )
+
+    assert [
+             {:event, :reducer_received, %{"count" => 1}},
+             {:complete_step, result},
+             {:complete_run, result}
+           ] = actions
+  end
+
   test "batch template buffers items and flushes when batch size is reached" do
     node = %{config: %{"batch_size" => 2}, type: "batch"}
 
