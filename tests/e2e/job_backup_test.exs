@@ -138,6 +138,7 @@ defmodule MirrorNeuron.JobBackupTest do
     assert restored_job["recovery_status"] == "paused_for_review"
     assert restored_job["recovery_requires_review"] == true
     assert get_in(restored_job, ["recovery", "can_resume"]) == true
+
     assert get_in(restored_job, ["recovery", "reason"]) ==
              "job was restored from a backup and must remain paused"
 
@@ -234,6 +235,14 @@ defmodule MirrorNeuron.JobBackupTest do
       },
       "flow" => %{
         "entrypoint" => "intake",
+        "nodes" => [
+          %{
+            "node_id" => "node1",
+            "agent_type" => "router",
+            "role" => "root_coordinator"
+          }
+        ],
+        "edges" => [],
         "graph" => %{
           "schema" => "mn.workflow.problem_graph/v1",
           "mode" => "static_dag",
@@ -279,15 +288,7 @@ defmodule MirrorNeuron.JobBackupTest do
           "blueprint_run_id" => "source-run"
         }
       },
-      "entrypoints" => ["node1"],
-      "nodes" => [
-        %{
-          "node_id" => "node1",
-          "agent_type" => "router",
-          "role" => "root_coordinator"
-        }
-      ],
-      "edges" => []
+      "entrypoints" => ["node1"]
     }
 
     File.write!(Path.join(bundle_dir, "manifest.json"), Jason.encode!(manifest))

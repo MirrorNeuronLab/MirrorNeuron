@@ -14,6 +14,15 @@ execution_profiles =
       end
   end
 
+blob_store_root =
+  System.get_env("MN_BLOB_STORE_ROOT", Path.join(System.user_home!(), ".mn/blobs"))
+
+job_artifact_root =
+  System.get_env(
+    "MN_JOB_ARTIFACT_ROOT",
+    blob_store_root |> Path.expand() |> Path.dirname() |> Path.join("jobs")
+  )
+
 config :mirror_neuron,
   redis_url: System.get_env("MN_REDIS_URL", "redis://#{redis_host}:6379/0"),
   redis_namespace: System.get_env("MN_REDIS_NAMESPACE", "mirror_neuron"),
@@ -46,19 +55,8 @@ config :mirror_neuron,
   cookie: System.get_env("MN_COOKIE", "mirrorneuron"),
   openshell_bin: System.get_env("MN_OPENSHELL_BIN", "openshell"),
   temp_dir: System.get_env("MN_TEMP_DIR", "/tmp/mirror_neuron"),
-  blob_store_root:
-    System.get_env("MN_BLOB_STORE_ROOT", Path.join(System.user_home!(), ".mn/blobs")),
-  artifact_enabled:
-    System.get_env("MN_ARTIFACT_ENABLED", "true") not in [
-      "0",
-      "false",
-      "FALSE",
-      "False",
-      ""
-    ],
-  artifact_bind_host: System.get_env("MN_ARTIFACT_BIND_HOST", "0.0.0.0"),
-  artifact_port: String.to_integer(System.get_env("MN_ARTIFACT_PORT", "55660")),
-  artifact_advertise_url: System.get_env("MN_ARTIFACT_ADVERTISE_URL"),
+  blob_store_root: blob_store_root,
+  job_artifact_root: job_artifact_root,
   resource_admission_enabled:
     System.get_env("MN_RESOURCE_ADMISSION_ENABLED", "true") not in [
       "0",

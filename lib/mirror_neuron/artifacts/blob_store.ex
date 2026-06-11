@@ -22,6 +22,16 @@ defmodule MirrorNeuron.Artifacts.BlobStore do
 
   def path(_sha256), do: nil
 
+  def relative_path(sha256) when is_binary(sha256) do
+    sha256 = String.downcase(sha256)
+
+    if Regex.match?(@sha256_re, sha256) do
+      Path.join(binary_part(sha256, 0, 2), sha256)
+    end
+  end
+
+  def relative_path(_sha256), do: nil
+
   def has?(sha256) do
     case path(sha256) do
       nil -> false
@@ -75,9 +85,42 @@ defmodule MirrorNeuron.Artifacts.BlobStore do
 
     with :ok <- validate_expected_sha(expected_sha256, sha256),
          {:ok, target_path} <- target_path(sha256) do
-      File.mkdir_p!(Path.dirname(target_path))
-      File.write!(target_path, bytes)
-      {:ok, %{sha256: sha256, path: target_path, bytes: byte_size(bytes)}}
+      if File.regular?(target_path) and valid?(sha256) do
+        {:ok, %{sha256: sha256, path: target_path, bytes: file_size(target_path)}}
+      else
+        tmp_path = target_path <> ".tmp-#{System.unique_integer([:positive])}"
+        File.mkdir_p!(Path.dirname(target_path))
+
+        with :ok <- File.write(tmp_path, bytes),
+             true <- valid_file?(tmp_path, sha256),
+             :ok <- File.rename(tmp_path, target_path) do
+          {:ok, %{sha256: sha256, path: target_path, bytes: byte_size(bytes)}}
+        else
+          false ->
+            _ = File.rm(tmp_path)
+            {:error, "blob hash verification failed for bytes"}
+
+          {:error, reason} ->
+            _ = File.rm(tmp_path)
+            {:error, reason}
+        end
+      end
+    end
+  end
+
+  def materialize_file(source, destination) when is_binary(source) and is_binary(destination) do
+    source = Path.expand(source)
+    destination = Path.expand(destination)
+
+    cond do
+      source == destination ->
+        :ok
+
+      not File.regular?(source) ->
+        {:error, "blob source file does not exist: #{source}"}
+
+      true ->
+        do_materialize_file(source, destination)
     end
   end
 
@@ -104,6 +147,33 @@ defmodule MirrorNeuron.Artifacts.BlobStore do
     case path(sha256) do
       nil -> {:error, "invalid blob sha256 #{inspect(sha256)}"}
       blob_path -> {:ok, blob_path}
+    end
+  end
+
+  defp do_materialize_file(source, destination) do
+    tmp_path = destination <> ".tmp-#{System.unique_integer([:positive])}"
+    File.mkdir_p!(Path.dirname(destination))
+
+    result =
+      case File.ln(source, tmp_path) do
+        :ok -> :ok
+        {:error, _reason} -> File.cp(source, tmp_path)
+      end
+
+    case result do
+      :ok ->
+        case File.rename(tmp_path, destination) do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            _ = File.rm(tmp_path)
+            {:error, "failed to materialize blob #{source} to #{destination}: #{inspect(reason)}"}
+        end
+
+      {:error, reason} ->
+        _ = File.rm(tmp_path)
+        {:error, "failed to materialize blob #{source} to #{destination}: #{inspect(reason)}"}
     end
   end
 

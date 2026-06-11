@@ -89,12 +89,10 @@ services:
     restart: unless-stopped
     expose:
       - "50051"
-      - "${MN_ARTIFACT_PORT:-55660}"
       - "${MN_EPMD_PORT:-54369}"
       - "${MN_DIST_PORT:-54370}"
     ports:
       - "${MN_GRPC_BIND_HOST:-127.0.0.1}:${MN_GRPC_PORT:-55051}:50051"
-      - "${MN_ARTIFACT_PUBLISH_HOST:-127.0.0.1}:${MN_ARTIFACT_PORT:-55660}:${MN_ARTIFACT_PORT:-55660}"
     command: >
       sh -c 'if [ -n "$$MN_NODE_NAME" ]; then
       if [ -z "$$MN_COOKIE" ] || [ "$$MN_COOKIE" = "mirrorneuron" ]; then
@@ -136,11 +134,8 @@ services:
       MN_NODE_RUNTIME_MODELS: ${MN_NODE_RUNTIME_MODELS:-}
       MN_CLUSTER_NODES: ${MN_CLUSTER_NODES:-}
       MN_DIST_PORT: ${MN_DIST_PORT:-54370}
-      MN_BLOB_STORE_ROOT: ${MN_CONTAINER_BLOB_STORE_ROOT:-/root/.mn/blobs}
-      MN_ARTIFACT_ENABLED: ${MN_ARTIFACT_ENABLED:-true}
-      MN_ARTIFACT_BIND_HOST: ${MN_ARTIFACT_BIND_HOST:-0.0.0.0}
-      MN_ARTIFACT_PORT: ${MN_ARTIFACT_PORT:-55660}
-      MN_ARTIFACT_ADVERTISE_URL: ${MN_ARTIFACT_ADVERTISE_URL:-}
+      MN_BLOB_STORE_ROOT: ${MN_CONTAINER_BLOB_STORE_ROOT:-/root/.mn/shared/blobs}
+      MN_JOB_ARTIFACT_ROOT: ${MN_CONTAINER_JOB_ARTIFACT_ROOT:-/root/.mn/shared/jobs}
       MN_RUNS_ROOT: ${MN_CONTAINER_RUNS_ROOT:-/root/.mn/runs}
       MN_BLUEPRINT_WEB_UI_BIND_HOST: ${MN_BLUEPRINT_WEB_UI_BIND_HOST:-0.0.0.0}
       MN_BLUEPRINT_WEB_UI_PUBLIC_HOST: ${MN_BLUEPRINT_WEB_UI_PUBLIC_HOST:-localhost}
@@ -170,8 +165,8 @@ services:
       - ${MN_HOST_HOME_DIR:-${MN_HOST_MN_DIR:-./mn}}:/opt/mirror_neuron/.mn
       - ${MN_HOST_ARTIFACTS_DIR:-./mn/runs}:/root/.mn/runs
       - ${MN_HOST_ARTIFACTS_DIR:-./mn/runs}:/opt/mirror_neuron/.mn/runs
-      - ${MN_HOST_BLOB_STORE_DIR:-./mn/blobs}:${MN_CONTAINER_BLOB_STORE_ROOT:-/root/.mn/blobs}
-      - ${MN_HOST_BLOB_STORE_DIR:-./mn/blobs}:/opt/mirror_neuron/.mn/blobs
+      - ${MN_HOST_SHARED_ARTIFACT_ROOT:-./mn/shared}:${MN_CONTAINER_SHARED_ARTIFACT_ROOT:-/root/.mn/shared}
+      - ${MN_HOST_SHARED_ARTIFACT_ROOT:-./mn/shared}:/opt/mirror_neuron/.mn/shared
       - ${MN_HOST_OPENSHELL_CONFIG_DIR:-./openshell-config}:/root/.config/openshell:ro
       - ${MN_HOST_OPENSHELL_CONFIG_DIR:-./openshell-config}:/opt/mirror_neuron/.config/openshell:ro
     networks:

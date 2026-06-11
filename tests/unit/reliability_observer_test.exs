@@ -129,10 +129,12 @@ defmodule MirrorNeuron.Runtime.ReliabilityObserverTest do
         "manifest_version" => "1.0",
         "graph_id" => "observer-reliability-test",
         "entrypoints" => ["worker"],
-        "nodes" => [
-          %{"node_id" => "worker", "agent_type" => "executor", "role" => "root_coordinator"}
-        ],
-        "edges" => [],
+        "flow" => %{
+          "nodes" => [
+            %{"node_id" => "worker", "agent_type" => "executor", "role" => "root_coordinator"}
+          ],
+          "edges" => []
+        },
         "policies" => %{"recovery_mode" => "cluster_recover"}
       })
 

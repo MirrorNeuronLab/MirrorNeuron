@@ -2,6 +2,7 @@ defmodule MirrorNeuron.Cluster.NodeState do
   @moduledoc false
 
   alias MirrorNeuron.Cluster.Hardware
+  alias MirrorNeuron.Cluster.NodeAdapter
   alias MirrorNeuron.Execution.Profile
   alias MirrorNeuron.ModelServices
   alias MirrorNeuron.Persistence.RedisStore
@@ -19,7 +20,7 @@ defmodule MirrorNeuron.Cluster.NodeState do
       |> Map.put("status", to_string(status))
       |> Map.put("node", node_name)
 
-    RedisStore.persist_node_state(node_name, attrs)
+    store().persist_node_state(node_name, attrs)
   end
 
   def mark_connected(node, attrs \\ %{}) do
@@ -55,7 +56,7 @@ defmodule MirrorNeuron.Cluster.NodeState do
     end
   end
 
-  def fetch(node), do: RedisStore.fetch_node_state(to_string(node))
+  def fetch(node), do: store().fetch_node_state(to_string(node))
 
   def active?(node), do: status(node) in @active_statuses
   def inactive?(node), do: status(node) in @inactive_statuses
@@ -78,7 +79,7 @@ defmodule MirrorNeuron.Cluster.NodeState do
   def operator_disconnected_state?(_state), do: false
 
   def list do
-    case RedisStore.list_node_states() do
+    case store().list_node_states() do
       {:ok, states} -> states
       {:error, _reason} -> []
     end
@@ -95,12 +96,15 @@ defmodule MirrorNeuron.Cluster.NodeState do
       |> Map.merge(attrs)
       |> merge_capabilities(hardware)
 
-    ModelServices.advertise_env_models(Node.self())
+    ModelServices.advertise_env_models(NodeAdapter.self())
 
     if to_string(status) == "healthy" do
-      mark_connected(Node.self(), Map.merge(attrs, %{"self" => Map.get(attrs, "self", true)}))
+      mark_connected(
+        NodeAdapter.self(),
+        Map.merge(attrs, %{"self" => Map.get(attrs, "self", true)})
+      )
     else
-      mark(Node.self(), status, attrs)
+      mark(NodeAdapter.self(), status, attrs)
     end
   end
 
@@ -137,7 +141,11 @@ defmodule MirrorNeuron.Cluster.NodeState do
   end
 
   defp default_status(node) do
-    if node in [Node.self() | Node.list()], do: "healthy", else: "offline"
+    if node in [NodeAdapter.self() | NodeAdapter.list()], do: "healthy", else: "offline"
+  end
+
+  defp store do
+    Application.get_env(:mirror_neuron, :node_state_store, RedisStore)
   end
 
   defp preserve_operator_disconnect(node_name, status, attrs) do

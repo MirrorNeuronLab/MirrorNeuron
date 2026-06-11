@@ -223,15 +223,17 @@ defmodule MirrorNeuron.Runtime.ReliabilityStrategyTest do
         "manifest_version" => "1.0",
         "graph_id" => "adaptive-reliability-test",
         "entrypoints" => ["worker"],
-        "nodes" => [
-          %{
-            "node_id" => "worker",
-            "agent_type" => "executor",
-            "role" => "root_coordinator",
-            "config" => config
-          }
-        ],
-        "edges" => [],
+        "flow" => %{
+          "nodes" => [
+            %{
+              "node_id" => "worker",
+              "agent_type" => "executor",
+              "role" => "root_coordinator",
+              "config" => config
+            }
+          ],
+          "edges" => []
+        },
         "policies" => policies
       })
 

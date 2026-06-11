@@ -2,6 +2,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
   use ExUnit.Case, async: false
 
   alias MirrorNeuron.Bundle.{Archive, Fingerprint}
+  alias MirrorNeuron.Artifacts.JobStore
   alias MirrorNeuron.JobBundle
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime.EventBus
@@ -185,6 +186,18 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
 
   test "retention sweep deletes expired terminal jobs and stale job ids" do
     job_id = "terminal-retention-#{System.unique_integer([:positive])}"
+    old_job_root = System.get_env("MN_JOB_ARTIFACT_ROOT")
+    job_root = Path.join(System.tmp_dir!(), "mn_job_artifacts_#{System.unique_integer([:positive])}")
+
+    System.put_env("MN_JOB_ARTIFACT_ROOT", job_root)
+
+    on_exit(fn ->
+      restore_system_env("MN_JOB_ARTIFACT_ROOT", old_job_root)
+      File.rm_rf(job_root)
+    end)
+
+    assert {:ok, job_path} = JobStore.ensure_job_dir(job_id)
+    File.write!(Path.join(job_path, "artifact.txt"), "done")
 
     assert {:ok, _job} =
              RedisStore.persist_terminal_job(job_id, %{"status" => "completed"}, %{
@@ -198,6 +211,33 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert result.deleted_jobs == [job_id]
     assert result.deleted_count == 1
     assert {:error, _reason} = RedisStore.fetch_job(job_id)
+    refute File.exists?(job_path)
+  end
+
+  test "register_blob_ref persists shared filesystem locations without urls" do
+    sha256 = String.duplicate("d", 64)
+    path = Path.join(binary_part(sha256, 0, 2), sha256)
+
+    ref = %{
+      "type" => "blob_ref",
+      "sha256" => sha256,
+      "locations" => [
+        %{
+          "node" => "node-a@lab",
+          "storage" => "shared_fs",
+          "root" => "blob_store",
+          "path" => path,
+          "status" => "available"
+        }
+      ]
+    }
+
+    assert {:ok, blob} = RedisStore.register_blob_ref(ref)
+    assert [%{"storage" => "shared_fs", "path" => ^path} = location] = blob["locations"]
+    refute Map.has_key?(location, "url")
+
+    assert {:ok, fetched} = RedisStore.fetch_blob_ref(sha256)
+    assert [%{"storage" => "shared_fs", "path" => ^path}] = fetched["locations"]
   end
 
   test "recovery evals can be listed by active status" do
@@ -626,8 +666,10 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     manifest = %{
       "manifest_version" => "1.0",
       "graph_id" => graph_id,
-      "nodes" => [%{"node_id" => "node1", "agent_type" => "router", "role" => "root"}],
-      "edges" => []
+      "flow" => %{
+        "nodes" => [%{"node_id" => "node1", "agent_type" => "router", "role" => "root"}],
+        "edges" => []
+      }
     }
 
     File.write!(Path.join(bundle_dir, "manifest.json"), Jason.encode!(manifest))

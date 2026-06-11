@@ -1568,7 +1568,12 @@ defmodule MirrorNeuron.Scheduler do
   defp blob_available_on_node?(ref, node_name) do
     ref
     |> blob_locations()
-    |> Enum.any?(&(Map.get(&1, "node") == node_name))
+    |> Enum.any?(&(shared_blob_location?(&1) or Map.get(&1, "node") == node_name))
+  end
+
+  defp shared_blob_location?(location) do
+    storage = Map.get(location, "storage") || Map.get(location, "type")
+    storage in ["shared_fs", "shared_fs_cas"]
   end
 
   defp blob_locations(ref) do

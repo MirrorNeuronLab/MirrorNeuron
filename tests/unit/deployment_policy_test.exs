@@ -70,14 +70,16 @@ defmodule MirrorNeuron.Runtime.DeploymentPolicyTest do
         "manifest_version" => "1.0",
         "graph_id" => "deploy-policy-test",
         "entrypoints" => ["worker"],
-        "nodes" => [
-          %{
-            "node_id" => "worker",
-            "agent_type" => "executor",
-            "role" => "root"
-          }
-        ],
-        "edges" => [],
+        "flow" => %{
+          "nodes" => [
+            %{
+              "node_id" => "worker",
+              "agent_type" => "executor",
+              "role" => "root"
+            }
+          ],
+          "edges" => []
+        },
         "policies" => %{"recovery_mode" => "local_restart"}
       },
       overrides

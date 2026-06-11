@@ -54,26 +54,28 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcherTest do
       "graph_id" => "schedule_#{graph_id}",
       "job_name" => "schedule #{graph_id}",
       "type" => "batch",
-      "nodes" => [
-        %{
-          "node_id" => "root",
-          "agent_type" => "router",
-          "role" => "root_coordinator",
-          "config" => %{"emit_type" => "done"}
-        },
-        %{
-          "node_id" => "sink",
-          "agent_type" => "aggregator",
-          "config" => %{
-            "complete_on_message" => true,
-            "terminal_sink" => true,
-            "complete_run" => true
+      "flow" => %{
+        "nodes" => [
+          %{
+            "node_id" => "root",
+            "agent_type" => "router",
+            "role" => "root_coordinator",
+            "config" => %{"emit_type" => "done"}
+          },
+          %{
+            "node_id" => "sink",
+            "agent_type" => "aggregator",
+            "config" => %{
+              "complete_on_message" => true,
+              "terminal_sink" => true,
+              "complete_run" => true
+            }
           }
-        }
-      ],
-      "edges" => [
-        %{"from_node" => "root", "to_node" => "sink", "message_type" => "done"}
-      ],
+        ],
+        "edges" => [
+          %{"from_node" => "root", "to_node" => "sink", "message_type" => "done"}
+        ]
+      },
       "entrypoints" => ["root"],
       "policies" => %{"recovery_mode" => "manual_recover"}
     }

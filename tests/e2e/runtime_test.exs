@@ -508,7 +508,7 @@ defmodule MirrorNeuron.RuntimeTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:ok, job_id, job} = MirrorNeuron.run_manifest(manifest, await: true, timeout: 2_000)
+    assert {:ok, job_id, job} = run_manifest(manifest, await: true, timeout: 2_000)
     assert job_id =~ ~r/^rt-[a-f0-9]{8}$/
     assert job["status"] == "completed"
 
@@ -611,7 +611,7 @@ defmodule MirrorNeuron.RuntimeTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:ok, job_id, job} = MirrorNeuron.run_manifest(manifest, await: true, timeout: 3_000)
+    assert {:ok, job_id, job} = run_manifest(manifest, await: true, timeout: 3_000)
     assert job["status"] == "completed"
     assert get_in(job, ["result", "agent_id"]) == "report_sink"
     assert get_in(job, ["result", "output", "last_message", "done"]) == true
@@ -630,7 +630,7 @@ defmodule MirrorNeuron.RuntimeTest do
     key = "deploy-runtime-#{System.unique_integer([:positive])}"
     manifest_v1 = deployment_service_manifest(key, "v1")
 
-    assert {:ok, first} = MirrorNeuron.deploy_manifest(manifest_v1, deployment_key: key)
+    assert {:ok, first} = deploy_manifest(manifest_v1, deployment_key: key)
     assert first["status"] == "successful"
     job_id = first["job_id"]
 
@@ -648,7 +648,7 @@ defmodule MirrorNeuron.RuntimeTest do
         "healthy_deadline_ms" => 1_000
       })
 
-    assert {:ok, staged} = MirrorNeuron.update_deployment(key, manifest_v2)
+    assert {:ok, staged} = update_deployment(key, manifest_v2)
     assert staged["status"] == "awaiting_promotion"
     assert staged["deployment"]["target_version"] == "2"
 
@@ -728,7 +728,7 @@ defmodule MirrorNeuron.RuntimeTest do
     }
 
     assert {:ok, job_id, job} =
-             MirrorNeuron.run_manifest(manifest,
+             run_manifest(manifest,
                nodes: [fake_node],
                lookup_node_state: false,
                await: true,
@@ -777,7 +777,7 @@ defmodule MirrorNeuron.RuntimeTest do
       ]
     }
 
-    assert {:ok, job_id, job} = MirrorNeuron.run_manifest(manifest, await: true, timeout: 2_000)
+    assert {:ok, job_id, job} = run_manifest(manifest, await: true, timeout: 2_000)
     assert job["status"] == "completed"
     assert job["requested_recovery_policy"] == "auto"
     assert job["recovery_policy"] == "local_restart"
@@ -819,7 +819,7 @@ defmodule MirrorNeuron.RuntimeTest do
       "policies" => %{"recovery_mode" => "cluster_recover"}
     }
 
-    assert {:ok, job_id, job} = MirrorNeuron.run_manifest(manifest, await: true, timeout: 2_000)
+    assert {:ok, job_id, job} = run_manifest(manifest, await: true, timeout: 2_000)
     assert job["requested_recovery_policy"] == "cluster_recover"
     assert job["recovery_policy"] == "local_restart"
     assert job["reliability_degraded"] == true
@@ -891,7 +891,7 @@ defmodule MirrorNeuron.RuntimeTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:ok, job_id, job} = MirrorNeuron.run_manifest(manifest, await: true, timeout: 2_000)
+    assert {:ok, job_id, job} = run_manifest(manifest, await: true, timeout: 2_000)
     assert job["status"] == "completed"
     assert get_in(job, ["result", "output", "last_message", "domain"]) == "finance"
 
@@ -909,7 +909,7 @@ defmodule MirrorNeuron.RuntimeTest do
   test "queues messages while paused and completes after resume" do
     manifest = pause_resume_dag_manifest("pause_resume_test")
 
-    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
     wait_until(fn -> running_status?(job_id) end)
 
     assert {:ok, "paused"} = MirrorNeuron.pause(job_id)
@@ -940,7 +940,7 @@ defmodule MirrorNeuron.RuntimeTest do
   test "resume is idempotent for an already running job" do
     manifest = pause_resume_dag_manifest("resume_running_idempotent_test")
 
-    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
     wait_until(fn -> running_status?(job_id) end)
 
     assert {:ok, "resumed"} = MirrorNeuron.resume(job_id)
@@ -953,7 +953,7 @@ defmodule MirrorNeuron.RuntimeTest do
   test "recovers a paused job after coordinator restart and completes after resume" do
     manifest = pause_resume_dag_manifest("pause_resume_recovery_test")
 
-    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
     wait_until(fn -> running_status?(job_id) end)
 
     assert {:ok, "paused"} = MirrorNeuron.pause(job_id)
@@ -1024,7 +1024,7 @@ defmodule MirrorNeuron.RuntimeTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
     wait_until(fn -> running_status?(job_id) end)
 
     assert {:ok, "paused"} = MirrorNeuron.pause(job_id)
@@ -1077,7 +1077,7 @@ defmodule MirrorNeuron.RuntimeTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
     wait_until(fn -> running_status?(job_id) end)
 
     runner = job_runner_pid(job_id)
@@ -1114,7 +1114,7 @@ defmodule MirrorNeuron.RuntimeTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
     wait_until(fn -> running_status?(job_id) end)
 
     send_counter_messages(job_id, 1..5)
@@ -1181,7 +1181,7 @@ defmodule MirrorNeuron.RuntimeTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
     wait_until(fn -> running_status?(job_id) end)
 
     send_counter_messages(job_id, 1..5)
@@ -1240,7 +1240,7 @@ defmodule MirrorNeuron.RuntimeTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
     wait_until(fn -> running_status?(job_id) end)
 
     send_counter_messages(job_id, 1..3)
@@ -1295,7 +1295,7 @@ defmodule MirrorNeuron.RuntimeTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
     wait_until(fn -> running_status?(job_id) end)
 
     send_counter_messages(job_id, 1..1)
@@ -1959,7 +1959,7 @@ defmodule MirrorNeuron.RuntimeTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
     wait_until(fn -> running_status?(job_id) end, 2_000)
 
     assert {:ok, "paused"} = MirrorNeuron.pause(job_id)
@@ -2004,7 +2004,7 @@ defmodule MirrorNeuron.RuntimeTest do
       "policies" => %{"recovery_mode" => "local_restart", "job_type" => "service"}
     }
 
-    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
     wait_until(fn -> running_status?(job_id) end, 2_000)
 
     wait_until(
@@ -2048,7 +2048,7 @@ defmodule MirrorNeuron.RuntimeTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
     wait_until(fn -> running_status?(job_id) end, 2_000)
 
     wait_until(
@@ -2097,7 +2097,7 @@ defmodule MirrorNeuron.RuntimeTest do
       "policies" => %{"recovery_mode" => "local_restart", "job_type" => "sysbatch"}
     }
 
-    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
     assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 3_000)
 
     assert job["status"] == "completed"
@@ -2137,7 +2137,7 @@ defmodule MirrorNeuron.RuntimeTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
     wait_until(fn -> running_status?(job_id) end, 2_000)
 
     wait_until(
@@ -2187,7 +2187,7 @@ defmodule MirrorNeuron.RuntimeTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
     wait_until(fn -> running_status?(job_id) end, 2_000)
 
     wait_until(
@@ -2233,7 +2233,7 @@ defmodule MirrorNeuron.RuntimeTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
     wait_until(fn -> running_status?(job_id) end)
 
     stream_message =
@@ -2302,7 +2302,7 @@ defmodule MirrorNeuron.RuntimeTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:ok, job_id, job} = MirrorNeuron.run_manifest(manifest, await: true, timeout: 3_000)
+    assert {:ok, job_id, job} = run_manifest(manifest, await: true, timeout: 3_000)
     assert job["status"] == "completed"
     assert get_in(job, ["result", "output", "chunks_received"]) == 2
     assert get_in(job, ["result", "output", "peak_detected"]) == true
@@ -2345,7 +2345,7 @@ defmodule MirrorNeuron.RuntimeTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
     wait_until(fn -> running_status?(job_id) end, 2_000)
 
     results =
@@ -2412,7 +2412,7 @@ defmodule MirrorNeuron.RuntimeTest do
 
     manifest = profiled_executor_manifest("profiled_runtime_success", profile)
 
-    assert {:ok, job_id, job} = MirrorNeuron.run_manifest(manifest, await: true, timeout: 5_000)
+    assert {:ok, job_id, job} = run_manifest(manifest, await: true, timeout: 5_000)
     assert job["status"] == "completed"
     assert get_in(job, ["result", "output", "profile"]) == profile
     assert get_in(job, ["result", "output", "image"]) == "registry.local/video:ok"
@@ -2441,7 +2441,7 @@ defmodule MirrorNeuron.RuntimeTest do
 
     manifest = profiled_executor_manifest("profiled_runtime_pauses", profile)
 
-    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest)
+    assert {:ok, job_id} = run_manifest(manifest)
 
     wait_until(fn ->
       match?({:ok, %{"status" => "paused"}}, MirrorNeuron.inspect_job(job_id))
@@ -2507,7 +2507,7 @@ defmodule MirrorNeuron.RuntimeTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    assert {:ok, job_id, job} = MirrorNeuron.run_manifest(manifest, await: true, timeout: 2_000)
+    assert {:ok, job_id, job} = run_manifest(manifest, await: true, timeout: 2_000)
     assert job["status"] == "completed"
 
     assert {:ok, events} = MirrorNeuron.events(job_id)
@@ -2706,7 +2706,7 @@ defmodule MirrorNeuron.RuntimeTest do
       }
     }
 
-    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
     wait_until(fn -> running_status?(job_id) end, 2_000)
 
     wait_until(
@@ -2780,7 +2780,7 @@ defmodule MirrorNeuron.RuntimeTest do
       }
     }
 
-    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
     wait_until(fn -> running_status?(job_id) end, 2_000)
 
     for _ <- 1..2 do
@@ -2841,7 +2841,7 @@ defmodule MirrorNeuron.RuntimeTest do
       }
     }
 
-    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest, await: false)
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
 
     for _ <- 1..2 do
       wait_until(
@@ -3135,7 +3135,7 @@ defmodule MirrorNeuron.RuntimeTest do
   end
 
   defp persist_recoverable_job(manifest, suffix, extra_attrs \\ %{}) do
-    with {:ok, bundle} <- MirrorNeuron.JobBundle.load(manifest) do
+    with {:ok, bundle} <- MirrorNeuron.JobBundle.load(flow_manifest(manifest)) do
       job_id = "#{Runtime.generate_job_id(bundle.manifest.graph_id)}-#{suffix}"
       manifest_map = MirrorNeuron.Manifest.to_map(bundle.manifest)
 
@@ -3169,6 +3169,36 @@ defmodule MirrorNeuron.RuntimeTest do
       {:ok, job_id}
     end
   end
+
+  defp run_manifest(input, opts \\ []) do
+    MirrorNeuron.run_manifest(flow_manifest(input), opts)
+  end
+
+  defp deploy_manifest(input, opts) do
+    MirrorNeuron.deploy_manifest(flow_manifest(input), opts)
+  end
+
+  defp update_deployment(deployment_key, input, opts \\ []) do
+    MirrorNeuron.update_deployment(deployment_key, flow_manifest(input), opts)
+  end
+
+  defp flow_manifest(%{} = manifest) do
+    {nodes, manifest} = Map.pop(manifest, "nodes")
+    {edges, manifest} = Map.pop(manifest, "edges")
+
+    flow =
+      manifest
+      |> Map.get("flow", %{})
+      |> maybe_put_topology("nodes", nodes)
+      |> maybe_put_topology("edges", edges)
+
+    Map.put(manifest, "flow", flow)
+  end
+
+  defp flow_manifest(input), do: input
+
+  defp maybe_put_topology(flow, _key, nil), do: flow
+  defp maybe_put_topology(flow, key, value), do: Map.put(flow, key, value)
 
   defp encoded_checkpoint(term) do
     term

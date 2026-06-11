@@ -711,16 +711,18 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
       "manifest_version" => "1.0",
       "graph_id" => "reconcile-test",
       "entrypoints" => ["worker"],
-      "nodes" => [
-        %{
-          "node_id" => "worker",
-          "agent_type" => "executor",
-          "role" => "root",
-          "resources" => %{"cpu_cores" => 1, "memory_mb" => 512},
-          "config" => %{"safe_to_retry" => true}
-        }
-      ],
-      "edges" => [],
+      "flow" => %{
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{"cpu_cores" => 1, "memory_mb" => 512},
+            "config" => %{"safe_to_retry" => true}
+          }
+        ],
+        "edges" => []
+      },
       "policies" => %{"recovery_mode" => "cluster_recover"}
     }
   end
@@ -730,20 +732,22 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
       "manifest_version" => "1.0",
       "graph_id" => "gpu-reconcile-test",
       "entrypoints" => ["worker"],
-      "nodes" => [
-        %{
-          "node_id" => "worker",
-          "agent_type" => "executor",
-          "role" => "root",
-          "resources" => %{
-            "cpu_cores" => 1,
-            "memory_mb" => 512,
-            "devices" => [%{"kind" => "gpu", "driver" => "cuda", "count" => 1}]
-          },
-          "config" => %{"safe_to_retry" => true}
-        }
-      ],
-      "edges" => [],
+      "flow" => %{
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{
+              "cpu_cores" => 1,
+              "memory_mb" => 512,
+              "devices" => [%{"kind" => "gpu", "driver" => "cuda", "count" => 1}]
+            },
+            "config" => %{"safe_to_retry" => true}
+          }
+        ],
+        "edges" => []
+      },
       "policies" => %{"recovery_mode" => "cluster_recover"}
     }
   end

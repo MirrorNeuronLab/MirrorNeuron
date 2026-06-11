@@ -229,7 +229,7 @@ clear placement, and clear recovery behavior.
 | Runtime monitoring | Available | Lists jobs, job details, cluster overview, metrics, and dead letters. |
 | Cluster coordination | Available | Uses Erlang distribution plus `libcluster` and Horde. |
 | Redis high-availability helpers | Available | Includes scripts and config for Redis Sentinel development workflows. |
-| Shared run artifacts | Available | Supports host-mounted run storage so large JSON, Markdown, PDF, and log blobs can move by filesystem reference instead of oversized RPC payloads. |
+| Shared run artifacts | Available | Supports pre-mounted shared filesystem storage for large payloads and per-job artifact staging across LAN cluster nodes. |
 | gRPC services | Available | Job, cluster, and observability protobuf services are included. |
 | Resource-aware scheduling | Preview | Plans service and batch agents onto eligible nodes using CPU, memory, disk, GPU, constraints, and execution profiles. |
 | REST API, CLI, Web UI, SDK | External components | Provided by separate ecosystem repositories. |
@@ -493,10 +493,20 @@ Runtime configuration is read from environment variables in `config/runtime.exs`
 | `MN_NODE_CAPABILITIES` | Comma-separated runtime capabilities such as `video-codec:h264` or `ffmpeg`. |
 | `MN_NODE_GPU` | Optional override for whether this runtime node advertises GPU capacity. |
 | `MN_RESOURCE_ADMISSION_ENABLED` | Enables local resource checks before accepting work. |
+| `MN_BLOB_STORE_ROOT` | Durable content-addressed blob root. In LAN clusters, point this at a host-mounted NFS path such as `/root/.mn/shared/blobs`. |
+| `MN_JOB_ARTIFACT_ROOT` | Per-job artifact staging root. Defaults next to the blob root and is cleaned when terminal jobs age out or are deleted. |
 
 For Redis Sentinel, resource thresholds, network-only nodes, execution profiles,
 and release deployment settings, check `config/runtime.exs` and the documentation
 repo.
+
+Large job payloads are shared by filesystem path, not by a MirrorNeuron HTTP
+artifact server. For a LAN cluster, mount the same NFS export on every host and
+bind-mount it into each container at the same logical location. The Docker
+Compose default expects `${MN_HOST_SHARED_ARTIFACT_ROOT:-./mn/shared}` to contain
+`blobs/` for durable sha256 content and `jobs/` for temporary per-job staging.
+MirrorNeuron does not start or expose NFS ports itself; the host OS owns the NFS
+mount lifecycle.
 
 ---
 
@@ -559,6 +569,14 @@ Run tests:
 ```bash
 mix test
 ```
+
+The default test lane is intended to be deterministic and CI-friendly. It uses
+in-process fakes for fast cluster join/leave behavior, fake executables for
+Docker/OpenShell command-shape checks, and Redis-backed tests when Redis is
+available in CI. Tests that require real third-party services such as Docker,
+OpenShell, Redis Sentinel failover, or multi-node infrastructure should be kept
+behind explicit tags or environment gates and run as a separate integration
+validation lane.
 
 Compile with warnings as errors:
 
@@ -624,6 +642,7 @@ See [RELEASE.md](RELEASE.md) for the full release process.
 | Cluster nodes do not join | Verify `MN_NODE_NAME`, `MN_CLUSTER_NODES`, `MN_COOKIE`, EPMD connectivity, and Erlang distribution ports. |
 | Resource admission rejects jobs | Check `MN_RESOURCE_ADMISSION_ENABLED` and resource threshold variables. |
 | Expected GPU work is not placed on a node | Check `MN_NODE_GPU`, `MN_NODE_CAPABILITIES`, execution profiles, and manifest constraints. |
+| Large blob payloads are missing on a peer node | Confirm every cluster host has the same NFS export mounted and that `MN_BLOB_STORE_ROOT` points at the shared `blobs/` directory. |
 | Redis Sentinel failover is not resolving | Verify `MN_REDIS_SENTINELS`, `MN_REDIS_SENTINEL_MASTER`, credentials, and optional host mapping. |
 | OTP release fails after extraction | Make sure the release asset matches the target OS and CPU architecture. |
 

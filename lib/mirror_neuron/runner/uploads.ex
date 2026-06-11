@@ -8,7 +8,7 @@ defmodule MirrorNeuron.Runner.Uploads do
 
     with refs when refs != [] <- artifact_refs(config),
          {:ok, prefix} <- payload_prefix(source, payloads_path) do
-      Resolver.materialize_payload_refs(refs, prefix, target)
+      Resolver.materialize_payload_refs(refs, prefix, target, job_id: Keyword.get(opts, :job_id))
     else
       _ -> :not_found
     end

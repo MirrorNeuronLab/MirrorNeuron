@@ -56,19 +56,21 @@ defmodule MirrorNeuron.BlueprintValidationTest do
       "graph_id" => "validation",
       "entrypoints" => ["worker"],
       "policies" => %{"recovery_mode" => "local_restart"},
-      "nodes" => [
-        %{
-          "node_id" => "worker",
-          "agent_type" => "executor",
-          "config" => %{
-            "environment" => %{
-              "VIDEO_SOURCE_URI" => "rtsp://127.0.0.1:8554/demo",
-              "MN_BLUEPRINT_CONFIG_JSON" =>
-                ~s({"video_source":{"uri":"rtsp://127.0.0.1:8554/demo"}})
+      "flow" => %{
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "config" => %{
+              "environment" => %{
+                "VIDEO_SOURCE_URI" => "rtsp://127.0.0.1:8554/demo",
+                "MN_BLUEPRINT_CONFIG_JSON" =>
+                  ~s({"video_source":{"uri":"rtsp://127.0.0.1:8554/demo"}})
+              }
             }
           }
-        }
-      ],
+        ]
+      },
       "input_validation" => %{
         "rules" => [
           %{

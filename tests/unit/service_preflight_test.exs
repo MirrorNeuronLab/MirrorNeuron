@@ -113,8 +113,10 @@ defmodule MirrorNeuron.ServicePreflightTest do
         "graph_id" => "service-preflight",
         "job_name" => "service-preflight",
         "entrypoints" => ["worker"],
-        "nodes" => [%{"node_id" => "worker", "agent_type" => "executor", "role" => "root"}],
-        "edges" => [],
+        "flow" => %{
+          "nodes" => [%{"node_id" => "worker", "agent_type" => "executor", "role" => "root"}],
+          "edges" => []
+        },
         "policies" => %{"recovery_mode" => "local_restart"}
       }
       |> Map.merge(extra)

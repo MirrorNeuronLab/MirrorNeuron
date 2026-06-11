@@ -148,22 +148,37 @@ defmodule MirrorNeuron.Runtime.LifecyclePolicyTest do
   end
 
   defp manifest(overrides \\ %{}) do
-    Map.merge(
-      %{
-        "manifest_version" => "1.0",
-        "graph_id" => "policy-test",
-        "entrypoints" => ["worker"],
-        "nodes" => [
-          %{
-            "node_id" => "worker",
-            "agent_type" => "executor",
-            "role" => "root"
-          }
-        ],
-        "edges" => [],
-        "policies" => %{"recovery_mode" => "local_restart"}
-      },
-      overrides
-    )
+    %{
+      "manifest_version" => "1.0",
+      "graph_id" => "policy-test",
+      "entrypoints" => ["worker"],
+      "nodes" => [
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "role" => "root"
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+    |> Map.merge(overrides)
+    |> flow_manifest()
   end
+
+  defp flow_manifest(manifest) do
+    {nodes, manifest} = Map.pop(manifest, "nodes")
+    {edges, manifest} = Map.pop(manifest, "edges")
+
+    flow =
+      manifest
+      |> Map.get("flow", %{})
+      |> maybe_put_topology("nodes", nodes)
+      |> maybe_put_topology("edges", edges)
+
+    Map.put(manifest, "flow", flow)
+  end
+
+  defp maybe_put_topology(flow, _key, nil), do: flow
+  defp maybe_put_topology(flow, key, value), do: Map.put(flow, key, value)
 end

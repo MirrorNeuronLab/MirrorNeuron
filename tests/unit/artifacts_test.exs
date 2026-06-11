@@ -1,22 +1,28 @@
 defmodule MirrorNeuron.ArtifactsTest do
   use ExUnit.Case, async: false
 
-  alias MirrorNeuron.Artifacts.{BlobRef, BlobStore, Resolver}
+  alias MirrorNeuron.Artifacts.{BlobRef, BlobStore, JobStore, Registry, Resolver}
 
   setup do
-    old_root = System.get_env("MN_BLOB_STORE_ROOT")
+    old_blob_root = System.get_env("MN_BLOB_STORE_ROOT")
+    old_job_root = System.get_env("MN_JOB_ARTIFACT_ROOT")
 
     root =
       Path.join(System.tmp_dir!(), "mn_blob_store_test_#{System.unique_integer([:positive])}")
 
-    System.put_env("MN_BLOB_STORE_ROOT", root)
+    blob_root = Path.join(root, "blobs")
+    job_root = Path.join(root, "jobs")
+
+    System.put_env("MN_BLOB_STORE_ROOT", blob_root)
+    System.put_env("MN_JOB_ARTIFACT_ROOT", job_root)
 
     on_exit(fn ->
-      restore_env("MN_BLOB_STORE_ROOT", old_root)
+      restore_env("MN_BLOB_STORE_ROOT", old_blob_root)
+      restore_env("MN_JOB_ARTIFACT_ROOT", old_job_root)
       File.rm_rf(root)
     end)
 
-    %{root: root}
+    %{root: root, blob_root: blob_root, job_root: job_root}
   end
 
   test "collects and normalizes blob refs from nested manifests" do
@@ -46,7 +52,10 @@ defmodule MirrorNeuron.ArtifactsTest do
     assert sha == String.duplicate("a", 64)
   end
 
-  test "materializes payload refs from the local blob store", %{root: root} do
+  test "materializes payload refs from the shared blob store through a job folder", %{
+    root: root,
+    job_root: job_root
+  } do
     source = Path.join(root, "source.txt")
     File.mkdir_p!(Path.dirname(source))
     File.write!(source, "large doc")
@@ -64,44 +73,78 @@ defmodule MirrorNeuron.ArtifactsTest do
 
     target = Path.join(root, "stage/docs")
 
-    assert :ok = Resolver.materialize_payload_refs(refs, "docs", target)
+    assert :ok = Resolver.materialize_payload_refs(refs, "docs", target, job_id: "job-artifacts")
     assert File.read!(Path.join(target, "input.txt")) == "large doc"
+    assert File.read!(Path.join([job_root, "job-artifacts", "payloads", "input.txt"])) == "large doc"
   end
 
-  test "artifact HTTP server serves blobs without authorization", %{root: root} do
-    old_token = System.get_env("MN_ARTIFACT_AUTH_TOKEN")
-    System.put_env("MN_ARTIFACT_AUTH_TOKEN", "ignored-artifact-token")
+  test "resolver fails fast when a shared blob is missing" do
+    sha256 = String.duplicate("a", 64)
 
-    on_exit(fn ->
-      restore_env("MN_ARTIFACT_AUTH_TOKEN", old_token)
-    end)
+    assert {:error, reason} =
+             Resolver.resolve_ref(%{"type" => "blob_ref", "sha256" => sha256})
 
-    assert {:ok, %{sha256: sha256}} = BlobStore.put_bytes("remote doc")
-
-    port = free_tcp_port()
-    name = :"artifact_http_#{System.unique_integer([:positive])}"
-
-    start_supervised!(
-      {MirrorNeuron.Artifacts.HttpServer,
-       [enabled: true, port: port, bind_host: "127.0.0.1", name: name]}
-    )
-
-    :inets.start()
-
-    request = {String.to_charlist("http://127.0.0.1:#{port}/blobs/#{sha256}"), []}
-
-    assert {:ok, {{_version, 200, _reason}, _headers, body}} =
-             :httpc.request(:get, request, [], body_format: :binary)
-
-    assert body == "remote doc"
-    assert File.regular?(Path.join([root, binary_part(sha256, 0, 2), sha256]))
+    assert reason =~ "missing from shared blob store"
   end
 
-  defp free_tcp_port do
-    {:ok, socket} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
-    {:ok, port} = :inet.port(socket)
-    :gen_tcp.close(socket)
-    port
+  test "resolver rejects payload paths that escape the target", %{root: root} do
+    assert {:ok, %{sha256: sha256}} = BlobStore.put_bytes("escape")
+
+    refs = [
+      %{
+        "type" => "blob_ref",
+        "sha256" => sha256,
+        "payload_path" => "docs/../outside.txt"
+      }
+    ]
+
+    target = Path.join(root, "stage/docs")
+
+    assert {:error, reason} = Resolver.materialize_payload_refs(refs, "docs", target)
+    assert reason =~ "unsafe artifact path"
+    refute File.exists?(Path.join(root, "stage/outside.txt"))
+  end
+
+  test "registry advertises shared filesystem locations without urls" do
+    assert {:ok, %{sha256: sha256}} = BlobStore.put_bytes("shared")
+
+    ref = %{
+      "type" => "blob_ref",
+      "sha256" => sha256,
+      "size_bytes" => 6,
+      "media_type" => "text/plain"
+    }
+
+    assert %{
+             "storage" => "shared_fs",
+             "root" => "blob_store",
+             "path" => path,
+             "status" => "available"
+           } = Registry.local_location(ref)
+
+    assert path == Path.join(binary_part(sha256, 0, 2), sha256)
+    refute Map.has_key?(Registry.local_location(ref), "url")
+
+    assert %{"artifact_store" => %{"type" => "shared_fs_cas", "root" => "blob_store"}} =
+             Registry.node_advertisement()
+  end
+
+  test "job artifact cleanup removes only the requested job folder", %{job_root: job_root} do
+    assert {:ok, job_path} = JobStore.ensure_job_dir("job-one")
+    assert {:ok, other_path} = JobStore.ensure_job_dir("job-two")
+
+    File.write!(Path.join(job_path, "output.txt"), "done")
+    File.write!(Path.join(other_path, "output.txt"), "keep")
+
+    assert :ok = JobStore.cleanup_job("job-one")
+    refute File.exists?(job_path)
+    assert File.read!(Path.join(other_path, "output.txt")) == "keep"
+    assert Path.expand(JobStore.root()) == Path.expand(job_root)
+  end
+
+  test "job artifact cleanup rejects unsafe job ids" do
+    assert {:error, reason} = JobStore.job_path("../outside")
+    assert reason =~ "single path segment"
   end
 
   defp restore_env(key, nil), do: System.delete_env(key)

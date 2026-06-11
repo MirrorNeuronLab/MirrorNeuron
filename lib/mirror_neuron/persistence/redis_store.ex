@@ -1,4 +1,6 @@
 defmodule MirrorNeuron.Persistence.RedisStore do
+  alias MirrorNeuron.Artifacts.JobStore
+  alias MirrorNeuron.Cluster.NodeAdapter
   alias MirrorNeuron.Config
   alias MirrorNeuron.JobId
 
@@ -399,6 +401,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   def delete_job(job_id) do
     _ = delete_service_instances(job_id: job_id)
+    _ = JobStore.cleanup_job(job_id)
 
     with {:ok, agent_ids} <- command(["SMEMBERS", key("job", job_id, "agents")]) do
       keys =
@@ -434,6 +437,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
             {:error, _reason} ->
               _ = command(["SREM", key(@jobs_set), job_id])
+              _ = JobStore.cleanup_job(job_id)
               Map.update!(acc, :stale_job_ids, &[job_id | &1])
           end
         end)
@@ -967,10 +971,26 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     (List.wrap(existing) ++ List.wrap(incoming))
     |> Enum.filter(&is_map/1)
     |> Enum.map(&stringify_map/1)
-    |> Enum.reject(&(Map.get(&1, "url") in [nil, ""]))
+    |> Enum.filter(&valid_blob_location?/1)
     |> Enum.reverse()
-    |> Enum.uniq_by(fn location -> {Map.get(location, "node"), Map.get(location, "url")} end)
+    |> Enum.uniq_by(fn location ->
+      {
+        Map.get(location, "node"),
+        Map.get(location, "storage") || Map.get(location, "type"),
+        Map.get(location, "path"),
+        Map.get(location, "url")
+      }
+    end)
     |> Enum.reverse()
+  end
+
+  defp valid_blob_location?(location) do
+    url = Map.get(location, "url")
+    storage = Map.get(location, "storage") || Map.get(location, "type")
+    path = Map.get(location, "path")
+
+    (is_binary(url) and url != "") or
+      (storage in ["shared_fs", "shared_fs_cas"] and is_binary(path) and path != "")
   end
 
   defp schedule_due_commands(
@@ -1594,11 +1614,15 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   defp maybe_forward_command(args) do
-    if forward_redis_to_primary?() do
-      {:forwarded,
-       forward_or_error(:redis_command_from_peer, [args], {:error, :primary_unavailable})}
-    else
-      :local
+    case forwarding_primary_node() do
+      {:ok, node} ->
+        case NodeAdapter.rpc_call(node, __MODULE__, :redis_command_from_peer, [args], 5_000) do
+          {:badrpc, _reason} -> :local
+          result -> {:forwarded, result}
+        end
+
+      :local ->
+        :local
     end
   end
 
@@ -1608,26 +1632,33 @@ defmodule MirrorNeuron.Persistence.RedisStore do
         fallback
 
       node ->
-        case :rpc.call(node, __MODULE__, function, args, 5_000) do
+        case NodeAdapter.rpc_call(node, __MODULE__, function, args, 5_000) do
           {:badrpc, _reason} -> fallback
           result -> result
         end
     end
   end
 
-  defp forward_redis_to_primary? do
+  defp forwarding_primary_node do
     enabled? =
       "MN_REDIS_FORWARD_PRIMARY"
       |> System.get_env("false")
       |> String.downcase()
       |> Kernel.in(["1", "true", "yes", "on"])
 
-    enabled? and not is_nil(primary_redis_node())
+    if enabled? do
+      case primary_redis_node() do
+        nil -> :local
+        node -> {:ok, node}
+      end
+    else
+      :local
+    end
   end
 
   defp primary_redis_node do
-    Enum.find(Node.list(), fn node ->
-      case :rpc.call(node, MirrorNeuron.Grpc.NetworkOnly, :enabled?, [], 1_000) do
+    Enum.find(NodeAdapter.list(), fn node ->
+      case NodeAdapter.rpc_call(node, MirrorNeuron.Grpc.NetworkOnly, :enabled?, [], 1_000) do
         false -> true
         _ -> false
       end
@@ -1711,11 +1742,15 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   defp maybe_forward_pipeline(commands) do
-    if forward_redis_to_primary?() do
-      {:forwarded,
-       forward_or_error(:redis_pipeline_from_peer, [commands], {:error, :primary_unavailable})}
-    else
-      :local
+    case forwarding_primary_node() do
+      {:ok, node} ->
+        case NodeAdapter.rpc_call(node, __MODULE__, :redis_pipeline_from_peer, [commands], 5_000) do
+          {:badrpc, _reason} -> :local
+          result -> {:forwarded, result}
+        end
+
+      :local ->
+        :local
     end
   end
 

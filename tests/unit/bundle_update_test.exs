@@ -44,8 +44,10 @@ defmodule MirrorNeuron.BundleUpdateTest do
       "manifest_version" => "1.0",
       "graph_id" => graph_id,
       "reload" => %{"mode" => reload_mode, "interval_seconds" => interval},
-      "nodes" => [%{"node_id" => "node1", "agent_type" => "router", "role" => "root"}],
-      "edges" => []
+      "flow" => %{
+        "nodes" => [%{"node_id" => "node1", "agent_type" => "router", "role" => "root"}],
+        "edges" => []
+      }
     }
 
     File.write!(Path.join(bundle_dir, "manifest.json"), Jason.encode!(manifest))
@@ -104,12 +106,14 @@ defmodule MirrorNeuron.BundleUpdateTest do
       # Must match
       "graph_id" => "update_test_bundle",
       "reload" => %{"mode" => "manual", "interval_seconds" => 1},
-      "nodes" => [
-        %{"node_id" => "node1", "agent_type" => "router", "role" => "root"},
-        # ADDED A NEW NODE
-        %{"node_id" => "node2", "agent_type" => "executor"}
-      ],
-      "edges" => []
+      "flow" => %{
+        "nodes" => [
+          %{"node_id" => "node1", "agent_type" => "router", "role" => "root"},
+          # ADDED A NEW NODE
+          %{"node_id" => "node2", "agent_type" => "executor"}
+        ],
+        "edges" => []
+      }
     }
 
     File.write!(Path.join(bundle_dir, "manifest.json"), Jason.encode!(new_manifest))

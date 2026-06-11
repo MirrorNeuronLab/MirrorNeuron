@@ -8,13 +8,15 @@ defmodule MirrorNeuron.JobBundleTest do
     "manifest_version" => "1.0",
     "graph_id" => "test_graph",
     "entrypoints" => ["test_node"],
-    "nodes" => [
-      %{
-        "node_id" => "test_node",
-        "agent_type" => "router"
-      }
-    ],
-    "edges" => []
+    "flow" => %{
+      "nodes" => [
+        %{
+          "node_id" => "test_node",
+          "agent_type" => "router"
+        }
+      ],
+      "edges" => []
+    }
   }
 
   test "load/1 with JobBundle struct returns ok" do

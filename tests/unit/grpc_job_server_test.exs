@@ -6,9 +6,11 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
   alias MirrorNeuron.Cluster.NodeState
 
   alias Mirrorneuron.Cluster.V1.{
+    AddNodeRequest,
     CheckServicesRequest,
     DrainNodeRequest,
     NetworkHandshakeRequest,
+    RemoveNodeRequest,
     SetNodeMaintenanceRequest
   }
 
@@ -25,8 +27,123 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
   @legacy_admin_token_env "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN"
   @operator_token_env "MN_GRPC_AUTH_TOKEN"
   @operator_token_file_env "MN_GRPC_AUTH_TOKEN_FILE"
+  @test_pid_name :grpc_job_server_test_pid
+
+  defmodule NodeStateStoreStub do
+    @test_pid_name :grpc_job_server_test_pid
+
+    def reset do
+      nodes()
+      |> Enum.each(fn node_name -> :persistent_term.erase({__MODULE__, :state, node_name}) end)
+
+      :persistent_term.put({__MODULE__, :nodes}, MapSet.new())
+    end
+
+    def persist_node_state(node_name, attrs) do
+      state =
+        attrs
+        |> Map.put("node", node_name)
+        |> Map.put_new("updated_at", "2026-06-11T00:00:00Z")
+
+      nodes = MapSet.put(nodes(), node_name)
+      :persistent_term.put({__MODULE__, :nodes}, nodes)
+      :persistent_term.put({__MODULE__, :state, node_name}, state)
+      notify({:node_state_persisted, node_name, state})
+
+      {:ok, state}
+    end
+
+    def fetch_node_state(node_name) do
+      case :persistent_term.get({__MODULE__, :state, node_name}, nil) do
+        nil -> {:error, "node #{node_name} state was not found"}
+        state -> {:ok, state}
+      end
+    end
+
+    def list_node_states do
+      states =
+        nodes()
+        |> Enum.map(fn node_name ->
+          :persistent_term.get({__MODULE__, :state, node_name}, nil)
+        end)
+        |> Enum.reject(&is_nil/1)
+
+      {:ok, states}
+    end
+
+    defp nodes, do: :persistent_term.get({__MODULE__, :nodes}, MapSet.new())
+
+    defp notify(message) do
+      case Process.whereis(@test_pid_name) do
+        nil -> :ok
+        pid -> send(pid, message)
+      end
+    end
+  end
+
+  defmodule ClusterNodeAdapterStub do
+    @test_pid_name :grpc_job_server_test_pid
+
+    def reset do
+      :persistent_term.put({__MODULE__, :self}, :"mirror_neuron@test")
+      :persistent_term.put({__MODULE__, :list}, [])
+      :persistent_term.put({__MODULE__, :connect_results}, %{})
+      :persistent_term.put({__MODULE__, :disconnect_results}, %{})
+      :persistent_term.put({__MODULE__, :rpc_results}, %{})
+    end
+
+    def put_list(nodes), do: :persistent_term.put({__MODULE__, :list}, nodes)
+    def put_connect_result(node, result), do: put_result(:connect_results, node, result)
+    def put_disconnect_result(node, result), do: put_result(:disconnect_results, node, result)
+
+    def put_rpc_result(node, module, function, args, result) do
+      key = {node, module, function, args}
+      results = :persistent_term.get({__MODULE__, :rpc_results}, %{})
+      :persistent_term.put({__MODULE__, :rpc_results}, Map.put(results, key, result))
+    end
+
+    def self, do: :persistent_term.get({__MODULE__, :self}, :"mirror_neuron@test")
+    def list, do: :persistent_term.get({__MODULE__, :list}, [])
+
+    def connect(node) do
+      notify({:connect, node})
+      Map.get(:persistent_term.get({__MODULE__, :connect_results}, %{}), node, true)
+    end
+
+    def disconnect(node) do
+      notify({:disconnect, node})
+      Map.get(:persistent_term.get({__MODULE__, :disconnect_results}, %{}), node, true)
+    end
+
+    def set_cookie(node, cookie) do
+      notify({:set_cookie, node, cookie})
+      :ok
+    end
+
+    def rpc_call(node, module, function, args, timeout) do
+      notify({:rpc_call, node, module, function, args, timeout})
+
+      :persistent_term.get({__MODULE__, :rpc_results}, %{})
+      |> Map.get({node, module, function, args}, :ok)
+    end
+
+    defp put_result(key, node, result) do
+      results = :persistent_term.get({__MODULE__, key}, %{})
+      :persistent_term.put({__MODULE__, key}, Map.put(results, node, result))
+    end
+
+    defp notify(message) do
+      case Process.whereis(@test_pid_name) do
+        nil -> :ok
+        pid -> send(pid, message)
+      end
+    end
+  end
 
   setup do
+    if Process.whereis(@test_pid_name), do: Process.unregister(@test_pid_name)
+    Process.register(self(), @test_pid_name)
+
     old_token = System.get_env(@admin_token_env)
     old_token_file = System.get_env(@admin_token_file_env)
     old_legacy_token = System.get_env(@legacy_admin_token_env)
@@ -41,12 +158,22 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     old_grpc_port = System.get_env("MN_GRPC_PORT")
     old_dist_port = System.get_env("MN_DIST_PORT")
     old_cluster_nodes = System.get_env("MN_CLUSTER_NODES")
+    old_reconnect_attempts = System.get_env("MN_REDIS_RECONNECT_ATTEMPTS")
     old_namespace = Application.get_env(:mirror_neuron, :redis_namespace)
+    old_application_reconnect_attempts = Application.get_env(:mirror_neuron, :redis_reconnect_attempts)
+    old_cluster_node_adapter = Application.get_env(:mirror_neuron, :cluster_node_adapter)
+    old_node_state_store = Application.get_env(:mirror_neuron, :node_state_store)
     old_system_namespace = System.get_env("MN_REDIS_NAMESPACE")
     namespace = "mirror_neuron_grpc_job_server_test_#{System.unique_integer([:positive])}"
 
+    ClusterNodeAdapterStub.reset()
+    NodeStateStoreStub.reset()
+    Application.put_env(:mirror_neuron, :cluster_node_adapter, ClusterNodeAdapterStub)
+    Application.put_env(:mirror_neuron, :node_state_store, NodeStateStoreStub)
     Application.put_env(:mirror_neuron, :redis_namespace, namespace)
+    Application.put_env(:mirror_neuron, :redis_reconnect_attempts, 0)
     System.put_env("MN_REDIS_NAMESPACE", namespace)
+    System.put_env("MN_REDIS_RECONNECT_ATTEMPTS", "0")
 
     System.delete_env(@admin_token_env)
     System.delete_env(@admin_token_file_env)
@@ -57,8 +184,14 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     System.delete_env("MN_REDIS_URL")
 
     on_exit(fn ->
-      cleanup_namespace(namespace)
+      if redis_available?(), do: cleanup_namespace(namespace)
+      NodeStateStoreStub.reset()
+      ClusterNodeAdapterStub.reset()
+      if Process.whereis(@test_pid_name), do: Process.unregister(@test_pid_name)
       restore_env(:redis_namespace, old_namespace)
+      restore_env(:redis_reconnect_attempts, old_application_reconnect_attempts)
+      restore_env(:cluster_node_adapter, old_cluster_node_adapter)
+      restore_env(:node_state_store, old_node_state_store)
       restore_system_env("MN_REDIS_NAMESPACE", old_system_namespace)
       restore_env(@admin_token_env, old_token)
       restore_env(@admin_token_file_env, old_token_file)
@@ -74,6 +207,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       restore_env("MN_GRPC_PORT", old_grpc_port)
       restore_env("MN_DIST_PORT", old_dist_port)
       restore_env("MN_CLUSTER_NODES", old_cluster_nodes)
+      restore_env("MN_REDIS_RECONNECT_ATTEMPTS", old_reconnect_attempts)
     end)
   end
 
@@ -138,21 +272,23 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
   end
 
   test "deployment status RPCs return JSON-safe results" do
-    deployment_id = "dep-grpc-#{System.unique_integer([:positive])}"
+    if redis_available?() do
+      deployment_id = "dep-grpc-#{System.unique_integer([:positive])}"
 
-    assert {:ok, _deployment} =
-             MirrorNeuron.Persistence.RedisStore.persist_deployment(deployment_id, %{
-               "deployment_key" => "grpc-deploy",
-               "status" => "successful",
-               "current_version" => "1"
-             })
+      assert {:ok, _deployment} =
+               MirrorNeuron.Persistence.RedisStore.persist_deployment(deployment_id, %{
+                 "deployment_key" => "grpc-deploy",
+                 "status" => "successful",
+                 "current_version" => "1"
+               })
 
-    response = JobServer.get_deployment(%GetDeploymentRequest{id_or_key: "grpc-deploy"}, nil)
-    assert %{"deployment_key" => "grpc-deploy"} = Jason.decode!(response.result_json)
+      response = JobServer.get_deployment(%GetDeploymentRequest{id_or_key: "grpc-deploy"}, nil)
+      assert %{"deployment_key" => "grpc-deploy"} = Jason.decode!(response.result_json)
 
-    list_response = JobServer.list_deployments(%ListDeploymentsRequest{query_json: "{}"}, nil)
-    assert %{"data" => deployments} = Jason.decode!(list_response.result_json)
-    assert Enum.any?(deployments, &(&1["deployment_key"] == "grpc-deploy"))
+      list_response = JobServer.list_deployments(%ListDeploymentsRequest{query_json: "{}"}, nil)
+      assert %{"data" => deployments} = Jason.decode!(list_response.result_json)
+      assert Enum.any?(deployments, &(&1["deployment_key"] == "grpc-deploy"))
+    end
   end
 
   test "network-only mode rejects destructive admin RPCs before token checks" do
@@ -211,7 +347,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert response.grpc_admin_token == "primary-admin-token"
 
     node_info = Jason.decode!(response.node_info_json)
-    assert node_info["node_name"] == to_string(Node.self())
+    assert node_info["node_name"] == "mirror_neuron@test"
     assert is_binary(node_info["display_name"])
     assert is_integer(node_info["gpu_count"])
   end
@@ -398,10 +534,76 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert Exception.message(error) =~ "valid MN_NETWORK_JOIN_TOKEN is required"
   end
 
+  test "add_node sets cookie, connects, and syncs peer cookies after successful join" do
+    node_name = "mirror_neuron@10.0.0.42"
+    remote_node = String.to_atom(node_name)
+    peer_a = :"peer-a@lab"
+    peer_b = :"peer-b@lab"
+    cookie = cookie_from_token("join-secret")
+
+    ClusterNodeAdapterStub.put_list([peer_a, remote_node, peer_b])
+
+    response =
+      ClusterServer.add_node(%AddNodeRequest{node_name: node_name, token: "join-secret"}, nil)
+
+    assert response.node_name == node_name
+    assert response.status == "connected"
+
+    assert_receive {:set_cookie, ^remote_node, cookie_atom}
+    assert Atom.to_string(cookie_atom) == cookie
+    assert_receive {:connect, ^remote_node}
+    assert_receive {:node_state_persisted, ^node_name, %{"status" => "healthy"} = state}
+    assert state["operator_disconnect"] == false
+    assert state["scheduling_eligible"] == true
+
+    assert_receive {:rpc_call, ^peer_a, ClusterServer, :set_peer_cookie, [^node_name, ^cookie],
+                    2_000}
+
+    assert_receive {:rpc_call, ^remote_node, ClusterServer, :set_peer_cookie,
+                    ["peer-a@lab", ^cookie], 2_000}
+
+    assert_receive {:rpc_call, ^peer_b, ClusterServer, :set_peer_cookie, [^node_name, ^cookie],
+                    2_000}
+
+    assert_receive {:rpc_call, ^remote_node, ClusterServer, :set_peer_cookie,
+                    ["peer-b@lab", ^cookie], 2_000}
+  end
+
+  test "remove_node disconnects cluster peers before marking operator disconnect locally" do
+    node_name = "mirror_neuron@10.0.0.42"
+    remote_node = String.to_atom(node_name)
+    peer_a = :"peer-a@lab"
+    peer_b = :"peer-b@lab"
+
+    ClusterNodeAdapterStub.put_list([remote_node, peer_a, peer_b])
+
+    response = ClusterServer.remove_node(%RemoveNodeRequest{node_name: node_name}, nil)
+
+    assert response.node_name == node_name
+    assert response.status == "disconnected"
+
+    assert_receive {:rpc_call, ^remote_node, ClusterServer, :disconnect_peers,
+                    [["peer-a@lab", "peer-b@lab"]], 2_000}
+
+    assert_receive {:rpc_call, ^peer_a, ClusterServer, :disconnect_peer, [^node_name], 2_000}
+    assert_receive {:rpc_call, ^peer_b, ClusterServer, :disconnect_peer, [^node_name], 2_000}
+
+    assert_receive {:node_state_persisted, ^node_name,
+                    %{
+                      "status" => "disconnected",
+                      "operator_disconnect" => true,
+                      "scheduling_eligible" => false
+                    }}
+
+    assert_receive {:disconnect, ^remote_node}
+  end
+
   test "cluster peer helpers tolerate absent peer links" do
     assert :ok = ClusterServer.connect_peer("mirror_neuron@10.0.0.99")
+    assert :ok = ClusterServer.connect_peer("")
 
     assert :ok = ClusterServer.disconnect_peer("mirror_neuron@10.0.0.99")
+    assert :ok = ClusterServer.disconnect_peer("")
 
     assert :ok =
              ClusterServer.disconnect_peers([
@@ -450,6 +652,26 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     File.write!(path, token <> "\n")
     on_exit(fn -> File.rm(path) end)
     path
+  end
+
+  defp redis_available? do
+    case Process.whereis(MirrorNeuron.Redis.Connection) do
+      nil ->
+        false
+
+      _pid ->
+        case Redix.command(MirrorNeuron.Redis.Connection, ["PING"]) do
+          {:ok, "PONG"} -> true
+          _ -> false
+        end
+    end
+  catch
+    :exit, _reason -> false
+  end
+
+  defp cookie_from_token(token) do
+    :crypto.hash(:sha256, "mirror-neuron:cookie:#{token}")
+    |> Base.encode16(case: :lower)
   end
 
   defp cleanup_namespace(namespace) do

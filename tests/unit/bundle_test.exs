@@ -31,8 +31,10 @@ defmodule MirrorNeuron.BundleTest do
       "manifest_version" => "1.0",
       "graph_id" => graph_id,
       "reload" => %{"mode" => reload_mode, "interval_seconds" => 1},
-      "nodes" => [%{"node_id" => "node1", "agent_type" => "router", "role" => "root"}],
-      "edges" => []
+      "flow" => %{
+        "nodes" => [%{"node_id" => "node1", "agent_type" => "router", "role" => "root"}],
+        "edges" => []
+      }
     }
 
     File.write!(Path.join(bundle_dir, "manifest.json"), Jason.encode!(manifest))
