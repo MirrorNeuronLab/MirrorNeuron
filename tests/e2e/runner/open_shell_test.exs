@@ -102,7 +102,7 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
       "upload_as" => "bundle",
       "sandbox_upload_path" => remote_dir,
       "workdir" => Path.join(remote_dir, "bundle"),
-      "command" => ["python3", "scripts/echo_input.py"],
+      "command" => ["/usr/bin/python3", "scripts/echo_input.py"],
       "custom_openshell_image" => "sandbox_image",
       "policy" => "policies/api-egress.yaml",
       "no_keep" => true,
@@ -199,7 +199,7 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
       "upload_as" => "bundle",
       "sandbox_upload_path" => remote_dir,
       "workdir" => Path.join(remote_dir, "bundle"),
-      "command" => ["python3", "scripts/echo_attempt.py"],
+      "command" => ["/usr/bin/python3", "scripts/echo_attempt.py"],
       "no_keep" => true,
       "no_auto_providers" => true,
       "tty" => false,
@@ -316,7 +316,7 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
       "upload_as" => "bundle",
       "sandbox_upload_path" => remote_dir,
       "workdir" => Path.join(remote_dir, "bundle"),
-      "command" => ["python3", "scripts/read_message.py"],
+      "command" => ["/usr/bin/python3", "scripts/read_message.py"],
       "content_type" => "application/x-ndjson",
       "no_keep" => true,
       "no_auto_providers" => true,
@@ -442,7 +442,7 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
       "upload_as" => "bundle",
       "sandbox_upload_path" => remote_dir,
       "workdir" => Path.join(remote_dir, "bundle"),
-      "command" => ["python3", "scripts/read_env.py"],
+      "command" => ["/usr/bin/python3", "scripts/read_env.py"],
       "pass_env" => ["GEMINI_API_KEY", "MN_TEST_PASSTHROUGH"],
       "environment" => %{"WORKER_LABEL" => "sandbox-env-test"},
       "no_keep" => true,
@@ -536,7 +536,7 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
       rewrite_script() {
         local script="$1"
         local root="$2"
-        python3 - "$script" "$root" <<'PY'
+        python3.11 - "$script" "$root" <<'PY'
       import sys
       print(sys.argv[1].replace("/sandbox", sys.argv[2]))
       PY
@@ -641,7 +641,7 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
 
       if [ "$1" = "bash" ] && [ "$2" = "-lc" ]; then
         script="$3"
-        rewritten="$(python3 - "$script" "$root" <<'PY'
+        rewritten="$(python3.11 - "$script" "$root" <<'PY'
       import sys
       print(sys.argv[1].replace("/sandbox", sys.argv[2]))
       PY
@@ -662,7 +662,7 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
       "upload_paths" => [%{"source" => "bundle", "target" => "bundle"}],
       "sandbox_upload_path" => "/sandbox/job",
       "workdir" => "/sandbox/job/bundle",
-      "command" => ["python3", "scripts/echo_input.py"],
+      "command" => ["/usr/bin/python3", "scripts/echo_input.py"],
       "policy" => "policies/api-egress.yaml",
       "no_auto_providers" => true,
       "tty" => false,
@@ -919,7 +919,7 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
       rewrite_script() {
         local script="$1"
         local root="$2"
-        python3 - "$script" "$root" <<'PY'
+        python3.11 - "$script" "$root" <<'PY'
       import sys
       print(sys.argv[1].replace("/sandbox", sys.argv[2]))
       PY
@@ -1015,7 +1015,7 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
 
       if [ "$1" = "bash" ] && [ "$2" = "-lc" ]; then
         script="$3"
-        rewritten="$(python3 - "$script" "$root" <<'PY'
+        rewritten="$(python3.11 - "$script" "$root" <<'PY'
       import sys
       print(sys.argv[1].replace("/sandbox", sys.argv[2]))
       PY
@@ -1037,7 +1037,7 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
       "upload_as" => "bundle",
       "sandbox_upload_path" => "/sandbox/job",
       "workdir" => "/sandbox/job/bundle",
-      "command" => ["python3", "scripts/increment_counter.py"],
+      "command" => ["/usr/bin/python3", "scripts/increment_counter.py"],
       "no_auto_providers" => true,
       "tty" => false,
       "name_prefix" => "persistent-test",

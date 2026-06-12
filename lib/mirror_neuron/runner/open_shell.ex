@@ -121,7 +121,7 @@ defmodule MirrorNeuron.Runner.OpenShell do
     actual_command =
       case Map.get(config, "command") do
         nil ->
-          "python3 - <<'PY'\nprint('No command configured for sandbox worker')\nPY"
+          "/usr/bin/python3 - <<'PY'\nprint('No command configured for sandbox worker')\nPY"
 
         command when is_binary(command) ->
           substitute(command, substitutions)
@@ -162,7 +162,7 @@ defmodule MirrorNeuron.Runner.OpenShell do
     cd #{shell_escape(workdir)}
     #{actual_command} >#{shell_escape(stdout_file)} 2>#{shell_escape(stderr_file)}
     status=$?
-    MN_EXIT_CODE="$status" python3 - <<'PY'
+    MN_EXIT_CODE="$status" /usr/bin/python3 - <<'PY'
     import json
     import os
     import pathlib
