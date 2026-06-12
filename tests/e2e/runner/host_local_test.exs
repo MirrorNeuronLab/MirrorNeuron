@@ -32,7 +32,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
       "upload_path" => "bundle",
       "upload_as" => "bundle",
       "workdir" => "/sandbox/job/bundle",
-      "command" => ["python3", "scripts/echo_input.py"],
+      "command" => ["python3.11", "scripts/echo_input.py"],
       "environment" => %{"WORKER_FLAG" => "host-local-ok"}
     }
 
@@ -96,7 +96,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
         "upload_path" => "bundle",
         "upload_as" => "bundle",
         "workdir" => "/sandbox/job/bundle",
-        "command" => ["python3", "scripts/read_package.py"],
+        "command" => ["python3.11", "scripts/read_package.py"],
         "environment" => %{"MN_BLUEPRINT_ID" => "test_python_env_blueprint"},
         "python_environment" => %{
           "requirements" => "bundle/requirements.txt"
@@ -178,7 +178,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
         "upload_path" => "bundle",
         "upload_as" => "bundle",
         "workdir" => "/sandbox/job/bundle",
-        "command" => ["python3", "scripts/noop.py"]
+        "command" => ["python3.11", "scripts/noop.py"]
       }
 
       missing_config =
@@ -241,7 +241,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
       "upload_path" => "bundle",
       "upload_as" => "bundle",
       "workdir" => "/sandbox/job/bundle",
-      "command" => ["python3", "scripts/sleep.py"],
+      "command" => ["python3.11", "scripts/sleep.py"],
       "timeout_seconds" => 0.1
     }
 
@@ -285,7 +285,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
         "upload_path" => "bundle",
         "upload_as" => "bundle",
         "workdir" => "/sandbox/job/bundle",
-        "command" => ["python3", "scripts/sleep_then_done.py"],
+        "command" => ["python3.11", "scripts/sleep_then_done.py"],
         "beacon_enabled" => true,
         "beacon_interval_ms" => 10,
         "beacon_timeout_ms" => 1000,
@@ -364,7 +364,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
         "upload_path" => "bundle",
         "upload_as" => "bundle",
         "workdir" => "/sandbox/job/bundle",
-        "command" => ["python3", "scripts/noisy.py"],
+        "command" => ["python3.11", "scripts/noisy.py"],
         "beacon_enabled" => true,
         "beacon_interval_ms" => 10,
         "beacon_timeout_ms" => 1000,
@@ -425,7 +425,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
         "upload_path" => "bundle",
         "upload_as" => "bundle",
         "workdir" => "/sandbox/job/bundle",
-        "command" => ["python3", "scripts/emit_beacon.py"],
+        "command" => ["python3.11", "scripts/emit_beacon.py"],
         "beacon_enabled" => true,
         "beacon_interval_ms" => 1000,
         "beacon_timeout_ms" => 1000,
@@ -491,7 +491,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
         "upload_path" => "bundle",
         "upload_as" => "bundle",
         "workdir" => "/sandbox/job/bundle",
-        "command" => ["python3", "scripts/quiet.py"],
+        "command" => ["python3.11", "scripts/quiet.py"],
         "beacon_enabled" => true,
         "beacon_interval_ms" => 1000,
         "beacon_timeout_ms" => 20,

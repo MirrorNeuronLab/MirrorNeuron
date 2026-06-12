@@ -115,7 +115,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
     configured_command =
       case Map.get(config, "command") do
         nil ->
-          "python3 - <<'PY'\nprint('No command configured for host-local worker')\nPY"
+          "python3.11 - <<'PY'\nprint('No command configured for host-local worker')\nPY"
 
         command when is_binary(command) ->
           substitute(command, substitutions)
@@ -160,7 +160,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
     set +e
     #{command} >#{shell_escape(stdout_file)} 2>#{shell_escape(stderr_file)}
     status=$?
-    MN_EXIT_CODE="$status" python3 - <<'PY'
+    MN_EXIT_CODE="$status" python3.11 - <<'PY'
     import json
     import os
     import pathlib
@@ -186,7 +186,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
   defp rewrite_python_command(command, nil), do: command
 
   defp rewrite_python_command([executable | args], %{python: python}) do
-    if Path.basename(executable) in ["python", "python3"] do
+    if Path.basename(executable) in ["python", "python3", "python3.11"] do
       [python | args]
     else
       [executable | args]
@@ -1145,7 +1145,18 @@ defmodule MirrorNeuron.Runner.HostLocal do
   end
 
   defp host_python_executable do
-    System.find_executable("python3") || System.find_executable("python") || "python3"
+    ["python3.11", "python3", "python"]
+    |> Enum.map(&System.find_executable/1)
+    |> Enum.find(&python_3_11?/1) || "python3.11"
+  end
+
+  defp python_3_11?(nil), do: false
+
+  defp python_3_11?(python) do
+    case python_version(python) do
+      {:ok, "Python 3.11" <> _} -> true
+      _ -> false
+    end
   end
 
   defp python_environment_cache_root do

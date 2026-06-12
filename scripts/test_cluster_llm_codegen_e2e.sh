@@ -114,7 +114,7 @@ if [ -z "${GEMINI_API_KEY:-${GOOGLE_API_KEY:-}}" ]; then
 fi
 
 quote_env_value() {
-  python3 - "$1" <<'PY'
+  python3.11 - "$1" <<'PY'
 import shlex
 import sys
 
@@ -125,7 +125,7 @@ PY
 detect_local_ip() {
   local peer_ip="${1:-8.8.8.8}"
 
-  python3 - "$peer_ip" <<'PY'
+  python3.11 - "$peer_ip" <<'PY'
 import socket
 import sys
 
@@ -141,7 +141,7 @@ PY
 
 detect_remote_ip() {
   ssh "$BOX2_IP" "$REMOTE_PATH_PREFIX
-    python3 - <<'PY'
+    python3.11 - <<'PY'
 import socket
 import subprocess
 
@@ -354,7 +354,7 @@ start_local_runtime() {
       ERL_AFLAGS="-kernel inet_dist_listen_min ${DIST_PORT} inet_dist_listen_max ${DIST_PORT}" \
       GEMINI_API_KEY="$LOCAL_GEMINI_KEY" \
       MN_LOG_PATH="$LOCAL_LOG" \
-      python3 - <<'PY'
+      python3.11 - <<'PY'
 import os
 import subprocess
 
@@ -392,7 +392,7 @@ start_remote_runtime() {
       ERL_AFLAGS=\"-kernel inet_dist_listen_min ${DIST_PORT} inet_dist_listen_max ${DIST_PORT}\" \
       GEMINI_API_KEY=${LOCAL_GEMINI_KEY_QUOTED} \
       MN_LOG_PATH=\"$REMOTE_LOG\" \
-      python3 - <<'PY'
+      python3.11 - <<'PY'
 import os
 import subprocess
 
@@ -503,7 +503,7 @@ wait_for_cluster
 
 echo "Running cluster LLM codegen/review test..."
 BUNDLE_PATH="$(
-  python3 "$ROOT_DIR/examples/llm_codegen_review/generate_bundle.py" \
+  python3.11 "$ROOT_DIR/examples/llm_codegen_review/generate_bundle.py" \
     --model "$MODEL" \
     --output-dir "$BUNDLE_ROOT"
 )"
@@ -532,7 +532,7 @@ time bash "$ROOT_DIR/scripts/cluster_cli.sh" \
   -- run "$BUNDLE_PATH" --json | tee "$RESULT_PATH"
 
 JOB_ID="$(
-  python3 - "$RESULT_PATH" <<'PY'
+  python3.11 - "$RESULT_PATH" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -557,7 +557,7 @@ PY
 echo "Result written to:"
 echo "  $RESULT_PATH"
 echo "Summary:"
-python3 "$ROOT_DIR/examples/llm_codegen_review/summarize_result.py" "$RESULT_PATH"
+python3.11 "$ROOT_DIR/examples/llm_codegen_review/summarize_result.py" "$RESULT_PATH"
 
 echo "Worker placement by node:"
 (

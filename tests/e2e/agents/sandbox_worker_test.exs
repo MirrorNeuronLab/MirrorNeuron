@@ -34,7 +34,7 @@ defmodule MirrorNeuron.ExecutorTest do
     def run(_payload, _config, _opts) do
       attempt = Process.get(:sandbox_worker_attempt, 0) + 1
       Process.put(:sandbox_worker_attempt, attempt)
-      {:error, %{"error" => "missing script", "logs" => "python3: can't open file"}}
+      {:error, %{"error" => "missing script", "logs" => "python3.11: can't open file"}}
     end
   end
 

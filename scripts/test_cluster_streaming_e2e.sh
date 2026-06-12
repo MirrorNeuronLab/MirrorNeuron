@@ -275,7 +275,7 @@ start_local_runtime() {
       MN_DIST_PORT="$DIST_PORT" \
       ERL_AFLAGS="-kernel inet_dist_listen_min ${DIST_PORT} inet_dist_listen_max ${DIST_PORT}" \
       MN_LOG_PATH="$LOCAL_LOG" \
-      python3 - <<'PY'
+      python3.11 - <<'PY'
 import os
 import subprocess
 
@@ -311,7 +311,7 @@ start_remote_runtime() {
       MN_DIST_PORT=\"$DIST_PORT\" \
       ERL_AFLAGS=\"-kernel inet_dist_listen_min ${DIST_PORT} inet_dist_listen_max ${DIST_PORT}\" \
       MN_LOG_PATH=\"$REMOTE_LOG\" \
-      python3 - <<'PY'
+      python3.11 - <<'PY'
 import os
 import subprocess
 

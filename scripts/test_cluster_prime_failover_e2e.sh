@@ -121,7 +121,7 @@ if [ "$END" -lt "$START" ]; then
 fi
 
 WORKERS="$(
-  python3 - <<PY
+  python3.11 - <<PY
 start = int("$START")
 end = int("$END")
 chunk = int("$CHUNK_SIZE")
@@ -131,7 +131,7 @@ PY
 
 if [ -z "$WAIT_TIMEOUT_SECONDS" ]; then
   WAIT_TIMEOUT_SECONDS="$(
-    python3 - <<PY
+    python3.11 - <<PY
 import math
 workers = int("$WORKERS")
 capacity = max(1, int("$EXECUTOR_CAPACITY"))
@@ -315,7 +315,7 @@ start_local_runtime() {
       MN_DIST_PORT="$DIST_PORT" \
       ERL_AFLAGS="-kernel inet_dist_listen_min ${DIST_PORT} inet_dist_listen_max ${DIST_PORT}" \
       MN_LOG_PATH="$LOCAL_LOG" \
-      python3 - <<'PY'
+      python3.11 - <<'PY'
 import os
 import subprocess
 
@@ -352,7 +352,7 @@ start_remote_runtime() {
       MN_DIST_PORT=\"$DIST_PORT\" \
       ERL_AFLAGS=\"-kernel inet_dist_listen_min ${DIST_PORT} inet_dist_listen_max ${DIST_PORT}\" \
       MN_LOG_PATH=\"$REMOTE_LOG\" \
-      python3 - <<'PY'
+      python3.11 - <<'PY'
 import os
 import subprocess
 
@@ -474,7 +474,7 @@ wait_for_cluster
 
 echo "Running cluster prime failover test..."
 BUNDLE_PATH="$(
-  python3 "$ROOT_DIR/examples/prime_sweep_scale/generate_bundle.py" \
+  python3.11 "$ROOT_DIR/examples/prime_sweep_scale/generate_bundle.py" \
     --workers "$WORKERS" \
     --start "$START" \
     --end "$END" \
@@ -509,7 +509,7 @@ bash "$ROOT_DIR/scripts/cluster_cli.sh" \
   -- run "$BUNDLE_PATH" --json --no-await >"$SUBMIT_JSON_FILE"
 
 JOB_ID="$(
-  python3 - "$SUBMIT_JSON_FILE" <<'PY'
+  python3.11 - "$SUBMIT_JSON_FILE" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -553,7 +553,7 @@ for _attempt in $(seq 1 60); do
   )"
 
   REMOTE_ASSIGNMENTS="$(
-    AGENTS_JSON_INPUT="$AGENTS_JSON" python3 - <<'PY'
+    AGENTS_JSON_INPUT="$AGENTS_JSON" python3.11 - <<'PY'
 import json
 import os
 
@@ -650,7 +650,7 @@ printf '%s\n' "$JOB_JSON" >"$RESULT_PATH"
 echo "Result written to:"
 echo "  $RESULT_PATH"
 echo "Summary:"
-python3 "$ROOT_DIR/examples/prime_sweep_scale/summarize_result.py" "$RESULT_PATH"
+python3.11 "$ROOT_DIR/examples/prime_sweep_scale/summarize_result.py" "$RESULT_PATH"
 
 echo "Recovery events:"
 (
