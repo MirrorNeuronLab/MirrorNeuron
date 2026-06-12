@@ -23,6 +23,11 @@ job_artifact_root =
     blob_store_root |> Path.expand() |> Path.dirname() |> Path.join("jobs")
   )
 
+shared_storage_root =
+  System.get_env("MN_RUNTIME_SHARED_STORAGE_ROOT") ||
+    System.get_env("MN_SHARED_STORAGE_ROOT") ||
+    Path.join(System.user_home!(), ".mn/shared")
+
 config :mirror_neuron,
   redis_url: System.get_env("MN_REDIS_URL", "redis://#{redis_host}:6379/0"),
   redis_namespace: System.get_env("MN_REDIS_NAMESPACE", "mirror_neuron"),
@@ -57,6 +62,7 @@ config :mirror_neuron,
   temp_dir: System.get_env("MN_TEMP_DIR", "/tmp/mirror_neuron"),
   blob_store_root: blob_store_root,
   job_artifact_root: job_artifact_root,
+  shared_storage_root: shared_storage_root,
   resource_admission_enabled:
     System.get_env("MN_RESOURCE_ADMISSION_ENABLED", "true") not in [
       "0",

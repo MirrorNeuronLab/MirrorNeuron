@@ -54,6 +54,36 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
     File.rm_rf!(tmp_dir)
   end
 
+  test "runs the default no-command heredoc through the capture wrapper" do
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "mirror_neuron_host_local_default_command_test_#{System.unique_integer([:positive])}"
+      )
+
+    bundle_dir = Path.join(tmp_dir, "job_bundle")
+    payloads_dir = Path.join(bundle_dir, "payloads")
+
+    try do
+      File.mkdir_p!(payloads_dir)
+
+      assert {:ok, result} =
+               HostLocal.run(
+                 %{},
+                 %{},
+                 job_id: "job-default-command",
+                 agent_id: "agent-default-command",
+                 bundle_root: bundle_dir,
+                 payloads_path: payloads_dir
+               )
+
+      assert result["exit_code"] == 0
+      assert result["stdout"] =~ "No command configured for host-local worker"
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
   test "installs blueprint python requirements into a cached virtualenv" do
     tmp_dir =
       Path.join(

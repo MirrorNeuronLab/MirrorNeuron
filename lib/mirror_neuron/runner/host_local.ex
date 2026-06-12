@@ -158,7 +158,9 @@ defmodule MirrorNeuron.Runner.HostLocal do
 
     wrapper = """
     set +e
-    #{command} >#{shell_escape(stdout_file)} 2>#{shell_escape(stderr_file)}
+    (
+    #{command}
+    ) >#{shell_escape(stdout_file)} 2>#{shell_escape(stderr_file)}
     status=$?
     MN_EXIT_CODE="$status" python3.11 - <<'PY'
     import json

@@ -1,5 +1,5 @@
 defmodule MirrorNeuron.Persistence.RedisStore do
-  alias MirrorNeuron.Artifacts.JobStore
+  alias MirrorNeuron.Artifacts.{JobStore, SharedStorage}
   alias MirrorNeuron.Cluster.NodeAdapter
   alias MirrorNeuron.Config
   alias MirrorNeuron.JobId
@@ -400,7 +400,14 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   def delete_job(job_id) do
+    job_map =
+      case fetch_job(job_id) do
+        {:ok, job} when is_map(job) -> job
+        _ -> nil
+      end
+
     _ = delete_service_instances(job_id: job_id)
+    _ = SharedStorage.cleanup_job(job_id, job_map)
     _ = JobStore.cleanup_job(job_id)
 
     with {:ok, agent_ids} <- command(["SMEMBERS", key("job", job_id, "agents")]) do

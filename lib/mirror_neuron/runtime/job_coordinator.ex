@@ -5,6 +5,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   alias MirrorNeuron.Execution.Profile
   alias MirrorNeuron.Message
   alias MirrorNeuron.Persistence.RedisStore
+  alias MirrorNeuron.Artifacts.SharedStorage
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.{ServiceRegistry, ServiceSpec}
   alias MirrorNeuron.Scheduler
@@ -2172,6 +2173,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     terminate_agent_workers(state)
     ServiceRegistry.deregister_job(state.job_id)
     {result, event_fields} = attach_failure_error(state, status, result, event_type, event_fields)
+    {result, event_fields} = finalize_shared_storage(state, status, result, event_fields)
 
     next_state = %{
       state
@@ -2191,6 +2193,33 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
     EventBus.publish(state.job_id, event)
     next_state
+  end
+
+  defp finalize_shared_storage(state, status, result, event_fields) do
+    manifest = MirrorNeuron.Manifest.to_map(state.manifest)
+
+    case SharedStorage.finalize_terminal_job(state.job_id, manifest, status) do
+      {:ok, []} ->
+        {result, event_fields}
+
+      {:ok, warnings} ->
+        {put_finalization_warnings(result, warnings),
+         Map.put(event_fields, :finalization_warnings, warnings)}
+
+      {:error, warnings} ->
+        {put_finalization_warnings(result, warnings),
+         Map.put(event_fields, :finalization_warnings, warnings)}
+    end
+  end
+
+  defp put_finalization_warnings(nil, warnings), do: %{"finalization_warnings" => warnings}
+
+  defp put_finalization_warnings(result, warnings) when is_map(result) do
+    Map.put(result, "finalization_warnings", warnings)
+  end
+
+  defp put_finalization_warnings(result, warnings) do
+    %{"result" => result, "finalization_warnings" => warnings}
   end
 
   defp attach_failure_error(state, "failed", result, _event_type, event_fields) do

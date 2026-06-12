@@ -45,6 +45,7 @@ defmodule MirrorNeuron.Config do
     validate_runtime_efficiency!()
     validate_reliability!()
     validate_execution_profiles!()
+    validate_shared_storage!()
     validate_production_secrets!()
     :ok
   end
@@ -256,6 +257,10 @@ defmodule MirrorNeuron.Config do
 
     optional_nonnegative_int!("MN_CLUSTER_HEALTH_STABLE_MS")
     optional_positive_int!("MN_RELIABILITY_OBSERVER_INTERVAL_MS")
+  end
+
+  defp validate_shared_storage! do
+    MirrorNeuron.Artifacts.SharedStorage.validate!()
   end
 
   defp validate_execution_profiles! do

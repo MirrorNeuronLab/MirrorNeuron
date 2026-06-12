@@ -160,7 +160,9 @@ defmodule MirrorNeuron.Runner.OpenShell do
     #{extra_env_exports}
     mkdir -p #{shell_escape(remote_dir)}
     cd #{shell_escape(workdir)}
-    #{actual_command} >#{shell_escape(stdout_file)} 2>#{shell_escape(stderr_file)}
+    (
+    #{actual_command}
+    ) >#{shell_escape(stdout_file)} 2>#{shell_escape(stderr_file)}
     status=$?
     MN_EXIT_CODE="$status" /usr/bin/python3 - <<'PY'
     import json
