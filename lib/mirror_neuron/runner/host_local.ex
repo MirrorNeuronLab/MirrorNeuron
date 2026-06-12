@@ -382,6 +382,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
       interval_ms: interval_ms,
       timeout_ms: timeout_ms,
       prefix: beacon_prefix(config),
+      event_prefix: agent_event_prefix(config),
       line_buffer: "",
       sequence: 0,
       job_id: to_string(Keyword.get(opts, :job_id, "")),
@@ -407,7 +408,12 @@ defmodule MirrorNeuron.Runner.HostLocal do
     end
   end
 
-  defp filter_beacon_output(data, %{enabled: false} = state), do: {data, state}
+  defp agent_event_prefix(config) do
+    case Map.get(config, "agent_event_stdout_prefix") do
+      prefix when is_binary(prefix) and prefix != "" -> prefix
+      _ -> "__MN_EVENT__"
+    end
+  end
 
   defp filter_beacon_output(data, state) do
     combined = state.line_buffer <> data
@@ -421,11 +427,17 @@ defmodule MirrorNeuron.Runner.HostLocal do
                                                                              {acc, current_state} ->
         line = String.trim_trailing(line, "\r")
 
-        if String.starts_with?(line, current_state.prefix) do
-          {"", parsed_state} = handle_agent_beacon_line(line, current_state)
-          {acc, parsed_state}
-        else
-          {[line | acc], current_state}
+        cond do
+          String.starts_with?(line, current_state.event_prefix) ->
+            {"", parsed_state} = handle_agent_event_line(line, current_state)
+            {acc, parsed_state}
+
+          String.starts_with?(line, current_state.prefix) ->
+            {"", parsed_state} = handle_agent_beacon_line(line, current_state)
+            {acc, parsed_state}
+
+          true ->
+            {[line | acc], current_state}
         end
       end)
 
@@ -446,12 +458,49 @@ defmodule MirrorNeuron.Runner.HostLocal do
   defp flush_beacon_buffer(state) do
     line = String.trim_trailing(state.line_buffer, "\r")
 
-    if String.starts_with?(line, state.prefix) do
-      {"", next_state} = handle_agent_beacon_line(line, state)
-      {"", %{next_state | line_buffer: ""}}
-    else
-      {state.line_buffer, %{state | line_buffer: ""}}
+    cond do
+      String.starts_with?(line, state.event_prefix) ->
+        {"", next_state} = handle_agent_event_line(line, state)
+        {"", %{next_state | line_buffer: ""}}
+
+      String.starts_with?(line, state.prefix) ->
+        {"", next_state} = handle_agent_beacon_line(line, state)
+        {"", %{next_state | line_buffer: ""}}
+
+      true ->
+        {state.line_buffer, %{state | line_buffer: ""}}
     end
+  end
+
+  defp handle_agent_event_line(line, state) do
+    raw_payload =
+      line
+      |> String.replace_prefix(state.event_prefix, "")
+      |> String.trim()
+
+    case Jason.decode(raw_payload) do
+      {:ok, %{"type" => event_type, "payload" => payload}}
+      when is_binary(event_type) and is_map(payload) ->
+        emit_beacon_event(state, event_type, agent_event_payload(state, payload))
+
+      {:ok, payload} when is_map(payload) ->
+        event_type = Map.get(payload, "type", "agent_activity")
+
+        emit_beacon_event(
+          state,
+          to_string(event_type),
+          agent_event_payload(state, Map.drop(payload, ["type"]))
+        )
+
+      _ ->
+        emit_beacon_event(
+          state,
+          "agent_activity",
+          agent_event_payload(state, %{"message" => raw_payload, "category" => "agent"})
+        )
+    end
+
+    {"", state}
   end
 
   defp handle_agent_beacon_line(line, state) do
@@ -537,6 +586,32 @@ defmodule MirrorNeuron.Runner.HostLocal do
         "timeout_ms",
         "elapsed_ms",
         "ms_since_last_agent_beacon",
+        "emitted_at"
+      ])
+    )
+  end
+
+  defp agent_event_payload(state, payload) do
+    Map.merge(
+      %{
+        "schema" => "mn.agent.activity.v1",
+        "job_id" => state.job_id,
+        "agent_id" => state.agent_id,
+        "step" => state.step,
+        "step_id" => state.step,
+        "attempt" => state.attempt,
+        "source" => "agent",
+        "category" => Map.get(payload, "category", "agent"),
+        "emitted_at" => MirrorNeuron.Runtime.timestamp()
+      },
+      Map.drop(payload, [
+        "schema",
+        "job_id",
+        "agent_id",
+        "step",
+        "step_id",
+        "attempt",
+        "source",
         "emitted_at"
       ])
     )

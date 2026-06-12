@@ -7,6 +7,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
 
   @default_container_workdir "/mn/job"
   @default_payloads_dir "/mn/payloads"
+  @default_agent_event_prefix "__MN_EVENT__"
 
   def run(payload, config, opts \\ []) do
     runner_name = build_runner_name(config, opts)
@@ -24,7 +25,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
       with :ok <- reject_published_ports(config),
            :ok <- copy_uploads(base_dir, config, opts),
            :ok <- write_runtime_files(base_dir, message, opts),
-           {:ok, image} <- resolve_image(config, base_dir),
+           {:ok, image} <- resolve_image(config, base_dir, opts),
            {:ok, output, exit_code, command_name} <-
              run_worker_command(image, base_dir, config, opts) do
         result =
@@ -49,7 +50,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     end
   end
 
-  defp resolve_image(config, base_dir) do
+  defp resolve_image(config, base_dir, opts) do
     image =
       Map.get(config, "image") ||
         Map.get(config, "docker_image") ||
@@ -62,7 +63,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
 
     cond do
       is_binary(build_source) and String.trim(build_source) != "" ->
-        build_worker_image(base_dir, build_source, image)
+        build_worker_image(base_dir, build_source, image, config, opts)
 
       is_binary(image) and image != "" ->
         {:ok, image}
@@ -73,22 +74,61 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     end
   end
 
-  defp build_worker_image(base_dir, build_source, image) do
+  defp build_worker_image(base_dir, build_source, image, config, opts) do
     with {:ok, source_path} <- resolve_build_source(base_dir, build_source),
          image_ref <- build_image_ref(source_path, image),
+         :ok <-
+           emit_runner_event(opts, "docker_worker_build_started", %{
+             "category" => "system",
+             "message" => "DockerWorker image build started",
+             "status" => "started",
+             "runner" => "docker_worker",
+             "target" => build_source,
+             "image" => image_ref
+           }),
          {output, exit_code} <-
-           System.cmd(docker_bin(), ["build", "-t", image_ref, source_path],
+           System.cmd(docker_bin(config), ["build", "-t", image_ref, source_path],
              stderr_to_stdout: true
            ) do
       if exit_code == 0 do
+        emit_runner_event(opts, "docker_worker_build_completed", %{
+          "category" => "system",
+          "message" => "DockerWorker image build completed",
+          "status" => "completed",
+          "runner" => "docker_worker",
+          "target" => build_source,
+          "image" => image_ref,
+          "result_summary" => compact_output_tail(output)
+        })
+
         {:ok, image_ref}
       else
+        emit_runner_event(opts, "docker_worker_build_failed", %{
+          "category" => "error",
+          "message" => "DockerWorker image build failed",
+          "status" => "failed",
+          "runner" => "docker_worker",
+          "target" => build_source,
+          "image" => image_ref,
+          "result_summary" => compact_output_tail(output),
+          "details" => %{"exit_code" => exit_code}
+        })
+
         {:error,
          "failed to build docker_worker image from #{build_source}: #{String.trim(output)}"}
       end
     end
   rescue
     error ->
+      emit_runner_event(opts, "docker_worker_build_failed", %{
+        "category" => "error",
+        "message" => "DockerWorker image build failed",
+        "status" => "failed",
+        "runner" => "docker_worker",
+        "target" => build_source,
+        "result_summary" => Exception.message(error)
+      })
+
       {:error,
        "failed to build docker_worker image from #{build_source}: #{Exception.message(error)}"}
   end
@@ -232,7 +272,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
       run_shared_docker(image, base_dir, config, opts)
     else
       with {:ok, docker_args, command_name} <- build_docker_args(image, base_dir, config, opts),
-           {:ok, output, exit_code} <- run_docker(docker_args, command_name, config) do
+           {:ok, output, exit_code} <- run_docker(docker_args, command_name, config, opts) do
         {:ok, output, exit_code, command_name}
       end
     end
@@ -250,7 +290,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
              :ok <- copy_to_shared_container(container_name, base_dir, remote_dir, config),
              {:ok, docker_args} <-
                build_docker_exec_args(container_name, remote_dir, config, opts),
-             {:ok, output, exit_code} <- run_docker(docker_args, container_name, config) do
+             {:ok, output, exit_code} <- run_docker(docker_args, container_name, config, opts) do
           {:ok, output, exit_code, container_name}
         end
       after
@@ -486,11 +526,20 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     |> Enum.reduce(args, fn {key, value}, acc -> acc ++ ["-e", "#{key}=#{value}"] end)
   end
 
-  defp run_docker(args, container_name, config) do
+  defp run_docker(args, container_name, config, opts) do
     docker_bin = docker_bin(config)
     executable = System.find_executable(docker_bin) || docker_bin
     timeout_ms = timeout_ms(config)
     deadline = if timeout_ms, do: System.monotonic_time(:millisecond) + timeout_ms
+    event_state = agent_event_state(config, opts)
+
+    emit_runner_event(opts, "docker_worker_command_started", %{
+      "category" => "system",
+      "message" => "DockerWorker command started",
+      "status" => "started",
+      "runner" => "docker_worker",
+      "target" => container_name
+    })
 
     port =
       Port.open(
@@ -503,7 +552,17 @@ defmodule MirrorNeuron.Runner.DockerWorker do
         ]
       )
 
-    collect_docker_output(port, container_name, config, [], 0, max_output_bytes(config), deadline)
+    collect_docker_output(
+      port,
+      container_name,
+      config,
+      opts,
+      [],
+      0,
+      max_output_bytes(config),
+      deadline,
+      event_state
+    )
   rescue
     error in ErlangError ->
       {:error, "failed to invoke docker worker: #{Exception.message(error)}"}
@@ -513,40 +572,248 @@ defmodule MirrorNeuron.Runner.DockerWorker do
          port,
          container_name,
          config,
+         opts,
          chunks,
          bytes,
          max_output_bytes,
-         deadline
+         deadline,
+         event_state
        ) do
     receive do
       {^port, {:data, data}} ->
-        {next_chunks, next_bytes} = append_output(chunks, bytes, data, max_output_bytes)
+        {clean_data, next_event_state} = filter_agent_event_output(data, event_state)
+        {next_chunks, next_bytes} = append_output(chunks, bytes, clean_data, max_output_bytes)
 
         collect_docker_output(
           port,
           container_name,
           config,
+          opts,
           next_chunks,
           next_bytes,
           max_output_bytes,
-          deadline
+          deadline,
+          next_event_state
         )
 
       {^port, {:exit_status, exit_code}} ->
-        {:ok, chunks |> Enum.reverse() |> IO.iodata_to_binary(), exit_code}
+        {tail, next_event_state} = flush_agent_event_buffer(event_state)
+        {next_chunks, _next_bytes} = append_output(chunks, bytes, tail, max_output_bytes)
+        output = next_chunks |> Enum.reverse() |> IO.iodata_to_binary()
+
+        emit_runner_event(opts, "docker_worker_command_completed", %{
+          "category" => if(exit_code == 0, do: "system", else: "error"),
+          "message" =>
+            if(exit_code == 0,
+              do: "DockerWorker command completed",
+              else: "DockerWorker command failed"
+            ),
+          "status" => if(exit_code == 0, do: "completed", else: "failed"),
+          "runner" => "docker_worker",
+          "target" => container_name,
+          "result_summary" => compact_output_tail(output),
+          "details" => %{
+            "exit_code" => exit_code,
+            "agent_event_prefix" => next_event_state.prefix
+          }
+        })
+
+        {:ok, output, exit_code}
     after
       receive_timeout(deadline) ->
         Port.close(port)
         cleanup_container(container_name, config)
+        output = chunks |> Enum.reverse() |> IO.iodata_to_binary()
+
+        emit_runner_event(opts, "docker_worker_command_timed_out", %{
+          "category" => "error",
+          "message" => "DockerWorker command timed out",
+          "status" => "failed",
+          "runner" => "docker_worker",
+          "target" => container_name,
+          "duration_ms" => timeout_ms_from_deadline(deadline),
+          "result_summary" => compact_output_tail(output)
+        })
 
         {:error,
          %{
            "error" => "docker worker command timed out",
            "timeout_ms" => timeout_ms_from_deadline(deadline),
-           "stdout" => chunks |> Enum.reverse() |> IO.iodata_to_binary()
+           "stdout" => output
          }}
     end
   end
+
+  defp agent_event_state(config, opts) do
+    environment = Map.get(config, "environment", %{})
+
+    %{
+      prefix: agent_event_prefix(config),
+      line_buffer: "",
+      event_callback: Keyword.get(opts, :event_callback),
+      job_id: to_string(Keyword.get(opts, :job_id, "")),
+      agent_id: to_string(Keyword.get(opts, :agent_id, "")),
+      step:
+        to_string(
+          Map.get(environment, "MN_WORKFLOW_STEP_ID") ||
+            Keyword.get(opts, :agent_id, "")
+        ),
+      attempt: Keyword.get(opts, :attempt, 1)
+    }
+  end
+
+  defp agent_event_prefix(config) do
+    case Map.get(config, "agent_event_stdout_prefix") do
+      prefix when is_binary(prefix) and prefix != "" -> prefix
+      _ -> @default_agent_event_prefix
+    end
+  end
+
+  defp filter_agent_event_output(data, state) do
+    combined = state.line_buffer <> data
+    parts = :binary.split(combined, "\n", [:global])
+    complete_count = length(parts) - 1
+    complete_lines = Enum.take(parts, complete_count)
+    trailing = List.last(parts) || ""
+
+    {clean_lines, next_state} =
+      Enum.reduce(complete_lines, {[], %{state | line_buffer: trailing}}, fn line,
+                                                                             {acc, current_state} ->
+        line = String.trim_trailing(line, "\r")
+
+        if String.starts_with?(line, current_state.prefix) do
+          emit_agent_event_line(line, current_state)
+          {acc, current_state}
+        else
+          {[line | acc], current_state}
+        end
+      end)
+
+    clean_output =
+      clean_lines
+      |> Enum.reverse()
+      |> Enum.map(&(&1 <> "\n"))
+      |> IO.iodata_to_binary()
+
+    {clean_output, next_state}
+  end
+
+  defp flush_agent_event_buffer(%{line_buffer: ""} = state), do: {"", state}
+
+  defp flush_agent_event_buffer(state) do
+    line = String.trim_trailing(state.line_buffer, "\r")
+
+    if String.starts_with?(line, state.prefix) do
+      emit_agent_event_line(line, state)
+      {"", %{state | line_buffer: ""}}
+    else
+      {state.line_buffer, %{state | line_buffer: ""}}
+    end
+  end
+
+  defp emit_agent_event_line(line, state) do
+    raw_payload =
+      line
+      |> String.replace_prefix(state.prefix, "")
+      |> String.trim()
+
+    case Jason.decode(raw_payload) do
+      {:ok, %{"type" => event_type, "payload" => payload}}
+      when is_binary(event_type) and is_map(payload) ->
+        emit_event(state, event_type, agent_event_payload(state, payload))
+
+      {:ok, payload} when is_map(payload) ->
+        event_type = Map.get(payload, "type", "agent_activity")
+
+        emit_event(
+          state,
+          to_string(event_type),
+          agent_event_payload(state, Map.drop(payload, ["type"]))
+        )
+
+      _ ->
+        emit_event(
+          state,
+          "agent_activity",
+          agent_event_payload(state, %{"message" => raw_payload, "category" => "agent"})
+        )
+    end
+  end
+
+  defp agent_event_payload(state, payload) do
+    Map.merge(
+      %{
+        "schema" => "mn.agent.activity.v1",
+        "job_id" => state.job_id,
+        "agent_id" => state.agent_id,
+        "step" => state.step,
+        "step_id" => state.step,
+        "attempt" => state.attempt,
+        "source" => "agent",
+        "category" => Map.get(payload, "category", "agent"),
+        "emitted_at" => MirrorNeuron.Runtime.timestamp()
+      },
+      Map.drop(payload, [
+        "schema",
+        "job_id",
+        "agent_id",
+        "step",
+        "step_id",
+        "attempt",
+        "source",
+        "emitted_at"
+      ])
+    )
+  end
+
+  defp emit_runner_event(opts, event_type, payload) do
+    case Keyword.get(opts, :event_callback) do
+      callback when is_function(callback, 2) ->
+        callback.(event_type, runner_event_payload(opts, payload))
+
+      _ ->
+        :ok
+    end
+
+    :ok
+  end
+
+  defp runner_event_payload(opts, payload) do
+    agent_id = to_string(Keyword.get(opts, :agent_id, ""))
+
+    Map.merge(
+      %{
+        "schema" => "mn.agent.activity.v1",
+        "agent_id" => agent_id,
+        "step" => agent_id,
+        "step_id" => agent_id,
+        "source" => "runtime",
+        "category" => Map.get(payload, "category", "system"),
+        "emitted_at" => MirrorNeuron.Runtime.timestamp()
+      },
+      payload
+    )
+  end
+
+  defp emit_event(%{event_callback: callback}, event_type, payload)
+       when is_function(callback, 2) do
+    callback.(event_type, payload)
+  end
+
+  defp emit_event(_state, _event_type, _payload), do: :ok
+
+  defp compact_output_tail(output, limit \\ 1200) do
+    output
+    |> to_string()
+    |> String.split("\n", trim: true)
+    |> Enum.take(-20)
+    |> Enum.join("\n")
+    |> String.trim()
+    |> truncate(limit)
+  end
+
+  defp truncate(text, limit) when byte_size(text) <= limit, do: text
+  defp truncate(text, limit), do: binary_part(text, 0, max(limit - 15, 0)) <> "\n[truncated]"
 
   defp append_output(chunks, bytes, data, max_output_bytes) do
     cond do
@@ -763,7 +1030,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     |> String.trim("-")
   end
 
-  defp docker_bin(config \\ %{}) do
+  defp docker_bin(config) do
     Map.get(config, "docker_bin") ||
       get_in(config, ["docker", "bin"]) ||
       System.get_env("MN_DOCKER_BIN") ||

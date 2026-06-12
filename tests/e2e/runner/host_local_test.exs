@@ -3,6 +3,75 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
 
   alias MirrorNeuron.Runner.HostLocal
 
+  test "parses structured agent event stdout lines without keeping them in stdout" do
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "mirror_neuron_host_local_agent_event_test_#{System.unique_integer([:positive])}"
+      )
+
+    bundle_dir = Path.join(tmp_dir, "job_bundle")
+    payloads_dir = Path.join(bundle_dir, "payloads")
+    upload_dir = Path.join(payloads_dir, "bundle")
+
+    try do
+      File.mkdir_p!(Path.join(upload_dir, "scripts"))
+
+      File.write!(
+        Path.join(upload_dir, "scripts/events.py"),
+        """
+        import json
+        print("__MN_EVENT__" + json.dumps({
+            "type": "tool_call_completed",
+            "payload": {
+                "category": "tool",
+                "message": "Browsed example.com",
+                "tool_name": "w3m",
+                "target": "https://example.com",
+                "status": "completed"
+            }
+        }))
+        print("visible output")
+        """
+      )
+
+      config = %{
+        "upload_path" => "bundle",
+        "upload_as" => "bundle",
+        "workdir" => "/sandbox/job/bundle",
+        "command" => ["python3.11", "scripts/events.py"]
+      }
+
+      parent = self()
+
+      assert {:ok, result} =
+               HostLocal.run(
+                 %{},
+                 config,
+                 job_id: "job-agent-events",
+                 agent_id: "agent-events",
+                 bundle_root: bundle_dir,
+                 payloads_path: payloads_dir,
+                 event_callback: fn event_type, payload ->
+                   send(parent, {:runner_event, event_type, payload})
+                 end
+               )
+
+      assert result["stdout"] =~ "visible output"
+      refute result["stdout"] =~ "__MN_EVENT__"
+
+      assert_receive {:runner_event, "tool_call_completed",
+                      %{
+                        "category" => "tool",
+                        "tool_name" => "w3m",
+                        "target" => "https://example.com",
+                        "agent_id" => "agent-events"
+                      }}
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
   test "stages uploads and executes a command on the host runtime" do
     tmp_dir =
       Path.join(
