@@ -86,7 +86,12 @@ defmodule MirrorNeuron.ServiceCheckTest do
       "id" => "svc-threshold",
       "name" => "dashboard",
       "checks" => [
-        %{"name" => "ready", "type" => "http", "required" => true, "failures_before_critical" => 3}
+        %{
+          "name" => "ready",
+          "type" => "http",
+          "required" => true,
+          "failures_before_critical" => 3
+        }
       ]
     }
 

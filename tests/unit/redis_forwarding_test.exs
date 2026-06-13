@@ -14,7 +14,7 @@ defmodule MirrorNeuron.Persistence.RedisForwardingTest do
       :persistent_term.put({__MODULE__, :rpc_results}, %{})
     end
 
-    def self, do: :"control@lab"
+    def self, do: :control@lab
     def list, do: :persistent_term.get({__MODULE__, :list}, [])
     def put_list(nodes), do: :persistent_term.put({__MODULE__, :list}, nodes)
     def connect(_node), do: true
@@ -70,14 +70,28 @@ defmodule MirrorNeuron.Persistence.RedisForwardingTest do
   end
 
   test "forwards Redis commands to the first non-network-only peer" do
-    primary = :"primary@lab"
+    primary = :primary@lab
     worker = :"network-only@lab"
     job_id = "job-forwarded"
     command = ["GET", "#{@namespace}:job:#{job_id}"]
 
     ClusterNodeAdapterStub.put_list([worker, primary])
-    ClusterNodeAdapterStub.put_rpc_result(worker, MirrorNeuron.Grpc.NetworkOnly, :enabled?, [], true)
-    ClusterNodeAdapterStub.put_rpc_result(primary, MirrorNeuron.Grpc.NetworkOnly, :enabled?, [], false)
+
+    ClusterNodeAdapterStub.put_rpc_result(
+      worker,
+      MirrorNeuron.Grpc.NetworkOnly,
+      :enabled?,
+      [],
+      true
+    )
+
+    ClusterNodeAdapterStub.put_rpc_result(
+      primary,
+      MirrorNeuron.Grpc.NetworkOnly,
+      :enabled?,
+      [],
+      false
+    )
 
     ClusterNodeAdapterStub.put_rpc_result(
       primary,
@@ -95,7 +109,7 @@ defmodule MirrorNeuron.Persistence.RedisForwardingTest do
   end
 
   test "forwards Redis transaction pipelines to the primary peer" do
-    primary = :"primary@lab"
+    primary = :primary@lab
     schedule_id = "schedule-forwarded"
 
     commands = [
@@ -107,7 +121,14 @@ defmodule MirrorNeuron.Persistence.RedisForwardingTest do
     ]
 
     ClusterNodeAdapterStub.put_list([primary])
-    ClusterNodeAdapterStub.put_rpc_result(primary, MirrorNeuron.Grpc.NetworkOnly, :enabled?, [], false)
+
+    ClusterNodeAdapterStub.put_rpc_result(
+      primary,
+      MirrorNeuron.Grpc.NetworkOnly,
+      :enabled?,
+      [],
+      false
+    )
 
     ClusterNodeAdapterStub.put_rpc_result(
       primary,
@@ -120,13 +141,22 @@ defmodule MirrorNeuron.Persistence.RedisForwardingTest do
     assert :ok = RedisStore.delete_schedule(schedule_id)
 
     assert_receive {:rpc_call, ^primary, MirrorNeuron.Grpc.NetworkOnly, :enabled?, [], 1_000}
-    assert_receive {:rpc_call, ^primary, RedisStore, :redis_pipeline_from_peer, [^commands], 5_000}
+
+    assert_receive {:rpc_call, ^primary, RedisStore, :redis_pipeline_from_peer, [^commands],
+                    5_000}
   end
 
   test "falls back to the local Redis error path when no primary peer exists" do
     worker = :"network-only@lab"
     ClusterNodeAdapterStub.put_list([worker])
-    ClusterNodeAdapterStub.put_rpc_result(worker, MirrorNeuron.Grpc.NetworkOnly, :enabled?, [], true)
+
+    ClusterNodeAdapterStub.put_rpc_result(
+      worker,
+      MirrorNeuron.Grpc.NetworkOnly,
+      :enabled?,
+      [],
+      true
+    )
 
     assert {:error, _reason} = RedisStore.fetch_job("missing-job")
 
@@ -134,12 +164,19 @@ defmodule MirrorNeuron.Persistence.RedisForwardingTest do
   end
 
   test "falls back to the local Redis error path when primary forwarding RPC fails" do
-    primary = :"primary@lab"
+    primary = :primary@lab
     job_id = "missing-after-badrpc"
     command = ["GET", "#{@namespace}:job:#{job_id}"]
 
     ClusterNodeAdapterStub.put_list([primary])
-    ClusterNodeAdapterStub.put_rpc_result(primary, MirrorNeuron.Grpc.NetworkOnly, :enabled?, [], false)
+
+    ClusterNodeAdapterStub.put_rpc_result(
+      primary,
+      MirrorNeuron.Grpc.NetworkOnly,
+      :enabled?,
+      [],
+      false
+    )
 
     ClusterNodeAdapterStub.put_rpc_result(
       primary,

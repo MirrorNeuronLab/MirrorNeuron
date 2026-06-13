@@ -4,7 +4,10 @@ defmodule MirrorNeuron.Runtime.JobRunnerTest do
   alias MirrorNeuron.Runtime.JobRunner
 
   test "child spec carries preferred start node for Horde placement" do
-    spec = JobRunner.child_spec({"job-1", :manifest, [preferred_start_node: "mirror_neuron@127.0.0.1"]})
+    spec =
+      JobRunner.child_spec(
+        {"job-1", :manifest, [preferred_start_node: "mirror_neuron@127.0.0.1"]}
+      )
 
     assert spec.mirror_neuron_target_node == "mirror_neuron@127.0.0.1"
   end

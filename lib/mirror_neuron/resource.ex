@@ -400,8 +400,7 @@ defmodule MirrorNeuron.Resource do
 
   defp integer_value(_value), do: 0
 
-  defp map_get(map, key) when is_map(map),
-    do: Map.get(map, key) || Map.get(map, String.to_atom(key))
+  defp map_get(map, key) when is_map(map), do: MirrorNeuron.SafeAccess.map_get(map, key)
 
   defp map_get(_map, _key), do: nil
 

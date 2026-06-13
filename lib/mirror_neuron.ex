@@ -463,18 +463,23 @@ defmodule MirrorNeuron do
       |> Enum.reduce_while(
         {:error, "job #{job_id} is not running in the connected cluster"},
         fn node_name, _acc ->
-          node = String.to_atom(node_name)
-          _ = Node.connect(node)
+          case MirrorNeuron.SafeAccess.node_name_to_atom(node_name) do
+            {:ok, node} ->
+              _ = Node.connect(node)
 
-          case :rpc.call(node, module, function, args, 15_000) do
-            {:badrpc, _reason} ->
+              case :rpc.call(node, module, function, args, 15_000) do
+                {:badrpc, _reason} ->
+                  {:cont, {:error, "job #{job_id} is not running in the connected cluster"}}
+
+                {:error, "job " <> _reason} ->
+                  {:cont, {:error, "job #{job_id} is not running in the connected cluster"}}
+
+                reply ->
+                  {:halt, reply}
+              end
+
+            {:error, _reason} ->
               {:cont, {:error, "job #{job_id} is not running in the connected cluster"}}
-
-            {:error, "job " <> _reason} ->
-              {:cont, {:error, "job #{job_id} is not running in the connected cluster"}}
-
-            reply ->
-              {:halt, reply}
           end
         end
       )

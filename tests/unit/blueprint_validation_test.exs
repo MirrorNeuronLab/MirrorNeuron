@@ -53,15 +53,22 @@ defmodule MirrorNeuron.BlueprintValidationTest do
       metadata: %{}
     }
 
-    no_nvidia = %{nodes: [gpu_node("amd@lab", vendor: "amd", driver: "rocm", api_version: "6.1", memory: 65_536)]}
+    no_nvidia = %{
+      nodes: [
+        gpu_node("amd@lab", vendor: "amd", driver: "rocm", api_version: "6.1", memory: 65_536)
+      ]
+    }
+
     exact_cuda = %{nodes: [gpu_node("cuda12@lab", api_version: "12.0", memory: 65_536)]}
     exact_memory = %{nodes: [gpu_node("cuda48@lab", api_version: "12.1", memory: 49_152)]}
+
     split_memory = %{
       nodes: [
         gpu_node("cuda24a@lab", api_version: "12.1", memory: 24_576),
         gpu_node("cuda24b@lab", api_version: "12.1", memory: 24_576)
       ]
     }
+
     passing = %{nodes: [gpu_node("h100@lab", api_version: "12.1", memory: 81_920)]}
 
     for snapshot <- [no_nvidia, exact_cuda, exact_memory, split_memory] do

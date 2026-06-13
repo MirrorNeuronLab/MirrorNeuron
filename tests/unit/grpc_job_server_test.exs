@@ -85,7 +85,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     @test_pid_name :grpc_job_server_test_pid
 
     def reset do
-      :persistent_term.put({__MODULE__, :self}, :"mirror_neuron@test")
+      :persistent_term.put({__MODULE__, :self}, :mirror_neuron@test)
       :persistent_term.put({__MODULE__, :list}, [])
       :persistent_term.put({__MODULE__, :connect_results}, %{})
       :persistent_term.put({__MODULE__, :disconnect_results}, %{})
@@ -102,7 +102,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       :persistent_term.put({__MODULE__, :rpc_results}, Map.put(results, key, result))
     end
 
-    def self, do: :persistent_term.get({__MODULE__, :self}, :"mirror_neuron@test")
+    def self, do: :persistent_term.get({__MODULE__, :self}, :mirror_neuron@test)
     def list, do: :persistent_term.get({__MODULE__, :list}, [])
 
     def connect(node) do
@@ -160,7 +160,10 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     old_cluster_nodes = System.get_env("MN_CLUSTER_NODES")
     old_reconnect_attempts = System.get_env("MN_REDIS_RECONNECT_ATTEMPTS")
     old_namespace = Application.get_env(:mirror_neuron, :redis_namespace)
-    old_application_reconnect_attempts = Application.get_env(:mirror_neuron, :redis_reconnect_attempts)
+
+    old_application_reconnect_attempts =
+      Application.get_env(:mirror_neuron, :redis_reconnect_attempts)
+
     old_cluster_node_adapter = Application.get_env(:mirror_neuron, :cluster_node_adapter)
     old_node_state_store = Application.get_env(:mirror_neuron, :node_state_store)
     old_system_namespace = System.get_env("MN_REDIS_NAMESPACE")

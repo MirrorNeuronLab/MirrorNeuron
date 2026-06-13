@@ -525,9 +525,7 @@ defmodule MirrorNeuron.Cluster.NodeDrainer do
   defp json_safe(value), do: value
 
   defp option(opts, key, default \\ nil) do
-    Keyword.get(opts, key, Keyword.get(opts, String.to_atom(to_string(key)), default))
-  rescue
-    _ -> Keyword.get(opts, key, default)
+    MirrorNeuron.SafeAccess.keyword_get(opts, key, default)
   end
 
   defp maybe_put(map, _key, nil), do: map

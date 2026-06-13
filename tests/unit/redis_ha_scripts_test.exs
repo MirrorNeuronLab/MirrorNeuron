@@ -79,10 +79,11 @@ defmodule MirrorNeuron.RedisHAScriptsTest do
   end
 
   defp tmp_path do
-    path = Path.join(
-      System.tmp_dir!(),
-      "mirror_neuron_redis_ha_test_#{System.unique_integer([:positive])}"
-    )
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "mirror_neuron_redis_ha_test_#{System.unique_integer([:positive])}"
+      )
 
     File.rm_rf!(path)
     path

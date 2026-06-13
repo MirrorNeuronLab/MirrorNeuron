@@ -65,7 +65,7 @@ defmodule MirrorNeuron.Runner.Policy do
 
   defp declares_forwards?(config) when is_map(config) do
     Enum.any?(@forward_keys, fn key ->
-      value = Map.get(config, key) || Map.get(config, String.to_atom(key))
+      value = MirrorNeuron.SafeAccess.map_get(config, key)
       value not in [nil, [], %{}, "", false]
     end)
   end

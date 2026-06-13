@@ -26,6 +26,11 @@ defmodule MirrorNeuron.ResourceAdmissionTest do
 
     previous = Map.new(keys, &{&1, System.get_env(&1)})
 
+    System.put_env("MN_MAX_CPU_LOAD_RATIO", "1.0")
+    System.put_env("MN_MAX_MEMORY_USED_RATIO", "0.9")
+    System.put_env("MN_MAX_GPU_UTILIZATION_RATIO", "0.9")
+    System.put_env("MN_MAX_GPU_MEMORY_USED_RATIO", "0.9")
+
     on_exit(fn ->
       Enum.each(previous, fn
         {key, nil} -> System.delete_env(key)
@@ -70,6 +75,14 @@ defmodule MirrorNeuron.ResourceAdmissionTest do
 
     assert log =~ "not accepting a new job"
     assert log =~ "resources are overloaded"
+  end
+
+  test "rejects malformed resource threshold env values" do
+    System.put_env("MN_MAX_CPU_LOAD_RATIO", "0.5oops")
+
+    assert_raise ArgumentError, ~r/MN_MAX_CPU_LOAD_RATIO must be a number/, fn ->
+      ResourceAdmission.thresholds()
+    end
   end
 
   test "can disable resource admission with MN_RESOURCE_ADMISSION_ENABLED" do

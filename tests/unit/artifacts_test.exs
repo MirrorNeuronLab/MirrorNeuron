@@ -75,7 +75,9 @@ defmodule MirrorNeuron.ArtifactsTest do
 
     assert :ok = Resolver.materialize_payload_refs(refs, "docs", target, job_id: "job-artifacts")
     assert File.read!(Path.join(target, "input.txt")) == "large doc"
-    assert File.read!(Path.join([job_root, "job-artifacts", "payloads", "input.txt"])) == "large doc"
+
+    assert File.read!(Path.join([job_root, "job-artifacts", "payloads", "input.txt"])) ==
+             "large doc"
   end
 
   test "resolver fails fast when a shared blob is missing" do

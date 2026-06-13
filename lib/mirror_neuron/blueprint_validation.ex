@@ -876,8 +876,8 @@ defmodule MirrorNeuron.BlueprintValidation do
 
   defp map_get(map, key) when is_map(map),
     do:
-      Map.get(map, key) || Map.get(map, to_string(key)) ||
-        Map.get(map, String.to_atom(to_string(key)))
+      MirrorNeuron.SafeAccess.map_get(map, key) ||
+        MirrorNeuron.SafeAccess.map_get(map, to_string(key))
 
   defp map_get(_map, _key), do: nil
 

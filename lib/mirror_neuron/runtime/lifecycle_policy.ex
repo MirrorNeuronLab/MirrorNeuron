@@ -355,7 +355,7 @@ defmodule MirrorNeuron.Runtime.LifecyclePolicy do
   end
 
   defp policy_map(policies, kind) when is_map(policies) do
-    Map.get(policies, kind) || Map.get(policies, String.to_atom(kind)) || %{}
+    MirrorNeuron.SafeAccess.map_get(policies, kind, %{})
   end
 
   defp policy_map(_policies, _kind), do: %{}

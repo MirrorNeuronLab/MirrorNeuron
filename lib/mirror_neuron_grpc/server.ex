@@ -539,7 +539,7 @@ defmodule MirrorNeuron.Grpc.JobServer do
   defp valid_admin_token?(configured_token, request_token)
        when is_binary(configured_token) and byte_size(configured_token) > 0 and
               is_binary(request_token) do
-    configured_token == request_token
+    MirrorNeuron.Grpc.Tokens.secure_compare(request_token, configured_token)
   end
 
   defp valid_admin_token?(_configured_token, _request_token), do: false
@@ -642,28 +642,39 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
   def set_peer_cookie(node_name, cookie_text)
       when is_binary(node_name) and is_binary(cookie_text) and
              node_name != "" and cookie_text != "" do
-    NodeAdapter.set_cookie(String.to_atom(node_name), String.to_atom(cookie_text))
-    :ok
+    with {:ok, node} <- MirrorNeuron.SafeAccess.node_name_to_atom(node_name),
+         {:ok, cookie} <- MirrorNeuron.SafeAccess.nonempty_binary_to_atom(cookie_text) do
+      NodeAdapter.set_cookie(node, cookie)
+      :ok
+    else
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   @doc false
   def connect_peer(node_name) when is_binary(node_name) and node_name != "" do
-    node_name
-    |> String.to_atom()
-    |> NodeAdapter.connect()
+    case MirrorNeuron.SafeAccess.node_name_to_atom(node_name) do
+      {:ok, node} ->
+        NodeAdapter.connect(node)
+        :ok
 
-    :ok
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   def connect_peer(_node_name), do: :ok
 
   @doc false
   def disconnect_peer(node_name) when is_binary(node_name) and node_name != "" do
-    node_name
-    |> String.to_atom()
-    |> NodeAdapter.disconnect()
+    case MirrorNeuron.SafeAccess.node_name_to_atom(node_name) do
+      {:ok, node} ->
+        NodeAdapter.disconnect(node)
+        :ok
 
-    :ok
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   def disconnect_peer(_node_name), do: :ok
@@ -922,9 +933,7 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
     }
   end
 
-  defp map_value(map, key) when is_map(map) do
-    Map.get(map, key) || Map.get(map, String.to_atom(key))
-  end
+  defp map_value(map, key) when is_map(map), do: MirrorNeuron.SafeAccess.map_get(map, key)
 
   defp map_value(_map, _key), do: nil
 
@@ -982,66 +991,73 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
     MirrorNeuron.Grpc.Tokens.admin_token()
   end
 
-  defp secure_compare(left, right) when is_binary(left) and is_binary(right) do
-    byte_size(left) == byte_size(right) and
-      :crypto.hash(:sha256, left) == :crypto.hash(:sha256, right)
-  end
-
-  defp secure_compare(_left, _right), do: false
+  defp secure_compare(left, right), do: MirrorNeuron.Grpc.Tokens.secure_compare(left, right)
 
   defp maybe_set_remote_cookie(node_name, token)
        when is_binary(node_name) and is_binary(token) and token != "" do
-    cookie = cookie_from_token(token) |> String.to_atom()
-
-    node_name
-    |> String.to_atom()
-    |> NodeAdapter.set_cookie(cookie)
-
-    :ok
+    with {:ok, node} <- MirrorNeuron.SafeAccess.node_name_to_atom(node_name),
+         {:ok, cookie} <-
+           cookie_from_token(token) |> MirrorNeuron.SafeAccess.nonempty_binary_to_atom() do
+      NodeAdapter.set_cookie(node, cookie)
+      :ok
+    else
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp maybe_set_remote_cookie(_node_name, _token), do: :ok
 
   defp sync_remote_cookie_with_cluster(node_name, token)
        when is_binary(node_name) and is_binary(token) and node_name != "" and token != "" do
-    remote_node = String.to_atom(node_name)
-    cookie = cookie_from_token(token)
+    case MirrorNeuron.SafeAccess.node_name_to_atom(node_name) do
+      {:ok, remote_node} ->
+        cookie = cookie_from_token(token)
 
-    NodeAdapter.list()
-    |> Enum.reject(&(&1 == remote_node))
-    |> Enum.each(fn peer ->
-      _ = NodeAdapter.rpc_call(peer, __MODULE__, :set_peer_cookie, [node_name, cookie], 2_000)
+        NodeAdapter.list()
+        |> Enum.reject(&(&1 == remote_node))
+        |> Enum.each(fn peer ->
+          _ = NodeAdapter.rpc_call(peer, __MODULE__, :set_peer_cookie, [node_name, cookie], 2_000)
 
-      _ =
-        NodeAdapter.rpc_call(
-          remote_node,
-          __MODULE__,
-          :set_peer_cookie,
-          [Atom.to_string(peer), cookie],
-          2_000
-        )
-    end)
+          _ =
+            NodeAdapter.rpc_call(
+              remote_node,
+              __MODULE__,
+              :set_peer_cookie,
+              [Atom.to_string(peer), cookie],
+              2_000
+            )
+        end)
 
-    :ok
+        :ok
+
+      {:error, _reason} ->
+        :ok
+    end
   end
 
   defp sync_remote_cookie_with_cluster(_node_name, _token), do: :ok
 
   defp disconnect_node_from_cluster(node_name) when is_binary(node_name) and node_name != "" do
-    remote_node = String.to_atom(node_name)
-    connected_nodes = NodeAdapter.list()
-    peer_nodes = Enum.reject(connected_nodes, &(&1 == remote_node))
-    peer_names = Enum.map(peer_nodes, &Atom.to_string/1)
+    case MirrorNeuron.SafeAccess.node_name_to_atom(node_name) do
+      {:ok, remote_node} ->
+        connected_nodes = NodeAdapter.list()
+        peer_nodes = Enum.reject(connected_nodes, &(&1 == remote_node))
+        peer_names = Enum.map(peer_nodes, &Atom.to_string/1)
 
-    if remote_node in connected_nodes do
-      _ = NodeAdapter.rpc_call(remote_node, __MODULE__, :disconnect_peers, [peer_names], 2_000)
+        if remote_node in connected_nodes do
+          _ =
+            NodeAdapter.rpc_call(remote_node, __MODULE__, :disconnect_peers, [peer_names], 2_000)
+        end
+
+        Enum.each(peer_nodes, fn peer ->
+          _ = NodeAdapter.rpc_call(peer, __MODULE__, :disconnect_peer, [node_name], 2_000)
+        end)
+
+        :ok
+
+      {:error, _reason} ->
+        :ok
     end
-
-    Enum.each(peer_nodes, fn peer ->
-      _ = NodeAdapter.rpc_call(peer, __MODULE__, :disconnect_peer, [node_name], 2_000)
-    end)
-
-    :ok
   end
 
   defp disconnect_node_from_cluster(_node_name), do: :ok

@@ -329,33 +329,7 @@ defmodule MirrorNeuron.Runner.OpenShell do
   end
 
   defp sanitize_result(result) do
-    Enum.into(result, %{}, fn
-      {key, value} when is_binary(value) ->
-        {key, value |> redact_secrets() |> truncate_artifact()}
-
-      entry ->
-        entry
-    end)
-  end
-
-  defp redact_secrets(text) do
-    System.get_env()
-    |> Enum.filter(fn {key, value} ->
-      value != "" and String.match?(key, ~r/(TOKEN|SECRET|KEY|COOKIE|PASSWORD)/i)
-    end)
-    |> Enum.reduce(text, fn {_key, value}, acc -> String.replace(acc, value, "[REDACTED]") end)
-  end
-
-  defp truncate_artifact(text) do
-    max_bytes =
-      System.get_env("MN_MAX_ARTIFACT_BYTES", "1048576")
-      |> String.to_integer()
-
-    if byte_size(text) > max_bytes do
-      binary_part(text, 0, max_bytes) <> "\n[truncated by MN_MAX_ARTIFACT_BYTES]"
-    else
-      text
-    end
+    MirrorNeuron.Runner.Result.sanitize(result)
   end
 
   defp stage_workspace(payload, config, opts) do

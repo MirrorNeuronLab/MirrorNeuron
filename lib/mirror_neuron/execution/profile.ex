@@ -56,7 +56,7 @@ defmodule MirrorNeuron.Execution.Profile do
 
   def profile_name(config) when is_map(config) do
     Enum.find_value(@profile_keys, fn key ->
-      case Map.get(config, key) || Map.get(config, String.to_atom(key)) do
+      case MirrorNeuron.SafeAccess.map_get(config, key) do
         name when is_binary(name) and name != "" -> name
         nil -> nil
         name when is_atom(name) -> Atom.to_string(name)

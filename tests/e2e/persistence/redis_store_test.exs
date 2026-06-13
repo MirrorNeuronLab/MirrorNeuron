@@ -187,7 +187,9 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
   test "retention sweep deletes expired terminal jobs and stale job ids" do
     job_id = "terminal-retention-#{System.unique_integer([:positive])}"
     old_job_root = System.get_env("MN_JOB_ARTIFACT_ROOT")
-    job_root = Path.join(System.tmp_dir!(), "mn_job_artifacts_#{System.unique_integer([:positive])}")
+
+    job_root =
+      Path.join(System.tmp_dir!(), "mn_job_artifacts_#{System.unique_integer([:positive])}")
 
     System.put_env("MN_JOB_ARTIFACT_ROOT", job_root)
 

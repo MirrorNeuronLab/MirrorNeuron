@@ -63,14 +63,16 @@ Important paths:
 - `lib/mirror_neuron/runtime/`: job coordinator, supervisors, event bus, runtime wiring
 - `lib/mirror_neuron/builtins/`: runtime primitives such as router/executor/aggregator/sensor
 - `lib/mirror_neuron/agent_templates/`: reusable workflow behavior templates
-- `lib/mirror_neuron/cli/`: CLI commands, output formatting, and UI
 - `lib/mirror_neuron/cluster/`: cluster membership and control
 - `lib/mirror_neuron/persistence/redis_store.ex`: persistence adapter
 - `lib/mirror_neuron/sandbox/`: sandbox and OpenShell integration
 - `lib/mirror_neuron/execution/`: execution lease management
-- `docs/`: user and operator documentation
-- `examples/`: runnable example bundles
-- `tests/`: ExUnit coverage for runtime, CLI, manifests, and templates
+- `lib/mirror_neuron_grpc/`: generated protobuf modules and gRPC service handlers
+- `proto/`: protobuf service definitions
+- `scripts/`: local, cluster, Redis, and release helper scripts
+- `tests/`: ExUnit coverage for runtime, gRPC, manifests, persistence, runners, clustering, and templates
+
+The active CLI and larger user/operator docs live in sibling ecosystem repositories, not in this checkout.
 
 ## Where To Start By Task
 
@@ -98,11 +100,8 @@ If the request is about built-in agent behavior:
 
 If the request is about CLI behavior:
 
-- inspect `lib/mirror_neuron/cli.ex`
-- inspect `lib/mirror_neuron/cli/commands/`
-- inspect `lib/mirror_neuron/cli/output.ex`
-- inspect `lib/mirror_neuron/cli/ui.ex`
-- inspect `tests/mirror_neuron/cli_ui_test.exs`
+- confirm whether the requested behavior belongs in this core runtime or the external CLI repository
+- inspect gRPC/public API behavior here only when the core service contract is involved
 
 If the request is about persistence or recovery:
 

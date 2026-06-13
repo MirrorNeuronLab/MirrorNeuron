@@ -358,11 +358,7 @@ defmodule MirrorNeuron.HardwareRequirements do
   defp stringify_map(value), do: value
 
   defp map_get(map, key) when is_map(map) do
-    cond do
-      Map.has_key?(map, key) -> Map.get(map, key)
-      Map.has_key?(map, String.to_atom(key)) -> Map.get(map, String.to_atom(key))
-      true -> nil
-    end
+    MirrorNeuron.SafeAccess.map_get(map, key)
   end
 
   defp map_get(_map, _key), do: nil

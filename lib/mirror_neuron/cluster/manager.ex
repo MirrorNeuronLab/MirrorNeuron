@@ -38,9 +38,8 @@ defmodule MirrorNeuron.Cluster.Manager do
   end
 
   def add_node(node_name) when is_binary(node_name) do
-    atom_name = String.to_atom(node_name)
-
-    if NodeAdapter.connect(atom_name) do
+    with {:ok, atom_name} <- MirrorNeuron.SafeAccess.node_name_to_atom(node_name),
+         true <- NodeAdapter.connect(atom_name) do
       NodeState.mark_connected(node_name, %{
         "operator_disconnect" => false,
         "scheduling_eligible" => true
@@ -48,23 +47,25 @@ defmodule MirrorNeuron.Cluster.Manager do
 
       {:ok, %{name: node_name, status: "connected"}}
     else
-      {:error, "failed to connect to #{node_name}"}
+      false -> {:error, "failed to connect to #{node_name}"}
+      {:error, reason} -> {:error, "invalid node name #{inspect(node_name)}: #{reason}"}
     end
   end
 
   def remove_node(node_name) when is_binary(node_name) do
-    atom_name = String.to_atom(node_name)
+    case MirrorNeuron.SafeAccess.node_name_to_atom(node_name) do
+      {:ok, atom_name} ->
+        NodeState.mark(node_name, "disconnected", %{
+          "operator_disconnect" => true,
+          "scheduling_eligible" => false,
+          "reason" => "operator requested disconnect"
+        })
 
-    NodeState.mark(node_name, "disconnected", %{
-      "operator_disconnect" => true,
-      "scheduling_eligible" => false,
-      "reason" => "operator requested disconnect"
-    })
+        _ = NodeAdapter.disconnect(atom_name)
+        {:ok, %{name: node_name, status: "disconnected"}}
 
-    if NodeAdapter.disconnect(atom_name) do
-      {:ok, %{name: node_name, status: "disconnected"}}
-    else
-      {:ok, %{name: node_name, status: "disconnected"}}
+      {:error, reason} ->
+        {:error, "invalid node name #{inspect(node_name)}: #{reason}"}
     end
   end
 

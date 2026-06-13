@@ -183,10 +183,13 @@ defmodule MirrorNeuron.Bundle.Archive do
   end
 
   defp safe_relative_path?(path) when is_binary(path) do
+    path = String.replace(path, "\\", "/")
+
     Path.type(path) == :relative and
-      not String.starts_with?(path, "..") and
-      not String.contains?(path, "/../") and
-      path not in ["", "."]
+      path not in ["", "."] and
+      path
+      |> String.split("/", trim: true)
+      |> Enum.all?(&(&1 not in [".", ".."]))
   end
 
   defp safe_relative_path?(_path), do: false

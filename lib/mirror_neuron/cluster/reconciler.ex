@@ -1053,11 +1053,10 @@ defmodule MirrorNeuron.Cluster.Reconciler do
   defp start_supervised_job(spec, nil), do: start_supervised_job_here(spec)
 
   defp start_supervised_job(spec, preferred_node) when is_binary(preferred_node) do
-    preferred_node
-    |> String.to_atom()
-    |> start_supervised_job(spec)
-  rescue
-    _ -> start_supervised_job_here(spec)
+    case MirrorNeuron.SafeAccess.node_name_to_atom(preferred_node) do
+      {:ok, node} -> start_supervised_job(spec, node)
+      {:error, _reason} -> start_supervised_job_here(spec)
+    end
   end
 
   defp start_supervised_job(spec, preferred_node) when is_atom(preferred_node) do

@@ -13,7 +13,7 @@ defmodule MirrorNeuron.Application do
       "MN_CLUSTER_NODES"
       |> System.get_env("")
       |> String.split(",", trim: true)
-      |> Enum.map(&String.to_atom/1)
+      |> Enum.map(&MirrorNeuron.SafeAccess.node_name_to_atom!/1)
 
     topologies =
       if cluster_hosts == [] do
@@ -73,7 +73,7 @@ defmodule MirrorNeuron.Application do
   @doc false
   def grpc_child_specs do
     if Config.boolean("MN_API_ENABLED", :api_enabled) do
-      grpc_port = String.to_integer(System.get_env("MN_GRPC_PORT", "50051"))
+      grpc_port = Config.integer("MN_GRPC_PORT", :grpc_port)
       grpc_host = System.get_env("MN_CORE_HOST", "localhost")
 
       [

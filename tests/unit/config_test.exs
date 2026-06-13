@@ -14,6 +14,8 @@ defmodule MirrorNeuron.ConfigTest do
         "mirror_neuron_config_test_#{System.unique_integer([:positive])}"
       )
 
+    on_exit(fn -> File.rm_rf!(tmp_dir) end)
+
     bin_dir = Path.join([tmp_dir, ".local", "bin"])
     tool_path = Path.join(bin_dir, "test-tool")
 
@@ -37,8 +39,6 @@ defmodule MirrorNeuron.ConfigTest do
       else
         Application.put_env(:mirror_neuron, :test_tool_bin, previous_value)
       end
-
-      File.rm_rf!(tmp_dir)
     end
   end
 

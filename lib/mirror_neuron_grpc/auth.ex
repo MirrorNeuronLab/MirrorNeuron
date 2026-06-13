@@ -1,8 +1,6 @@
 defmodule MirrorNeuron.Grpc.Auth do
   @moduledoc false
 
-  import Bitwise
-
   @auth_token_env "MN_GRPC_AUTH_TOKEN"
   @token_headers ["authorization"]
 
@@ -31,7 +29,7 @@ defmodule MirrorNeuron.Grpc.Auth do
       stream
       |> metadata()
       |> token_candidates()
-      |> Enum.any?(&secure_compare(&1, expected_token))
+      |> Enum.any?(&MirrorNeuron.Grpc.Tokens.secure_compare(&1, expected_token))
   end
 
   def authorized?(_stream, _expected_token), do: false
@@ -102,17 +100,4 @@ defmodule MirrorNeuron.Grpc.Auth do
   defp normalize_key(key) when is_atom(key), do: key |> Atom.to_string() |> String.downcase()
   defp normalize_key(key) when is_binary(key), do: String.downcase(key)
   defp normalize_key(key), do: key |> to_string() |> String.downcase()
-
-  defp secure_compare(left, right) when is_binary(left) and is_binary(right) do
-    byte_size(left) == byte_size(right) and compare_bytes(left, right) == 0
-  end
-
-  defp secure_compare(_left, _right), do: false
-
-  defp compare_bytes(left, right), do: compare_bytes(left, right, 0)
-  defp compare_bytes(<<>>, <<>>, acc), do: acc
-
-  defp compare_bytes(<<left, left_rest::binary>>, <<right, right_rest::binary>>, acc) do
-    compare_bytes(left_rest, right_rest, bor(acc, bxor(left, right)))
-  end
 end

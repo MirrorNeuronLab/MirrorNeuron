@@ -820,6 +820,8 @@ defmodule MirrorNeuron.ManifestTest do
         "mirror_neuron_bundle_test_#{System.unique_integer([:positive])}"
       )
 
+    on_exit(fn -> File.rm_rf!(tmp_dir) end)
+
     payloads_dir = Path.join(tmp_dir, "payloads")
 
     File.mkdir_p!(payloads_dir)
@@ -851,8 +853,6 @@ defmodule MirrorNeuron.ManifestTest do
     assert bundle.root_path == Path.expand(tmp_dir)
     assert bundle.payloads_path == Path.join(Path.expand(tmp_dir), "payloads")
     assert bundle.manifest.graph_id == "bundle-test"
-
-    File.rm_rf!(tmp_dir)
   end
 
   defp flow_manifest(manifest) do

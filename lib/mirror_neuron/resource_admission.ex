@@ -129,8 +129,7 @@ defmodule MirrorNeuron.ResourceAdmission do
       value ->
         case Float.parse(value) do
           {float, ""} -> float
-          {float, _rest} -> float
-          :error -> raise ArgumentError, "#{env_name} must be a number"
+          _ -> raise ArgumentError, "#{env_name} must be a number"
         end
     end
   end
