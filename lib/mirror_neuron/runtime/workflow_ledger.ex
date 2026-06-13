@@ -783,32 +783,31 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   defp dependencies_satisfied?(state, step) do
     state
     |> incoming_edges(step)
-    |> Enum.all?(fn edge ->
-      case get_step(state, Map.get(edge, "from")) do
-        nil -> true
-        parent -> parent_status_accepted?(Map.get(parent, "status"), Map.get(edge, "accepts"))
-      end
-    end)
+    |> Enum.all?(&dependency_satisfied?(state, &1))
   end
 
   defp blocked_dependencies(state, step) do
     state
     |> incoming_edges(step)
-    |> Enum.reject(fn edge ->
-      case get_step(state, Map.get(edge, "from")) do
-        nil -> true
-        parent -> parent_status_accepted?(Map.get(parent, "status"), Map.get(edge, "accepts"))
-      end
-    end)
-    |> Enum.map(fn edge ->
-      parent = get_step(state, Map.get(edge, "from")) || %{}
+    |> Enum.reject(&dependency_satisfied?(state, &1))
+    |> Enum.map(&blocked_dependency_summary(state, &1))
+  end
 
-      %{
-        "from" => Map.get(edge, "from"),
-        "status" => Map.get(parent, "status", "unknown"),
-        "accepts" => normalized_accepts(Map.get(edge, "accepts"))
-      }
-    end)
+  defp dependency_satisfied?(state, edge) do
+    case get_step(state, Map.get(edge, "from")) do
+      nil -> true
+      parent -> parent_status_accepted?(Map.get(parent, "status"), Map.get(edge, "accepts"))
+    end
+  end
+
+  defp blocked_dependency_summary(state, edge) do
+    parent = get_step(state, Map.get(edge, "from")) || %{}
+
+    %{
+      "from" => Map.get(edge, "from"),
+      "status" => Map.get(parent, "status", "unknown"),
+      "accepts" => normalized_accepts(Map.get(edge, "accepts"))
+    }
   end
 
   defp incoming_edges(%{"edges" => edges}, %{"id" => step_id}) when is_list(edges) do
@@ -981,22 +980,8 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
 
   defp step_id_from_payload(state, agent_id, _payload), do: step_for_agent(state, agent_id)
 
-  defp should_start_attempt?(step, message) do
-    current = Map.get(step, "current_attempt")
-
-    cond do
-      step_terminal?(step) ->
-        false
-
-      not is_map(current) ->
-        true
-
-      Map.get(current, "message_id") == safe_message_id(message) ->
-        false
-
-      true ->
-        false
-    end
+  defp should_start_attempt?(step, _message) do
+    not step_terminal?(step) and not is_map(Map.get(step, "current_attempt"))
   end
 
   defp step_terminal?(step),

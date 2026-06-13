@@ -44,6 +44,57 @@ defmodule MirrorNeuron.SchedulerTest do
     Manifest.load(raw)
   end
 
+  test "plan inspection helpers return stable defaults" do
+    plan = %{
+      "placements" => [
+        %{
+          "agent_id" => "alpha",
+          "node" => "node-a@lab",
+          "allocations" => %{"devices" => [%{"id" => "gpu-0"}]}
+        },
+        %{"agent_id" => "beta", "node" => "node-b@lab"}
+      ]
+    }
+
+    assert Scheduler.target_node(plan, "alpha") == "node-a@lab"
+    assert Scheduler.target_node(plan, "missing") == nil
+
+    assert Scheduler.allocation(plan, "alpha") == %{"devices" => [%{"id" => "gpu-0"}]}
+    assert Scheduler.allocation(plan, "beta") == %{}
+
+    assert Scheduler.affected_agent_ids(plan, "node-a@lab") == ["alpha"]
+    assert Scheduler.affected_agent_ids(%{"placements" => "invalid"}, "node-a@lab") == []
+  end
+
+  test "merge_plan replaces matching placements and preserves unrelated ones" do
+    existing = %{
+      "status" => "planned",
+      "placement_count" => 2,
+      "placements" => [
+        %{"agent_id" => "alpha", "node" => "node-a@lab"},
+        %{"agent_id" => "beta", "node" => "node-b@lab"}
+      ]
+    }
+
+    partial = %{
+      "placements" => [
+        %{"agent_id" => "beta", "node" => "node-c@lab"},
+        %{"agent_id" => "gamma", "node" => "node-c@lab"}
+      ]
+    }
+
+    merged = Scheduler.merge_plan(existing, partial)
+
+    assert merged["placement_count"] == 3
+    assert is_binary(merged["generated_at"])
+
+    assert merged["placements"] == [
+             %{"agent_id" => "alpha", "node" => "node-a@lab"},
+             %{"agent_id" => "beta", "node" => "node-c@lab"},
+             %{"agent_id" => "gamma", "node" => "node-c@lab"}
+           ]
+  end
+
   test "binpack prefers the more powerful healthy node by default" do
     {:ok, manifest} =
       load_manifest(%{
@@ -1482,7 +1533,10 @@ defmodule MirrorNeuron.SchedulerTest do
       })
 
     assert {:error, exact_cuda_reason} =
-             Scheduler.plan(manifest, nodes: [h100_node() |> put_gpu_api_version("12.0")], jobs: [])
+             Scheduler.plan(manifest,
+               nodes: [h100_node() |> put_gpu_api_version("12.0")],
+               jobs: []
+             )
 
     assert exact_cuda_reason =~ "devices, ports, volumes, or runtime driver not available"
 
@@ -1496,12 +1550,18 @@ defmodule MirrorNeuron.SchedulerTest do
     assert exact_memory_reason =~ "devices, ports, volumes, or runtime driver not available"
 
     assert {:error, split_memory_reason} =
-             Scheduler.plan(manifest, nodes: [cuda_node() |> put_gpu_api_version("12.1")], jobs: [])
+             Scheduler.plan(manifest,
+               nodes: [cuda_node() |> put_gpu_api_version("12.1")],
+               jobs: []
+             )
 
     assert split_memory_reason =~ "devices, ports, volumes, or runtime driver not available"
 
     assert {:ok, plan} =
-             Scheduler.plan(manifest, nodes: [h100_node() |> put_gpu_api_version("12.1")], jobs: [])
+             Scheduler.plan(manifest,
+               nodes: [h100_node() |> put_gpu_api_version("12.1")],
+               jobs: []
+             )
 
     assert [%{"node" => "h100@lab", "allocations" => %{"devices" => [device]}}] =
              plan["placements"]
@@ -1574,6 +1634,36 @@ defmodule MirrorNeuron.SchedulerTest do
 
     assert {:ok, device_plan} = Scheduler.plan(device_manifest, nodes: [cuda_node()], jobs: jobs)
     assert [%{"allocations" => %{"devices" => [%{"id" => "cuda-1"}]}}] = device_plan["placements"]
+  end
+
+  test "duplicate explicit ports in one request fail placement clearly" do
+    {:ok, manifest} =
+      load_manifest(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "duplicate-port",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{
+              "ports" => [
+                %{"label" => "api", "port" => 8080, "protocol" => "tcp"},
+                %{"label" => "metrics", "port" => 8080, "protocol" => "tcp"}
+              ]
+            }
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    assert {:error, "placement_failed: " <> reason} =
+             Scheduler.plan(manifest, nodes: [large_node()], jobs: [])
+
+    assert reason =~ "worker"
+    assert reason =~ "devices, ports, volumes, or runtime driver not available"
   end
 
   test "host volumes and runtime drivers filter candidate nodes" do

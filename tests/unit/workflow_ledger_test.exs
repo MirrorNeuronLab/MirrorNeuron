@@ -177,6 +177,32 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
              Message.id(second_message)
   end
 
+  test "re-receiving the active message is idempotent" do
+    {state, []} = WorkflowLedger.new(manifest(), runtime_nodes()) |> WorkflowLedger.job_running()
+    message = Message.new("job-1", "runtime", "step_a", "init", %{"value" => "first"})
+    decorated = WorkflowLedger.decorate_message(state, "step_a", message)
+
+    {state, [_started]} =
+      WorkflowLedger.on_message_received(
+        state,
+        "step_a",
+        decorated,
+        "2026-06-02T16:00:00.000Z"
+      )
+
+    {state, []} =
+      WorkflowLedger.on_message_received(
+        state,
+        "step_a",
+        decorated,
+        "2026-06-02T16:00:00.100Z"
+      )
+
+    assert get_in(state, ["steps", "step_a", "attempt_count"]) == 1
+    assert get_in(state, ["steps", "step_a", "status"]) == "running"
+    assert get_in(state, ["messages", Message.id(decorated), "status"]) == "running"
+  end
+
   test "ignores late messages after a step is completed" do
     {state, []} = WorkflowLedger.new(manifest(), runtime_nodes()) |> WorkflowLedger.job_running()
     message = Message.new("job-1", "runtime", "step_a", "init", %{"value" => "first"})

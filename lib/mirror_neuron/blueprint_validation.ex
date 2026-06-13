@@ -727,7 +727,10 @@ defmodule MirrorNeuron.BlueprintValidation do
 
   defp node_cpu_count(node) when is_map(node) do
     node = map_value(node)
-    number_or_zero(map_get(node, "cpu_cores") || path_get(node, "hardware.cpu.logical_processors"))
+
+    number_or_zero(
+      map_get(node, "cpu_cores") || path_get(node, "hardware.cpu.logical_processors")
+    )
   end
 
   defp node_cpu_count(_node), do: 0

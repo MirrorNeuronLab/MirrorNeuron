@@ -756,32 +756,13 @@ defmodule MirrorNeuron.Scheduler do
   end
 
   defp system_node_plan(node, demands, used, service_instances) do
-    if schedulable_node?(node) and
-         Enum.all?(demands, &system_demand_eligible?(&1, node, service_instances)) do
-      demands
-      |> Enum.reduce_while(
-        {:ok, empty_resources(), %{}, normalize_usage(used)},
-        fn demand, {:ok, resources_acc, allocations, used_acc} ->
-          case fit_allocation(node, used_acc, demand) do
-            {:ok, allocation} ->
-              {:cont,
-               {:ok, add_resources(resources_acc, demand["resources"]),
-                Map.put(allocations, demand["agent_id"], allocation),
-                add_usage(used_acc, demand["resources"], allocation)}}
-
-            {:error, _reason} ->
-              {:halt, :error}
-          end
-        end
+    if schedulable_node?(node) do
+      group_node_plan(
+        node,
+        demands,
+        used,
+        &system_demand_eligible?(&1, node, service_instances)
       )
-      |> case do
-        {:ok, group_resources, allocations, next_usage} ->
-          {:ok,
-           %{"resources" => group_resources, "allocations" => allocations, "usage" => next_usage}}
-
-        :error ->
-          :error
-      end
     else
       :error
     end
@@ -939,35 +920,49 @@ defmodule MirrorNeuron.Scheduler do
   end
 
   defp local_node_plan(node, demands, used, service_instances) do
-    if Enum.all?(demands, &normal_demand_eligible?(&1, node, service_instances)) do
-      demands
-      |> Enum.reduce_while(
-        {:ok, empty_resources(), %{}, normalize_usage(used)},
-        fn demand, {:ok, resources_acc, allocations, used_acc} ->
-          case fit_allocation(node, used_acc, demand) do
-            {:ok, allocation} ->
-              {:cont,
-               {:ok, add_resources(resources_acc, demand["resources"]),
-                Map.put(allocations, demand["agent_id"], allocation),
-                add_usage(used_acc, demand["resources"], allocation)}}
+    group_node_plan(
+      node,
+      demands,
+      used,
+      &normal_demand_eligible?(&1, node, service_instances)
+    )
+  end
 
-            {:error, _reason} ->
-              {:halt, :error}
-          end
-        end
-      )
-      |> case do
-        {:ok, group_resources, allocations, next_usage} ->
-          {:ok,
-           %{"resources" => group_resources, "allocations" => allocations, "usage" => next_usage}}
-
-        :error ->
-          :error
-      end
+  defp group_node_plan(node, demands, used, eligible?) do
+    if Enum.all?(demands, eligible?) do
+      fit_demand_group(node, demands, used)
     else
       :error
     end
   end
+
+  defp fit_demand_group(node, demands, used) do
+    demands
+    |> Enum.reduce_while({:ok, empty_resources(), %{}, normalize_usage(used)}, fn demand,
+                                                                                  group_acc ->
+      fit_demand_in_group(node, demand, group_acc)
+    end)
+    |> group_plan_result()
+  end
+
+  defp fit_demand_in_group(node, demand, {:ok, resources_acc, allocations, used_acc}) do
+    case fit_allocation(node, used_acc, demand) do
+      {:ok, allocation} ->
+        {:cont,
+         {:ok, add_resources(resources_acc, demand["resources"]),
+          Map.put(allocations, demand["agent_id"], allocation),
+          add_usage(used_acc, demand["resources"], allocation)}}
+
+      {:error, _reason} ->
+        {:halt, :error}
+    end
+  end
+
+  defp group_plan_result({:ok, group_resources, allocations, next_usage}) do
+    {:ok, %{"resources" => group_resources, "allocations" => allocations, "usage" => next_usage}}
+  end
+
+  defp group_plan_result(:error), do: :error
 
   defp normal_demand_eligible?(demand, node, service_instances) do
     profile_match?(demand["profile"], node) and constraints_match?(demand["constraints"], node) and

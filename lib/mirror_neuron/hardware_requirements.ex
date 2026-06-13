@@ -10,14 +10,18 @@ defmodule MirrorNeuron.HardwareRequirements do
     case map_get(requirements, "gpu") do
       gpu when is_map(gpu) ->
         %{
-          "min_count" => number_value(map_get(gpu, "min_count") || map_get(gpu, "count") || map_get(gpu, "min")),
+          "min_count" =>
+            number_value(
+              map_get(gpu, "min_count") || map_get(gpu, "count") || map_get(gpu, "min")
+            ),
           "vendor" => normalize_text(map_get(gpu, "vendor")),
           "driver" => normalize_text(map_get(gpu, "driver")),
           "min_api_version" => blank_to_nil(map_get(gpu, "min_api_version")),
           "api_version_operator" => normalize_operator(map_get(gpu, "api_version_operator")),
           "min_memory_mb" => number_value(map_get(gpu, "min_memory_mb")),
           "memory_operator" => normalize_operator(map_get(gpu, "memory_operator")),
-          "required_capabilities" => normalize_capabilities(map_get(gpu, "required_capabilities")),
+          "required_capabilities" =>
+            normalize_capabilities(map_get(gpu, "required_capabilities")),
           "enforcement" => normalize_text(map_get(gpu, "enforcement"))
         }
 
@@ -97,8 +101,10 @@ defmodule MirrorNeuron.HardwareRequirements do
 
     Enum.all?([
       gpu_device?(device, capabilities),
-      blank?(requirement["vendor"]) or requirement["vendor"] == normalize_text(map_get(device, "vendor")),
-      blank?(requirement["driver"]) or requirement["driver"] == normalize_text(map_get(device, "driver")),
+      blank?(requirement["vendor"]) or
+        requirement["vendor"] == normalize_text(map_get(device, "vendor")),
+      blank?(requirement["driver"]) or
+        requirement["driver"] == normalize_text(map_get(device, "driver")),
       requirement_capabilities == [] or Enum.any?(requirement_capabilities, &(&1 in capabilities)),
       version_matches?(
         map_get(device, "api_version"),
@@ -120,9 +126,14 @@ defmodule MirrorNeuron.HardwareRequirements do
 
   def version_matches?(actual, minimum, operator) do
     case {version_parts(actual), version_parts(minimum)} do
-      {[], _} -> false
-      {_, []} -> true
-      {actual_parts, minimum_parts} -> compare_value(compare_versions(actual_parts, minimum_parts), operator)
+      {[], _} ->
+        false
+
+      {_, []} ->
+        true
+
+      {actual_parts, minimum_parts} ->
+        compare_value(compare_versions(actual_parts, minimum_parts), operator)
     end
   end
 
@@ -209,7 +220,8 @@ defmodule MirrorNeuron.HardwareRequirements do
         else: nil
       ),
       if(requirement["min_api_version"],
-        do: "CUDA #{requirement["api_version_operator"] || ">="} #{requirement["min_api_version"]}",
+        do:
+          "CUDA #{requirement["api_version_operator"] || ">="} #{requirement["min_api_version"]}",
         else: nil
       )
     ]
@@ -285,6 +297,7 @@ defmodule MirrorNeuron.HardwareRequirements do
   defp compare_numbers(_actual, _minimum), do: :lt
 
   defp compare_versions([], []), do: :eq
+
   defp compare_versions([left | left_rest], [right | right_rest]) when left == right,
     do: compare_versions(left_rest, right_rest)
 
@@ -318,6 +331,7 @@ defmodule MirrorNeuron.HardwareRequirements do
   defp blank?(_value), do: false
 
   defp blank_to_nil(nil), do: nil
+
   defp blank_to_nil(value) do
     case to_string(value) |> String.trim() do
       "" -> nil

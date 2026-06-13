@@ -469,7 +469,8 @@ defmodule MirrorNeuron.ResourceSpec do
       "min_memory_mb" => number_value(map_get(device, "min_memory_mb")),
       "memory_operator" => normalize_comparison_operator(map_get(device, "memory_operator")),
       "min_api_version" => trim_to_nil(map_get(device, "min_api_version")),
-      "api_version_operator" => normalize_comparison_operator(map_get(device, "api_version_operator")),
+      "api_version_operator" =>
+        normalize_comparison_operator(map_get(device, "api_version_operator")),
       "capabilities" => list_value(map_get(device, "capabilities")),
       "ids" => list_value(map_get(device, "ids"))
     }
