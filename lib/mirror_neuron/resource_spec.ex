@@ -779,30 +779,7 @@ defmodule MirrorNeuron.ResourceSpec do
   defp list_value(nil), do: []
   defp list_value(value), do: [to_string(value)]
 
-  defp map_get(map, key) when is_map(map) and is_atom(key) do
-    cond do
-      Map.has_key?(map, key) -> Map.get(map, key)
-      Map.has_key?(map, Atom.to_string(key)) -> Map.get(map, Atom.to_string(key))
-      true -> nil
-    end
-  end
-
-  defp map_get(map, key) when is_map(map) and is_binary(key) do
-    if Map.has_key?(map, key) do
-      Map.get(map, key)
-    else
-      existing_atom_value(map, key)
-    end
-  end
-
-  defp map_get(_map, _key), do: nil
-
-  defp existing_atom_value(map, key) do
-    atom = String.to_existing_atom(key)
-    if Map.has_key?(map, atom), do: Map.get(map, atom)
-  rescue
-    ArgumentError -> nil
-  end
+  defp map_get(map, key), do: MirrorNeuron.SafeAccess.map_get(map, key)
 
   defp stringify_map(map) when is_map(map) do
     Enum.into(map, %{}, fn {key, value} ->

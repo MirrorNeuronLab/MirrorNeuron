@@ -47,6 +47,22 @@ Thumbs.db
 /examples/*/__pycache__/
 /examples/**/*.pyc
 
+# Python / local tooling output
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Frontend / packaging output from companion tooling
+node_modules/
+build/
+dist/
+coverage/
+
 # Historical demo output
 /demo/**/generated/
 
@@ -54,6 +70,8 @@ Thumbs.db
 /target/
 /project/target/
 /project/project
+/protoc_install/
+/protoc-*.zip
 
 # Environment / local machine overrides
 .env

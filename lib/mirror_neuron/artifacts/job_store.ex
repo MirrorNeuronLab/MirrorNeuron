@@ -4,6 +4,7 @@ defmodule MirrorNeuron.Artifacts.JobStore do
   require Logger
 
   alias MirrorNeuron.Artifacts.BlobStore
+  alias MirrorNeuron.PathSafety
 
   def root do
     System.get_env("MN_JOB_ARTIFACT_ROOT") ||
@@ -115,7 +116,7 @@ defmodule MirrorNeuron.Artifacts.JobStore do
     root = Path.expand(root)
 
     cond do
-      unsafe_relative_path?(relative_path) ->
+      PathSafety.unsafe_relative_path?(relative_path) ->
         {:error, "unsafe artifact path #{inspect(relative_path)}"}
 
       true ->
@@ -127,18 +128,6 @@ defmodule MirrorNeuron.Artifacts.JobStore do
           {:error, "unsafe artifact path #{inspect(relative_path)}"}
         end
     end
-  end
-
-  defp unsafe_relative_path?(path) when not is_binary(path), do: true
-  defp unsafe_relative_path?(""), do: true
-
-  defp unsafe_relative_path?(path) do
-    path = String.replace(path, "\\", "/")
-
-    Path.type(path) == :absolute or
-      path
-      |> String.split("/", trim: true)
-      |> Enum.any?(&(&1 in [".", ".."]))
   end
 
   defp inside_root?(path, root) do

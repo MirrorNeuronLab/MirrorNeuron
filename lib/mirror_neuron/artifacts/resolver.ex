@@ -2,6 +2,7 @@ defmodule MirrorNeuron.Artifacts.Resolver do
   @moduledoc false
 
   alias MirrorNeuron.Artifacts.{BlobRef, BlobStore, JobStore}
+  alias MirrorNeuron.PathSafety
 
   def resolve_ref(ref) do
     ref = BlobRef.normalize(ref)
@@ -66,7 +67,7 @@ defmodule MirrorNeuron.Artifacts.Resolver do
     suffix = normalize_suffix(suffix)
 
     cond do
-      unsafe_relative_path?(suffix) ->
+      PathSafety.unsafe_relative_path?(suffix) ->
         {:error, "unsafe artifact path #{inspect(suffix)}"}
 
       true ->
@@ -86,15 +87,5 @@ defmodule MirrorNeuron.Artifacts.Resolver do
     |> String.replace("\\", "/")
     |> String.trim()
     |> String.trim_leading("/")
-  end
-
-  defp unsafe_relative_path?(path) when not is_binary(path), do: true
-  defp unsafe_relative_path?(""), do: true
-
-  defp unsafe_relative_path?(path) do
-    Path.type(path) == :absolute or
-      path
-      |> String.split("/", trim: true)
-      |> Enum.any?(&(&1 in [".", ".."]))
   end
 end

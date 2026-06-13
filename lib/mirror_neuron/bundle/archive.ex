@@ -5,6 +5,7 @@ defmodule MirrorNeuron.Bundle.Archive do
 
   alias MirrorNeuron.Bundle.Fingerprint
   alias MirrorNeuron.JobBundle
+  alias MirrorNeuron.PathSafety
   alias MirrorNeuron.Persistence.RedisStore
 
   @default_max_bytes 50 * 1024 * 1024
@@ -155,7 +156,7 @@ defmodule MirrorNeuron.Bundle.Archive do
     File.mkdir_p!(Path.join(root, "payloads"))
 
     Enum.each(files, fn %{"path" => relative_path, "data" => encoded} ->
-      if safe_relative_path?(relative_path) do
+      if PathSafety.safe_relative_path?(relative_path) do
         target = Path.join(root, relative_path)
         File.mkdir_p!(Path.dirname(target))
         File.write!(target, Base.decode64!(encoded))
@@ -181,18 +182,6 @@ defmodule MirrorNeuron.Bundle.Archive do
   rescue
     error -> {:error, error}
   end
-
-  defp safe_relative_path?(path) when is_binary(path) do
-    path = String.replace(path, "\\", "/")
-
-    Path.type(path) == :relative and
-      path not in ["", "."] and
-      path
-      |> String.split("/", trim: true)
-      |> Enum.all?(&(&1 not in [".", ".."]))
-  end
-
-  defp safe_relative_path?(_path), do: false
 
   defp cache_root do
     System.get_env("MN_BUNDLE_CACHE_DIR") ||
