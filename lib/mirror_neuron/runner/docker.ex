@@ -24,6 +24,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     try do
       with :ok <- reject_published_ports(config),
            :ok <- copy_uploads(base_dir, config, opts),
+           :ok <- copy_build_context_uploads(base_dir, config, opts),
            :ok <- write_runtime_files(base_dir, message, opts),
            {:ok, image} <- resolve_image(config, base_dir, opts),
            {:ok, output, exit_code, command_name} <-
@@ -809,11 +810,17 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     |> Enum.take(-20)
     |> Enum.join("\n")
     |> String.trim()
-    |> truncate(limit)
+    |> truncate_tail(limit)
   end
 
-  defp truncate(text, limit) when byte_size(text) <= limit, do: text
-  defp truncate(text, limit), do: binary_part(text, 0, max(limit - 15, 0)) <> "\n[truncated]"
+  defp truncate_tail(text, limit) when byte_size(text) <= limit, do: text
+
+  defp truncate_tail(text, limit) do
+    marker = "[truncated]\n"
+    keep = max(limit - byte_size(marker), 0)
+    start = max(byte_size(text) - keep, 0)
+    marker <> binary_part(text, start, min(keep, byte_size(text) - start))
+  end
 
   defp append_output(chunks, bytes, data, max_output_bytes) do
     cond do
@@ -886,6 +893,92 @@ defmodule MirrorNeuron.Runner.DockerWorker do
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
+  end
+
+  defp copy_build_context_uploads(base_dir, config, opts) do
+    entries =
+      case Map.get(config, "build_context_upload_paths") do
+        paths when is_list(paths) -> paths
+        _ -> []
+      end
+
+    Enum.reduce_while(entries, :ok, fn entry, :ok ->
+      with {:ok, source} <- resolve_build_context_source(entry, config, opts),
+           {:ok, target_name} <- resolve_build_context_target(entry),
+           {:ok, target} <- resolve_upload_target(base_dir, target_name) do
+        copy_upload_entry(
+          source,
+          target,
+          Keyword.get(opts, :coordinator_node, Node.self()),
+          config,
+          opts
+        )
+      else
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp resolve_build_context_target(%{"target" => target})
+       when is_binary(target) and target != "",
+       do: {:ok, target}
+
+  defp resolve_build_context_target(_entry),
+    do: {:error, "build_context_upload_paths entry requires target"}
+
+  defp resolve_build_context_source(entry, config, opts) when is_map(entry) do
+    source = Map.get(entry, "source")
+    base = Map.get(entry, "base", "payloads")
+
+    cond do
+      not is_binary(source) or String.trim(source) == "" ->
+        {:error, "build_context_upload_paths entry requires source"}
+
+      base in ["skills_root", "mn_skills", "skills"] ->
+        resolve_skills_root_source(source, config)
+
+      true ->
+        resolve_upload_source(source, Keyword.get(opts, :payloads_path))
+    end
+  end
+
+  defp resolve_build_context_source(_entry, _config, _opts),
+    do: {:error, "build_context_upload_paths entries must be objects"}
+
+  defp resolve_skills_root_source(source, config) do
+    environment = Map.get(config, "environment", %{})
+
+    skills_root =
+      Map.get(environment, "MN_SKILLS_ROOT") ||
+        Map.get(environment, :MN_SKILLS_ROOT) ||
+        System.get_env("MN_SKILLS_ROOT") ||
+        System.get_env("MIRROR_NEURON_SKILLS_ROOT") ||
+        System.get_env("OTTERDESK_MN_SKILLS_ROOT")
+
+    if is_binary(skills_root) and String.trim(skills_root) != "" do
+      root = Path.expand(skills_root)
+
+      resolved =
+        if Path.type(source) == :absolute do
+          Path.expand(source)
+        else
+          Path.expand(source, root)
+        end
+
+      cond do
+        not inside_path?(resolved, root) ->
+          {:error,
+           "build_context_upload_paths skills source must stay inside MN_SKILLS_ROOT: #{source}"}
+
+        File.exists?(resolved) ->
+          {:ok, resolved}
+
+        true ->
+          {:error, "build_context_upload_paths skills source does not exist: #{source}"}
+      end
+    else
+      {:error, "build_context_upload_paths entry uses skills_root but MN_SKILLS_ROOT is not set"}
+    end
   end
 
   defp copy_upload_entry(source, target, coordinator_node, config, opts) do

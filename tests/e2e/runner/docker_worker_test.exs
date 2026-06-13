@@ -5,13 +5,25 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
   alias MirrorNeuron.Sandbox.DockerJobSandbox
 
   setup do
-    previous = System.get_env("MN_DOCKER_BIN")
-    tmp_dir = Path.join(System.tmp_dir!(), "mn-docker-worker-test-#{System.unique_integer([:positive])}")
+    previous_docker = System.get_env("MN_DOCKER_BIN")
+    previous_skills_root = System.get_env("MN_SKILLS_ROOT")
+
+    tmp_dir =
+      Path.join(System.tmp_dir!(), "mn-docker-worker-test-#{System.unique_integer([:positive])}")
+
     File.mkdir_p!(tmp_dir)
 
     on_exit(fn ->
       DockerJobSandbox.cleanup_job_local("job-1")
-      if is_nil(previous), do: System.delete_env("MN_DOCKER_BIN"), else: System.put_env("MN_DOCKER_BIN", previous)
+
+      if is_nil(previous_docker),
+        do: System.delete_env("MN_DOCKER_BIN"),
+        else: System.put_env("MN_DOCKER_BIN", previous_docker)
+
+      if is_nil(previous_skills_root),
+        do: System.delete_env("MN_SKILLS_ROOT"),
+        else: System.put_env("MN_SKILLS_ROOT", previous_skills_root)
+
       File.rm_rf(tmp_dir)
     end)
 
@@ -76,6 +88,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     refute result["stdout"] =~ "__MN_EVENT__"
 
     assert_receive {:docker_event, "docker_worker_command_started", %{"category" => "system"}}
+
     assert_receive {:docker_event, "tool_call_completed",
                     %{
                       "category" => "tool",
@@ -83,6 +96,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
                       "target" => "https://example.com",
                       "agent_id" => "worker"
                     }}
+
     assert_receive {:docker_event, "docker_worker_command_completed", %{"category" => "system"}}
 
     args = File.read!(args_log)
@@ -166,7 +180,9 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     File.write!(fake_docker, """
     #!/usr/bin/env bash
     if [ "$1" = "build" ]; then
-      echo "build failed because apt package was unavailable"
+      printf 'very long build prelude '
+      head -c 5000 /dev/zero | tr '\\0' 'x'
+      printf '\\nERROR: No matching distribution found for mirrorneuron-blueprint-support-skill\\n'
       exit 9
     fi
     exit 0
@@ -196,13 +212,74 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
 
     assert reason =~ "failed to build docker_worker image"
     assert_receive {:docker_event, "docker_worker_build_started", %{"category" => "system"}}
+
     assert_receive {:docker_event, "docker_worker_build_failed",
                     %{
                       "category" => "error",
                       "message" => "DockerWorker image build failed",
                       "result_summary" => summary
                     }}
-    assert summary =~ "apt package was unavailable"
+
+    assert summary =~ "No matching distribution found for mirrorneuron-blueprint-support-skill"
+    refute String.starts_with?(summary, "very long build prelude")
+  end
+
+  test "copies skills root build context uploads before building image", %{tmp_dir: tmp_dir} do
+    fake_docker = Path.join(tmp_dir, "fake-docker-build-context")
+    payloads_dir = Path.join(tmp_dir, "payloads")
+    docker_worker_dir = Path.join([payloads_dir, "bundle", "docker_worker"])
+    skills_root = Path.join(tmp_dir, "mn-skills")
+    support_skill_dir = Path.join(skills_root, "blueprint_support_skill")
+
+    File.mkdir_p!(docker_worker_dir)
+    File.mkdir_p!(support_skill_dir)
+    File.write!(Path.join(docker_worker_dir, "Dockerfile"), "FROM scratch\n")
+    File.write!(Path.join(support_skill_dir, "marker.txt"), "local skill")
+
+    File.write!(fake_docker, """
+    #!/usr/bin/env bash
+    if [ "$1" = "build" ]; then
+      context="${@: -1}"
+      test -f "$context/build_context/blueprint_support_skill/marker.txt" || exit 7
+      echo "build ok"
+      exit 0
+    fi
+    if [ "$1" = "run" ]; then
+      echo "worker output"
+      exit 0
+    fi
+    exit 0
+    """)
+
+    File.chmod!(fake_docker, 0o755)
+    System.put_env("MN_DOCKER_BIN", fake_docker)
+    System.delete_env("MN_SKILLS_ROOT")
+
+    assert {:ok, result} =
+             DockerWorker.run(
+               %{},
+               %{
+                 "upload_path" => "bundle",
+                 "upload_as" => "bundle",
+                 "docker_worker_image" => "bundle/docker_worker",
+                 "command" => ["sh", "-lc", "echo should run"],
+                 "docker_bin" => fake_docker,
+                 "reuse_shared_container" => false,
+                 "environment" => %{"MN_SKILLS_ROOT" => skills_root},
+                 "build_context_upload_paths" => [
+                   %{
+                     "base" => "skills_root",
+                     "source" => "blueprint_support_skill",
+                     "target" => "bundle/docker_worker/build_context/blueprint_support_skill"
+                   }
+                 ]
+               },
+               job_id: "job-build-context",
+               agent_id: "worker-build",
+               payloads_path: payloads_dir
+             )
+
+    assert result["stdout"] =~ "worker output"
   end
 
   defp docker_calls(path) do

@@ -287,6 +287,8 @@ defmodule MirrorNeuron.ResourceSpec do
     count = number_value(raw_count)
     raw_min_memory = map_get(device, "min_memory_mb")
     min_memory = number_value(raw_min_memory)
+    memory_operator = map_get(device, "memory_operator")
+    api_version_operator = map_get(device, "api_version_operator")
 
     errors
     |> maybe_error(
@@ -296,6 +298,14 @@ defmodule MirrorNeuron.ResourceSpec do
     |> maybe_error(
       raw_min_memory != nil and (is_nil(min_memory) or min_memory < 0),
       "#{path}.min_memory_mb must be zero or greater"
+    )
+    |> maybe_error(
+      memory_operator != nil and normalize_comparison_operator(memory_operator) == nil,
+      "#{path}.memory_operator must be >, >=, or =="
+    )
+    |> maybe_error(
+      api_version_operator != nil and normalize_comparison_operator(api_version_operator) == nil,
+      "#{path}.api_version_operator must be >, >=, or =="
     )
     |> maybe_error(
       not nil_or_list?(map_get(device, "ids")),
@@ -457,6 +467,9 @@ defmodule MirrorNeuron.ResourceSpec do
       "vendor" => blank_to_nil(map_get(device, "vendor")),
       "driver" => blank_to_nil(map_get(device, "driver")),
       "min_memory_mb" => number_value(map_get(device, "min_memory_mb")),
+      "memory_operator" => normalize_comparison_operator(map_get(device, "memory_operator")),
+      "min_api_version" => trim_to_nil(map_get(device, "min_api_version")),
+      "api_version_operator" => normalize_comparison_operator(map_get(device, "api_version_operator")),
       "capabilities" => list_value(map_get(device, "capabilities")),
       "ids" => list_value(map_get(device, "ids"))
     }
@@ -679,6 +692,16 @@ defmodule MirrorNeuron.ResourceSpec do
   defp driver_from_vendor("amd"), do: "rocm"
   defp driver_from_vendor("apple"), do: "metal"
   defp driver_from_vendor(_vendor), do: nil
+
+  defp normalize_comparison_operator(nil), do: nil
+
+  defp normalize_comparison_operator(value) do
+    case value |> to_string() |> String.trim() do
+      operator when operator in [">", ">=", "=="] -> operator
+      "=" -> "=="
+      _other -> nil
+    end
+  end
 
   defp kind_from_type(nil), do: nil
 

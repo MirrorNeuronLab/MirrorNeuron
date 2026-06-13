@@ -3,6 +3,7 @@ defmodule MirrorNeuron.Scheduler do
 
   alias MirrorNeuron.Cluster.{Hardware, NodeState}
   alias MirrorNeuron.Artifacts.BlobRef
+  alias MirrorNeuron.HardwareRequirements
   alias MirrorNeuron.Manifest
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Resource
@@ -1255,6 +1256,9 @@ defmodule MirrorNeuron.Scheduler do
     request_capabilities = Map.get(request, "capabilities", [])
     request_ids = Map.get(request, "ids", [])
     min_memory = Map.get(request, "min_memory_mb")
+    memory_operator = Map.get(request, "memory_operator") || ">="
+    min_api_version = Map.get(request, "min_api_version")
+    api_version_operator = Map.get(request, "api_version_operator") || ">="
 
     device_kind = String.downcase(to_string(Map.get(device, "kind") || ""))
     device_type = String.downcase(to_string(Map.get(device, "type") || ""))
@@ -1276,7 +1280,12 @@ defmodule MirrorNeuron.Scheduler do
       request_driver in [nil, ""] or request_driver == device_driver,
       request_ids == [] or device_id in Enum.map(request_ids, &to_string/1),
       Enum.all?(request_capabilities, &(String.downcase(to_string(&1)) in device_capabilities)),
-      is_nil(min_memory) or (is_number(device_memory) and device_memory >= min_memory)
+      HardwareRequirements.memory_matches?(device_memory, min_memory, memory_operator),
+      HardwareRequirements.version_matches?(
+        Map.get(device, "api_version"),
+        min_api_version,
+        api_version_operator
+      )
     ])
   end
 

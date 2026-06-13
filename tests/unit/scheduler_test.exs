@@ -1451,6 +1451,64 @@ defmodule MirrorNeuron.SchedulerTest do
     assert [%{"node" => "cuda@lab"}] = plan["placements"]
   end
 
+  test "strict CUDA API and GPU memory device requirements filter placement" do
+    {:ok, manifest} =
+      load_manifest(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "strict-gpu-device",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{
+              "devices" => [
+                %{
+                  "kind" => "gpu",
+                  "vendor" => "nvidia",
+                  "driver" => "cuda",
+                  "min_api_version" => "12.0",
+                  "api_version_operator" => ">",
+                  "min_memory_mb" => 49_152,
+                  "memory_operator" => ">"
+                }
+              ]
+            }
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    assert {:error, exact_cuda_reason} =
+             Scheduler.plan(manifest, nodes: [h100_node() |> put_gpu_api_version("12.0")], jobs: [])
+
+    assert exact_cuda_reason =~ "devices, ports, volumes, or runtime driver not available"
+
+    assert {:error, exact_memory_reason} =
+             Scheduler.plan(
+               manifest,
+               nodes: [h100_node() |> put_gpu_api_version("12.1") |> put_gpu_memory(49_152)],
+               jobs: []
+             )
+
+    assert exact_memory_reason =~ "devices, ports, volumes, or runtime driver not available"
+
+    assert {:error, split_memory_reason} =
+             Scheduler.plan(manifest, nodes: [cuda_node() |> put_gpu_api_version("12.1")], jobs: [])
+
+    assert split_memory_reason =~ "devices, ports, volumes, or runtime driver not available"
+
+    assert {:ok, plan} =
+             Scheduler.plan(manifest, nodes: [h100_node() |> put_gpu_api_version("12.1")], jobs: [])
+
+    assert [%{"node" => "h100@lab", "allocations" => %{"devices" => [device]}}] =
+             plan["placements"]
+
+    assert device["id"] == "h100-0"
+  end
+
   test "allocated device ids and explicit ports are exclusive across active placements" do
     {:ok, manifest} =
       load_manifest(%{
@@ -1766,6 +1824,22 @@ defmodule MirrorNeuron.SchedulerTest do
         ]
       }
     }
+  end
+
+  defp put_gpu_api_version(node, version) do
+    update_in(node, ["hardware", "gpu"], fn gpus ->
+      Enum.map(gpus, &Map.put(&1, "api_version", version))
+    end)
+  end
+
+  defp put_gpu_memory(node, memory_mb) do
+    update_in(node, ["hardware", "gpu"], fn gpus ->
+      Enum.map(gpus, fn gpu ->
+        gpu
+        |> Map.put("memory_total_mb", memory_mb)
+        |> Map.put("memory_free_mb", memory_mb)
+      end)
+    end)
   end
 
   defp capabilityless_h100_node do

@@ -36,6 +36,66 @@ defmodule MirrorNeuron.BlueprintValidationTest do
     assert reason =~ "disk"
   end
 
+  test "hard NVIDIA CUDA GPU requirements match one working node strictly" do
+    manifest = %Manifest{
+      requirements: %{
+        "gpu" => %{
+          "min_count" => 1,
+          "vendor" => "nvidia",
+          "driver" => "cuda",
+          "min_api_version" => "12.0",
+          "api_version_operator" => ">",
+          "min_memory_mb" => 49_152,
+          "memory_operator" => ">",
+          "enforcement" => "hard"
+        }
+      },
+      metadata: %{}
+    }
+
+    no_nvidia = %{nodes: [gpu_node("amd@lab", vendor: "amd", driver: "rocm", api_version: "6.1", memory: 65_536)]}
+    exact_cuda = %{nodes: [gpu_node("cuda12@lab", api_version: "12.0", memory: 65_536)]}
+    exact_memory = %{nodes: [gpu_node("cuda48@lab", api_version: "12.1", memory: 49_152)]}
+    split_memory = %{
+      nodes: [
+        gpu_node("cuda24a@lab", api_version: "12.1", memory: 24_576),
+        gpu_node("cuda24b@lab", api_version: "12.1", memory: 24_576)
+      ]
+    }
+    passing = %{nodes: [gpu_node("h100@lab", api_version: "12.1", memory: 81_920)]}
+
+    for snapshot <- [no_nvidia, exact_cuda, exact_memory, split_memory] do
+      assert {:error, "requirements_not_met:" <> reason} =
+               BlueprintValidation.check_requirements(manifest, snapshot)
+
+      assert {:ok, report} = Jason.decode(String.trim(reason))
+      assert Enum.any?(report["issues"], &(&1["code"] == "requirements.gpu_node_unavailable"))
+    end
+
+    assert :ok = BlueprintValidation.check_requirements(manifest, passing)
+  end
+
+  test "force metadata does not skip hard GPU requirements" do
+    manifest = %Manifest{
+      requirements: %{
+        "gpu" => %{
+          "min_count" => 1,
+          "vendor" => "nvidia",
+          "driver" => "cuda",
+          "min_api_version" => "12.0",
+          "api_version_operator" => ">",
+          "min_memory_mb" => 49_152,
+          "memory_operator" => ">",
+          "enforcement" => "hard"
+        }
+      },
+      metadata: %{"mn_validation" => %{"force" => true}}
+    }
+
+    assert {:error, "requirements_not_met:" <> _reason} =
+             BlueprintValidation.check_requirements(manifest, %{nodes: []})
+  end
+
   test "runs pattern and command input validation rules from a bundle" do
     root = Path.join(System.tmp_dir!(), "mn-validation-#{System.unique_integer([:positive])}")
     on_exit(fn -> File.rm_rf!(root) end)
@@ -106,5 +166,31 @@ defmodule MirrorNeuron.BlueprintValidationTest do
              BlueprintValidation.check_requirements(manifest, %{cpu: %{logical_processors: 1}})
 
     assert :ok = BlueprintValidation.run_input_validation(%JobBundle{manifest: manifest})
+  end
+
+  defp gpu_node(name, opts) do
+    vendor = Keyword.get(opts, :vendor, "nvidia")
+    driver = Keyword.get(opts, :driver, "cuda")
+    api_version = Keyword.fetch!(opts, :api_version)
+    memory = Keyword.fetch!(opts, :memory)
+
+    %{
+      "name" => name,
+      "status" => "healthy",
+      "scheduling_eligible" => true,
+      "devices" => [
+        %{
+          "id" => "#{name}-gpu-0",
+          "kind" => "gpu",
+          "type" => "#{vendor}/gpu",
+          "vendor" => vendor,
+          "driver" => driver,
+          "api_version" => api_version,
+          "memory_total_mb" => memory,
+          "memory_free_mb" => memory,
+          "capabilities" => ["gpu", vendor, driver]
+        }
+      ]
+    }
   end
 end

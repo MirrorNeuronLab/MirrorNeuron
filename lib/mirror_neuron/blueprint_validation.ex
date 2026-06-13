@@ -2,6 +2,7 @@ defmodule MirrorNeuron.BlueprintValidation do
   @moduledoc false
 
   alias MirrorNeuron.Cluster.Hardware
+  alias MirrorNeuron.HardwareRequirements
   alias MirrorNeuron.JobBundle
 
   def force?(manifest) do
@@ -31,11 +32,11 @@ defmodule MirrorNeuron.BlueprintValidation do
   end
 
   def check_requirements(manifest, snapshot \\ hardware_info()) do
-    if force?(manifest) do
+    requirements = map_value(manifest.requirements)
+
+    if force?(manifest) and not HardwareRequirements.hard_gpu_requirement?(requirements) do
       :ok
     else
-      requirements = map_value(manifest.requirements)
-
       case requirement_violations(requirements, snapshot) do
         [] -> :ok
         issues -> {:error, "requirements_not_met: " <> Jason.encode!(validation_report(issues))}
@@ -74,7 +75,29 @@ defmodule MirrorNeuron.BlueprintValidation do
       capacity.disk_gb,
       "GB"
     )
+    |> maybe_gpu_requirement_violation(requirements, snapshot)
     |> Enum.reverse()
+  end
+
+  defp maybe_gpu_requirement_violation(errors, requirements, snapshot) do
+    case HardwareRequirements.gpu_requirement_issue(requirements, snapshot) do
+      nil ->
+        errors
+
+      issue ->
+        [
+          issue(
+            issue.code,
+            issue.message,
+            help: issue.help,
+            source: "requirements",
+            path: "gpu",
+            expected: issue.expected,
+            actual: issue.actual
+          )
+          | errors
+        ]
+    end
   end
 
   defp run_rule(rule, %JobBundle{} = bundle) when is_map(rule) do
@@ -567,16 +590,32 @@ defmodule MirrorNeuron.BlueprintValidation do
   defp input_rules(_validation), do: []
 
   defp capacity(snapshot) do
-    cpu = number_or_zero(path_get(snapshot, "cpu.logical_processors"))
-    gpu = gpu_count(map_get(snapshot, "gpu"))
-    memory = memory_gb(map_get(snapshot, "memory"))
-    disk = disk_available_gb(map_get(snapshot, "disk"))
+    snapshot = map_value(snapshot)
+
+    {cpu, gpu, memory, disk} =
+      case map_get(snapshot, "nodes") do
+        nodes when is_list(nodes) ->
+          {
+            Enum.sum(Enum.map(nodes, &node_cpu_count/1)),
+            Enum.sum(Enum.map(nodes, &node_gpu_count/1)),
+            Enum.sum(Enum.map(nodes, &node_memory_gb/1)),
+            Enum.sum(Enum.map(nodes, &node_disk_gb/1))
+          }
+
+        _nodes ->
+          {
+            number_or_zero(path_get(snapshot, "cpu.logical_processors")),
+            gpu_count(map_get(snapshot, "gpu")),
+            memory_gb(map_get(snapshot, "memory")),
+            disk_available_gb(map_get(snapshot, "disk"))
+          }
+      end
 
     %{
       cpu_cores: floor_number(cpu),
       gpu_count: floor_number(gpu),
-      memory_gb: Float.round(memory, 2),
-      disk_gb: Float.round(disk, 2)
+      memory_gb: Float.round(memory * 1.0, 2),
+      disk_gb: Float.round(disk * 1.0, 2)
     }
   end
 
@@ -685,6 +724,47 @@ defmodule MirrorNeuron.BlueprintValidation do
   end
 
   defp disk_available_gb(_disk), do: 0
+
+  defp node_cpu_count(node) when is_map(node) do
+    node = map_value(node)
+    number_or_zero(map_get(node, "cpu_cores") || path_get(node, "hardware.cpu.logical_processors"))
+  end
+
+  defp node_cpu_count(_node), do: 0
+
+  defp node_gpu_count(node) when is_map(node) do
+    node = map_value(node)
+
+    cond do
+      value = map_get(node, "gpu_count") -> number_or_zero(value)
+      devices = map_get(node, "devices") -> gpu_count(devices)
+      true -> gpu_count(path_get(node, "hardware.gpu"))
+    end
+  end
+
+  defp node_gpu_count(_node), do: 0
+
+  defp node_memory_gb(node) when is_map(node) do
+    node = map_value(node)
+
+    case map_get(node, "memory_total_gb") || map_get(node, "memory_gb") do
+      nil -> memory_gb(path_get(node, "hardware.memory"))
+      value -> number_or_zero(value)
+    end
+  end
+
+  defp node_memory_gb(_node), do: 0
+
+  defp node_disk_gb(node) when is_map(node) do
+    node = map_value(node)
+
+    case map_get(node, "disk_available_gb") || map_get(node, "disk_gb") do
+      nil -> disk_available_gb(path_get(node, "hardware.disk"))
+      value -> number_or_zero(value)
+    end
+  end
+
+  defp node_disk_gb(_node), do: 0
 
   defp gpu_count(gpus) when is_list(gpus), do: length(gpus)
 
@@ -839,8 +919,11 @@ defmodule MirrorNeuron.BlueprintValidation do
   defp truthy?(_value), do: false
 
   defp hardware_info do
-    :mirror_neuron
-    |> Application.get_env(:hardware_module, Hardware)
-    |> apply(:info, [])
+    MirrorNeuron.Resource.list()
+  rescue
+    _error ->
+      :mirror_neuron
+      |> Application.get_env(:hardware_module, Hardware)
+      |> apply(:info, [])
   end
 end
