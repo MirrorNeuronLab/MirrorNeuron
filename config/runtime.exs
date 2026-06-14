@@ -71,13 +71,4 @@ config :mirror_neuron,
       "False",
       ""
     ],
-  grpc_port: String.to_integer(System.get_env("MN_GRPC_PORT", "50051")),
-  api_port: String.to_integer(System.get_env("MN_API_PORT", "4000")),
-  api_enabled:
-    System.get_env("MN_API_ENABLED", "true") not in [
-      "0",
-      "false",
-      "FALSE",
-      "False",
-      ""
-    ]
+  grpc_port: String.to_integer(System.get_env("MN_GRPC_PORT", "50051"))

@@ -483,7 +483,7 @@ Runtime configuration is read from environment variables in `config/runtime.exs`
 | `MN_CORE_HOST` | Host/IP used by the gRPC listener; defaults to loopback-style local binding. |
 | `MN_GRPC_PORT` | gRPC service port. |
 | `MN_GRPC_AUTH_TOKEN` | Bearer token for protected gRPC calls such as pause, resume, and resource updates. |
-| `MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN` | Required token for destructive administrative calls such as `ClearJobs`. |
+| `MN_GRPC_ADMIN_TOKEN` | Required token for destructive administrative calls such as `ClearJobs`. |
 | `MN_NODE_NAME` | Erlang node name used by release and cluster scripts. |
 | `MN_CLUSTER_NODES` | Comma-separated Erlang node names for cluster discovery. |
 | `MN_COOKIE` | Erlang distribution cookie; use a strong non-default value for distributed nodes. |
@@ -518,12 +518,12 @@ MirrorNeuron Core includes protobuf definitions and generated Elixir modules for
 - `proto/cluster.proto`
 - `proto/observability.proto`
 
-Generated modules live under `lib/mirror_neuron_grpc/`. The gRPC listener is
-controlled by `MN_API_ENABLED` and binds to `MN_CORE_HOST`.
+Generated modules live under `lib/mirror_neuron_grpc/`. The gRPC listener binds
+to `MN_CORE_HOST` and listens on `MN_GRPC_PORT`.
 
 `JobService.ClearJobs` is a destructive administrative RPC. It is denied unless
-the server has `MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN` set and the request includes
-the same value in `admin_token`.
+the server has `MN_GRPC_ADMIN_TOKEN` set and the request includes the same value
+in `admin_token`.
 
 `ClusterService.NetworkHandshake` is used by cluster join flows to verify the
 join token and keep network-facing nodes scoped to cluster/resource inspection

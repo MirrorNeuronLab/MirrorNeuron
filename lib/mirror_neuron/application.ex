@@ -72,18 +72,14 @@ defmodule MirrorNeuron.Application do
 
   @doc false
   def grpc_child_specs do
-    if Config.boolean("MN_API_ENABLED", :api_enabled) do
-      grpc_port = Config.integer("MN_GRPC_PORT", :grpc_port)
-      grpc_host = System.get_env("MN_CORE_HOST", "localhost")
+    grpc_port = Config.integer("MN_GRPC_PORT", :grpc_port)
+    grpc_host = System.get_env("MN_CORE_HOST", "localhost")
 
-      [
-        {GRPC.Server.Supervisor,
-         [endpoint: MirrorNeuron.Grpc.Endpoint, port: grpc_port, start_server: true] ++
-           grpc_bind_opts(grpc_host)}
-      ]
-    else
-      []
-    end
+    [
+      {GRPC.Server.Supervisor,
+       [endpoint: MirrorNeuron.Grpc.Endpoint, port: grpc_port, start_server: true] ++
+         grpc_bind_opts(grpc_host)}
+    ]
   end
 
   def grpc_bind_opts(host) do

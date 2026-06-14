@@ -36,7 +36,6 @@ defmodule MirrorNeuron.Config do
   def validate! do
     validate_mirror_neuron_env!()
     validate_port!("MN_GRPC_PORT", System.get_env("MN_GRPC_PORT", "50051"))
-    validate_port!("MN_API_PORT", string("MN_API_PORT", :api_port))
     validate_redis_config!()
     validate_queue_limits!()
     validate_sandbox_limits!()
