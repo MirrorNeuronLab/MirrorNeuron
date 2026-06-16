@@ -63,6 +63,38 @@ defmodule MirrorNeuron.ModelCatalogTest do
     assert Enum.all?(services, &(&1["node"] == "node@lab"))
   end
 
+  test "compose injected docker model runner env advertises the current node model service" do
+    env = %{
+      "MN_NODE_RUNTIME_MODELS" => "gemma4:e2b",
+      "MN_DOCKER_MODEL_RUNNER_MODEL" => "ai/gemma4:E2B",
+      "MN_DOCKER_MODEL_RUNNER_API_BASE" => "http://model-runner.docker.internal/engines/v1"
+    }
+
+    refs = ModelServices.env_model_refs(env)
+    services = ModelServices.service_instances_for_models(refs, "node@lab")
+
+    assert refs == ["gemma4:e2b", "ai/gemma4:E2B"]
+    assert [%{"name" => "docker-model-runner", "node" => "node@lab"}] = services
+  end
+
+  test "advertised compose model services include a model runner health check" do
+    env = %{
+      "MN_DOCKER_MODEL_RUNNER_MODEL" => "ai/gemma4:E2B",
+      "MN_DOCKER_MODEL_RUNNER_API_BASE" => "http://model-runner.docker.internal/engines/v1"
+    }
+
+    [service] = ModelServices.service_instances_for_env(env, "node@lab")
+
+    assert service["name"] == "docker-model-runner"
+
+    assert [
+             %{
+               "type" => "http",
+               "url" => "http://model-runner.docker.internal/engines/v1/models"
+             }
+           ] = service["checks"]
+  end
+
   test "model services use advertised host identity when docker hostname differs" do
     env = %{"MN_NETWORK_ADVERTISE_HOST" => "192.168.4.173"}
 
