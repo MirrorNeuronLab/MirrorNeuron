@@ -175,7 +175,16 @@ defmodule MirrorNeuron.ModelCatalog do
   defp external_catalog_paths do
     []
     |> maybe_cons(System.get_env("MN_MODEL_CATALOG_PATH"))
-    |> Kernel.++([Path.expand("~/.mn/models/catalog.json")])
+    |> Kernel.++([Path.join(mn_home(), "models/catalog.json")])
+  end
+
+  defp mn_home do
+    System.get_env("MN_HOME")
+    |> case do
+      nil -> Path.expand("~/.mn")
+      "" -> Path.expand("~/.mn")
+      path -> Path.expand(path)
+    end
   end
 
   defp maybe_cons(paths, nil), do: paths

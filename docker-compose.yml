@@ -137,8 +137,8 @@ services:
       MN_BLOB_STORE_ROOT: ${MN_CONTAINER_BLOB_STORE_ROOT:-/root/.mn/shared/blobs}
       MN_JOB_ARTIFACT_ROOT: ${MN_CONTAINER_JOB_ARTIFACT_ROOT:-/root/.mn/shared/jobs}
       MN_RUNS_ROOT: ${MN_CONTAINER_RUNS_ROOT:-/root/.mn/runs}
-      MN_SHARED_STORAGE_ROOT: ${MN_RUNTIME_SHARED_STORAGE_ROOT:-${MN_CONTAINER_SHARED_STORAGE_ROOT:-${MN_CONTAINER_SHARED_ARTIFACT_ROOT:-/root/.mn/shared}}}
-      MN_RUNTIME_SHARED_STORAGE_ROOT: ${MN_RUNTIME_SHARED_STORAGE_ROOT:-${MN_CONTAINER_SHARED_STORAGE_ROOT:-${MN_CONTAINER_SHARED_ARTIFACT_ROOT:-/root/.mn/shared}}}
+      MN_SHARED_STORAGE_ROOT: ${MN_RUNTIME_SHARED_STORAGE_ROOT:-${MN_CONTAINER_SHARED_STORAGE_ROOT:-/root/.mn/shared}}
+      MN_RUNTIME_SHARED_STORAGE_ROOT: ${MN_RUNTIME_SHARED_STORAGE_ROOT:-${MN_CONTAINER_SHARED_STORAGE_ROOT:-/root/.mn/shared}}
       MN_BLUEPRINT_WEB_UI_BIND_HOST: ${MN_BLUEPRINT_WEB_UI_BIND_HOST:-0.0.0.0}
       MN_BLUEPRINT_WEB_UI_PUBLIC_HOST: ${MN_BLUEPRINT_WEB_UI_PUBLIC_HOST:-localhost}
       MN_BLUEPRINT_WEB_UI_PORT_START: ${MN_BLUEPRINT_WEB_UI_PORT_START:-58000}
@@ -149,7 +149,7 @@ services:
       MN_COOKIE: ${MN_COOKIE:-}
       MN_GRPC_AUTH_TOKEN: ${MN_GRPC_AUTH_TOKEN:-}
       MN_GRPC_AUTH_TOKEN_FILE: ${MN_GRPC_AUTH_TOKEN_FILE:-/root/.mn/grpc_auth.token}
-      MN_GRPC_ADMIN_TOKEN: ${MN_GRPC_ADMIN_TOKEN:-${MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN:-}}
+      MN_GRPC_ADMIN_TOKEN: ${MN_GRPC_ADMIN_TOKEN:-}
       MN_GRPC_ADMIN_TOKEN_FILE: ${MN_GRPC_ADMIN_TOKEN_FILE:-/root/.mn/grpc_admin.token}
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
       SLACK_DEFAULT_CHANNEL: ${SLACK_DEFAULT_CHANNEL:-}
@@ -161,14 +161,12 @@ services:
       redis:
         condition: service_started
     volumes:
-      - ${MN_HOST_STATE_DIR:-./state}:/root/.mirror_neuron
-      - ${MN_HOST_STATE_DIR:-./state}:/opt/mirror_neuron/.mirror_neuron
-      - ${MN_HOST_HOME_DIR:-${MN_HOST_MN_DIR:-./mn}}:/root/.mn
-      - ${MN_HOST_HOME_DIR:-${MN_HOST_MN_DIR:-./mn}}:/opt/mirror_neuron/.mn
+      - ${MN_HOST_HOME_DIR:-./mn}:/root/.mn
+      - ${MN_HOST_HOME_DIR:-./mn}:/opt/mirror_neuron/.mn
       - ${MN_HOST_ARTIFACTS_DIR:-./mn/runs}:/root/.mn/runs
       - ${MN_HOST_ARTIFACTS_DIR:-./mn/runs}:/opt/mirror_neuron/.mn/runs
-      - ${MN_SHARED_STORAGE_ROOT:-${MN_HOST_SHARED_STORAGE_ROOT:-${MN_HOST_SHARED_ARTIFACT_ROOT:-./mn/shared}}}:${MN_RUNTIME_SHARED_STORAGE_ROOT:-${MN_CONTAINER_SHARED_STORAGE_ROOT:-${MN_CONTAINER_SHARED_ARTIFACT_ROOT:-/root/.mn/shared}}}
-      - ${MN_SHARED_STORAGE_ROOT:-${MN_HOST_SHARED_STORAGE_ROOT:-${MN_HOST_SHARED_ARTIFACT_ROOT:-./mn/shared}}}:/opt/mirror_neuron/.mn/shared
+      - ${MN_SHARED_STORAGE_ROOT:-${MN_HOST_SHARED_STORAGE_ROOT:-./mn/shared}}:${MN_RUNTIME_SHARED_STORAGE_ROOT:-${MN_CONTAINER_SHARED_STORAGE_ROOT:-/root/.mn/shared}}
+      - ${MN_SHARED_STORAGE_ROOT:-${MN_HOST_SHARED_STORAGE_ROOT:-./mn/shared}}:/opt/mirror_neuron/.mn/shared
       - ${MN_HOST_OPENSHELL_CONFIG_DIR:-./openshell-config}:/root/.config/openshell:ro
       - ${MN_HOST_OPENSHELL_CONFIG_DIR:-./openshell-config}:/opt/mirror_neuron/.config/openshell:ro
     networks:

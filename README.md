@@ -503,7 +503,7 @@ repo.
 Large job payloads are shared by filesystem path, not by a MirrorNeuron HTTP
 artifact server. For a LAN cluster, mount the same NFS export on every host and
 bind-mount it into each container at the same logical location. The Docker
-Compose default expects `${MN_HOST_SHARED_ARTIFACT_ROOT:-./mn/shared}` to contain
+Compose default expects `${MN_HOST_SHARED_STORAGE_ROOT:-./mn/shared}` to contain
 `blobs/` for durable sha256 content and `jobs/` for temporary per-job staging.
 MirrorNeuron does not start or expose NFS ports itself; the host OS owns the NFS
 mount lifecycle.

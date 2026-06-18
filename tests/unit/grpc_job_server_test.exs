@@ -24,7 +24,6 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
   @admin_token_env "MN_GRPC_ADMIN_TOKEN"
   @admin_token_file_env "MN_GRPC_ADMIN_TOKEN_FILE"
-  @legacy_admin_token_env "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN"
   @operator_token_env "MN_GRPC_AUTH_TOKEN"
   @operator_token_file_env "MN_GRPC_AUTH_TOKEN_FILE"
   @test_pid_name :grpc_job_server_test_pid
@@ -146,7 +145,6 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
     old_token = System.get_env(@admin_token_env)
     old_token_file = System.get_env(@admin_token_file_env)
-    old_legacy_token = System.get_env(@legacy_admin_token_env)
     old_operator_token = System.get_env(@operator_token_env)
     old_operator_token_file = System.get_env(@operator_token_file_env)
     old_network_only = System.get_env("MN_NETWORK_ONLY")
@@ -180,7 +178,6 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
     System.delete_env(@admin_token_env)
     System.delete_env(@admin_token_file_env)
-    System.delete_env(@legacy_admin_token_env)
     System.delete_env(@operator_token_file_env)
     System.delete_env("MN_NETWORK_ONLY")
     System.delete_env("MN_NETWORK_JOIN_TOKEN")
@@ -198,7 +195,6 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       restore_system_env("MN_REDIS_NAMESPACE", old_system_namespace)
       restore_env(@admin_token_env, old_token)
       restore_env(@admin_token_file_env, old_token_file)
-      restore_env(@legacy_admin_token_env, old_legacy_token)
       restore_env(@operator_token_env, old_operator_token)
       restore_env(@operator_token_file_env, old_operator_token_file)
       restore_env("MN_NETWORK_ONLY", old_network_only)

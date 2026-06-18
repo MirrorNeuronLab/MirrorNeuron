@@ -7,14 +7,13 @@ defmodule MirrorNeuron.Grpc.Tokens do
   @auth_token_file_env "MN_GRPC_AUTH_TOKEN_FILE"
   @admin_token_env "MN_GRPC_ADMIN_TOKEN"
   @admin_token_file_env "MN_GRPC_ADMIN_TOKEN_FILE"
-  @legacy_admin_token_env "MN_MIRROR_NEURON_GRPC_ADMIN_TOKEN"
 
   def auth_token do
     resolve_token(@auth_token_file_env, [@auth_token_env])
   end
 
   def admin_token do
-    resolve_token(@admin_token_file_env, [@admin_token_env, @legacy_admin_token_env])
+    resolve_token(@admin_token_file_env, [@admin_token_env])
   end
 
   def secure_compare(left, right) when is_binary(left) and is_binary(right) do
