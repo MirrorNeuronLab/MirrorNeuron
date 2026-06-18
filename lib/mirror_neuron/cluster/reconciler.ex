@@ -34,11 +34,16 @@ defmodule MirrorNeuron.Cluster.Reconciler do
         |> Enum.filter(&(Map.get(&1, "status") in @active_statuses))
         |> filter_only_job_ids(Keyword.get(opts, :only_job_ids))
         |> Enum.reduce(@empty_result, fn job, acc ->
-          if affected_by_node?(job, node_name) do
-            record(acc, enqueue_or_run_affected_job(job, node_name, opts))
-          else
-            record(acc, skipped(job, "job is not affected by #{node_name}"))
-          end
+          result =
+            safe_job_result(job, "node reconciliation", fn ->
+              if affected_by_node?(job, node_name) do
+                enqueue_or_run_affected_job(job, node_name, opts)
+              else
+                skipped(job, "job is not affected by #{node_name}")
+              end
+            end)
+
+          record(acc, result)
         end)
 
       {:ok, finalize_result(result)}
@@ -89,7 +94,12 @@ defmodule MirrorNeuron.Cluster.Reconciler do
         |> Enum.filter(&(Map.get(&1, "status") in @active_statuses))
         |> Enum.filter(fn job -> is_nil(owner_node) or lease_owner(job) == owner_node end)
         |> Enum.reduce(@empty_result, fn job, acc ->
-          record(acc, enqueue_or_run_orphaned_job(job, opts))
+          result =
+            safe_job_result(job, "orphan sweep", fn ->
+              enqueue_or_run_orphaned_job(job, opts)
+            end)
+
+          record(acc, result)
         end)
 
       {:ok, finalize_result(result)}
@@ -102,7 +112,12 @@ defmodule MirrorNeuron.Cluster.Reconciler do
         evals
         |> Enum.filter(&due_eval?/1)
         |> Enum.reduce(@empty_result, fn eval, acc ->
-          record(acc, process_recovery_eval(eval, opts))
+          result =
+            safe_eval_result(eval, opts, fn ->
+              process_recovery_eval(eval, opts)
+            end)
+
+          record(acc, result)
         end)
 
       {:ok, finalize_result(result)}
@@ -154,9 +169,26 @@ defmodule MirrorNeuron.Cluster.Reconciler do
     if dry_run?(opts) or Keyword.has_key?(opts, :eval) do
       reconcile_orphaned_job(job, opts)
     else
-      failed_node = lease_owner(job)
-      reason = Keyword.get(opts, :reason, "lost job lease")
-      enqueue_and_process_eval(job, Keyword.fetch!(opts, :trigger), failed_node, [], reason, opts)
+      case redis_store(opts).get_lease("job:#{job["job_id"]}") do
+        {:ok, nil} ->
+          failed_node = lease_owner(job)
+          reason = Keyword.get(opts, :reason, "lost job lease")
+
+          enqueue_and_process_eval(
+            job,
+            Keyword.fetch!(opts, :trigger),
+            failed_node,
+            [],
+            reason,
+            opts
+          )
+
+        {:ok, _lease} ->
+          skipped(job, "job lease is still active")
+
+        {:error, reason} ->
+          failed(job, "could not inspect job lease: #{inspect(reason)}")
+      end
     end
   end
 
@@ -197,7 +229,6 @@ defmodule MirrorNeuron.Cluster.Reconciler do
             "reason" => reason,
             "failed_node" => failed_node,
             "affected_agents" => affected_agents,
-            "job" => job,
             "status" => "pending",
             "updated_at" => Runtime.timestamp()
           })
@@ -343,7 +374,6 @@ defmodule MirrorNeuron.Cluster.Reconciler do
       "failed_node" => failed_node,
       "affected_agents" => affected_agents,
       "attempt" => 0,
-      "job" => job,
       "created_at" => now,
       "updated_at" => now,
       "history" => []
@@ -1378,17 +1408,74 @@ defmodule MirrorNeuron.Cluster.Reconciler do
     :ok
   end
 
-  defp skipped(job, reason), do: %{job_id: job["job_id"], action: :skipped, reason: reason}
-  defp failed(job, reason), do: %{job_id: job["job_id"], action: :failed, reason: reason}
+  defp safe_job_result(job, context, fun) do
+    fun.()
+  rescue
+    error ->
+      failed(job, "#{context} exception: #{Exception.message(error)}")
+  catch
+    kind, reason ->
+      failed(job, "#{context} #{kind}: #{inspect(reason)}")
+  end
+
+  defp safe_eval_result(eval, opts, fun) do
+    fun.()
+  rescue
+    error ->
+      reason = "recovery eval #{Map.get(eval, "eval_id")} exception: #{Exception.message(error)}"
+      result = failed(eval_job(eval), reason)
+      mark_eval_failed(eval, result, reason, opts)
+      result
+  catch
+    kind, reason ->
+      reason = "recovery eval #{Map.get(eval, "eval_id")} #{kind}: #{inspect(reason)}"
+      result = failed(eval_job(eval), reason)
+      mark_eval_failed(eval, result, reason, opts)
+      result
+  end
+
+  defp mark_eval_failed(%{"eval_id" => eval_id} = eval, result, reason, opts) do
+    now = Runtime.timestamp()
+
+    _ =
+      update_recovery_eval(
+        eval_id,
+        %{
+          "status" => "failed",
+          "result" => stringify_result(result),
+          "block_reason" => nil,
+          "wait_until" => nil,
+          "completed_at" => now,
+          "updated_at" => now,
+          "history" => append_eval_history(eval, "failed", reason)
+        },
+        opts
+      )
+
+    :ok
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
+
+  defp mark_eval_failed(_eval, _result, _reason, _opts), do: :ok
+
+  defp skipped(job, reason), do: %{job_id: result_job_id(job), action: :skipped, reason: reason}
+  defp failed(job, reason), do: %{job_id: result_job_id(job), action: :failed, reason: reason}
 
   defp blocked(job, reason, extra),
-    do: Map.merge(%{job_id: job["job_id"], action: :blocked, reason: reason}, extra)
+    do: Map.merge(%{job_id: result_job_id(job), action: :blocked, reason: reason}, extra)
 
   defp paused(job, reason, extra),
-    do: Map.merge(%{job_id: job["job_id"], action: :paused_for_review, reason: reason}, extra)
+    do:
+      Map.merge(%{job_id: result_job_id(job), action: :paused_for_review, reason: reason}, extra)
 
   defp recovered(job, reason, extra),
-    do: Map.merge(%{job_id: job["job_id"], action: :recovered, reason: reason}, extra)
+    do: Map.merge(%{job_id: result_job_id(job), action: :recovered, reason: reason}, extra)
+
+  defp result_job_id(job) when is_map(job), do: Map.get(job, "job_id") || Map.get(job, :job_id)
+  defp result_job_id(_job), do: nil
 
   defp record(acc, result) do
     acc

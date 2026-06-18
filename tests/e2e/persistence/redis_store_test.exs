@@ -20,6 +20,8 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     old_system_namespace = System.get_env("MN_REDIS_NAMESPACE")
     old_event_max_count = Application.get_env(:mirror_neuron, :event_max_count)
     old_terminal_ttl = Application.get_env(:mirror_neuron, :terminal_job_ttl_seconds)
+    old_recovery_eval_ttl = Application.get_env(:mirror_neuron, :recovery_eval_ttl_seconds)
+    old_system_recovery_eval_ttl = System.get_env("MN_RECOVERY_EVAL_TTL_SECONDS")
     old_wait_replicas = Application.get_env(:mirror_neuron, :redis_wait_replicas)
     old_wait_timeout = Application.get_env(:mirror_neuron, :redis_wait_timeout_ms)
 
@@ -35,6 +37,8 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
       restore_env(:redis_namespace, old_namespace)
       restore_env(:event_max_count, old_event_max_count)
       restore_env(:terminal_job_ttl_seconds, old_terminal_ttl)
+      restore_env(:recovery_eval_ttl_seconds, old_recovery_eval_ttl)
+      restore_system_env("MN_RECOVERY_EVAL_TTL_SECONDS", old_system_recovery_eval_ttl)
       restore_env(:redis_wait_replicas, old_wait_replicas)
       restore_env(:redis_wait_timeout_ms, old_wait_timeout)
     end)
@@ -134,6 +138,48 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
              RedisStore.read_events(job_id)
 
     RedisStore.delete_job(job_id)
+  end
+
+  test "event persistence errors stay local and event bus sanitizes runtime diagnostics" do
+    bad_job_id = "bad-event-#{System.unique_integer([:positive])}"
+    job_id = "safe-event-bus-#{System.unique_integer([:positive])}"
+    callback = fn -> :ok end
+
+    assert {:error, _reason} =
+             RedisStore.append_event(bad_job_id, %{
+               "type" => "bad",
+               "callback" => callback
+             })
+
+    assert {:ok, _} = EventBus.subscribe(job_id)
+
+    assert :ok =
+             EventBus.publish(job_id, %{
+               type: :runtime_diagnostic,
+               payload: %{
+                 callback: callback,
+                 owner: self(),
+                 tuple: {:runtime, 1},
+                 status: :ok
+               }
+             })
+
+    assert_receive {:mirror_neuron_event,
+                    %{
+                      type: :runtime_diagnostic,
+                      payload: %{callback: received_callback, owner: owner}
+                    }},
+                   500
+
+    assert is_function(received_callback, 0)
+    assert owner == self()
+
+    assert {:ok, [stored]} = RedisStore.read_events(job_id)
+    assert stored["type"] == "runtime_diagnostic"
+    assert stored["payload"]["callback"] =~ "#Function"
+    assert stored["payload"]["owner"] =~ "#PID"
+    assert stored["payload"]["tuple"] == "{:runtime, 1}"
+    assert stored["payload"]["status"] == "ok"
   end
 
   test "service registry persists, resolves passing instances, and deregisters by agent" do
@@ -305,6 +351,123 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
 
     assert {:ok, [repaired]} = RedisStore.list_recovery_evals(["blocked"])
     assert repaired["eval_id"] == eval_id
+  end
+
+  test "legacy recovery evals with embedded jobs can still be fetched", %{namespace: namespace} do
+    eval_id = "legacy-job-eval-#{System.unique_integer([:positive])}"
+
+    legacy_eval = %{
+      "eval_id" => eval_id,
+      "job_id" => "legacy-job",
+      "status" => "complete",
+      "job" => %{"job_id" => "legacy-job", "manifest" => %{"graph_id" => "legacy"}}
+    }
+
+    assert {:ok, "OK"} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SET",
+               redis_key(namespace, ["recovery", "eval", eval_id]),
+               Jason.encode!(legacy_eval)
+             ])
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SADD",
+               redis_key(namespace, ["recovery", "evals"]),
+               eval_id
+             ])
+
+    assert {:ok, fetched} = RedisStore.fetch_recovery_eval(eval_id)
+    assert fetched["job"]["manifest"]["graph_id"] == "legacy"
+  end
+
+  test "terminal recovery evals receive ttl and active evals persist", %{namespace: namespace} do
+    System.put_env("MN_RECOVERY_EVAL_TTL_SECONDS", "120")
+    complete_id = "ttl-complete-eval-#{System.unique_integer([:positive])}"
+    pending_id = "ttl-pending-eval-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _eval} =
+             RedisStore.persist_recovery_eval(complete_id, %{
+               "job_id" => "job-a",
+               "status" => "complete"
+             })
+
+    assert {:ok, _eval} =
+             RedisStore.persist_recovery_eval(pending_id, %{
+               "job_id" => "job-a",
+               "status" => "pending"
+             })
+
+    assert {:ok, complete_ttl} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "TTL",
+               redis_key(namespace, ["recovery", "eval", complete_id])
+             ])
+
+    assert complete_ttl > 0
+    assert complete_ttl <= 120
+
+    assert {:ok, -1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "TTL",
+               redis_key(namespace, ["recovery", "eval", pending_id])
+             ])
+  end
+
+  test "retention sweep removes expired recovery evals and stale index ids",
+       %{namespace: namespace} do
+    old_eval_id = "expired-eval-#{System.unique_integer([:positive])}"
+    stale_eval_id = "stale-eval-#{System.unique_integer([:positive])}"
+    status_only_eval_id = "status-only-eval-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _eval} =
+             RedisStore.persist_recovery_eval(old_eval_id, %{
+               "job_id" => "job-a",
+               "status" => "complete",
+               "updated_at" => "2026-01-01T00:00:00Z"
+             })
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SADD",
+               redis_key(namespace, ["recovery", "evals"]),
+               stale_eval_id
+             ])
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SADD",
+               redis_key(namespace, ["recovery", "evals", "status", "complete"]),
+               stale_eval_id
+             ])
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SADD",
+               redis_key(namespace, ["recovery", "evals", "status", "failed"]),
+               status_only_eval_id
+             ])
+
+    System.put_env("MN_RECOVERY_EVAL_TTL_SECONDS", "0")
+
+    assert {:ok, result} = RedisStore.sweep_retention()
+    assert old_eval_id in result.deleted_recovery_evals
+    assert stale_eval_id in result.stale_recovery_evals
+    assert status_only_eval_id in result.stale_recovery_evals
+    assert {:error, _reason} = RedisStore.fetch_recovery_eval(old_eval_id)
+
+    for {status, eval_id} <- [
+          {"complete", old_eval_id},
+          {"complete", stale_eval_id},
+          {"failed", status_only_eval_id}
+        ] do
+      assert {:ok, 0} =
+               Redix.command(MirrorNeuron.Redis.Connection, [
+                 "SISMEMBER",
+                 redis_key(namespace, ["recovery", "evals", "status", status]),
+                 eval_id
+               ])
+    end
   end
 
   test "repair_recovery_indexes makes orphaned checkpoints discoverable and removes stale index entries",
@@ -589,14 +752,26 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
                "trigger" => "node_down",
                "status" => "pending",
                "attempt" => 0,
-               "affected_agents" => ["worker"]
+               "affected_agents" => ["worker"],
+               "job" => %{
+                 "job_id" => "job-a",
+                 "manifest" => %{"payload" => String.duplicate("x", 1024)}
+               },
+               "manifest" => %{"payload" => String.duplicate("y", 1024)},
+               "runtime_logs" => ["noisy runtime line"]
              })
 
     assert eval["eval_id"] == eval_id
     assert eval["status"] == "pending"
+    refute Map.has_key?(eval, "job")
+    refute Map.has_key?(eval, "manifest")
+    refute Map.has_key?(eval, "runtime_logs")
 
     assert {:ok, fetched} = RedisStore.fetch_recovery_eval(eval_id)
     assert fetched["affected_agents"] == ["worker"]
+    refute Map.has_key?(fetched, "job")
+    refute Map.has_key?(fetched, "manifest")
+    refute Map.has_key?(fetched, "runtime_logs")
 
     assert {:ok, evals} = RedisStore.list_recovery_evals()
     assert Enum.any?(evals, &(&1["eval_id"] == eval_id))
@@ -609,6 +784,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
 
     assert updated["status"] == "blocked"
     assert updated["wait_until"] == "2030-01-01T00:00:00Z"
+    refute Map.has_key?(updated, "job")
   end
 
   test "bundle archive store reuses an existing fingerprint archive" do

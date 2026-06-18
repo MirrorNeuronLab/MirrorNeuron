@@ -13,6 +13,16 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
       do: :persistent_term.put({__MODULE__, :agents, job_id}, agents)
 
     def put_lease(job_id, lease), do: :persistent_term.put({__MODULE__, :lease, job_id}, lease)
+    def clear_lease(job_id), do: :persistent_term.erase({__MODULE__, :lease, job_id})
+    def raise_on_lease(job_id), do: :persistent_term.put({__MODULE__, :raise_lease, job_id}, true)
+
+    def clear_raise_on_lease(job_id),
+      do: :persistent_term.erase({__MODULE__, :raise_lease, job_id})
+
+    def raise_on_fetch(job_id), do: :persistent_term.put({__MODULE__, :raise_fetch, job_id}, true)
+
+    def clear_raise_on_fetch(job_id),
+      do: :persistent_term.erase({__MODULE__, :raise_fetch, job_id})
 
     def put_evals(evals),
       do: :persistent_term.put({__MODULE__, :evals}, Map.new(evals, &{&1["eval_id"], &1}))
@@ -20,6 +30,10 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
     def list_jobs, do: {:ok, :persistent_term.get({__MODULE__, :jobs}, [])}
 
     def fetch_job(job_id) do
+      if :persistent_term.get({__MODULE__, :raise_fetch, job_id}, false) do
+        raise "fetch backend exploded for #{job_id}"
+      end
+
       case Enum.find(
              :persistent_term.get({__MODULE__, :jobs}, []),
              &(Map.get(&1, "job_id") == job_id)
@@ -31,11 +45,20 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
 
     def list_agents(job_id), do: {:ok, :persistent_term.get({__MODULE__, :agents, job_id}, [])}
 
-    def get_lease("job:" <> job_id),
-      do: {:ok, :persistent_term.get({__MODULE__, :lease, job_id}, nil)}
+    def get_lease("job:" <> job_id) do
+      if :persistent_term.get({__MODULE__, :raise_lease, job_id}, false) do
+        raise "lease backend exploded for #{job_id}"
+      end
+
+      {:ok, :persistent_term.get({__MODULE__, :lease, job_id}, nil)}
+    end
 
     def persist_recovery_eval(eval_id, eval) do
-      eval = Map.put(eval, "eval_id", eval_id)
+      eval =
+        eval
+        |> Map.drop(["job", :job])
+        |> Map.put("eval_id", eval_id)
+
       evals = :persistent_term.get({__MODULE__, :evals}, %{})
       :persistent_term.put({__MODULE__, :evals}, Map.put(evals, eval_id, eval))
       send(Process.whereis(:reconciler_test_pid), {:eval_persisted, eval_id, eval})
@@ -473,6 +496,129 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
     assert result.skipped == 0
   end
 
+  test "due eval sweep marks eval failed when processing raises" do
+    job_id = unique_job_id("eval-fetch-crash-job")
+    eval_id = "eval-fetch-crash"
+
+    RedisStoreStub.put_evals([
+      %{
+        "eval_id" => eval_id,
+        "job_id" => job_id,
+        "trigger" => "lease_lost",
+        "status" => "pending",
+        "created_at" => "2026-01-01T00:00:00Z",
+        "updated_at" => "2026-01-01T00:00:00Z"
+      }
+    ])
+
+    RedisStoreStub.raise_on_fetch(job_id)
+    on_exit(fn -> RedisStoreStub.clear_raise_on_fetch(job_id) end)
+
+    assert {:ok, result} = Reconciler.process_due_evals(redis_store: RedisStoreStub)
+
+    assert result.checked == 1
+    assert result.failed == 1
+    assert [%{job_id: ^job_id, action: :failed, reason: reason}] = result.jobs
+    assert reason =~ "recovery eval #{eval_id} exception"
+    assert reason =~ "fetch backend exploded"
+
+    assert_receive {:eval_persisted, ^eval_id, %{"status" => "running"}}
+    assert_receive {:eval_persisted, ^eval_id, %{"status" => "failed"} = failed_eval}
+    assert failed_eval["completed_at"]
+    assert [%{"status" => "failed", "reason" => failed_reason}] = failed_eval["history"]
+    assert failed_reason =~ "fetch backend exploded"
+  end
+
+  test "orphan sweep skips active job lease without persisting recovery eval" do
+    job_id = unique_job_id("leased-job")
+    job = running_job(job_id)
+    RedisStoreStub.put_jobs([job])
+    RedisStoreStub.put_lease(job_id, %{"owner_id" => "coordinator@lab", "epoch" => 3})
+    on_exit(fn -> RedisStoreStub.clear_lease(job_id) end)
+
+    assert {:ok, result} = Reconciler.sweep_orphaned_jobs(nil, redis_store: RedisStoreStub)
+
+    assert result.checked == 1
+    assert result.skipped == 1
+
+    assert [%{job_id: ^job_id, action: :skipped, reason: "job lease is still active"}] =
+             result.jobs
+
+    assert {:ok, []} = RedisStoreStub.list_recovery_evals()
+    refute_received {:eval_persisted, _, _}
+  end
+
+  test "orphan sweep with missing lease persists one compact recovery eval" do
+    job_id = unique_job_id("orphan-job")
+
+    job =
+      running_job(job_id)
+      |> Map.put("recovery_policy", "local_restart")
+      |> Map.put("manifest", %{
+        "graph_id" => "large-manifest",
+        "payload" => String.duplicate("x", 1024)
+      })
+
+    RedisStoreStub.put_jobs([job])
+
+    assert {:ok, result} = Reconciler.sweep_orphaned_jobs(nil, redis_store: RedisStoreStub)
+
+    assert result.checked == 1
+    assert result.paused == 1
+    assert_receive {:eval_persisted, _eval_id, %{"status" => "pending"} = pending_eval}
+    refute Map.has_key?(pending_eval, "job")
+    assert_receive {:eval_persisted, _eval_id, %{"status" => "running"} = running_eval}
+    refute Map.has_key?(running_eval, "job")
+    assert_receive {:eval_persisted, _eval_id, %{"status" => "complete"} = complete_eval}
+    refute Map.has_key?(complete_eval, "job")
+    assert {:ok, [stored_eval]} = RedisStoreStub.list_recovery_evals()
+    assert stored_eval["status"] == "complete"
+    refute Map.has_key?(stored_eval, "job")
+  end
+
+  test "repeated orphan sweeps with active lease do not create eval churn" do
+    job_id = unique_job_id("stable-lease-job")
+    job = running_job(job_id)
+    RedisStoreStub.put_jobs([job])
+    RedisStoreStub.put_lease(job_id, %{"owner_id" => "coordinator@lab", "epoch" => 4})
+    on_exit(fn -> RedisStoreStub.clear_lease(job_id) end)
+
+    assert {:ok, first} = Reconciler.sweep_orphaned_jobs(nil, redis_store: RedisStoreStub)
+    assert {:ok, second} = Reconciler.sweep_orphaned_jobs(nil, redis_store: RedisStoreStub)
+
+    assert first.skipped == 1
+    assert second.skipped == 1
+    assert {:ok, []} = RedisStoreStub.list_recovery_evals()
+    refute_received {:eval_persisted, _, _}
+  end
+
+  test "orphan sweep isolates per-job lease exceptions and continues" do
+    crashing_job_id = unique_job_id("crashing-lease-job")
+    stable_job_id = unique_job_id("stable-after-crash-job")
+
+    RedisStoreStub.put_jobs([running_job(crashing_job_id), running_job(stable_job_id)])
+    RedisStoreStub.raise_on_lease(crashing_job_id)
+    RedisStoreStub.put_lease(stable_job_id, %{"owner_id" => "coordinator@lab", "epoch" => 8})
+
+    on_exit(fn ->
+      RedisStoreStub.clear_raise_on_lease(crashing_job_id)
+      RedisStoreStub.clear_lease(stable_job_id)
+    end)
+
+    assert {:ok, result} = Reconciler.sweep_orphaned_jobs(nil, redis_store: RedisStoreStub)
+
+    assert result.checked == 2
+    assert result.failed == 1
+    assert result.skipped == 1
+
+    failed_result = Enum.find(result.jobs, &(&1.job_id == crashing_job_id))
+    assert failed_result.action == :failed
+    assert failed_result.reason =~ "orphan sweep exception"
+    assert failed_result.reason =~ "lease backend exploded"
+
+    assert Enum.find(result.jobs, &(&1.job_id == stable_job_id)).action == :skipped
+  end
+
   test "blocks recovery when final plan validation sees stale target node" do
     {:ok, bundle} = JobBundle.load(manifest())
     job = running_job("validation-job")
@@ -693,6 +839,8 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
       }
     }
   end
+
+  defp unique_job_id(prefix), do: "#{prefix}-#{System.unique_integer([:positive])}"
 
   defp agent_snapshot(agent_id) do
     %{

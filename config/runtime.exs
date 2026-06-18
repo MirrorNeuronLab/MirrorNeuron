@@ -2,6 +2,38 @@ import Config
 
 redis_host = System.get_env("MN_REDIS_HOST", "localhost")
 
+positive_integer = fn env_name, default ->
+  case System.get_env(env_name) do
+    nil ->
+      default
+
+    "" ->
+      default
+
+    value ->
+      case Integer.parse(value) do
+        {parsed, ""} when parsed > 0 -> parsed
+        _ -> default
+      end
+  end
+end
+
+nonnegative_integer = fn env_name, default ->
+  case System.get_env(env_name) do
+    nil ->
+      default
+
+    "" ->
+      default
+
+    value ->
+      case Integer.parse(value) do
+        {parsed, ""} when parsed >= 0 -> parsed
+        _ -> default
+      end
+  end
+end
+
 execution_profiles =
   case System.get_env("MN_EXECUTION_PROFILES_JSON", "") do
     "" ->
@@ -48,6 +80,12 @@ config :mirror_neuron,
     String.to_integer(System.get_env("MN_REDIS_RECONNECT_BACKOFF_MS", "250")),
   redis_reconnect_max_backoff_ms:
     String.to_integer(System.get_env("MN_REDIS_RECONNECT_MAX_BACKOFF_MS", "2000")),
+  recovery_eval_ttl_seconds: positive_integer.("MN_RECOVERY_EVAL_TTL_SECONDS", 86_400),
+  job_lease_duration_ms: positive_integer.("MN_JOB_LEASE_DURATION_MS", 60_000),
+  job_lease_renew_interval_ms: positive_integer.("MN_JOB_LEASE_RENEW_INTERVAL_MS", 10_000),
+  job_call_timeout_ms: positive_integer.("MN_JOB_CALL_TIMEOUT_MS", 15_000),
+  delivery_retry_attempts: nonnegative_integer.("MN_DELIVERY_RETRY_ATTEMPTS", 50),
+  delivery_retry_interval_ms: nonnegative_integer.("MN_DELIVERY_RETRY_INTERVAL_MS", 50),
   reliability_strategy: System.get_env("MN_RELIABILITY_STRATEGY", "auto"),
   cluster_health_stable_ms:
     String.to_integer(System.get_env("MN_CLUSTER_HEALTH_STABLE_MS", "10000")),

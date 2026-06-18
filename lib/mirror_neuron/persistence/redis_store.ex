@@ -16,7 +16,28 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   @default_agent_snapshot_ttl_seconds 7 * 24 * 60 * 60
   @default_bundle_archive_ttl_seconds 7 * 24 * 60 * 60
   @default_blob_ref_ttl_seconds 7 * 24 * 60 * 60
+  @default_recovery_eval_ttl_seconds 24 * 60 * 60
   @recovery_eval_statuses ["pending", "running", "blocked", "complete", "failed"]
+  @terminal_recovery_eval_statuses ["complete", "failed"]
+  @recovery_eval_fields [
+    "eval_id",
+    "job_id",
+    "trigger",
+    "status",
+    "reason",
+    "failed_node",
+    "affected_agents",
+    "attempt",
+    "history",
+    "created_at",
+    "updated_at",
+    "started_at",
+    "completed_at",
+    "result",
+    "block_reason",
+    "wait_until",
+    "wake_reason"
+  ]
 
   def persist_job(job_id, job_map) do
     encoded = Jason.encode!(job_map)
@@ -314,20 +335,18 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   def append_event(job_id, event) do
-    encoded = Jason.encode!(event)
     event_key = key("job", job_id, "events")
 
-    commands =
-      [
-        ["RPUSH", event_key, encoded]
-        | event_retention_commands(event_key)
-      ]
-
-    with {:ok, results} <- pipeline(commands),
+    with {:ok, encoded} <- Jason.encode(event),
+         commands <- [["RPUSH", event_key, encoded] | event_retention_commands(event_key)],
+         {:ok, results} <- pipeline(commands),
          :ok <- expect_first_result(results, &is_integer/1),
          :ok <- wait_for_replicas(),
          {:ok, _count} <- command(["PUBLISH", channel("events", job_id), encoded]) do
       {:ok, event}
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
     end
   end
 
@@ -430,7 +449,8 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   def sweep_retention(opts \\ []) do
     ttl_seconds = Keyword.get(opts, :terminal_job_ttl_seconds, terminal_job_ttl_seconds())
 
-    with {:ok, job_ids} <- list_job_ids() do
+    with {:ok, job_ids} <- list_job_ids(),
+         {:ok, eval_result} <- sweep_recovery_eval_retention() do
       result =
         Enum.reduce(job_ids, %{deleted_jobs: [], stale_job_ids: []}, fn job_id, acc ->
           case fetch_job(job_id) do
@@ -457,7 +477,11 @@ defmodule MirrorNeuron.Persistence.RedisStore do
          deleted_count: length(deleted_jobs),
          stale_count: length(stale_job_ids),
          deleted_jobs: deleted_jobs,
-         stale_job_ids: stale_job_ids
+         stale_job_ids: stale_job_ids,
+         deleted_recovery_eval_count: Map.get(eval_result, :deleted_recovery_eval_count, 0),
+         stale_recovery_eval_count: Map.get(eval_result, :stale_recovery_eval_count, 0),
+         deleted_recovery_evals: Map.get(eval_result, :deleted_recovery_evals, []),
+         stale_recovery_evals: Map.get(eval_result, :stale_recovery_evals, [])
        }}
     end
   end
@@ -760,16 +784,19 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     eval =
       eval_map
       |> stringify_map()
+      |> compact_recovery_eval()
       |> Map.put("eval_id", eval_id)
       |> Map.put_new("created_at", timestamp())
       |> Map.put("updated_at", timestamp())
 
     with {:ok, results} <-
-           transaction([
-             ["SET", key("recovery", "eval", eval_id), Jason.encode!(eval)],
-             ["SADD", key("recovery", "evals"), eval_id]
-             | recovery_eval_status_index_commands(eval_id, Map.get(eval, "status"))
-           ]),
+           transaction(
+             [
+               ["SET", key("recovery", "eval", eval_id), Jason.encode!(eval)],
+               ["SADD", key("recovery", "evals"), eval_id]
+               | recovery_eval_status_index_commands(eval_id, Map.get(eval, "status"))
+             ] ++ recovery_eval_retention_commands(eval_id, Map.get(eval, "status"))
+           ),
          :ok <- expect_no_redis_errors(results),
          :ok <- wait_for_replicas() do
       {:ok, eval}
@@ -1213,7 +1240,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   defp repair_recovery_eval_indexes do
-    case command(["SMEMBERS", key("recovery", "evals")]) do
+    case recovery_eval_index_ids() do
       {:ok, eval_ids} ->
         result =
           Enum.reduce(
@@ -1252,6 +1279,71 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
       _ ->
         false
+    end
+  end
+
+  defp sweep_recovery_eval_retention do
+    ttl_seconds = recovery_eval_ttl_seconds()
+
+    case recovery_eval_index_ids() do
+      {:ok, eval_ids} ->
+        result =
+          Enum.reduce(
+            eval_ids,
+            %{
+              deleted_recovery_evals: [],
+              stale_recovery_evals: []
+            },
+            fn eval_id, acc ->
+              case fetch_recovery_eval(eval_id) do
+                {:ok, eval} when is_map(eval) ->
+                  if terminal_recovery_eval_expired?(eval, ttl_seconds) do
+                    _ = remove_stale_recovery_eval_index(eval_id)
+                    Map.update!(acc, :deleted_recovery_evals, &[eval_id | &1])
+                  else
+                    :ok = apply_recovery_eval_retention(eval_id, Map.get(eval, "status"))
+                    acc
+                  end
+
+                _ ->
+                  _ = remove_stale_recovery_eval_index(eval_id)
+                  Map.update!(acc, :stale_recovery_evals, &[eval_id | &1])
+              end
+            end
+          )
+
+        deleted_recovery_evals = Enum.reverse(result.deleted_recovery_evals)
+        stale_recovery_evals = Enum.reverse(result.stale_recovery_evals)
+
+        {:ok,
+         %{
+           deleted_recovery_eval_count: length(deleted_recovery_evals),
+           stale_recovery_eval_count: length(stale_recovery_evals),
+           deleted_recovery_evals: deleted_recovery_evals,
+           stale_recovery_evals: stale_recovery_evals
+         }}
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
+    end
+  end
+
+  defp recovery_eval_index_ids do
+    index_keys = [key("recovery", "evals") | recovery_eval_status_index_keys()]
+
+    case pipeline(Enum.map(index_keys, &["SMEMBERS", &1])) do
+      {:ok, results} ->
+        {:ok,
+         results
+         |> Enum.flat_map(fn
+           ids when is_list(ids) -> ids
+           _ -> []
+         end)
+         |> Enum.uniq()
+         |> Enum.sort()}
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
     end
   end
 
@@ -1500,6 +1592,54 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     :ok
   end
 
+  defp compact_recovery_eval(eval) when is_map(eval), do: Map.take(eval, @recovery_eval_fields)
+  defp compact_recovery_eval(eval), do: eval
+
+  defp recovery_eval_retention_commands(eval_id, status) do
+    eval_key = key("recovery", "eval", eval_id)
+
+    if terminal_recovery_eval_status?(status) do
+      maybe_expire_key_command(eval_key, recovery_eval_ttl_seconds())
+    else
+      [["PERSIST", eval_key]]
+    end
+  end
+
+  defp apply_recovery_eval_retention(eval_id, status) do
+    eval_key = key("recovery", "eval", eval_id)
+
+    if terminal_recovery_eval_status?(status) do
+      expire_key(eval_key, recovery_eval_ttl_seconds())
+    else
+      persist_key(eval_key)
+    end
+  end
+
+  defp terminal_recovery_eval_expired?(_eval, ttl_seconds) when ttl_seconds < 0, do: false
+
+  defp terminal_recovery_eval_expired?(eval, ttl_seconds) do
+    terminal_recovery_eval_status?(Map.get(eval, "status")) and
+      recovery_eval_age_seconds(eval) >= ttl_seconds
+  end
+
+  defp terminal_recovery_eval_status?(status),
+    do: to_string(status || "") in @terminal_recovery_eval_statuses
+
+  defp recovery_eval_age_seconds(eval) do
+    updated_at =
+      Map.get(eval, "completed_at") ||
+        Map.get(eval, "updated_at") ||
+        Map.get(eval, "created_at") ||
+        timestamp()
+
+    with true <- is_binary(updated_at),
+         {:ok, datetime, _offset} <- DateTime.from_iso8601(updated_at) do
+      DateTime.diff(DateTime.utc_now(), datetime, :second)
+    else
+      _ -> 0
+    end
+  end
+
   defp terminal_job_expired?(_job, ttl_seconds) when ttl_seconds < 0, do: false
 
   defp terminal_job_expired?(job, ttl_seconds) do
@@ -1560,6 +1700,14 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       "MN_BLOB_REF_TTL_SECONDS",
       :blob_ref_ttl_seconds,
       @default_blob_ref_ttl_seconds
+    )
+  end
+
+  defp recovery_eval_ttl_seconds do
+    config_integer(
+      "MN_RECOVERY_EVAL_TTL_SECONDS",
+      :recovery_eval_ttl_seconds,
+      @default_recovery_eval_ttl_seconds
     )
   end
 
@@ -1835,6 +1983,10 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   defp expect_no_redis_errors(other), do: {:error, format_reason(other)}
+
+  defp recovery_eval_status_index_keys do
+    Enum.map(@recovery_eval_statuses, &key("recovery", "evals", "status", &1))
+  end
 
   defp recovery_eval_status_index_commands(eval_id, status) do
     status = recovery_eval_status(status)

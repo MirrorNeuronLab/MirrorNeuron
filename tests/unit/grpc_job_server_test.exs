@@ -15,6 +15,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
   }
 
   alias Mirrorneuron.Job.V1.{
+    CancelJobRequest,
     ClearJobsRequest,
     ClearJobsResponse,
     GetDeploymentRequest,
@@ -257,6 +258,18 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       end
 
     assert Exception.message(error) =~ "SubmitJob is disabled"
+  end
+
+  test "cancel_job maps a missing runtime job to not_found" do
+    job_id = "missing-grpc-job-#{System.unique_integer([:positive])}"
+
+    error =
+      assert_raise GRPC.RPCError, fn ->
+        JobServer.cancel_job(%CancelJobRequest{job_id: job_id}, nil)
+      end
+
+    assert error.status == GRPC.Status.not_found()
+    assert Exception.message(error) =~ "not running" or Exception.message(error) =~ "not found"
   end
 
   test "network-only mode rejects deployment RPCs" do

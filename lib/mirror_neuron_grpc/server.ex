@@ -154,7 +154,7 @@ defmodule MirrorNeuron.Grpc.JobServer do
 
     case MirrorNeuron.cancel(job_id) do
       {:error, reason} ->
-        raise GRPC.RPCError, status: GRPC.Status.internal(), message: reason
+        raise_runtime_error!(reason)
 
       {:ok, status} ->
         %CancelJobResponse{job_id: job_id, status: status}
@@ -172,7 +172,7 @@ defmodule MirrorNeuron.Grpc.JobServer do
 
     case MirrorNeuron.pause(job_id) do
       {:error, reason} ->
-        raise GRPC.RPCError, status: GRPC.Status.internal(), message: reason
+        raise_runtime_error!(reason)
 
       {:ok, status} ->
         %PauseJobResponse{job_id: job_id, status: status}
@@ -190,7 +190,7 @@ defmodule MirrorNeuron.Grpc.JobServer do
 
     case MirrorNeuron.resume(job_id) do
       {:error, reason} ->
-        raise GRPC.RPCError, status: GRPC.Status.internal(), message: reason
+        raise_runtime_error!(reason)
 
       {:ok, status} ->
         %ResumeJobResponse{job_id: job_id, status: status}
@@ -489,6 +489,50 @@ defmodule MirrorNeuron.Grpc.JobServer do
   end
 
   defp schedule_response(result), do: %ScheduleResponse{result_json: Jason.encode!(result)}
+
+  defp raise_runtime_error!(reason) do
+    raise GRPC.RPCError,
+      status: runtime_error_status(reason),
+      message: MirrorNeuron.Runtime.error_message(reason)
+  end
+
+  defp runtime_error_status({:job_not_running, _job_id}), do: GRPC.Status.not_found()
+  defp runtime_error_status({:agent_not_running, _details}), do: GRPC.Status.not_found()
+
+  defp runtime_error_status({:job_call_timeout, _job_id, _timeout_ms}),
+    do: GRPC.Status.deadline_exceeded()
+
+  defp runtime_error_status({:job_registry_unavailable, _job_id, _reason}),
+    do: GRPC.Status.unavailable()
+
+  defp runtime_error_status({:runtime_lookup_unavailable, _job_id, _reason}),
+    do: GRPC.Status.unavailable()
+
+  defp runtime_error_status({:job_call_failed, _job_id, _reason}), do: GRPC.Status.unavailable()
+
+  defp runtime_error_status({:agent_registry_unavailable, _details}),
+    do: GRPC.Status.unavailable()
+
+  defp runtime_error_status({:agent_unavailable, _details}), do: GRPC.Status.unavailable()
+  defp runtime_error_status({:backpressure, _details}), do: GRPC.Status.resource_exhausted()
+  defp runtime_error_status({:retry_later, _details}), do: GRPC.Status.resource_exhausted()
+
+  defp runtime_error_status(reason) do
+    message = reason |> MirrorNeuron.Runtime.error_message() |> String.downcase()
+
+    cond do
+      String.contains?(message, "not running") -> GRPC.Status.not_found()
+      String.contains?(message, "not found") -> GRPC.Status.not_found()
+      String.contains?(message, "timed out") -> GRPC.Status.deadline_exceeded()
+      String.contains?(message, "timeout") -> GRPC.Status.deadline_exceeded()
+      String.contains?(message, "backpressure") -> GRPC.Status.resource_exhausted()
+      String.contains?(message, "retry later") -> GRPC.Status.resource_exhausted()
+      String.contains?(message, "not paused") -> GRPC.Status.failed_precondition()
+      String.contains?(message, "terminal state") -> GRPC.Status.failed_precondition()
+      String.contains?(message, "unavailable") -> GRPC.Status.unavailable()
+      true -> GRPC.Status.internal()
+    end
+  end
 
   defp backup_error_status(reason) do
     text = inspect(reason)

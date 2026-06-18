@@ -480,6 +480,7 @@ Runtime configuration is read from environment variables in `config/runtime.exs`
 | --- | --- |
 | `MN_REDIS_URL` | Redis connection URL for persisted runtime data. |
 | `MN_REDIS_NAMESPACE` | Prefix/namespace for stored MirrorNeuron runtime data. |
+| `MN_RECOVERY_EVAL_TTL_SECONDS` | Retention for terminal recovery eval diagnostics; defaults to 86400. |
 | `MN_CORE_HOST` | Host/IP used by the gRPC listener; defaults to loopback-style local binding. |
 | `MN_GRPC_PORT` | gRPC service port. |
 | `MN_GRPC_AUTH_TOKEN` | Bearer token for protected gRPC calls such as pause, resume, and resource updates. |
@@ -487,6 +488,11 @@ Runtime configuration is read from environment variables in `config/runtime.exs`
 | `MN_NODE_NAME` | Erlang node name used by release and cluster scripts. |
 | `MN_CLUSTER_NODES` | Comma-separated Erlang node names for cluster discovery. |
 | `MN_COOKIE` | Erlang distribution cookie; use a strong non-default value for distributed nodes. |
+| `MN_JOB_LEASE_DURATION_MS` | Job lease duration for fenced runtime ownership; defaults to 60000. |
+| `MN_JOB_LEASE_RENEW_INTERVAL_MS` | Job lease renewal cadence; defaults to 10000. |
+| `MN_JOB_CALL_TIMEOUT_MS` | Timeout for runtime job control calls such as pause, resume, cancel, pressure, and external message submit; defaults to 15000. |
+| `MN_DELIVERY_RETRY_ATTEMPTS` | Number of agent lookup retries before a delivery becomes a dead letter; defaults to 50. |
+| `MN_DELIVERY_RETRY_INTERVAL_MS` | Delay between delivery lookup retries; defaults to 50. |
 | `MN_RELIABILITY_STRATEGY` | Conservative runtime strategy resolver for new jobs. |
 | `MN_NODE_RECONNECT_ATTEMPTS` | Runtime node reconnect attempts before jobs are paused for manual restart. |
 | `MN_NODE_EXECUTION_PROFILES` | Comma-separated execution profiles this runtime node may advertise after warmup. |

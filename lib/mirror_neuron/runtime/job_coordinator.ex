@@ -1302,12 +1302,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp agent_pressure_snapshot(state, agent_id) do
-    with [{pid, _meta}] <-
-           Horde.Registry.lookup(
-             MirrorNeuron.DistributedRegistry,
-             {:agent, state.job_id, agent_id}
-           ) do
-      node = Map.fetch!(state.nodes_by_id, agent_id)
+    with {:ok, pid} <- lookup_registered_agent(state.job_id, agent_id),
+         node when is_map(node) <- Map.get(state.nodes_by_id, agent_id) do
       queue_depth = Backpressure.process_queue_depth(pid)
       Backpressure.snapshot(agent_id, node, queue_depth, [], Map.get(state.pressure, agent_id))
     else
@@ -1674,11 +1670,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp agent_ready?(state, agent_id) do
-    case Horde.Registry.lookup(
-           MirrorNeuron.DistributedRegistry,
-           {:agent, state.job_id, agent_id}
-         ) do
-      [{pid, _meta}] -> pid_alive?(pid)
+    with {:ok, pid} <- lookup_registered_agent(state.job_id, agent_id) do
+      pid_alive?(pid)
+    else
       _ -> false
     end
   end
@@ -1686,13 +1680,58 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp pid_alive?(pid) when is_pid(pid) and node(pid) == node(), do: Process.alive?(pid)
 
   defp pid_alive?(pid) when is_pid(pid) do
+    safe_remote_alive?(pid)
+  end
+
+  defp pid_alive?(_pid), do: false
+
+  defp safe_remote_alive?(pid) do
     case :rpc.call(node(pid), Process, :alive?, [pid], 5_000) do
       true -> true
       _ -> false
     end
+  rescue
+    exception ->
+      Logger.debug("remote pid liveness probe failed",
+        pid: inspect(pid),
+        error: Exception.message(exception)
+      )
+
+      false
+  catch
+    kind, reason ->
+      Logger.debug("remote pid liveness probe failed",
+        pid: inspect(pid),
+        error: inspect({kind, reason})
+      )
+
+      false
   end
 
-  defp pid_alive?(_pid), do: false
+  defp lookup_registered_agent(job_id, agent_id) do
+    case Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:agent, job_id, agent_id}) do
+      [{pid, _meta} | _] when is_pid(pid) -> {:ok, pid}
+      _ -> :missing
+    end
+  rescue
+    exception ->
+      Logger.debug("agent registry lookup failed",
+        job_id: job_id,
+        agent_id: agent_id,
+        error: Exception.message(exception)
+      )
+
+      :missing
+  catch
+    kind, reason ->
+      Logger.debug("agent registry lookup failed",
+        job_id: job_id,
+        agent_id: agent_id,
+        error: inspect({kind, reason})
+      )
+
+      :missing
+  end
 
   defp schedule_health_check(interval_ms) do
     Process.send_after(self(), :health_check, interval_ms)
@@ -2142,12 +2181,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     Enum.each(agent_ids, fn agent_id ->
       ServiceRegistry.deregister_agent(state.job_id, agent_id)
 
-      case Horde.Registry.lookup(
-             MirrorNeuron.DistributedRegistry,
-             {:agent, state.job_id, agent_id}
-           ) do
-        [{pid, _}] ->
-          case Horde.DynamicSupervisor.terminate_child(MirrorNeuron.Runtime.AgentSupervisor, pid) do
+      case lookup_registered_agent(state.job_id, agent_id) do
+        {:ok, pid} ->
+          case safe_terminate_agent_child(pid) do
             :ok ->
               :ok
 
@@ -2159,13 +2195,45 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
                 "failed to terminate agent #{state.job_id}/#{agent_id}: #{inspect(reason)}"
               )
 
-              if Process.alive?(pid), do: Process.exit(pid, :kill)
+              safe_exit_agent(pid)
           end
 
-        [] ->
+        :missing ->
           :ok
       end
     end)
+  end
+
+  defp safe_terminate_agent_child(pid) do
+    Horde.DynamicSupervisor.terminate_child(MirrorNeuron.Runtime.AgentSupervisor, pid)
+  rescue
+    exception -> {:error, {exception.__struct__, Exception.message(exception)}}
+  catch
+    kind, reason -> {:error, {kind, reason}}
+  end
+
+  defp safe_exit_agent(pid) do
+    if pid_alive?(pid) do
+      Process.exit(pid, :kill)
+    end
+
+    :ok
+  rescue
+    exception ->
+      Logger.debug("failed to force-exit agent process",
+        pid: inspect(pid),
+        error: Exception.message(exception)
+      )
+
+      :ok
+  catch
+    kind, reason ->
+      Logger.debug("failed to force-exit agent process",
+        pid: inspect(pid),
+        error: inspect({kind, reason})
+      )
+
+      :ok
   end
 
   defp finalize_job(state, status, result, event_type, event_fields) do
@@ -2471,7 +2539,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp cleanup_sandbox_on_node(node, module, job_id, label) do
-    case :rpc.call(node, module, :cleanup_job_local, [job_id], 15_000) do
+    case safe_cleanup_sandbox_on_node(node, module, job_id) do
       :ok ->
         :ok
 
@@ -2483,6 +2551,14 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       _other ->
         :ok
     end
+  end
+
+  defp safe_cleanup_sandbox_on_node(node, module, job_id) do
+    :rpc.call(node, module, :cleanup_job_local, [job_id], 15_000)
+  rescue
+    exception -> {:badrpc, {exception.__struct__, Exception.message(exception)}}
+  catch
+    kind, reason -> {:badrpc, {kind, reason}}
   end
 
   defp existing_recovery_fields(job_id) do

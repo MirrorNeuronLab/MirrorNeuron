@@ -1,4 +1,6 @@
 defmodule MirrorNeuron.Runtime.EventBus do
+  require Logger
+
   alias MirrorNeuron.Persistence.RedisStore
 
   def subscribe(job_id) do
@@ -7,7 +9,7 @@ defmodule MirrorNeuron.Runtime.EventBus do
 
   def publish(job_id, event) do
     persisted = Map.put_new(event, :job_id, job_id)
-    RedisStore.append_event(job_id, stringify_keys(persisted))
+    safe_append_event(job_id, json_safe(persisted))
 
     Registry.dispatch(MirrorNeuron.Runtime.EventRegistry, job_id, fn entries ->
       Enum.each(entries, fn {pid, _value} -> send(pid, {:mirror_neuron_event, persisted}) end)
@@ -16,13 +18,39 @@ defmodule MirrorNeuron.Runtime.EventBus do
     :ok
   end
 
-  defp stringify_keys(map) when is_map(map) do
+  defp safe_append_event(job_id, event) do
+    case RedisStore.append_event(job_id, event) do
+      {:ok, _event} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("failed to persist event for #{job_id}: #{inspect(reason)}")
+        :ok
+    end
+  rescue
+    error ->
+      Logger.warning("failed to persist event for #{job_id}: #{Exception.message(error)}")
+      :ok
+  catch
+    kind, reason ->
+      Logger.warning("failed to persist event for #{job_id}: #{kind} #{inspect(reason)}")
+      :ok
+  end
+
+  defp json_safe(%_struct{} = value), do: value |> Map.from_struct() |> json_safe()
+
+  defp json_safe(map) when is_map(map) do
     Enum.into(map, %{}, fn {key, value} ->
       key = if is_atom(key), do: Atom.to_string(key), else: key
-      {key, stringify_keys(value)}
+      {key, json_safe(value)}
     end)
   end
 
-  defp stringify_keys(list) when is_list(list), do: Enum.map(list, &stringify_keys/1)
-  defp stringify_keys(value), do: value
+  defp json_safe(tuple) when is_tuple(tuple), do: inspect(tuple)
+  defp json_safe(list) when is_list(list), do: Enum.map(list, &json_safe/1)
+  defp json_safe(value) when is_atom(value), do: Atom.to_string(value)
+  defp json_safe(value) when is_pid(value), do: inspect(value)
+  defp json_safe(value) when is_reference(value), do: inspect(value)
+  defp json_safe(value) when is_function(value), do: inspect(value)
+  defp json_safe(value), do: value
 end

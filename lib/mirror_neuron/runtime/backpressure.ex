@@ -1,6 +1,8 @@
 defmodule MirrorNeuron.Runtime.Backpressure do
   @moduledoc false
 
+  require Logger
+
   @default_max_queue_depth 100
   @default_high_watermark 75
   @default_low_watermark 25
@@ -27,7 +29,7 @@ defmodule MirrorNeuron.Runtime.Backpressure do
     raw =
       node_or_config
       |> raw_config()
-      |> Map.merge(Map.new(opts))
+      |> Map.merge(opts_map(opts))
 
     max_queue_depth =
       raw
@@ -107,7 +109,27 @@ defmodule MirrorNeuron.Runtime.Backpressure do
   end
 
   def process_queue_depth(pid, internal_depth \\ 0) when is_pid(pid) do
-    mailbox_queue_depth(pid) + max(as_int(internal_depth, 0), 0)
+    safe_mailbox_queue_depth(pid) + max(as_int(internal_depth, 0), 0)
+  end
+
+  defp safe_mailbox_queue_depth(pid) do
+    mailbox_queue_depth(pid)
+  rescue
+    exception ->
+      Logger.debug("failed to inspect process queue depth",
+        pid: inspect(pid),
+        error: Exception.message(exception)
+      )
+
+      0
+  catch
+    kind, reason ->
+      Logger.debug("failed to inspect process queue depth",
+        pid: inspect(pid),
+        error: inspect({kind, reason})
+      )
+
+      0
   end
 
   defp mailbox_queue_depth(pid) when node(pid) == node() do
@@ -123,6 +145,18 @@ defmodule MirrorNeuron.Runtime.Backpressure do
       _ -> 0
     end
   end
+
+  defp opts_map(opts) when is_map(opts), do: stringify_keys(opts)
+
+  defp opts_map(opts) when is_list(opts) do
+    opts
+    |> Map.new()
+    |> stringify_keys()
+  rescue
+    _exception -> %{}
+  end
+
+  defp opts_map(_opts), do: %{}
 
   defp raw_config(%{config: config}) when is_map(config), do: raw_config(config)
 

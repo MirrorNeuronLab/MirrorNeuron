@@ -334,8 +334,20 @@ defmodule MirrorNeuron do
         call_control_or_runtime(job_id, :cancel, [job_id])
       else
         case Runtime.cancel_job(job_id) do
-          {:error, "job " <> _} ->
-            call_runtime_by_job(job_id, Runtime, :cancel_job, [job_id])
+          {:error, reason} = error ->
+            if job_not_running_error?(reason) do
+              case call_runtime_by_job(job_id, Runtime, :cancel_job, [job_id]) do
+                {:error, fallback_reason} when is_tuple(fallback_reason) ->
+                  if runtime_lookup_unavailable_error?(fallback_reason),
+                    do: error,
+                    else: {:error, fallback_reason}
+
+                other ->
+                  other
+              end
+            else
+              error
+            end
 
           other ->
             other
@@ -343,8 +355,12 @@ defmodule MirrorNeuron do
       end
 
     case result do
-      {:error, "job " <> _ = reason} ->
-        force_cancel_orphaned_job(job_id, reason)
+      {:error, reason} = error ->
+        if job_not_running_error?(reason) do
+          force_cancel_orphaned_job(job_id, Runtime.error_message(reason))
+        else
+          error
+        end
 
       other ->
         other
@@ -443,8 +459,12 @@ defmodule MirrorNeuron do
       {:error, "no runtime nodes available in the connected cluster"} ->
         call_runtime_by_job(job_id, function, args)
 
-      {:error, "job " <> _} ->
-        call_runtime_by_job(job_id, function, args)
+      {:error, reason} = error ->
+        if job_not_running_error?(reason) do
+          call_runtime_by_job(job_id, function, args)
+        else
+          error
+        end
 
       other ->
         other
@@ -455,34 +475,56 @@ defmodule MirrorNeuron do
     do: call_runtime_by_job(job_id, __MODULE__, function, args)
 
   defp call_runtime_by_job(job_id, module, function, args) do
-    with {:ok, agents} <- RedisStore.list_agents(job_id) do
-      agents
-      |> Enum.map(& &1["assigned_node"])
-      |> Enum.reject(&is_nil/1)
-      |> Enum.uniq()
-      |> Enum.reduce_while(
-        {:error, "job #{job_id} is not running in the connected cluster"},
-        fn node_name, _acc ->
-          case MirrorNeuron.SafeAccess.node_name_to_atom(node_name) do
-            {:ok, node} ->
-              _ = Node.connect(node)
+    case RedisStore.list_agents(job_id) do
+      {:ok, agents} ->
+        agents
+        |> Enum.map(& &1["assigned_node"])
+        |> Enum.reject(&is_nil/1)
+        |> Enum.uniq()
+        |> Enum.reduce_while(
+          job_not_running_result(job_id),
+          fn node_name, _acc ->
+            case MirrorNeuron.SafeAccess.node_name_to_atom(node_name) do
+              {:ok, node} ->
+                _ = Node.connect(node)
 
-              case :rpc.call(node, module, function, args, 15_000) do
-                {:badrpc, _reason} ->
-                  {:cont, {:error, "job #{job_id} is not running in the connected cluster"}}
+                case :rpc.call(node, module, function, args, 15_000) do
+                  {:badrpc, _reason} ->
+                    {:cont, job_not_running_result(job_id)}
 
-                {:error, "job " <> _reason} ->
-                  {:cont, {:error, "job #{job_id} is not running in the connected cluster"}}
+                  {:error, reason} = error ->
+                    if job_not_running_error?(reason) do
+                      {:cont, job_not_running_result(job_id)}
+                    else
+                      {:halt, error}
+                    end
 
-                reply ->
-                  {:halt, reply}
-              end
+                  reply ->
+                    {:halt, reply}
+                end
 
-            {:error, _reason} ->
-              {:cont, {:error, "job #{job_id} is not running in the connected cluster"}}
+              {:error, _reason} ->
+                {:cont, job_not_running_result(job_id)}
+            end
           end
-        end
-      )
+        )
+
+      {:error, reason} ->
+        {:error, {:runtime_lookup_unavailable, job_id, reason}}
     end
   end
+
+  defp job_not_running_result(job_id), do: {:error, {:job_not_running, job_id}}
+
+  defp job_not_running_error?({:job_not_running, _job_id}), do: true
+
+  defp job_not_running_error?(reason) when is_binary(reason),
+    do: String.starts_with?(reason, "job ") and String.contains?(reason, "not running")
+
+  defp job_not_running_error?(_reason), do: false
+
+  defp runtime_lookup_unavailable_error?({:runtime_lookup_unavailable, _job_id, _reason}),
+    do: true
+
+  defp runtime_lookup_unavailable_error?(_reason), do: false
 end
