@@ -2,6 +2,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
   @moduledoc false
 
   alias MirrorNeuron.Config
+  alias MirrorNeuron.Artifacts.SharedStorage
   alias MirrorNeuron.Message
   alias MirrorNeuron.Sandbox.DockerJobSandbox
 
@@ -258,6 +259,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
       |> put_host_gateway_args(config)
       |> put_gpu_args(config, opts)
       |> Kernel.++(["-v", "#{Path.expand(base_dir)}:#{@default_container_workdir}:rw"])
+      |> put_shared_storage_mount(config)
       |> put_payload_mount(opts)
       |> put_allocation_volumes(config, opts)
       |> Kernel.++(["-w", container_workdir])
@@ -499,6 +501,34 @@ defmodule MirrorNeuron.Runner.DockerWorker do
 
       _ ->
         args
+    end
+  end
+
+  defp put_shared_storage_mount(args, config) do
+    env = extra_env(config)
+
+    case runtime_shared_storage_root(env) do
+      nil ->
+        args
+
+      target_root ->
+        source_root = Path.expand(SharedStorage.root())
+        File.mkdir_p(source_root)
+        args ++ ["-v", "#{source_root}:#{target_root}:rw"]
+    end
+  end
+
+  defp runtime_shared_storage_root(env) do
+    env
+    |> Map.get("MN_JOB_SHARED_STORAGE_ROOT")
+    |> case do
+      value when is_binary(value) and value != "" ->
+        value
+        |> Path.dirname()
+        |> Path.dirname()
+
+      _ ->
+        nil
     end
   end
 

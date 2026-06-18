@@ -4,6 +4,8 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
   use GenServer
   require Logger
 
+  alias MirrorNeuron.Artifacts.SharedStorage
+
   @registry MirrorNeuron.Sandbox.Registry
   @supervisor MirrorNeuron.Sandbox.JobSandboxSupervisor
   @container_root "/mn/job"
@@ -140,6 +142,7 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
       |> put_network_args(state.config)
       |> put_host_gateway_args(state.config)
       |> put_gpu_args(state.config, state.opts)
+      |> put_shared_storage_mount(state.config)
       |> put_allocation_volumes(state.config, state.opts)
       |> Kernel.++([
         "--entrypoint",
@@ -262,6 +265,44 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
 
       true ->
         args
+    end
+  end
+
+  defp put_shared_storage_mount(args, config) do
+    env = config_env(config)
+
+    case runtime_shared_storage_root(env) do
+      nil ->
+        args
+
+      target_root ->
+        source_root = Path.expand(SharedStorage.root())
+        File.mkdir_p(source_root)
+        args ++ ["-v", "#{source_root}:#{target_root}:rw"]
+    end
+  end
+
+  defp runtime_shared_storage_root(env) do
+    env
+    |> Map.get("MN_JOB_SHARED_STORAGE_ROOT")
+    |> case do
+      value when is_binary(value) and value != "" ->
+        value
+        |> Path.dirname()
+        |> Path.dirname()
+
+      _ ->
+        nil
+    end
+  end
+
+  defp config_env(config) do
+    case Map.get(config, "environment") do
+      env when is_map(env) ->
+        Enum.into(env, %{}, fn {key, value} -> {to_string(key), to_string(value)} end)
+
+      _ ->
+        %{}
     end
   end
 
