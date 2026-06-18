@@ -172,6 +172,9 @@ defmodule MirrorNeuron.Runtime do
         {:ok, pid} ->
           {:ok, job_id, pid}
 
+        {:error, {:already_started, pid}} ->
+          {:ok, job_id, pid}
+
         {:error, reason} ->
           persist_startup_failure(
             job_id,

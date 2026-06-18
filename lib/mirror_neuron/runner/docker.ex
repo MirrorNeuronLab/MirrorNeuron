@@ -512,10 +512,18 @@ defmodule MirrorNeuron.Runner.DockerWorker do
         args
 
       target_root ->
-        source_root = Path.expand(SharedStorage.root())
+        source_root = host_shared_storage_root()
         File.mkdir_p(source_root)
         args ++ ["-v", "#{source_root}:#{target_root}:rw"]
     end
+  end
+
+  defp host_shared_storage_root do
+    (System.get_env("MN_HOST_SHARED_STORAGE_ROOT") ||
+       System.get_env("MN_SHARED_STORAGE_ROOT") ||
+       Application.get_env(:mirror_neuron, :host_shared_storage_root) ||
+       SharedStorage.root())
+    |> Path.expand()
   end
 
   defp runtime_shared_storage_root(env) do

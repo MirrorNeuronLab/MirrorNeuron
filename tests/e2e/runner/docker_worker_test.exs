@@ -120,6 +120,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     File.mkdir_p!(host_shared)
 
     previous_shared_root = System.get_env("MN_SHARED_STORAGE_ROOT")
+    previous_host_shared_root = System.get_env("MN_HOST_SHARED_STORAGE_ROOT")
     previous_runtime_shared_root = System.get_env("MN_RUNTIME_SHARED_STORAGE_ROOT")
 
     on_exit(fn ->
@@ -128,6 +129,10 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
       if is_nil(previous_shared_root),
         do: System.delete_env("MN_SHARED_STORAGE_ROOT"),
         else: System.put_env("MN_SHARED_STORAGE_ROOT", previous_shared_root)
+
+      if is_nil(previous_host_shared_root),
+        do: System.delete_env("MN_HOST_SHARED_STORAGE_ROOT"),
+        else: System.put_env("MN_HOST_SHARED_STORAGE_ROOT", previous_host_shared_root)
 
       if is_nil(previous_runtime_shared_root),
         do: System.delete_env("MN_RUNTIME_SHARED_STORAGE_ROOT"),
@@ -164,8 +169,9 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
 
     File.chmod!(fake_docker, 0o755)
     System.put_env("MN_DOCKER_BIN", fake_docker)
-    System.put_env("MN_SHARED_STORAGE_ROOT", host_shared)
-    System.delete_env("MN_RUNTIME_SHARED_STORAGE_ROOT")
+    System.put_env("MN_HOST_SHARED_STORAGE_ROOT", host_shared)
+    System.put_env("MN_SHARED_STORAGE_ROOT", "/runtime/shared")
+    System.put_env("MN_RUNTIME_SHARED_STORAGE_ROOT", "/runtime/shared")
 
     assert {:ok, result} =
              DockerWorker.run(
