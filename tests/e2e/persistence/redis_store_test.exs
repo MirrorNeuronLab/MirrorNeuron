@@ -635,6 +635,50 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
              ])
   end
 
+  test "list_job_summaries returns compact records and backfills legacy jobs", %{
+    namespace: namespace
+  } do
+    job_id = "summary-job-#{System.unique_integer([:positive])}"
+    large_payload = String.duplicate("x", 64_000)
+
+    assert {:ok, _job} =
+             RedisStore.persist_job(job_id, %{
+               "job_id" => job_id,
+               "graph_id" => "summary_demo",
+               "status" => "running",
+               "submitted_at" => "2026-03-28T00:00:00Z",
+               "updated_at" => "2026-03-28T00:00:10Z",
+               "manifest" => %{"payload" => large_payload},
+               "workflow" => %{"payload" => large_payload}
+             })
+
+    assert {:ok, [summary]} = RedisStore.list_job_summaries()
+    assert summary["job_id"] == job_id
+    assert summary["graph_id"] == "summary_demo"
+    refute Map.has_key?(summary, "manifest")
+    refute Map.has_key?(summary, "workflow")
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "DEL",
+               redis_key(namespace, ["job", job_id, "summary"])
+             ])
+
+    assert {:ok, [backfilled]} = RedisStore.list_job_summaries()
+    assert backfilled["job_id"] == job_id
+
+    assert {:ok, encoded_summary} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "GET",
+               redis_key(namespace, ["job", job_id, "summary"])
+             ])
+
+    assert is_binary(encoded_summary)
+    assert byte_size(encoded_summary) < 2_000
+
+    RedisStore.delete_job(job_id)
+  end
+
   test "fenced leases reject stale job and agent writes" do
     job_id = "fenced-job-#{System.unique_integer([:positive])}"
     lease_name = "job:#{job_id}"
@@ -697,18 +741,19 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
   end
 
   test "durable write acknowledgement reports timeout when not enough replicas are available" do
-    Application.put_env(:mirror_neuron, :redis_wait_replicas, 1)
+    required_replicas = 99
+    Application.put_env(:mirror_neuron, :redis_wait_replicas, required_replicas)
     Application.put_env(:mirror_neuron, :redis_wait_timeout_ms, 1)
     job_id = "wait-timeout-#{System.unique_integer([:positive])}"
 
-    assert {:error, {:redis_replication_wait_timeout, acknowledgements, 1}} =
+    assert {:error, {:redis_replication_wait_timeout, acknowledgements, ^required_replicas}} =
              RedisStore.persist_job(job_id, %{
                "job_id" => job_id,
                "status" => "running"
              })
 
     assert is_integer(acknowledgements)
-    assert acknowledgements < 1
+    assert acknowledgements < required_replicas
   end
 
   test "bundle archive and node state round-trip nested data" do

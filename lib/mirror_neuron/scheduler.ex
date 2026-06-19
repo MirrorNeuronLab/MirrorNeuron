@@ -504,7 +504,7 @@ defmodule MirrorNeuron.Scheduler do
   end
 
   defp active_jobs do
-    case RedisStore.list_jobs() do
+    case RedisStore.list_job_summaries() do
       {:ok, jobs} -> jobs
       {:error, _reason} -> []
     end

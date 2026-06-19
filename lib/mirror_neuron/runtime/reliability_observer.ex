@@ -55,7 +55,7 @@ defmodule MirrorNeuron.Runtime.ReliabilityObserver do
   end
 
   defp maybe_publish_job_changes(snapshot, state) do
-    case state.redis_store.list_jobs() do
+    case list_job_summaries(state.redis_store) do
       {:ok, jobs} ->
         jobs
         |> Enum.filter(&active_job?/1)
@@ -63,6 +63,14 @@ defmodule MirrorNeuron.Runtime.ReliabilityObserver do
 
       {:error, _reason} ->
         state
+    end
+  end
+
+  defp list_job_summaries(store) do
+    if function_exported?(store, :list_job_summaries, 0) do
+      store.list_job_summaries()
+    else
+      store.list_jobs()
     end
   end
 

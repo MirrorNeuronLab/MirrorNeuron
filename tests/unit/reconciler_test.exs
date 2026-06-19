@@ -29,6 +29,33 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
 
     def list_jobs, do: {:ok, :persistent_term.get({__MODULE__, :jobs}, [])}
 
+    def list_job_summaries do
+      jobs =
+        :persistent_term.get({__MODULE__, :jobs}, [])
+        |> Enum.map(fn job ->
+          Map.take(job, [
+            "job_id",
+            "status",
+            "job_type",
+            "scheduler",
+            "lease_owner",
+            "lease",
+            "updated_at",
+            "submitted_at",
+            "recovery_policy",
+            "requested_recovery_policy",
+            "restart_policy",
+            "reschedule_policy",
+            "policy_state",
+            "recovery_status",
+            "recovery_requires_review",
+            "recovery_reason"
+          ])
+        end)
+
+      {:ok, jobs}
+    end
+
     def fetch_job(job_id) do
       if :persistent_term.get({__MODULE__, :raise_fetch, job_id}, false) do
         raise "fetch backend exploded for #{job_id}"
@@ -281,6 +308,25 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
     assert [%{job_id: "selected"}] = result.jobs
     assert_receive {:job_persisted, "selected", _, _}
     refute_receive {:job_persisted, "ignored", _, _}
+  end
+
+  test "node reconciliation skips unaffected summaries without fetching full jobs" do
+    job_id = unique_job_id("unaffected-job")
+    job = running_job(job_id)
+    RedisStoreStub.put_jobs([job])
+    RedisStoreStub.raise_on_fetch(job_id)
+
+    on_exit(fn -> RedisStoreStub.clear_raise_on_fetch(job_id) end)
+
+    assert {:ok, result} =
+             Reconciler.reconcile_node("other@lab",
+               redis_store: RedisStoreStub,
+               event_bus: EventBusStub
+             )
+
+    assert result.checked == 1
+    assert result.skipped == 1
+    assert [%{job_id: ^job_id, action: :skipped}] = result.jobs
   end
 
   test "pauses cluster recoverable job when affected snapshot is missing" do

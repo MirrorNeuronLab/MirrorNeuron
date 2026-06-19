@@ -17,7 +17,9 @@ defmodule MirrorNeuron.Cluster.HardwareTest do
           "MN_NODE_GPU_TYPE",
           "MN_NODE_GPU_NAME",
           "MN_NODE_GPU_API_VERSION",
-          "MN_NODE_GPU_DRIVER_VERSION"
+          "MN_NODE_GPU_DRIVER_VERSION",
+          "MN_DOCKER_WORKER_ENABLED",
+          "MN_DOCKER_BIN"
         ],
         &{&1, System.get_env(&1)}
       )
@@ -232,5 +234,16 @@ defmodule MirrorNeuron.Cluster.HardwareTest do
 
     assert hardware.platform.display_name == "lab-box"
     assert is_binary(hardware.platform.hostname)
+  end
+
+  test "advertises docker worker only when docker daemon is reachable" do
+    System.put_env("MN_DOCKER_WORKER_ENABLED", "1")
+    System.put_env("MN_DOCKER_BIN", "false")
+
+    refute "docker_worker" in Hardware.info().runtime_drivers
+
+    System.put_env("MN_DOCKER_BIN", "true")
+
+    assert "docker_worker" in Hardware.info().runtime_drivers
   end
 end

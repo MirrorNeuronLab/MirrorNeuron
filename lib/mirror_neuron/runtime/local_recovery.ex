@@ -29,13 +29,13 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
       maybe_repair_recovery_indexes()
     end
 
-    with {:ok, jobs} <- RedisStore.list_jobs() do
+    with {:ok, jobs} <- RedisStore.list_job_summaries() do
       jobs
       |> Enum.filter(&recoverable_job_status?/1)
       |> Enum.reduce(%{checked: 0, recovered: 0, paused: 0, skipped: 0, failed: 0, jobs: []}, fn
         job, acc ->
           result =
-            case recover_job_map(job, opts) do
+            case fetch_and_recover_job(job, opts) do
               {:ok, value} -> value
               {:error, reason} -> %{job_id: job["job_id"], action: :failed, reason: reason}
             end
@@ -49,6 +49,14 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
       |> then(&{:ok, &1})
     end
   end
+
+  defp fetch_and_recover_job(%{"job_id" => job_id}, opts) when is_binary(job_id) do
+    with {:ok, job} <- RedisStore.fetch_job(job_id) do
+      recover_job_map(job, opts)
+    end
+  end
+
+  defp fetch_and_recover_job(job, opts), do: recover_job_map(job, opts)
 
   defp maybe_repair_recovery_indexes do
     case RedisStore.repair_recovery_indexes() do

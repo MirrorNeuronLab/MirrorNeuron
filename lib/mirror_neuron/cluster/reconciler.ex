@@ -28,7 +28,7 @@ defmodule MirrorNeuron.Cluster.Reconciler do
 
     opts = Keyword.put_new(opts, :trigger, "node_down")
 
-    with {:ok, jobs} <- redis_store(opts).list_jobs() do
+    with {:ok, jobs} <- list_reconciliation_jobs(opts) do
       result =
         jobs
         |> Enum.filter(&(Map.get(&1, "status") in @active_statuses))
@@ -37,7 +37,12 @@ defmodule MirrorNeuron.Cluster.Reconciler do
           result =
             safe_job_result(job, "node reconciliation", fn ->
               if affected_by_node?(job, node_name) do
-                enqueue_or_run_affected_job(job, node_name, opts)
+                with {:ok, full_job} <- fetch_reconciliation_job(job, opts) do
+                  enqueue_or_run_affected_job(full_job, node_name, opts)
+                else
+                  {:error, reason} ->
+                    failed(job, "could not load job for node reconciliation: #{inspect(reason)}")
+                end
               else
                 skipped(job, "job is not affected by #{node_name}")
               end
@@ -88,7 +93,7 @@ defmodule MirrorNeuron.Cluster.Reconciler do
     owner_node = if is_nil(owner_node), do: nil, else: node_name(owner_node)
     opts = Keyword.put_new(opts, :trigger, "lease_lost")
 
-    with {:ok, jobs} <- redis_store(opts).list_jobs() do
+    with {:ok, jobs} <- list_reconciliation_jobs(opts) do
       result =
         jobs
         |> Enum.filter(&(Map.get(&1, "status") in @active_statuses))
@@ -166,29 +171,34 @@ defmodule MirrorNeuron.Cluster.Reconciler do
   end
 
   defp enqueue_or_run_orphaned_job(job, opts) do
-    if dry_run?(opts) or Keyword.has_key?(opts, :eval) do
-      reconcile_orphaned_job(job, opts)
-    else
-      case redis_store(opts).get_lease("job:#{job["job_id"]}") do
-        {:ok, nil} ->
-          failed_node = lease_owner(job)
-          reason = Keyword.get(opts, :reason, "lost job lease")
+    case redis_store(opts).get_lease("job:#{job["job_id"]}") do
+      {:ok, nil} ->
+        with {:ok, full_job} <- fetch_reconciliation_job(job, opts) do
+          if dry_run?(opts) or Keyword.has_key?(opts, :eval) do
+            reconcile_orphaned_job(full_job, opts)
+          else
+            failed_node = lease_owner(full_job)
+            reason = Keyword.get(opts, :reason, "lost job lease")
 
-          enqueue_and_process_eval(
-            job,
-            Keyword.fetch!(opts, :trigger),
-            failed_node,
-            [],
-            reason,
-            opts
-          )
+            enqueue_and_process_eval(
+              full_job,
+              Keyword.fetch!(opts, :trigger),
+              failed_node,
+              [],
+              reason,
+              opts
+            )
+          end
+        else
+          {:error, reason} ->
+            failed(job, "could not load job for orphan sweep: #{inspect(reason)}")
+        end
 
-        {:ok, _lease} ->
-          skipped(job, "job lease is still active")
+      {:ok, _lease} ->
+        skipped(job, "job lease is still active")
 
-        {:error, reason} ->
-          failed(job, "could not inspect job lease: #{inspect(reason)}")
-      end
+      {:error, reason} ->
+        failed(job, "could not inspect job lease: #{inspect(reason)}")
     end
   end
 
@@ -1345,6 +1355,44 @@ defmodule MirrorNeuron.Cluster.Reconciler do
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
   end
+
+  defp list_reconciliation_jobs(opts) do
+    store = redis_store(opts)
+
+    cond do
+      function_exported?(store, :list_job_summaries, 0) ->
+        store.list_job_summaries()
+
+      function_exported?(store, :list_jobs, 0) ->
+        store.list_jobs()
+
+      true ->
+        {:ok, []}
+    end
+  end
+
+  defp fetch_reconciliation_job(job, opts) do
+    store = redis_store(opts)
+    job_id = Map.get(job, "job_id")
+
+    cond do
+      full_job_record?(job) ->
+        {:ok, job}
+
+      is_binary(job_id) and function_exported?(store, :fetch_job, 1) ->
+        store.fetch_job(job_id)
+
+      true ->
+        {:ok, job}
+    end
+  end
+
+  defp full_job_record?(job) when is_map(job) do
+    Map.has_key?(job, "manifest") or Map.has_key?(job, :manifest) or
+      Map.has_key?(job, "manifest_ref") or Map.has_key?(job, :manifest_ref)
+  end
+
+  defp full_job_record?(_job), do: false
 
   defp filter_only_job_ids(jobs, nil), do: jobs
 

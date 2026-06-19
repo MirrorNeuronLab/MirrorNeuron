@@ -9,6 +9,7 @@ message StreamEventsRequest {
   string job_id = 1;
   bool follow = 2;
   int32 heartbeat_interval_ms = 3;
+  int32 limit = 4;
 }
 
 message EventResponse {

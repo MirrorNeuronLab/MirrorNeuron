@@ -8,8 +8,16 @@ defmodule MirrorNeuron.Monitor do
   @compact_list_items 50
 
   def list_jobs(opts \\ []) do
-    with {:ok, jobs} <- RedisStore.list_jobs() do
+    with {:ok, jobs} <- list_job_records(opts) do
       {:ok, summarize_jobs(jobs, opts)}
+    end
+  end
+
+  defp list_job_records(opts) do
+    if Keyword.get(opts, :summary) == :basic do
+      RedisStore.list_job_summaries()
+    else
+      RedisStore.list_jobs()
     end
   end
 
@@ -93,13 +101,17 @@ defmodule MirrorNeuron.Monitor do
   def cluster_overview(opts \\ []) do
     opts = Keyword.put_new(opts, :summary, :basic)
 
-    with {:ok, raw_jobs} <- RedisStore.list_jobs() do
+    with {:ok, raw_jobs} <- list_job_records(opts) do
       jobs = summarize_jobs(raw_jobs, opts)
 
       metrics =
-        case metrics(raw_jobs) do
-          {:ok, values} -> values
-          {:error, _reason} -> %{}
+        if Keyword.get(opts, :metrics, false) do
+          case detailed_metrics(raw_jobs) do
+            {:ok, values} -> values
+            {:error, _reason} -> %{}
+          end
+        else
+          summary_metrics(jobs)
         end
 
       {:ok,
@@ -109,6 +121,23 @@ defmodule MirrorNeuron.Monitor do
          "metrics" => metrics
        }}
     end
+  end
+
+  defp summary_metrics(jobs) do
+    %{
+      "jobs" => %{
+        "total" => length(jobs),
+        "by_status" => jobs |> Enum.map(&Map.get(&1, "status", "unknown")) |> Enum.frequencies()
+      },
+      "nodes" => %{
+        "total" => length(MirrorNeuron.inspect_nodes())
+      },
+      "runtime" => %{
+        "generated_at" => MirrorNeuron.Runtime.timestamp(),
+        "redis_namespace" => MirrorNeuron.Config.string("MN_REDIS_NAMESPACE", :redis_namespace),
+        "source" => "summary"
+      }
+    }
   end
 
   def clear_jobs() do
@@ -127,8 +156,8 @@ defmodule MirrorNeuron.Monitor do
   end
 
   def metrics do
-    with {:ok, jobs} <- RedisStore.list_jobs() do
-      metrics(jobs)
+    with {:ok, jobs} <- RedisStore.list_job_summaries() do
+      {:ok, jobs |> Enum.map(&basic_job_summary/1) |> summary_metrics()}
     end
   end
 
@@ -184,7 +213,7 @@ defmodule MirrorNeuron.Monitor do
     end
   end
 
-  defp metrics(jobs) do
+  defp detailed_metrics(jobs) do
     with {:ok, details} <- metric_details(jobs) do
       {:ok,
        %{

@@ -870,17 +870,29 @@ defmodule MirrorNeuron.Cluster.Hardware do
   end
 
   defp docker_worker_driver do
+    docker_bin = System.get_env("MN_DOCKER_BIN", "docker")
+
     case System.get_env("MN_DOCKER_WORKER_ENABLED") do
       value when value in ["0", "false", "FALSE", "no", "NO", "off", "OFF"] ->
         []
 
       value when value in ["1", "true", "TRUE", "yes", "YES", "on", "ON"] ->
-        ["docker_worker"]
+        if docker_worker_available?(docker_bin), do: ["docker_worker"], else: []
 
       _ ->
-        docker_bin = System.get_env("MN_DOCKER_BIN", "docker")
-        if System.find_executable(docker_bin), do: ["docker_worker"], else: []
+        if docker_worker_available?(docker_bin), do: ["docker_worker"], else: []
     end
+  end
+
+  defp docker_worker_available?(docker_bin) do
+    with executable when is_binary(executable) <- System.find_executable(docker_bin),
+         {_output, 0} <- System.cmd(executable, ["version"], stderr_to_stdout: true) do
+      true
+    else
+      _ -> false
+    end
+  rescue
+    _ -> false
   end
 
   defp split_env_list(nil), do: []

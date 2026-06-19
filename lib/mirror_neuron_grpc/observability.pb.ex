@@ -9,6 +9,7 @@ defmodule Mirrorneuron.Observability.V1.StreamEventsRequest do
   field(:job_id, 1, type: :string, json_name: "jobId")
   field(:follow, 2, type: :bool)
   field(:heartbeat_interval_ms, 3, type: :int32, json_name: "heartbeatIntervalMs")
+  field(:limit, 4, type: :int32)
 end
 
 defmodule Mirrorneuron.Observability.V1.EventResponse do

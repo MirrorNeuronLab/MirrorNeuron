@@ -1154,6 +1154,7 @@ defmodule MirrorNeuron.Grpc.ObservabilityServer do
   use GRPC.Server, service: Mirrorneuron.Observability.V1.ObservabilityService.Service
 
   alias Mirrorneuron.Observability.V1.EventResponse
+  alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime.EventBus
 
   def stream_events(request, stream) do
@@ -1162,13 +1163,15 @@ defmodule MirrorNeuron.Grpc.ObservabilityServer do
     job_id = request.job_id
     follow? = Map.get(request, :follow, false)
     heartbeat_interval_ms = max(Map.get(request, :heartbeat_interval_ms, 0), 0)
+    event_limit = max(Map.get(request, :limit, 0), 0)
+    event_start = if event_limit > 0, do: -event_limit, else: 0
 
     if follow? do
       EventBus.subscribe(job_id)
     end
 
     terminal? =
-      case MirrorNeuron.events(job_id) do
+      case RedisStore.read_events(job_id, event_start, -1) do
         {:ok, events} ->
           Enum.each(events, fn ev ->
             GRPC.Server.send_reply(stream, %EventResponse{event_json: Jason.encode!(ev)})

@@ -41,11 +41,13 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   def persist_job(job_id, job_map) do
     encoded = Jason.encode!(job_map)
+    encoded_summary = Jason.encode!(job_summary(job_id, job_map))
 
     with :ok <- validate_job_lease_epoch(job_id, job_map),
          {:ok, results} <-
            transaction([
              ["SET", key("job", job_id), encoded],
+             ["SET", key("job", job_id, "summary"), encoded_summary],
              ["SADD", key(@jobs_set), job_id]
            ]),
          :ok <- expect_persist_job_results(results),
@@ -91,6 +93,12 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   def list_jobs do
     with {:ok, job_ids} <- list_job_ids() do
       fetch_jobs(job_ids)
+    end
+  end
+
+  def list_job_summaries do
+    with {:ok, job_ids} <- list_job_ids() do
+      fetch_job_summaries(job_ids)
     end
   end
 
@@ -433,6 +441,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       keys =
         [
           key("job", job_id),
+          key("job", job_id, "summary"),
           key("job", job_id, "events"),
           key("job", job_id, "agents")
         ] ++ Enum.map(agent_ids, &key("job", job_id, "agent", &1))
@@ -944,6 +953,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     keys =
       [
         key("job", job_id),
+        key("job", job_id, "summary"),
         key("job", job_id, "events"),
         key("job", job_id, "agents")
       ] ++ Enum.map(agent_ids, &key("job", job_id, "agent", &1))
@@ -962,6 +972,89 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       {:ok, encoded_jobs} -> {:ok, decode_json_items(encoded_jobs)}
       {:error, reason} -> {:error, format_reason(reason)}
     end
+  end
+
+  defp fetch_job_summaries([]), do: {:ok, []}
+
+  defp fetch_job_summaries(job_ids) do
+    keys = Enum.map(job_ids, &key("job", &1, "summary"))
+
+    case command(["MGET" | keys]) do
+      {:ok, encoded_summaries} ->
+        summaries =
+          job_ids
+          |> Enum.zip(encoded_summaries)
+          |> Enum.map(fn
+            {_job_id, encoded} when is_binary(encoded) ->
+              case Jason.decode(encoded) do
+                {:ok, summary} when is_map(summary) -> summary
+                _ -> nil
+              end
+
+            {job_id, _missing} ->
+              fetch_and_store_job_summary(job_id)
+          end)
+          |> Enum.reject(&is_nil/1)
+
+        {:ok, summaries}
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
+    end
+  end
+
+  defp fetch_and_store_job_summary(job_id) do
+    case fetch_job(job_id) do
+      {:ok, job} when is_map(job) ->
+        summary = job_summary(job_id, job)
+        _ = store_job_summary(job_id, summary, Map.get(summary, "status"))
+        summary
+
+      _ ->
+        nil
+    end
+  end
+
+  defp store_job_summary(job_id, summary, status) do
+    with {:ok, "OK"} <- command(["SET", key("job", job_id, "summary"), Jason.encode!(summary)]) do
+      if terminal_status?(status) do
+        expire_key(key("job", job_id, "summary"), terminal_job_ttl_seconds())
+      else
+        persist_key(key("job", job_id, "summary"))
+      end
+    end
+  end
+
+  defp job_summary(job_id, job) do
+    %{
+      "job_id" => field(job, "job_id") || job_id,
+      "graph_id" => field(job, "graph_id"),
+      "job_name" => field(job, "job_name"),
+      "status" => field(job, "status"),
+      "job_type" => field(job, "job_type"),
+      "submitted_at" => field(job, "submitted_at"),
+      "updated_at" => field(job, "updated_at"),
+      "placement_policy" => field(job, "placement_policy"),
+      "scheduler" => field(job, "scheduler"),
+      "requested_recovery_policy" => field(job, "requested_recovery_policy"),
+      "recovery_policy" => field(job, "recovery_policy"),
+      "reliability" => field(job, "reliability"),
+      "restart_policy" => field(job, "restart_policy"),
+      "reschedule_policy" => field(job, "reschedule_policy"),
+      "policy_state" => field(job, "policy_state"),
+      "recovery_status" => field(job, "recovery_status"),
+      "recovery_requires_review" => field(job, "recovery_requires_review", false),
+      "recovery_reason" => field(job, "recovery_reason"),
+      "executor_count" => field(job, "executor_count", 0),
+      "active_executors" => field(job, "active_executors", 0),
+      "nodes" => field(job, "nodes", []),
+      "sandbox_names" => field(job, "sandbox_names", []),
+      "last_event" => field(job, "last_event")
+    }
+  end
+
+  defp field(map, name, default \\ nil) when is_map(map) do
+    Map.get(map, name, Map.get(map, String.to_atom(name), default))
   end
 
   defp fetch_service_instances([]), do: {:ok, []}
@@ -1519,6 +1612,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   defp persist_active_job(job_id) do
     [
       key("job", job_id),
+      key("job", job_id, "summary"),
       key("job", job_id, "events"),
       key("job", job_id, "agents")
     ]
@@ -1532,6 +1626,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
     [
       key("job", job_id),
+      key("job", job_id, "summary"),
       key("job", job_id, "events"),
       key("job", job_id, "agents")
     ]
@@ -1946,12 +2041,15 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   defp parse_transaction_results(other), do: {:error, format_reason(other)}
 
-  defp expect_persist_job_results(["OK", count]) when is_integer(count), do: :ok
+  defp expect_persist_job_results(["OK", "OK", count]) when is_integer(count), do: :ok
 
   defp expect_persist_job_results([%Redix.Error{} = error | _]),
     do: {:error, format_reason(error)}
 
-  defp expect_persist_job_results([_set, %Redix.Error{} = error]),
+  defp expect_persist_job_results([_set, %Redix.Error{} = error | _]),
+    do: {:error, format_reason(error)}
+
+  defp expect_persist_job_results([_set, _summary, %Redix.Error{} = error | _]),
     do: {:error, format_reason(error)}
 
   defp expect_persist_job_results(other), do: {:error, format_reason(other)}
