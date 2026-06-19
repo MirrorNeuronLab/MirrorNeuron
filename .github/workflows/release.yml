@@ -129,6 +129,11 @@ jobs:
 
           echo "Verified $TAG_NAME is checked out at validated commit $head_commit."
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
         with:
