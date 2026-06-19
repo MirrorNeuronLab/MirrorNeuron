@@ -941,13 +941,14 @@ defmodule MirrorNeuron.RuntimeTest do
     manifest = pause_resume_dag_manifest("resume_running_idempotent_test")
 
     assert {:ok, job_id} = run_manifest(manifest, await: false)
+    cleanup_job_on_exit(job_id)
     wait_until(fn -> running_status?(job_id) end)
 
     assert {:ok, "resumed"} = MirrorNeuron.resume(job_id)
     assert {:ok, %{"status" => "running"}} = MirrorNeuron.inspect_job(job_id)
     assert_runtime_workflow_manifest(job_id)
 
-    RedisStore.delete_job(job_id)
+    cleanup_runtime_job(job_id)
   end
 
   test "recovers a paused job after coordinator restart and completes after resume" do
@@ -1078,6 +1079,7 @@ defmodule MirrorNeuron.RuntimeTest do
     }
 
     assert {:ok, job_id} = run_manifest(manifest, await: false)
+    cleanup_job_on_exit(job_id)
     wait_until(fn -> running_status?(job_id) end)
 
     runner = job_runner_pid(job_id)
@@ -1095,7 +1097,7 @@ defmodule MirrorNeuron.RuntimeTest do
     assert Enum.any?(events, &(&1["type"] == "job_paused_for_manual_resume"))
     assert Enum.any?(events, &(&1["type"] == "job_recovered"))
 
-    RedisStore.delete_job(job_id)
+    cleanup_runtime_job(job_id)
   end
 
   test "long-running workflow resumes from checkpoint without repeating completed steps" do
@@ -1357,6 +1359,7 @@ defmodule MirrorNeuron.RuntimeTest do
     }
 
     {:ok, job_id} = persist_recoverable_job(manifest, "false-failed")
+    cleanup_job_on_exit(job_id)
 
     RedisStore.persist_agent(job_id, "worker", %{
       "agent_id" => "worker",
@@ -2903,6 +2906,16 @@ defmodule MirrorNeuron.RuntimeTest do
       {:ok, %{"status" => "running"}} -> true
       _ -> false
     end
+  end
+
+  defp cleanup_job_on_exit(job_id) do
+    on_exit(fn -> cleanup_runtime_job(job_id) end)
+    :ok
+  end
+
+  defp cleanup_runtime_job(job_id) do
+    _ = MirrorNeuron.cancel(job_id)
+    RedisStore.delete_job(job_id)
   end
 
   defp pause_resume_dag_manifest(graph_id) do

@@ -679,6 +679,32 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     RedisStore.delete_job(job_id)
   end
 
+  test "list_job_summaries flags recoverable runner interruptions" do
+    job_id = "summary-failed-runner-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _job} =
+             RedisStore.persist_job(job_id, %{
+               "job_id" => job_id,
+               "graph_id" => "summary_failed_runner",
+               "status" => "failed",
+               "submitted_at" => "2026-03-28T00:00:00Z",
+               "updated_at" => "2026-03-28T00:00:10Z",
+               "result" => %{
+                 "agent_id" => "job_runner",
+                 "error" => "job coordinator exited before terminal state",
+                 "reason" => ":normal"
+               }
+             })
+
+    assert {:ok, [summary]} = RedisStore.list_job_summaries()
+    assert summary["job_id"] == job_id
+    assert summary["status"] == "failed"
+    assert summary["recovery_hint"] == "runner_interruption"
+    refute Map.has_key?(summary, "result")
+
+    RedisStore.delete_job(job_id)
+  end
+
   test "fenced leases reject stale job and agent writes" do
     job_id = "fenced-job-#{System.unique_integer([:positive])}"
     lease_name = "job:#{job_id}"

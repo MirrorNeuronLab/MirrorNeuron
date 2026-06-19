@@ -213,10 +213,19 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
   end
 
   defp recoverable_job_status?(%{"status" => status} = job) do
-    status in @active_statuses or recoverable_runner_interruption?(job)
+    status in @active_statuses or recoverable_runner_interruption?(job) or
+      runner_interruption_recovery_hint?(job)
   end
 
   defp recoverable_job_status?(_job), do: false
+
+  defp runner_interruption_recovery_hint?(%{
+         "status" => "failed",
+         "recovery_hint" => "runner_interruption"
+       }),
+       do: true
+
+  defp runner_interruption_recovery_hint?(_job), do: false
 
   defp recoverable_runner_interruption?(%{
          "status" => "failed",

@@ -1045,6 +1045,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       "recovery_status" => field(job, "recovery_status"),
       "recovery_requires_review" => field(job, "recovery_requires_review", false),
       "recovery_reason" => field(job, "recovery_reason"),
+      "recovery_hint" => recovery_hint(job),
       "executor_count" => field(job, "executor_count", 0),
       "active_executors" => field(job, "active_executors", 0),
       "nodes" => field(job, "nodes", []),
@@ -1052,6 +1053,19 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       "last_event" => field(job, "last_event")
     }
   end
+
+  defp recovery_hint(job) do
+    if field(job, "status") == "failed" and runner_interruption_result?(field(job, "result")) do
+      "runner_interruption"
+    end
+  end
+
+  defp runner_interruption_result?(result) when is_map(result) do
+    field(result, "agent_id") == "job_runner" and
+      field(result, "error") == "job coordinator exited before terminal state"
+  end
+
+  defp runner_interruption_result?(_result), do: false
 
   defp field(map, name, default \\ nil) when is_map(map) do
     Map.get(map, name, Map.get(map, String.to_atom(name), default))
