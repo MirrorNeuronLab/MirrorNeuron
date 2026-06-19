@@ -20,7 +20,7 @@ defmodule MirrorNeuron.MixProject do
   end
 
   defp project_version do
-    System.get_env("MIX_PROJECT_VERSION", "0.1.0")
+    System.get_env("MIX_PROJECT_VERSION", "1.2.5")
   end
 
   defp deps do
