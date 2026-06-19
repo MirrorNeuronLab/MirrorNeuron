@@ -105,7 +105,8 @@ defmodule MirrorNeuron.HardwareRequirements do
         requirement["vendor"] == normalize_text(map_get(device, "vendor")),
       blank?(requirement["driver"]) or
         requirement["driver"] == normalize_text(map_get(device, "driver")),
-      requirement_capabilities == [] or Enum.any?(requirement_capabilities, &(&1 in capabilities)),
+      requirement_capabilities == [] or
+        Enum.any?(requirement_capabilities, &(&1 in capabilities)),
       version_matches?(
         map_get(device, "api_version"),
         requirement["min_api_version"],
