@@ -90,7 +90,8 @@ defmodule MirrorNeuron.Runner.DockerWorker do
            }),
          {output, exit_code} <-
            System.cmd(docker_bin(config), ["build", "-t", image_ref, source_path],
-             stderr_to_stdout: true
+             stderr_to_stdout: true,
+             env: docker_build_env(config)
            ) do
       if exit_code == 0 do
         emit_runner_event(opts, "docker_worker_build_completed", %{
@@ -168,6 +169,29 @@ defmodule MirrorNeuron.Runner.DockerWorker do
 
     "mirror-neuron/docker-worker:#{digest}"
   end
+
+  defp docker_build_env(config) do
+    buildkit =
+      Map.get(config, "docker_buildkit") ||
+        get_in(config, ["docker", "buildkit"]) ||
+        System.get_env("MN_DOCKER_WORKER_BUILDKIT") ||
+        "0"
+
+    [{"DOCKER_BUILDKIT", docker_buildkit_value(buildkit)}]
+  end
+
+  defp docker_buildkit_value(value) when value in [true, 1, "1"], do: "1"
+
+  defp docker_buildkit_value(value) when is_binary(value) do
+    case String.downcase(String.trim(value)) do
+      "true" -> "1"
+      "yes" -> "1"
+      "on" -> "1"
+      _ -> "0"
+    end
+  end
+
+  defp docker_buildkit_value(_value), do: "0"
 
   defp reject_published_ports(config) do
     docker = Map.get(config, "docker", %{})
@@ -975,6 +999,9 @@ defmodule MirrorNeuron.Runner.DockerWorker do
       base in ["skills_root", "mn_skills", "skills"] ->
         resolve_skills_root_source(source, config)
 
+      base in ["workspace_root", "workspace", "repo_root"] ->
+        resolve_workspace_root_source(source, config)
+
       true ->
         resolve_upload_source(source, Keyword.get(opts, :payloads_path))
     end
@@ -1016,6 +1043,40 @@ defmodule MirrorNeuron.Runner.DockerWorker do
       end
     else
       {:error, "build_context_upload_paths entry uses skills_root but MN_SKILLS_ROOT is not set"}
+    end
+  end
+
+  defp resolve_workspace_root_source(source, config) do
+    environment = Map.get(config, "environment", %{})
+
+    workspace_root =
+      Map.get(environment, "MN_WORKSPACE_ROOT") ||
+        Map.get(environment, :MN_WORKSPACE_ROOT) ||
+        System.get_env("MN_WORKSPACE_ROOT")
+
+    if is_binary(workspace_root) and String.trim(workspace_root) != "" do
+      root = Path.expand(workspace_root)
+
+      resolved =
+        if Path.type(source) == :absolute do
+          Path.expand(source)
+        else
+          Path.expand(source, root)
+        end
+
+      cond do
+        not inside_path?(resolved, root) ->
+          {:error,
+           "build_context_upload_paths workspace source must stay inside MN_WORKSPACE_ROOT: #{source}"}
+
+        File.exists?(resolved) ->
+          {:ok, resolved}
+
+        true ->
+          {:error, "build_context_upload_paths workspace source does not exist: #{source}"}
+      end
+    else
+      {:error, "build_context_upload_paths entry uses workspace_root but MN_WORKSPACE_ROOT is not set"}
     end
   end
 
