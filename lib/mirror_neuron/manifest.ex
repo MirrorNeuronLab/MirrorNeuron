@@ -11,6 +11,7 @@ defmodule MirrorNeuron.Manifest do
     :runtime,
     :required_context_engine,
     :requirements,
+    :skill_dependencies,
     :input_validation,
     :services,
     :required_services,
@@ -47,6 +48,7 @@ defmodule MirrorNeuron.Manifest do
                           "required_context_engine",
                           "requirements",
                           "requirments",
+                          "skill_dependencies",
                           "input_validation",
                           "inputValidation",
                           "services",
@@ -122,6 +124,7 @@ defmodule MirrorNeuron.Manifest do
       "job_name" => manifest.job_name,
       "required_context_engine" => manifest.required_context_engine,
       "requirements" => json_safe(manifest.requirements),
+      "skill_dependencies" => json_safe(manifest.skill_dependencies),
       "input_validation" => json_safe(manifest.input_validation),
       "services" => json_safe(manifest.services),
       "required_services" => json_safe(manifest.required_services),
@@ -160,6 +163,7 @@ defmodule MirrorNeuron.Manifest do
           Map.get(raw, "requiredContextEngine", Map.get(raw, "required_context_engine", false))
         ),
       requirements: Map.get(raw, "requirements", Map.get(raw, "requirments", %{})),
+      skill_dependencies: normalize_optional_list(Map.get(raw, "skill_dependencies", [])),
       input_validation: Map.get(raw, "input_validation", Map.get(raw, "inputValidation", %{})),
       services: ServiceSpec.normalize_services(Map.get(raw, "services", [])),
       required_services:
@@ -847,6 +851,9 @@ defmodule MirrorNeuron.Manifest do
 
   defp normalize_optional_map(value) when is_map(value), do: json_safe(value)
   defp normalize_optional_map(_value), do: nil
+
+  defp normalize_optional_list(value) when is_list(value), do: Enum.map(value, &json_safe/1)
+  defp normalize_optional_list(_value), do: []
 
   defp extension_fields(raw) when is_map(raw) do
     raw
