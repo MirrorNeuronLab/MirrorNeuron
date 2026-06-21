@@ -1076,7 +1076,8 @@ defmodule MirrorNeuron.Runner.DockerWorker do
           {:error, "build_context_upload_paths workspace source does not exist: #{source}"}
       end
     else
-      {:error, "build_context_upload_paths entry uses workspace_root but MN_WORKSPACE_ROOT is not set"}
+      {:error,
+       "build_context_upload_paths entry uses workspace_root but MN_WORKSPACE_ROOT is not set"}
     end
   end
 

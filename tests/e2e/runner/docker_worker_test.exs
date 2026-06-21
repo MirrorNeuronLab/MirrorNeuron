@@ -436,7 +436,11 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     File.mkdir_p!(docker_worker_dir)
     File.mkdir_p!(sdk_dir)
     File.write!(Path.join(docker_worker_dir, "Dockerfile"), "FROM scratch\n")
-    File.write!(Path.join(sdk_dir, "pyproject.toml"), "[project]\nname='mirrorneuron-python-sdk'\n")
+
+    File.write!(
+      Path.join(sdk_dir, "pyproject.toml"),
+      "[project]\nname='mirrorneuron-python-sdk'\n"
+    )
 
     File.write!(fake_docker, """
     #!/usr/bin/env bash
