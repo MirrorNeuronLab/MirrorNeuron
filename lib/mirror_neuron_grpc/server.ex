@@ -581,7 +581,6 @@ defmodule MirrorNeuron.Grpc.JobServer do
   end
 
   defp valid_admin_token?(_configured_token, _request_token), do: false
-
 end
 
 defmodule MirrorNeuron.Grpc.ClusterServer do

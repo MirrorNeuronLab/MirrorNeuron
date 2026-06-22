@@ -224,7 +224,8 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     System.put_env(@admin_token_env, "stale-admin-token")
 
     try do
-      response = JobServer.clear_jobs(%ClearJobsRequest{admin_token: "mirror_neuron_password_admin"}, nil)
+      response =
+        JobServer.clear_jobs(%ClearJobsRequest{admin_token: "mirror_neuron_password_admin"}, nil)
 
       assert %ClearJobsResponse{} = response
       assert is_integer(response.cleared_count)
