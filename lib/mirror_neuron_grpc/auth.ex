@@ -1,24 +1,17 @@
 defmodule MirrorNeuron.Grpc.Auth do
   @moduledoc false
 
-  @auth_token_env "MN_GRPC_AUTH_TOKEN"
   @token_headers ["authorization"]
 
   def authorize_operator!(stream) do
-    case operator_token() do
-      {:ok, expected_token} ->
-        if authorized?(stream, expected_token) do
-          :ok
-        else
-          raise GRPC.RPCError,
-            status: GRPC.Status.unauthenticated(),
-            message: "gRPC auth token is required for this RPC"
-        end
+    expected_token = MirrorNeuron.Grpc.Tokens.auth_token()
 
-      :error ->
-        raise GRPC.RPCError,
-          status: GRPC.Status.unauthenticated(),
-          message: "#{@auth_token_env} must be set before protected gRPC RPCs can be used"
+    if authorized?(stream, expected_token) do
+      :ok
+    else
+      raise GRPC.RPCError,
+        status: GRPC.Status.unauthenticated(),
+        message: "gRPC auth token is required for this RPC"
     end
   end
 
@@ -33,13 +26,6 @@ defmodule MirrorNeuron.Grpc.Auth do
   end
 
   def authorized?(_stream, _expected_token), do: false
-
-  defp operator_token do
-    case MirrorNeuron.Grpc.Tokens.auth_token() do
-      nil -> :error
-      token -> {:ok, token}
-    end
-  end
 
   defp metadata(stream) when is_map(stream) do
     stream_map = if Map.has_key?(stream, :__struct__), do: Map.from_struct(stream), else: stream

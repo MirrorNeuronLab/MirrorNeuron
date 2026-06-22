@@ -21,8 +21,6 @@ end
 defmodule MirrorNeuron.Grpc.JobServer do
   use GRPC.Server, service: Mirrorneuron.Job.V1.JobService.Service
 
-  @admin_token_env "MN_GRPC_ADMIN_TOKEN"
-
   alias Mirrorneuron.Job.V1.{
     SubmitJobResponse,
     GetJobResponse,
@@ -251,6 +249,19 @@ defmodule MirrorNeuron.Grpc.JobServer do
     end
   end
 
+  defp authorize_clear_jobs!(request) do
+    configured_token = MirrorNeuron.Grpc.Tokens.admin_token()
+    request_token = Map.get(request, :admin_token, "")
+
+    unless valid_admin_token?(configured_token, request_token) do
+      raise GRPC.RPCError,
+        status: GRPC.Status.permission_denied(),
+        message: "ClearJobs requires MN_GRPC_ADMIN_TOKEN"
+    end
+
+    :ok
+  end
+
   def deploy_job(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("DeployJob")
 
@@ -444,23 +455,6 @@ defmodule MirrorNeuron.Grpc.JobServer do
     end
   end
 
-  defp authorize_clear_jobs!(request) do
-    configured_token = configured_admin_token()
-    request_token = Map.get(request, :admin_token, "")
-
-    unless valid_admin_token?(configured_token, request_token) do
-      raise GRPC.RPCError,
-        status: GRPC.Status.permission_denied(),
-        message: "ClearJobs requires #{@admin_token_env}"
-    end
-
-    :ok
-  end
-
-  defp configured_admin_token do
-    MirrorNeuron.Grpc.Tokens.admin_token()
-  end
-
   defp request_bundle_dir(manifest_json, payloads) do
     bundle_id = "bundle_#{System.unique_integer([:positive])}"
     tmp_dir = Path.join(System.tmp_dir!(), bundle_id)
@@ -587,6 +581,7 @@ defmodule MirrorNeuron.Grpc.JobServer do
   end
 
   defp valid_admin_token?(_configured_token, _request_token), do: false
+
 end
 
 defmodule MirrorNeuron.Grpc.ClusterServer do
@@ -631,8 +626,8 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
       cluster_nodes: System.get_env("MN_CLUSTER_NODES", ""),
       network_only: MirrorNeuron.Grpc.NetworkOnly.enabled?(),
       node_info_json: Jason.encode!(handshake_node_info()),
-      grpc_auth_token: MirrorNeuron.Grpc.Tokens.auth_token() || "",
-      grpc_admin_token: configured_admin_token() || ""
+      grpc_auth_token: MirrorNeuron.Grpc.Tokens.auth_token(),
+      grpc_admin_token: MirrorNeuron.Grpc.Tokens.admin_token()
     }
   end
 
@@ -1029,10 +1024,6 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
     end
 
     :ok
-  end
-
-  defp configured_admin_token do
-    MirrorNeuron.Grpc.Tokens.admin_token()
   end
 
   defp secure_compare(left, right), do: MirrorNeuron.Grpc.Tokens.secure_compare(left, right)

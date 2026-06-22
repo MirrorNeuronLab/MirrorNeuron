@@ -148,10 +148,8 @@ services:
       ERL_EPMD_ADDRESS: ${ERL_EPMD_ADDRESS:-0.0.0.0}
       ERL_AFLAGS: ${ERL_AFLAGS:-}
       MN_COOKIE: ${MN_COOKIE:-}
-      MN_GRPC_AUTH_TOKEN: ${MN_GRPC_AUTH_TOKEN:-}
-      MN_GRPC_AUTH_TOKEN_FILE: ${MN_GRPC_AUTH_TOKEN_FILE:-/root/.mn/grpc_auth.token}
-      MN_GRPC_ADMIN_TOKEN: ${MN_GRPC_ADMIN_TOKEN:-}
-      MN_GRPC_ADMIN_TOKEN_FILE: ${MN_GRPC_ADMIN_TOKEN_FILE:-/root/.mn/grpc_admin.token}
+      MN_GRPC_AUTH_TOKEN: mirror_neuron_password
+      MN_GRPC_ADMIN_TOKEN: mirror_neuron_password_admin
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
       SLACK_DEFAULT_CHANNEL: ${SLACK_DEFAULT_CHANNEL:-}
       SLACK_API_BASE_URL: ${SLACK_API_BASE_URL:-}
