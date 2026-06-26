@@ -11,6 +11,19 @@ defmodule MirrorNeuron.Grpc.AuthTest do
     def get_headers(:payload), do: %{"authorization" => "Bearer secret-token"}
   end
 
+  setup do
+    previous = System.get_env("MN_GRPC_AUTH_TOKEN")
+
+    on_exit(fn ->
+      case previous do
+        nil -> System.delete_env("MN_GRPC_AUTH_TOKEN")
+        value -> System.put_env("MN_GRPC_AUTH_TOKEN", value)
+      end
+    end)
+
+    :ok
+  end
+
   test "authorizes bearer tokens from request headers" do
     stream = %Stream{headers: %{"authorization" => "Bearer secret-token"}}
 
@@ -40,8 +53,9 @@ defmodule MirrorNeuron.Grpc.AuthTest do
     refute Auth.authorized?(%Stream{headers: %{"authorization" => "Bearer secret-token"}}, "")
   end
 
-  test "authorizes the fixed operator token" do
-    stream = %Stream{headers: %{"authorization" => "Bearer mirror_neuron_password"}}
+  test "authorizes the configured operator token" do
+    System.put_env("MN_GRPC_AUTH_TOKEN", "configured-operator-token")
+    stream = %Stream{headers: %{"authorization" => "Bearer configured-operator-token"}}
 
     assert :ok = Auth.authorize_operator!(stream)
   end

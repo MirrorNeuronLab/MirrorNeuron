@@ -192,8 +192,7 @@ defmodule MirrorNeuron.Runner.OpenShell do
   end
 
   defp max_command_length do
-    System.get_env("MN_MAX_COMMAND_LENGTH", "32768")
-    |> String.to_integer()
+    Config.integer("MN_MAX_COMMAND_LENGTH", :max_command_length)
   end
 
   defp run_command(executable, args) do

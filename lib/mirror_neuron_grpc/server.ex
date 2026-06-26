@@ -2,9 +2,7 @@ defmodule MirrorNeuron.Grpc.NetworkOnly do
   @moduledoc false
 
   def enabled? do
-    System.get_env("MN_NETWORK_ONLY", "false")
-    |> String.downcase()
-    |> Kernel.in(["1", "true", "yes", "on"])
+    MirrorNeuron.Config.boolean("MN_NETWORK_ONLY", :network_only)
   end
 
   def reject_if_enabled!(operation) do
@@ -622,7 +620,7 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
       redis_host: redis_host(),
       redis_port: redis_port(),
       redis_url: redis_url(),
-      cluster_nodes: System.get_env("MN_CLUSTER_NODES", ""),
+      cluster_nodes: MirrorNeuron.Config.string("MN_CLUSTER_NODES", :cluster_nodes),
       network_only: MirrorNeuron.Grpc.NetworkOnly.enabled?(),
       node_info_json: Jason.encode!(handshake_node_info()),
       grpc_auth_token: MirrorNeuron.Grpc.Tokens.auth_token(),
@@ -1013,7 +1011,12 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
   end
 
   defp authorize_network_join!(request_token) do
-    expected_token = System.get_env("MN_NETWORK_JOIN_TOKEN", "") |> String.trim()
+    expected_token =
+      "MN_NETWORK_JOIN_TOKEN"
+      |> MirrorNeuron.Config.secret(:network_join_token)
+      |> to_string()
+      |> String.trim()
+
     request_token = to_string(request_token || "") |> String.trim()
 
     unless expected_token != "" and secure_compare(request_token, expected_token) do
@@ -1102,17 +1105,20 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
   end
 
   defp advertised_host do
-    System.get_env("MN_NETWORK_ADVERTISE_HOST") ||
-      System.get_env("MN_CORE_HOST", "localhost")
+    MirrorNeuron.Config.optional_string("MN_NETWORK_ADVERTISE_HOST", :network_advertise_host) ||
+      MirrorNeuron.Config.string("MN_CORE_HOST", :core_host)
   end
 
   defp redis_host do
-    System.get_env("MN_NETWORK_REDIS_HOST") ||
+    MirrorNeuron.Config.optional_string("MN_NETWORK_REDIS_HOST", :network_redis_host) ||
       (redis_uri().host || advertised_host())
   end
 
   defp redis_port do
-    env_integer("MN_NETWORK_REDIS_PORT", redis_uri().port || 6_379)
+    case MirrorNeuron.Config.optional_string("MN_NETWORK_REDIS_PORT", :network_redis_port) do
+      nil -> redis_uri().port || 6_379
+      value -> parse_integer(value, "MN_NETWORK_REDIS_PORT")
+    end
   end
 
   defp redis_url do
@@ -1121,23 +1127,32 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
     port = redis_port()
     path = uri.path || "/0"
     scheme = uri.scheme || "redis"
-    userinfo = if uri.userinfo, do: "#{uri.userinfo}@", else: ""
 
-    "#{scheme}://#{userinfo}#{host}:#{port}#{path}"
+    "#{scheme}://#{host}:#{port}#{path}"
   end
 
   defp redis_uri do
     "MN_REDIS_URL"
-    |> System.get_env("redis://localhost:6379/0")
+    |> MirrorNeuron.Config.string(:redis_url)
     |> URI.parse()
   end
 
   defp env_integer(name, default) do
-    case Integer.parse(System.get_env(name, "")) do
-      {value, ""} -> value
-      _ -> default
+    case MirrorNeuron.Config.optional_string(name, env_key(name)) do
+      nil -> default
+      value -> parse_integer(value, name)
     end
   end
+
+  defp parse_integer(value, name) do
+    case Integer.parse(value) do
+      {parsed, ""} -> parsed
+      _ -> raise ArgumentError, "#{name} must be an integer, got #{inspect(value)}"
+    end
+  end
+
+  defp env_key("MN_GRPC_PORT"), do: :grpc_port
+  defp env_key("MN_DIST_PORT"), do: :dist_port
 end
 
 defmodule MirrorNeuron.Grpc.ObservabilityServer do

@@ -1,6 +1,8 @@
 defmodule MirrorNeuron.ModelCatalog do
   @moduledoc false
 
+  alias MirrorNeuron.Config
+
   @model_runner_provider "docker_model_runner"
   @model_runner_service "docker-model-runner"
 
@@ -174,17 +176,12 @@ defmodule MirrorNeuron.ModelCatalog do
 
   defp external_catalog_paths do
     []
-    |> maybe_cons(System.get_env("MN_MODEL_CATALOG_PATH"))
+    |> maybe_cons(Config.optional_string("MN_MODEL_CATALOG_PATH", :model_catalog_path))
     |> Kernel.++([Path.join(mn_home(), "models/catalog.json")])
   end
 
   defp mn_home do
-    System.get_env("MN_HOME")
-    |> case do
-      nil -> Path.expand("~/.mn")
-      "" -> Path.expand("~/.mn")
-      path -> Path.expand(path)
-    end
+    Config.optional_string("MN_HOME", :home) || Path.expand("~/.mn")
   end
 
   defp maybe_cons(paths, nil), do: paths

@@ -11,7 +11,7 @@ defmodule MirrorNeuron.Application do
 
     cluster_hosts =
       "MN_CLUSTER_NODES"
-      |> System.get_env("")
+      |> Config.string(:cluster_nodes)
       |> String.split(",", trim: true)
       |> Enum.map(&MirrorNeuron.SafeAccess.node_name_to_atom!/1)
 
@@ -67,13 +67,13 @@ defmodule MirrorNeuron.Application do
   end
 
   def node_role do
-    System.get_env("MN_NODE_ROLE", "runtime")
+    Config.string("MN_NODE_ROLE", :node_role)
   end
 
   @doc false
   def grpc_child_specs do
     grpc_port = Config.integer("MN_GRPC_PORT", :grpc_port)
-    grpc_host = System.get_env("MN_CORE_HOST", "localhost")
+    grpc_host = Config.string("MN_CORE_HOST", :core_host)
 
     [
       {GRPC.Server.Supervisor,

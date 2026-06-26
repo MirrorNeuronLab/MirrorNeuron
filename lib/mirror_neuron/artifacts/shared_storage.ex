@@ -17,10 +17,11 @@ defmodule MirrorNeuron.Artifacts.SharedStorage do
   }
 
   def root do
-    System.get_env("MN_RUNTIME_SHARED_STORAGE_ROOT") ||
-      System.get_env("MN_SHARED_STORAGE_ROOT") ||
-      Application.get_env(:mirror_neuron, :shared_storage_root) ||
-      Path.join(System.user_home!(), ".mn/shared")
+    MirrorNeuron.Config.optional_string(
+      "MN_RUNTIME_SHARED_STORAGE_ROOT",
+      :runtime_shared_storage_root
+    ) ||
+      MirrorNeuron.Config.string("MN_SHARED_STORAGE_ROOT", :shared_storage_root)
   end
 
   def validate! do

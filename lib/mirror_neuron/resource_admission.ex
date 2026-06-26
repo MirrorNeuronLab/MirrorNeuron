@@ -46,15 +46,6 @@ defmodule MirrorNeuron.ResourceAdmission do
 
   def enabled? do
     Config.boolean("MN_RESOURCE_ADMISSION_ENABLED", :resource_admission_enabled)
-  rescue
-    _ ->
-      System.get_env("MN_RESOURCE_ADMISSION_ENABLED", "true") not in [
-        "0",
-        "false",
-        "FALSE",
-        "False",
-        ""
-      ]
   end
 
   defp resource_violations(snapshot) when is_map(snapshot) do

@@ -1,9 +1,62 @@
 defmodule MirrorNeuron.Config do
   @moduledoc false
 
+  alias MirrorNeuron.Config.EnvFile
+  alias MirrorNeuron.Config.Schema
+
   def fetch!(key), do: Application.fetch_env!(:mirror_neuron, key)
 
+  def load_env_files!(root \\ File.cwd!()) do
+    real_env = System.get_env()
+    selected_env = real_env |> Map.get("MN_ENV") |> normalize_env()
+
+    protected_keys =
+      real_env
+      |> Map.keys()
+      |> MapSet.new()
+      |> MapSet.put("MN_ENV")
+
+    System.put_env("MN_ENV", selected_env)
+
+    loaded =
+      [
+        EnvFile.load_file(Path.join(root, ".env"), protected_keys),
+        EnvFile.load_file(
+          Path.join(root, ".env.#{env_file_suffix(selected_env)}"),
+          protected_keys
+        )
+      ]
+      |> Enum.flat_map(fn
+        {:ok, path} -> [path]
+        :missing -> []
+      end)
+
+    %{env: selected_env, loaded_files: loaded}
+  end
+
+  def app_env! do
+    Schema.app_env()
+  end
+
   def string(env_name, key), do: env_or_app(env_name, key) |> to_string()
+
+  def optional_string(env_name, key) do
+    case env_or_app(env_name, key, nil) do
+      nil -> nil
+      "" -> nil
+      value -> to_string(value)
+    end
+  end
+
+  def secret(env_name, key), do: optional_string(env_name, key)
+
+  def secret(env_name, key, file_env_name, file_key) do
+    case secret(env_name, key) do
+      nil -> secret_file(file_env_name, file_key)
+      "" -> secret_file(file_env_name, file_key)
+      value -> value
+    end
+  end
 
   def executable(env_name, key) do
     configured = string(env_name, key)
@@ -27,15 +80,32 @@ defmodule MirrorNeuron.Config do
 
   def boolean(env_name, key), do: parse_boolean(env_or_app(env_name, key), env_name)
 
+  def list(env_name, key) do
+    case env_or_app(env_name, key, []) do
+      value when is_list(value) ->
+        Enum.map(value, &to_string/1)
+
+      value when is_binary(value) ->
+        value
+        |> String.split(",", trim: true)
+        |> Enum.map(&String.trim/1)
+        |> Enum.reject(&(&1 == ""))
+
+      value ->
+        raise ArgumentError, "#{env_name} must be a comma-separated list, got #{inspect(value)}"
+    end
+  end
+
   def env do
-    System.get_env("MN_ENV", "dev")
+    System.get_env("MN_ENV")
+    |> normalize_env()
   end
 
   def prod?, do: env() == "prod"
 
   def validate! do
     validate_mirror_neuron_env!()
-    validate_port!("MN_GRPC_PORT", System.get_env("MN_GRPC_PORT", "50051"))
+    validate_port!("MN_GRPC_PORT", integer("MN_GRPC_PORT", :grpc_port))
     validate_redis_config!()
     validate_queue_limits!()
     validate_sandbox_limits!()
@@ -45,17 +115,22 @@ defmodule MirrorNeuron.Config do
     validate_reliability!()
     validate_execution_profiles!()
     validate_shared_storage!()
+    validate_network_config!()
+    validate_grpc_tokens!()
     validate_production_secrets!()
     :ok
   end
 
-  defp env_or_app(env_name, key) do
+  defp env_or_app(env_name, key, default \\ :raise) do
     case System.get_env(env_name) do
-      nil -> fetch!(key)
-      "" -> fetch!(key)
+      nil -> app_value(key, default)
+      "" -> app_value(key, default)
       value -> value
     end
   end
+
+  defp app_value(key, :raise), do: fetch!(key)
+  defp app_value(key, default), do: Application.get_env(:mirror_neuron, key, default)
 
   defp find_in_common_user_bins(executable) do
     user_home = System.get_env("HOME") || System.user_home()
@@ -105,7 +180,7 @@ defmodule MirrorNeuron.Config do
 
   defp validate_mirror_neuron_env! do
     unless env() in ["dev", "test", "prod"] do
-      raise ArgumentError, "MN_ENV must be one of dev, test, or prod"
+      raise ArgumentError, "MN_ENV must be one of dev, development, test, prod, or production"
     end
   end
 
@@ -205,11 +280,44 @@ defmodule MirrorNeuron.Config do
 
   defp validate_production_secrets! do
     if prod?() do
-      cookie = string("MN_COOKIE", :cookie)
+      cookie = secret("MN_COOKIE", :cookie)
 
-      if cookie in ["", "mirrorneuron"] do
+      if cookie == "mirrorneuron" do
         raise ArgumentError,
-              "MN_COOKIE must be set to a non-default secret when MN_ENV=prod"
+              "MN_COOKIE must not use the legacy default secret when MN_ENV=prod"
+      end
+    end
+  end
+
+  defp validate_network_config! do
+    if boolean("MN_NETWORK_ONLY", :network_only) and
+         blank?(secret("MN_NETWORK_JOIN_TOKEN", :network_join_token)) do
+      raise ArgumentError, "MN_NETWORK_JOIN_TOKEN is required when MN_NETWORK_ONLY=true"
+    end
+  end
+
+  defp validate_grpc_tokens! do
+    if prod?() do
+      if blank?(
+           secret(
+             "MN_GRPC_AUTH_TOKEN",
+             :grpc_auth_token,
+             "MN_GRPC_AUTH_TOKEN_FILE",
+             :grpc_auth_token_file
+           )
+         ) do
+        raise ArgumentError, "MN_GRPC_AUTH_TOKEN is required when MN_ENV=prod"
+      end
+
+      if blank?(
+           secret(
+             "MN_GRPC_ADMIN_TOKEN",
+             :grpc_admin_token,
+             "MN_GRPC_ADMIN_TOKEN_FILE",
+             :grpc_admin_token_file
+           )
+         ) do
+        raise ArgumentError, "MN_GRPC_ADMIN_TOKEN is required when MN_ENV=prod"
       end
     end
   end
@@ -266,26 +374,13 @@ defmodule MirrorNeuron.Config do
   end
 
   defp validate_execution_profiles! do
-    case System.get_env("MN_EXECUTION_PROFILES_JSON") do
-      nil ->
-        :ok
-
-      "" ->
-        :ok
-
-      raw ->
-        case Jason.decode(raw) do
-          {:ok, decoded} when is_map(decoded) ->
-            :ok
-
-          _ ->
-            raise ArgumentError, "MN_EXECUTION_PROFILES_JSON must be a JSON object"
-        end
-    end
+    "MN_EXECUTION_PROFILES_JSON"
+    |> env_or_app(:execution_profiles, nil)
+    |> validate_execution_profiles_value!()
   end
 
   defp optional_positive_int!(env_name) do
-    case System.get_env(env_name) do
+    case optional_raw(env_name) do
       nil ->
         nil
 
@@ -301,7 +396,7 @@ defmodule MirrorNeuron.Config do
   end
 
   defp optional_nonnegative_int!(env_name) do
-    case System.get_env(env_name) do
+    case optional_raw(env_name) do
       nil ->
         nil
 
@@ -317,7 +412,7 @@ defmodule MirrorNeuron.Config do
   end
 
   defp optional_positive_float!(env_name) do
-    case System.get_env(env_name) do
+    case optional_raw(env_name) do
       nil ->
         nil
 
@@ -333,7 +428,7 @@ defmodule MirrorNeuron.Config do
   end
 
   defp optional_ratio!(env_name) do
-    case System.get_env(env_name) do
+    case optional_raw(env_name) do
       nil ->
         nil
 
@@ -347,6 +442,59 @@ defmodule MirrorNeuron.Config do
         parsed
     end
   end
+
+  defp optional_raw(env_name) do
+    case System.get_env(env_name) do
+      nil -> nil
+      "" -> nil
+      value -> value
+    end
+  end
+
+  defp secret_file(env_name, key) do
+    case optional_string(env_name, key) do
+      nil ->
+        nil
+
+      path ->
+        case File.read(path) do
+          {:ok, value} ->
+            String.trim(value)
+
+          {:error, reason} ->
+            raise ArgumentError, "#{env_name} could not be read: #{:file.format_error(reason)}"
+        end
+    end
+  end
+
+  defp validate_execution_profiles_value!(nil), do: :ok
+  defp validate_execution_profiles_value!(""), do: :ok
+  defp validate_execution_profiles_value!(value) when is_map(value), do: :ok
+
+  defp validate_execution_profiles_value!(raw) when is_binary(raw) do
+    case Jason.decode(raw) do
+      {:ok, decoded} when is_map(decoded) ->
+        :ok
+
+      _ ->
+        raise ArgumentError, "MN_EXECUTION_PROFILES_JSON must be a JSON object"
+    end
+  end
+
+  defp validate_execution_profiles_value!(_raw) do
+    raise ArgumentError, "MN_EXECUTION_PROFILES_JSON must be a JSON object"
+  end
+
+  defp normalize_env(nil), do: "dev"
+  defp normalize_env(""), do: "dev"
+  defp normalize_env("development"), do: "dev"
+  defp normalize_env("production"), do: "prod"
+  defp normalize_env(value), do: value
+
+  defp env_file_suffix("prod"), do: "prod"
+  defp env_file_suffix(env), do: env
+
+  defp blank?(value), do: value in [nil, ""]
 
   defp parse_float(value, _env_name) when is_float(value), do: value
   defp parse_float(value, _env_name) when is_integer(value), do: value / 1

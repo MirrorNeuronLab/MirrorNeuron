@@ -174,7 +174,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     buildkit =
       Map.get(config, "docker_buildkit") ||
         get_in(config, ["docker", "buildkit"]) ||
-        System.get_env("MN_DOCKER_WORKER_BUILDKIT") ||
+        Config.optional_string("MN_DOCKER_WORKER_BUILDKIT", :docker_worker_buildkit) ||
         "0"
 
     [{"DOCKER_BUILDKIT", docker_buildkit_value(buildkit)}]
@@ -468,7 +468,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     network =
       Map.get(docker, "network") ||
         Map.get(config, "network") ||
-        System.get_env("MN_DOCKER_WORKER_NETWORK") ||
+        Config.optional_string("MN_DOCKER_WORKER_NETWORK", :docker_worker_network) ||
         "bridge"
 
     if is_binary(network) and network != "" do
@@ -543,9 +543,8 @@ defmodule MirrorNeuron.Runner.DockerWorker do
   end
 
   defp host_shared_storage_root do
-    (System.get_env("MN_HOST_SHARED_STORAGE_ROOT") ||
-       System.get_env("MN_SHARED_STORAGE_ROOT") ||
-       Application.get_env(:mirror_neuron, :host_shared_storage_root) ||
+    (Config.optional_string("MN_HOST_SHARED_STORAGE_ROOT", :host_shared_storage_root) ||
+       Config.optional_string("MN_SHARED_STORAGE_ROOT", :shared_storage_root) ||
        SharedStorage.root())
     |> Path.expand()
   end
@@ -1016,7 +1015,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     skills_root =
       Map.get(environment, "MN_SKILLS_ROOT") ||
         Map.get(environment, :MN_SKILLS_ROOT) ||
-        System.get_env("MN_SKILLS_ROOT") ||
+        Config.optional_string("MN_SKILLS_ROOT", :skills_root) ||
         System.get_env("MIRROR_NEURON_SKILLS_ROOT") ||
         System.get_env("OTTERDESK_MN_SKILLS_ROOT")
 
@@ -1052,7 +1051,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     workspace_root =
       Map.get(environment, "MN_WORKSPACE_ROOT") ||
         Map.get(environment, :MN_WORKSPACE_ROOT) ||
-        System.get_env("MN_WORKSPACE_ROOT")
+        Config.optional_string("MN_WORKSPACE_ROOT", :workspace_root)
 
     if is_binary(workspace_root) and String.trim(workspace_root) != "" do
       root = Path.expand(workspace_root)
@@ -1226,7 +1225,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
   defp docker_bin(config) do
     Map.get(config, "docker_bin") ||
       get_in(config, ["docker", "bin"]) ||
-      System.get_env("MN_DOCKER_BIN") ||
+      Config.optional_string("MN_DOCKER_BIN", :docker_bin) ||
       System.find_executable("docker") ||
       "docker"
   end
@@ -1242,7 +1241,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
   defp max_output_bytes(config) do
     case Map.get(config, "max_output_bytes") do
       value when is_integer(value) and value > 0 -> value
-      _ -> System.get_env("MN_MAX_ARTIFACT_BYTES", "1048576") |> String.to_integer()
+      _ -> Config.integer("MN_MAX_ARTIFACT_BYTES", :max_artifact_bytes)
     end
   end
 

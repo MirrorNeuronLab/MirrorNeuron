@@ -474,7 +474,21 @@ capability settings.
 
 ## Configuration highlights
 
-Runtime configuration is read from environment variables in `config/runtime.exs`.
+Runtime configuration is owned by `MirrorNeuron.Config`. On startup it loads
+defaults from `.env` and then `.env.<environment>`, where the environment comes
+from `MN_ENV` and defaults to `dev`. Real shell environment variables always win
+over values loaded from files:
+
+```text
+real environment variables
+> .env.${MN_ENV}
+> .env
+> built-in safe defaults
+```
+
+`MN_ENV=dev` and `MN_ENV=development` load `.env.dev`; `MN_ENV=test` loads
+`.env.test`; `MN_ENV=prod` and `MN_ENV=production` load `.env.prod` when it is
+present. Production does not require any `.env` file.
 
 | Variable | Purpose |
 | --- | --- |
@@ -502,9 +516,39 @@ Runtime configuration is read from environment variables in `config/runtime.exs`
 | `MN_BLOB_STORE_ROOT` | Durable content-addressed blob root. In LAN clusters, point this at a host-mounted NFS path such as `/root/.mn/shared/blobs`. |
 | `MN_JOB_ARTIFACT_ROOT` | Per-job artifact staging root. Defaults next to the blob root and is cleaned when terminal jobs age out or are deleted. |
 
+Development example:
+
+```bash
+export MN_ENV=dev
+cp .env.example .env.dev
+mn-cli ...
+```
+
+Test example:
+
+```bash
+export MN_ENV=test
+mn-cli ...
+```
+
+Production example:
+
+```bash
+export MN_ENV=production
+export MN_HOME=/var/lib/mirrorneuron
+export MN_LOG_LEVEL=info
+export MN_API_HOST=0.0.0.0
+export MN_API_PORT=8080
+export MN_CORE_HOST=0.0.0.0
+export MN_GRPC_PORT=50051
+export MN_GRPC_AUTH_TOKEN=<operator-token>
+export MN_GRPC_ADMIN_TOKEN=<admin-token>
+mn-api ...
+```
+
 For Redis Sentinel, resource thresholds, network-only nodes, execution profiles,
-and release deployment settings, check `config/runtime.exs` and the documentation
-repo.
+and release deployment settings, start from `.env.example` and the documentation
+repo. Do not commit real `.env` files or secrets.
 
 Large job payloads are shared by filesystem path, not by a MirrorNeuron HTTP
 artifact server. For a LAN cluster, mount the same NFS export on every host and

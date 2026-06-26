@@ -7,9 +7,7 @@ defmodule MirrorNeuron.Artifacts.JobStore do
   alias MirrorNeuron.PathSafety
 
   def root do
-    System.get_env("MN_JOB_ARTIFACT_ROOT") ||
-      Application.get_env(:mirror_neuron, :job_artifact_root) ||
-      default_root()
+    MirrorNeuron.Config.string("MN_JOB_ARTIFACT_ROOT", :job_artifact_root)
   end
 
   def job_path(job_id) do
@@ -58,13 +56,6 @@ defmodule MirrorNeuron.Artifacts.JobStore do
         Logger.warning("skipping unsafe job artifact cleanup for #{inspect(job_id)}: #{reason}")
         {:error, reason}
     end
-  end
-
-  defp default_root do
-    BlobStore.root()
-    |> Path.expand()
-    |> Path.dirname()
-    |> Path.join("jobs")
   end
 
   defp normalize_job_id(job_id) do

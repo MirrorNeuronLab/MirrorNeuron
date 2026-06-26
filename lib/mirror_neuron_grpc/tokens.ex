@@ -3,15 +3,22 @@ defmodule MirrorNeuron.Grpc.Tokens do
 
   import Bitwise
 
-  @auth_token "mirror_neuron_password"
-  @admin_token "mirror_neuron_password_admin"
-
   def auth_token do
-    @auth_token
+    MirrorNeuron.Config.secret(
+      "MN_GRPC_AUTH_TOKEN",
+      :grpc_auth_token,
+      "MN_GRPC_AUTH_TOKEN_FILE",
+      :grpc_auth_token_file
+    )
   end
 
   def admin_token do
-    @admin_token
+    MirrorNeuron.Config.secret(
+      "MN_GRPC_ADMIN_TOKEN",
+      :grpc_admin_token,
+      "MN_GRPC_ADMIN_TOKEN_FILE",
+      :grpc_admin_token_file
+    )
   end
 
   def secure_compare(left, right) when is_binary(left) and is_binary(right) do

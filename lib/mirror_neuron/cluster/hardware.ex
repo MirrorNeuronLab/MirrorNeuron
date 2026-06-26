@@ -3,6 +3,7 @@ defmodule MirrorNeuron.Cluster.Hardware do
   Fetches hardware information from the current node.
   """
 
+  alias MirrorNeuron.Config
   alias MirrorNeuron.ResourceSpec
 
   def info do
@@ -35,7 +36,7 @@ defmodule MirrorNeuron.Cluster.Hardware do
       os: to_string(name),
       node: to_string(Node.self()),
       hostname: hostname,
-      display_name: System.get_env("MN_NODE_DISPLAY_NAME") || hostname
+      display_name: Config.optional_string("MN_NODE_DISPLAY_NAME", :node_display_name) || hostname
     }
   end
 
@@ -119,13 +120,13 @@ defmodule MirrorNeuron.Cluster.Hardware do
 
   defp configured_gpu_info(memory) do
     cond do
-      count = parse_gpu_count(System.get_env("MN_NODE_GPU_COUNT")) ->
+      count = parse_gpu_count(Config.optional_string("MN_NODE_GPU_COUNT", :node_gpu_count)) ->
         generic_gpu_devices(count, memory)
 
-      truthy?(System.get_env("MN_NODE_GPU")) ->
+      truthy?(Config.optional_string("MN_NODE_GPU", :node_gpu)) ->
         generic_gpu_devices(1, memory)
 
-      falsey?(System.get_env("MN_NODE_GPU")) ->
+      falsey?(Config.optional_string("MN_NODE_GPU", :node_gpu)) ->
         []
 
       true ->
@@ -213,7 +214,7 @@ defmodule MirrorNeuron.Cluster.Hardware do
   end
 
   defp cpu_model do
-    blank_to_nil(System.get_env("MN_NODE_CPU_MODEL")) ||
+    blank_to_nil(Config.optional_string("MN_NODE_CPU_MODEL", :node_cpu_model)) ||
       case :os.type() do
         {:unix, :darwin} -> darwin_cpu_model()
         {:unix, :linux} -> linux_cpu_model()
@@ -539,14 +540,14 @@ defmodule MirrorNeuron.Cluster.Hardware do
   defp configured_gpu_profile do
     identity =
       [
-        System.get_env("MN_NODE_GPU_NAME"),
-        System.get_env("MN_NODE_GPU_VENDOR"),
-        System.get_env("MN_NODE_GPU_DRIVER"),
-        System.get_env("MN_NODE_GPU_TYPE"),
-        System.get_env("MN_NODE_GPU_API_VERSION"),
-        System.get_env("MN_NODE_GPU_DRIVER_VERSION"),
-        System.get_env("MN_NODE_CAPABILITIES"),
-        System.get_env("MN_NODE_DISPLAY_NAME")
+        Config.optional_string("MN_NODE_GPU_NAME", :node_gpu_name),
+        Config.optional_string("MN_NODE_GPU_VENDOR", :node_gpu_vendor),
+        Config.optional_string("MN_NODE_GPU_DRIVER", :node_gpu_driver),
+        Config.optional_string("MN_NODE_GPU_TYPE", :node_gpu_type),
+        Config.optional_string("MN_NODE_GPU_API_VERSION", :node_gpu_api_version),
+        Config.optional_string("MN_NODE_GPU_DRIVER_VERSION", :node_gpu_driver_version),
+        Config.list("MN_NODE_CAPABILITIES", :node_capabilities) |> Enum.join(" "),
+        Config.optional_string("MN_NODE_DISPLAY_NAME", :node_display_name)
       ]
       |> Enum.reject(&is_nil/1)
       |> Enum.join(" ")
@@ -554,21 +555,28 @@ defmodule MirrorNeuron.Cluster.Hardware do
     normalized = String.downcase(identity)
 
     vendor =
-      normalize_gpu_vendor(System.get_env("MN_NODE_GPU_VENDOR")) ||
+      normalize_gpu_vendor(Config.optional_string("MN_NODE_GPU_VENDOR", :node_gpu_vendor)) ||
         inferred_gpu_vendor(normalized)
 
     driver =
-      normalize_gpu_driver(System.get_env("MN_NODE_GPU_DRIVER")) ||
+      normalize_gpu_driver(Config.optional_string("MN_NODE_GPU_DRIVER", :node_gpu_driver)) ||
         driver_from_gpu_vendor(vendor)
 
-    type = System.get_env("MN_NODE_GPU_TYPE") || type_from_gpu_vendor(vendor)
-    name = System.get_env("MN_NODE_GPU_NAME") || inferred_gpu_name(vendor, normalized)
+    type =
+      Config.optional_string("MN_NODE_GPU_TYPE", :node_gpu_type) || type_from_gpu_vendor(vendor)
+
+    name =
+      Config.optional_string("MN_NODE_GPU_NAME", :node_gpu_name) ||
+        inferred_gpu_name(vendor, normalized)
+
     api = api_from_gpu_driver(driver)
 
     api_version =
-      System.get_env("MN_NODE_GPU_API_VERSION") || inferred_api_version(driver, normalized)
+      Config.optional_string("MN_NODE_GPU_API_VERSION", :node_gpu_api_version) ||
+        inferred_api_version(driver, normalized)
 
-    driver_version = System.get_env("MN_NODE_GPU_DRIVER_VERSION")
+    driver_version =
+      Config.optional_string("MN_NODE_GPU_DRIVER_VERSION", :node_gpu_driver_version)
 
     %{
       name: name,
@@ -585,7 +593,7 @@ defmodule MirrorNeuron.Cluster.Hardware do
 
   defp configured_gpu_capabilities(vendor, driver, normalized) do
     (["gpu", vendor, driver] ++
-       split_env_list(System.get_env("MN_NODE_CAPABILITIES")) ++
+       Config.list("MN_NODE_CAPABILITIES", :node_capabilities) ++
        inferred_gpu_capabilities(vendor, normalized))
     |> Enum.reject(&is_nil/1)
     |> Enum.map(&normalize_capability/1)
@@ -695,16 +703,16 @@ defmodule MirrorNeuron.Cluster.Hardware do
   defp type_from_gpu_vendor(vendor), do: "#{vendor}/gpu"
 
   defp advertised_host_paths do
-    System.get_env("MN_NODE_HOST_PATHS")
-    |> split_env_list()
+    "MN_NODE_HOST_PATHS"
+    |> Config.list(:node_host_paths)
     |> Enum.map(&Path.expand/1)
     |> Enum.uniq()
   end
 
   defp advertised_runtime_drivers do
     configured =
-      System.get_env("MN_NODE_RUNTIME_DRIVERS")
-      |> split_env_list()
+      "MN_NODE_RUNTIME_DRIVERS"
+      |> Config.list(:node_runtime_drivers)
       |> Enum.map(&String.downcase/1)
 
     drivers = ["host_local"] ++ configured ++ openshell_driver() ++ docker_worker_driver()
@@ -745,8 +753,7 @@ defmodule MirrorNeuron.Cluster.Hardware do
   end
 
   defp advertised_node_capabilities do
-    System.get_env("MN_NODE_CAPABILITIES")
-    |> split_env_list()
+    Config.list("MN_NODE_CAPABILITIES", :node_capabilities)
   end
 
   defp nvidia_cuda_version do
@@ -870,9 +877,9 @@ defmodule MirrorNeuron.Cluster.Hardware do
   end
 
   defp docker_worker_driver do
-    docker_bin = System.get_env("MN_DOCKER_BIN", "docker")
+    docker_bin = Config.optional_string("MN_DOCKER_BIN", :docker_bin) || "docker"
 
-    case System.get_env("MN_DOCKER_WORKER_ENABLED") do
+    case Config.optional_string("MN_DOCKER_WORKER_ENABLED", :docker_worker_enabled) do
       value when value in ["0", "false", "FALSE", "no", "NO", "off", "OFF"] ->
         []
 
@@ -893,15 +900,6 @@ defmodule MirrorNeuron.Cluster.Hardware do
     end
   rescue
     _ -> false
-  end
-
-  defp split_env_list(nil), do: []
-
-  defp split_env_list(value) do
-    value
-    |> String.split(",", trim: true)
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == ""))
   end
 
   defp parse_disk_df(output) do

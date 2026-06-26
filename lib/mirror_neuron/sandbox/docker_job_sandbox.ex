@@ -224,7 +224,7 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
     network =
       Map.get(docker, "network") ||
         Map.get(config, "network") ||
-        System.get_env("MN_DOCKER_WORKER_NETWORK") ||
+        MirrorNeuron.Config.optional_string("MN_DOCKER_WORKER_NETWORK", :docker_worker_network) ||
         "bridge"
 
     if is_binary(network) and network != "" do
@@ -283,9 +283,8 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
   end
 
   defp host_shared_storage_root do
-    (System.get_env("MN_HOST_SHARED_STORAGE_ROOT") ||
-       System.get_env("MN_SHARED_STORAGE_ROOT") ||
-       Application.get_env(:mirror_neuron, :host_shared_storage_root) ||
+    (MirrorNeuron.Config.optional_string("MN_HOST_SHARED_STORAGE_ROOT", :host_shared_storage_root) ||
+       MirrorNeuron.Config.optional_string("MN_SHARED_STORAGE_ROOT", :shared_storage_root) ||
        SharedStorage.root())
     |> Path.expand()
   end
@@ -370,7 +369,7 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
   defp docker_bin(config) do
     Map.get(config, "docker_bin") ||
       get_in(config, ["docker", "bin"]) ||
-      System.get_env("MN_DOCKER_BIN") ||
+      MirrorNeuron.Config.optional_string("MN_DOCKER_BIN", :docker_bin) ||
       System.find_executable("docker") ||
       "docker"
   end

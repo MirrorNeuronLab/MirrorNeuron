@@ -142,8 +142,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
   end
 
   defp max_command_length do
-    System.get_env("MN_MAX_COMMAND_LENGTH", "32768")
-    |> String.to_integer()
+    Config.integer("MN_MAX_COMMAND_LENGTH", :max_command_length)
   end
 
   defp command_size(command) when is_binary(command), do: byte_size(command)
@@ -333,7 +332,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
   defp max_output_bytes(config) do
     case Map.get(config, "max_output_bytes") do
       value when is_integer(value) and value > 0 -> value
-      _ -> System.get_env("MN_MAX_ARTIFACT_BYTES", "1048576") |> String.to_integer()
+      _ -> Config.integer("MN_MAX_ARTIFACT_BYTES", :max_artifact_bytes)
     end
   end
 
@@ -1211,15 +1210,15 @@ defmodule MirrorNeuron.Runner.HostLocal do
   end
 
   defp python_environment_cache_root do
-    System.get_env("MN_BLUEPRINT_PYTHON_ENVS_DIR") ||
+    Config.optional_string("MN_BLUEPRINT_PYTHON_ENVS_DIR", :blueprint_python_envs_dir) ||
       Path.join(Config.string("MN_TEMP_DIR", :temp_dir), "blueprint_python_envs")
   end
 
   defp python_environment_setup_timeout_ms do
-    case Integer.parse(System.get_env("MN_BLUEPRINT_PYTHON_ENV_SETUP_TIMEOUT_MS", "600000")) do
-      {timeout, ""} when timeout > 0 -> timeout
-      _ -> 600_000
-    end
+    Config.integer(
+      "MN_BLUEPRINT_PYTHON_ENV_SETUP_TIMEOUT_MS",
+      :blueprint_python_env_setup_timeout_ms
+    )
   end
 
   defp apply_python_environment_env(env, nil), do: env

@@ -184,23 +184,13 @@ defmodule MirrorNeuron.Bundle.Archive do
   end
 
   defp cache_root do
-    System.get_env("MN_BUNDLE_CACHE_DIR") ||
-      Application.get_env(:mirror_neuron, :bundle_cache_dir) ||
+    MirrorNeuron.Config.optional_string("MN_BUNDLE_CACHE_DIR", :bundle_cache_dir) ||
       Path.join(MirrorNeuron.Config.string("MN_TEMP_DIR", :temp_dir), "bundle_cache")
   end
 
   defp max_archive_bytes do
-    case System.get_env("MN_BUNDLE_ARCHIVE_MAX_BYTES") do
-      nil -> Application.get_env(:mirror_neuron, :bundle_archive_max_bytes, @default_max_bytes)
-      "" -> Application.get_env(:mirror_neuron, :bundle_archive_max_bytes, @default_max_bytes)
-      value -> parse_positive_integer(value, @default_max_bytes)
-    end
-  end
-
-  defp parse_positive_integer(value, default) do
-    case Integer.parse(to_string(value)) do
-      {parsed, ""} when parsed > 0 -> parsed
-      _ -> default
-    end
+    MirrorNeuron.Config.integer("MN_BUNDLE_ARCHIVE_MAX_BYTES", :bundle_archive_max_bytes)
+  rescue
+    _ -> @default_max_bytes
   end
 end

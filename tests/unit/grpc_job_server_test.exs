@@ -179,6 +179,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
     System.delete_env(@admin_token_env)
     System.delete_env(@admin_token_file_env)
+    System.delete_env(@operator_token_env)
     System.delete_env(@operator_token_file_env)
     System.delete_env("MN_NETWORK_ONLY")
     System.delete_env("MN_NETWORK_JOIN_TOKEN")
@@ -220,12 +221,12 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert Exception.message(error) =~ "ClearJobs requires #{@admin_token_env}"
   end
 
-  test "clear_jobs accepts the fixed admin token" do
-    System.put_env(@admin_token_env, "stale-admin-token")
+  test "clear_jobs accepts the configured admin token" do
+    System.put_env(@admin_token_env, "configured-admin-token")
 
     try do
       response =
-        JobServer.clear_jobs(%ClearJobsRequest{admin_token: "mirror_neuron_password_admin"}, nil)
+        JobServer.clear_jobs(%ClearJobsRequest{admin_token: "configured-admin-token"}, nil)
 
       assert %ClearJobsResponse{} = response
       assert is_integer(response.cleared_count)
@@ -235,12 +236,12 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     end
   end
 
-  test "clear_jobs rejects stale env token when fixed admin token is authoritative" do
-    System.put_env(@admin_token_env, "stale-admin-token")
+  test "clear_jobs rejects mismatched admin token" do
+    System.put_env(@admin_token_env, "configured-admin-token")
 
     error =
       assert_raise GRPC.RPCError, fn ->
-        JobServer.clear_jobs(%ClearJobsRequest{admin_token: "stale-admin-token"}, nil)
+        JobServer.clear_jobs(%ClearJobsRequest{admin_token: "wrong-admin-token"}, nil)
       end
 
     assert Exception.message(error) =~ "ClearJobs requires #{@admin_token_env}"
@@ -352,8 +353,8 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert response.redis_port == 6_380
     assert response.redis_url == "redis://192.168.4.10:6380/0"
     assert response.cluster_nodes == "mirror_neuron@192.168.4.10"
-    assert response.grpc_auth_token == "mirror_neuron_password"
-    assert response.grpc_admin_token == "mirror_neuron_password_admin"
+    assert response.grpc_auth_token == "primary-auth-token"
+    assert response.grpc_admin_token == "primary-admin-token"
 
     node_info = Jason.decode!(response.node_info_json)
     assert node_info["node_name"] == "mirror_neuron@test"
@@ -361,7 +362,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert is_integer(node_info["gpu_count"])
   end
 
-  test "network handshake returns fixed grpc tokens before stale env or file tokens" do
+  test "network handshake returns direct grpc tokens before file tokens" do
     auth_file = write_token_file("mn-auth-token", "file-auth-token")
     admin_file = write_token_file("mn-admin-token", "file-admin-token")
 
@@ -375,8 +376,8 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     response =
       ClusterServer.network_handshake(%NetworkHandshakeRequest{token: "join-secret"}, nil)
 
-    assert response.grpc_auth_token == "mirror_neuron_password"
-    assert response.grpc_admin_token == "mirror_neuron_password_admin"
+    assert response.grpc_auth_token == "stale-auth-token"
+    assert response.grpc_admin_token == "stale-admin-token"
   end
 
   test "network-only handshake does not record joining node metadata" do
@@ -639,7 +640,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
               }
             ])
         },
-        %{headers: %{"authorization" => "Bearer mirror_neuron_password"}}
+        %{headers: %{"authorization" => "Bearer operator-token"}}
       )
 
     assert %{"ok" => true, "results" => [%{"name" => "agent-api"}]} =

@@ -301,7 +301,7 @@ defmodule MirrorNeuron.Sandbox.OpenShellJobSandbox do
   end
 
   defp docker_cli do
-    case System.get_env("MN_DOCKER_BIN") do
+    case MirrorNeuron.Config.optional_string("MN_DOCKER_BIN", :docker_bin) do
       value when is_binary(value) and value != "" -> value
       _ -> System.find_executable("docker")
     end

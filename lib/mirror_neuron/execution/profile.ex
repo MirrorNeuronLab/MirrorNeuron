@@ -232,14 +232,14 @@ defmodule MirrorNeuron.Execution.Profile do
   end
 
   defp advertised_profile_names(configured) do
-    case System.get_env("MN_NODE_EXECUTION_PROFILES", "") |> split_csv() do
+    case MirrorNeuron.Config.list("MN_NODE_EXECUTION_PROFILES", :node_execution_profiles) do
       [] -> []
       names -> Enum.filter(names, &Map.has_key?(configured, &1))
     end
   end
 
   defp node_capabilities(profile_names) do
-    base = split_csv(System.get_env("MN_NODE_CAPABILITIES", ""))
+    base = MirrorNeuron.Config.list("MN_NODE_CAPABILITIES", :node_capabilities)
 
     profile_capabilities =
       profile_names
@@ -254,7 +254,7 @@ defmodule MirrorNeuron.Execution.Profile do
   end
 
   defp node_gpu? do
-    case System.get_env("MN_NODE_GPU") do
+    case MirrorNeuron.Config.optional_string("MN_NODE_GPU", :node_gpu) do
       value when value in ["1", "true", "TRUE", "True", "yes", "on"] -> true
       value when value in ["0", "false", "FALSE", "False", "no", "off"] -> false
       _ -> hardware_gpu?()

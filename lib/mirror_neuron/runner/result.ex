@@ -1,6 +1,8 @@
 defmodule MirrorNeuron.Runner.Result do
   @moduledoc false
 
+  alias MirrorNeuron.Config
+
   def sanitize(result) when is_map(result) do
     Enum.into(result, %{}, fn
       {key, value} when is_binary(value) ->
@@ -24,9 +26,7 @@ defmodule MirrorNeuron.Runner.Result do
   def redact_secrets(value), do: value
 
   def truncate_artifact(text) when is_binary(text) do
-    max_bytes =
-      System.get_env("MN_MAX_ARTIFACT_BYTES", "1048576")
-      |> String.to_integer()
+    max_bytes = Config.integer("MN_MAX_ARTIFACT_BYTES", :max_artifact_bytes)
 
     if byte_size(text) > max_bytes do
       binary_part(text, 0, max_bytes) <> "\n[truncated by MN_MAX_ARTIFACT_BYTES]"

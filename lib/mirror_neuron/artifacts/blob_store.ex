@@ -5,9 +5,7 @@ defmodule MirrorNeuron.Artifacts.BlobStore do
   @sha256_re ~r/^[a-f0-9]{64}$/
 
   def root do
-    System.get_env("MN_BLOB_STORE_ROOT") ||
-      Application.get_env(:mirror_neuron, :blob_store_root) ||
-      Path.join(System.user_home!(), ".mn/blobs")
+    MirrorNeuron.Config.string("MN_BLOB_STORE_ROOT", :blob_store_root)
   end
 
   def path(sha256) when is_binary(sha256) do
