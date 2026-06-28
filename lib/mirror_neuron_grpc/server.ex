@@ -18,6 +18,7 @@ end
 
 defmodule MirrorNeuron.Grpc.JobServer do
   use GRPC.Server, service: Mirrorneuron.Job.V1.JobService.Service
+  @interface_version 1
 
   alias Mirrorneuron.Job.V1.{
     SubmitJobResponse,
@@ -49,10 +50,10 @@ defmodule MirrorNeuron.Grpc.JobServer do
          result <- MirrorNeuron.run_manifest(tmp_dir, await: false) do
       case result do
         {:ok, job_id} ->
-          %SubmitJobResponse{job_id: job_id, status: "pending"}
+          %SubmitJobResponse{job_id: job_id, status: "pending", version: @interface_version}
 
         {:ok, job_id, _job} ->
-          %SubmitJobResponse{job_id: job_id, status: "pending"}
+          %SubmitJobResponse{job_id: job_id, status: "pending", version: @interface_version}
 
         {:error, "resource_overloaded:" <> _ = reason} ->
           raise GRPC.RPCError, status: GRPC.Status.resource_exhausted(), message: reason
@@ -118,10 +119,10 @@ defmodule MirrorNeuron.Grpc.JobServer do
 
     case MirrorNeuron.job_details(job_id, compact: true, event_limit: 10) do
       {:ok, details_map} ->
-        %GetJobResponse{job_json: Jason.encode!(details_map)}
+        %GetJobResponse{job_json: versioned_json(details_map), version: @interface_version}
 
       _ ->
-        %GetJobResponse{job_json: "{}"}
+        %GetJobResponse{job_json: versioned_json(%{}), version: @interface_version}
     end
   end
 
@@ -136,10 +137,16 @@ defmodule MirrorNeuron.Grpc.JobServer do
            summary: :basic
          ) do
       {:ok, jobs} ->
-        %ListJobsResponse{jobs_json: Jason.encode!(%{data: jobs})}
+        %ListJobsResponse{
+          jobs_json: versioned_json(%{data: jobs}),
+          version: @interface_version
+        }
 
       _ ->
-        %ListJobsResponse{jobs_json: "{\"data\": []}"}
+        %ListJobsResponse{
+          jobs_json: versioned_json(%{data: []}),
+          version: @interface_version
+        }
     end
   end
 
@@ -153,10 +160,10 @@ defmodule MirrorNeuron.Grpc.JobServer do
         raise_runtime_error!(reason)
 
       {:ok, status} ->
-        %CancelJobResponse{job_id: job_id, status: status}
+        %CancelJobResponse{job_id: job_id, status: status, version: @interface_version}
 
       _ ->
-        %CancelJobResponse{job_id: job_id, status: "cancelled"}
+        %CancelJobResponse{job_id: job_id, status: "cancelled", version: @interface_version}
     end
   end
 
@@ -171,10 +178,10 @@ defmodule MirrorNeuron.Grpc.JobServer do
         raise_runtime_error!(reason)
 
       {:ok, status} ->
-        %PauseJobResponse{job_id: job_id, status: status}
+        %PauseJobResponse{job_id: job_id, status: status, version: @interface_version}
 
       _ ->
-        %PauseJobResponse{job_id: job_id, status: "paused"}
+        %PauseJobResponse{job_id: job_id, status: "paused", version: @interface_version}
     end
   end
 
@@ -189,10 +196,10 @@ defmodule MirrorNeuron.Grpc.JobServer do
         raise_runtime_error!(reason)
 
       {:ok, status} ->
-        %ResumeJobResponse{job_id: job_id, status: status}
+        %ResumeJobResponse{job_id: job_id, status: status, version: @interface_version}
 
       _ ->
-        %ResumeJobResponse{job_id: job_id, status: "running"}
+        %ResumeJobResponse{job_id: job_id, status: "running", version: @interface_version}
     end
   end
 
@@ -203,8 +210,9 @@ defmodule MirrorNeuron.Grpc.JobServer do
     case MirrorNeuron.export_job_backup(request.job_id) do
       {:ok, backup, bundle_files} ->
         %ExportJobBackupResponse{
-          backup_json: Jason.encode!(backup),
-          bundle_files: bundle_files
+          backup_json: versioned_json(backup),
+          bundle_files: bundle_files,
+          version: @interface_version
         }
 
       {:error, reason} ->
@@ -222,7 +230,10 @@ defmodule MirrorNeuron.Grpc.JobServer do
              blueprint_id: blank_to_nil(request.blueprint_id),
              run_id: blank_to_nil(request.run_id)
            ) do
-      %RestoreJobBackupResponse{result_json: Jason.encode!(result)}
+      %RestoreJobBackupResponse{
+        result_json: versioned_json(result),
+        version: @interface_version
+      }
     else
       {:error, %Jason.DecodeError{} = error} ->
         raise GRPC.RPCError,
@@ -240,7 +251,7 @@ defmodule MirrorNeuron.Grpc.JobServer do
 
     case MirrorNeuron.Monitor.clear_jobs() do
       {:ok, count} ->
-        %ClearJobsResponse{cleared_count: count}
+        %ClearJobsResponse{cleared_count: count, version: @interface_version}
 
       {:error, reason} ->
         raise GRPC.RPCError, status: GRPC.Status.internal(), message: reason
@@ -270,7 +281,7 @@ defmodule MirrorNeuron.Grpc.JobServer do
              update_policy: decode_json_map(request.update_policy_json),
              wait: request.wait
            ) do
-      %DeploymentResponse{result_json: Jason.encode!(result)}
+      %DeploymentResponse{result_json: versioned_json(result), version: @interface_version}
     else
       {:error, reason} ->
         raise GRPC.RPCError, status: :invalid_argument, message: inspect(reason)
@@ -286,7 +297,7 @@ defmodule MirrorNeuron.Grpc.JobServer do
              update_policy: decode_json_map(request.update_policy_json),
              wait: request.wait
            ) do
-      %DeploymentResponse{result_json: Jason.encode!(result)}
+      %DeploymentResponse{result_json: versioned_json(result), version: @interface_version}
     else
       {:error, reason} ->
         raise GRPC.RPCError, status: :invalid_argument, message: inspect(reason)
@@ -297,8 +308,11 @@ defmodule MirrorNeuron.Grpc.JobServer do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("GetDeployment")
 
     case MirrorNeuron.get_deployment(request.id_or_key) do
-      {:ok, result} -> %DeploymentResponse{result_json: Jason.encode!(result)}
-      {:error, reason} -> raise GRPC.RPCError, status: :not_found, message: inspect(reason)
+      {:ok, result} ->
+        %DeploymentResponse{result_json: versioned_json(result), version: @interface_version}
+
+      {:error, reason} ->
+        raise GRPC.RPCError, status: :not_found, message: inspect(reason)
     end
   end
 
@@ -311,8 +325,14 @@ defmodule MirrorNeuron.Grpc.JobServer do
       |> keyword_opts()
 
     case MirrorNeuron.list_deployments(opts) do
-      {:ok, result} -> %DeploymentResponse{result_json: Jason.encode!(%{"data" => result})}
-      {:error, reason} -> raise GRPC.RPCError, status: :internal, message: inspect(reason)
+      {:ok, result} ->
+        %DeploymentResponse{
+          result_json: versioned_json(%{"data" => result}),
+          version: @interface_version
+        }
+
+      {:error, reason} ->
+        raise GRPC.RPCError, status: :internal, message: inspect(reason)
     end
   end
 
@@ -467,7 +487,7 @@ defmodule MirrorNeuron.Grpc.JobServer do
   end
 
   defp deployment_action_response({:ok, result}) do
-    %DeploymentResponse{result_json: Jason.encode!(result)}
+    %DeploymentResponse{result_json: versioned_json(result), version: @interface_version}
   end
 
   defp deployment_action_response({:error, reason}) do
@@ -480,7 +500,16 @@ defmodule MirrorNeuron.Grpc.JobServer do
     raise GRPC.RPCError, status: :invalid_argument, message: inspect(reason)
   end
 
-  defp schedule_response(result), do: %ScheduleResponse{result_json: Jason.encode!(result)}
+  defp schedule_response(result),
+    do: %ScheduleResponse{result_json: versioned_json(result), version: @interface_version}
+
+  defp versioned_json(value) when is_map(value) do
+    value
+    |> Map.put_new("version", @interface_version)
+    |> Jason.encode!()
+  end
+
+  defp versioned_json(value), do: Jason.encode!(value)
 
   defp raise_runtime_error!(reason) do
     raise GRPC.RPCError,
@@ -583,6 +612,7 @@ end
 
 defmodule MirrorNeuron.Grpc.ClusterServer do
   use GRPC.Server, service: Mirrorneuron.Cluster.V1.ClusterService.Service
+  @interface_version 1
 
   alias MirrorNeuron.Cluster.NodeAdapter
 
@@ -622,24 +652,31 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
       redis_url: redis_url(),
       cluster_nodes: MirrorNeuron.Config.string("MN_CLUSTER_NODES", :cluster_nodes),
       network_only: MirrorNeuron.Grpc.NetworkOnly.enabled?(),
-      node_info_json: Jason.encode!(handshake_node_info()),
+      node_info_json: versioned_json(handshake_node_info()),
       grpc_auth_token: MirrorNeuron.Grpc.Tokens.auth_token(),
-      grpc_admin_token: MirrorNeuron.Grpc.Tokens.admin_token()
+      grpc_admin_token: MirrorNeuron.Grpc.Tokens.admin_token(),
+      version: @interface_version
     }
   end
 
   def get_system_summary(_request, _stream) do
     case MirrorNeuron.Monitor.cluster_overview() do
       {:ok, overview} ->
-        %GetSystemSummaryResponse{summary_json: Jason.encode!(overview)}
+        %GetSystemSummaryResponse{
+          summary_json: versioned_json(overview),
+          version: @interface_version
+        }
 
       _ ->
-        %GetSystemSummaryResponse{summary_json: "{}"}
+        %GetSystemSummaryResponse{summary_json: versioned_json(%{}), version: @interface_version}
     end
   end
 
   def get_resource(_request, _stream) do
-    %GetResourceResponse{resource_json: Jason.encode!(MirrorNeuron.resource_list())}
+    %GetResourceResponse{
+      resource_json: versioned_json(MirrorNeuron.resource_list()),
+      version: @interface_version
+    }
   end
 
   def set_resource(request, _stream) do
@@ -647,7 +684,7 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
 
     with {:ok, attrs} <- Jason.decode(request.resource_json),
          {:ok, resource} <- MirrorNeuron.resource_set(attrs) do
-      %SetResourceResponse{resource_json: Jason.encode!(resource)}
+      %SetResourceResponse{resource_json: versioned_json(resource), version: @interface_version}
     else
       {:error, %Jason.DecodeError{} = error} ->
         raise GRPC.RPCError,
@@ -667,7 +704,12 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
     case MirrorNeuron.add_node(request.node_name) do
       {:ok, %{status: status}} ->
         sync_remote_cookie_with_cluster(request.node_name, token)
-        %AddNodeResponse{node_name: request.node_name, status: status}
+
+        %AddNodeResponse{
+          node_name: request.node_name,
+          status: status,
+          version: @interface_version
+        }
 
       {:error, reason} ->
         raise GRPC.RPCError, status: GRPC.Status.internal(), message: reason
@@ -727,7 +769,11 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
 
     case MirrorNeuron.remove_node(request.node_name) do
       {:ok, %{status: status}} ->
-        %RemoveNodeResponse{node_name: request.node_name, status: status}
+        %RemoveNodeResponse{
+          node_name: request.node_name,
+          status: status,
+          version: @interface_version
+        }
 
       {:error, reason} ->
         raise GRPC.RPCError, status: GRPC.Status.internal(), message: reason
@@ -747,7 +793,7 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
 
     case MirrorNeuron.reconcile_node(request.node_name, opts) do
       {:ok, result} ->
-        %ReconcileNodeResponse{result_json: Jason.encode!(result)}
+        %ReconcileNodeResponse{result_json: versioned_json(result), version: @interface_version}
 
       {:error, reason} ->
         raise GRPC.RPCError, status: GRPC.Status.internal(), message: inspect(reason)
@@ -769,7 +815,7 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
 
     case MirrorNeuron.drain_node(request.node_name, opts) do
       {:ok, result} ->
-        %DrainNodeResponse{result_json: Jason.encode!(result)}
+        %DrainNodeResponse{result_json: versioned_json(result), version: @interface_version}
 
       {:error, reason} ->
         raise GRPC.RPCError, status: GRPC.Status.internal(), message: inspect(reason)
@@ -789,7 +835,10 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
 
     case MirrorNeuron.cancel_node_drain(request.node_name, opts) do
       {:ok, result} ->
-        %CancelNodeDrainResponse{result_json: Jason.encode!(result)}
+        %CancelNodeDrainResponse{
+          result_json: versioned_json(result),
+          version: @interface_version
+        }
 
       {:error, reason} ->
         raise GRPC.RPCError, status: GRPC.Status.internal(), message: inspect(reason)
@@ -806,7 +855,10 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
 
     case MirrorNeuron.set_node_maintenance(request.node_name, request.enabled, opts) do
       {:ok, result} ->
-        %SetNodeMaintenanceResponse{result_json: Jason.encode!(result)}
+        %SetNodeMaintenanceResponse{
+          result_json: versioned_json(result),
+          version: @interface_version
+        }
 
       {:error, reason} ->
         raise GRPC.RPCError, status: GRPC.Status.internal(), message: inspect(reason)
@@ -819,7 +871,10 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
 
     case MirrorNeuron.node_drain_status(request.node_name) do
       {:ok, result} ->
-        %GetNodeDrainStatusResponse{result_json: Jason.encode!(result)}
+        %GetNodeDrainStatusResponse{
+          result_json: versioned_json(result),
+          version: @interface_version
+        }
 
       {:error, reason} ->
         raise GRPC.RPCError, status: GRPC.Status.internal(), message: inspect(reason)
@@ -834,7 +889,10 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
 
     case MirrorNeuron.list_services(opts) do
       {:ok, services} ->
-        %ListServicesResponse{result_json: Jason.encode!(%{"services" => services})}
+        %ListServicesResponse{
+          result_json: versioned_json(%{"services" => services}),
+          version: @interface_version
+        }
 
       {:error, reason} ->
         raise GRPC.RPCError, status: GRPC.Status.internal(), message: inspect(reason)
@@ -849,7 +907,10 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
 
     case MirrorNeuron.resolve_service(request.name, opts) do
       {:ok, services} ->
-        %ResolveServiceResponse{result_json: Jason.encode!(%{"services" => services})}
+        %ResolveServiceResponse{
+          result_json: versioned_json(%{"services" => services}),
+          version: @interface_version
+        }
 
       {:error, reason} ->
         raise GRPC.RPCError, status: GRPC.Status.internal(), message: inspect(reason)
@@ -863,7 +924,7 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
     with {:ok, services} <- decode_json(request.services_json, []) do
       case MirrorNeuron.check_services(services) do
         {:ok, result} ->
-          %CheckServicesResponse{result_json: Jason.encode!(result)}
+          %CheckServicesResponse{result_json: versioned_json(result), version: @interface_version}
 
         {:error, reason} ->
           raise GRPC.RPCError, status: GRPC.Status.internal(), message: inspect(reason)
@@ -911,6 +972,14 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
       {:error, error} -> {:error, "body must be valid JSON: #{Exception.message(error)}"}
     end
   end
+
+  defp versioned_json(value) when is_map(value) do
+    value
+    |> Map.put_new("version", @interface_version)
+    |> Jason.encode!()
+  end
+
+  defp versioned_json(value), do: Jason.encode!(value)
 
   defp maybe_record_joining_node(request) do
     node_name = request |> Map.get(:node_name, "") |> to_string() |> String.trim()
@@ -1157,6 +1226,7 @@ end
 
 defmodule MirrorNeuron.Grpc.ObservabilityServer do
   use GRPC.Server, service: Mirrorneuron.Observability.V1.ObservabilityService.Service
+  @interface_version 1
 
   alias Mirrorneuron.Observability.V1.EventResponse
   alias MirrorNeuron.Persistence.RedisStore
@@ -1179,7 +1249,7 @@ defmodule MirrorNeuron.Grpc.ObservabilityServer do
       case RedisStore.read_events(job_id, event_start, -1) do
         {:ok, events} ->
           Enum.each(events, fn ev ->
-            GRPC.Server.send_reply(stream, %EventResponse{event_json: Jason.encode!(ev)})
+            GRPC.Server.send_reply(stream, event_response(ev))
           end)
 
           Enum.any?(events, &terminal_event?/1)
@@ -1198,7 +1268,7 @@ defmodule MirrorNeuron.Grpc.ObservabilityServer do
   defp stream_live_events(job_id, stream, heartbeat_interval_ms) do
     receive do
       {:mirror_neuron_event, event} ->
-        GRPC.Server.send_reply(stream, %EventResponse{event_json: Jason.encode!(event)})
+        GRPC.Server.send_reply(stream, event_response(event))
 
         if terminal_event?(event) do
           stream
@@ -1208,14 +1278,14 @@ defmodule MirrorNeuron.Grpc.ObservabilityServer do
     after
       heartbeat_timeout(heartbeat_interval_ms) ->
         if heartbeat_interval_ms > 0 do
-          GRPC.Server.send_reply(stream, %EventResponse{
-            event_json:
-              Jason.encode!(%{
-                type: "stream_heartbeat",
-                job_id: job_id,
-                timestamp: MirrorNeuron.Runtime.timestamp()
-              })
-          })
+          GRPC.Server.send_reply(
+            stream,
+            event_response(%{
+              type: "stream_heartbeat",
+              job_id: job_id,
+              timestamp: MirrorNeuron.Runtime.timestamp()
+            })
+          )
         end
 
         stream_live_events(job_id, stream, heartbeat_interval_ms)
@@ -1233,6 +1303,17 @@ defmodule MirrorNeuron.Grpc.ObservabilityServer do
   end
 
   defp terminal_event?(_event), do: false
+
+  defp event_response(event) when is_map(event) do
+    %EventResponse{
+      event_json: event |> Map.put_new("version", @interface_version) |> Jason.encode!(),
+      version: @interface_version
+    }
+  end
+
+  defp event_response(event) do
+    %EventResponse{event_json: Jason.encode!(event), version: @interface_version}
+  end
 end
 
 defmodule MirrorNeuron.Grpc.Endpoint do
