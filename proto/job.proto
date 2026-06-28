@@ -35,64 +35,78 @@ service JobService {
 message SubmitJobRequest {
   string manifest_json = 1;
   map<string, bytes> payloads = 2;
+  uint32 version = 3;
 }
 
 message SubmitJobResponse {
   string job_id = 1;
   string status = 2;
+  uint32 version = 3;
 }
 
 message GetJobRequest {
   string job_id = 1;
+  uint32 version = 2;
 }
 
 message GetJobResponse {
   string job_json = 1;
+  uint32 version = 2;
 }
 
 message ListJobsRequest {
   int32 limit = 1;
   bool include_terminal = 2;
+  uint32 version = 3;
 }
 
 message ListJobsResponse {
   string jobs_json = 1;
+  uint32 version = 2;
 }
 
 message CancelJobRequest {
   string job_id = 1;
+  uint32 version = 2;
 }
 
 message CancelJobResponse {
   string job_id = 1;
   string status = 2;
+  uint32 version = 3;
 }
 
 message PauseJobRequest {
   string job_id = 1;
+  uint32 version = 2;
 }
 
 message PauseJobResponse {
   string job_id = 1;
   string status = 2;
+  uint32 version = 3;
 }
 
 message ResumeJobRequest {
   string job_id = 1;
+  uint32 version = 2;
 }
 
 message ResumeJobResponse {
   string job_id = 1;
   string status = 2;
+  uint32 version = 3;
 }
 
 message ExportJobBackupRequest {
   string job_id = 1;
+  uint32 version = 2;
 }
 
 message ExportJobBackupResponse {
   string backup_json = 1;
   map<string, bytes> bundle_files = 2;
+  uint32 version = 3;
 }
 
 message RestoreJobBackupRequest {
@@ -100,18 +114,22 @@ message RestoreJobBackupRequest {
   map<string, bytes> bundle_files = 2;
   string blueprint_id = 3;
   string run_id = 4;
+  uint32 version = 5;
 }
 
 message RestoreJobBackupResponse {
   string result_json = 1;
+  uint32 version = 2;
 }
 
 message ClearJobsRequest {
   string admin_token = 1;
+  uint32 version = 2;
 }
 
 message ClearJobsResponse {
   int32 cleared_count = 1;
+  uint32 version = 2;
 }
 
 message DeployJobRequest {
@@ -120,6 +138,7 @@ message DeployJobRequest {
   string deployment_key = 3;
   string update_policy_json = 4;
   bool wait = 5;
+  uint32 version = 6;
 }
 
 message UpdateDeploymentRequest {
@@ -128,18 +147,22 @@ message UpdateDeploymentRequest {
   map<string, bytes> payloads = 3;
   string update_policy_json = 4;
   bool wait = 5;
+  uint32 version = 6;
 }
 
 message GetDeploymentRequest {
   string id_or_key = 1;
+  uint32 version = 2;
 }
 
 message ListDeploymentsRequest {
   string query_json = 1;
+  uint32 version = 2;
 }
 
 message PromoteDeploymentRequest {
   string id_or_key = 1;
+  uint32 version = 2;
 }
 
 message RollbackDeploymentRequest {
@@ -152,10 +175,12 @@ message RollbackDeploymentRequest {
 message DeploymentActionRequest {
   string id_or_key = 1;
   string reason = 2;
+  uint32 version = 3;
 }
 
 message DeploymentResponse {
   string result_json = 1;
+  uint32 version = 2;
 }
 
 message CreateScheduleRequest {
@@ -163,38 +188,46 @@ message CreateScheduleRequest {
   map<string, bytes> payloads = 2;
   string schedule_json = 3;
   string source_json = 4;
+  uint32 version = 5;
 }
 
 message ScheduleActionRequest {
   string schedule_id = 1;
   string attrs_json = 2;
   string reason = 3;
+  uint32 version = 4;
 }
 
 message GetScheduleRequest {
   string schedule_id = 1;
+  uint32 version = 2;
 }
 
 message ListSchedulesRequest {
   string query_json = 1;
+  uint32 version = 2;
 }
 
 message DispatchScheduleRequest {
   string schedule_id = 1;
   string payload_json = 2;
   string reason = 3;
+  uint32 version = 4;
 }
 
 message EmitTriggerEventRequest {
   string event_type = 1;
   string payload_json = 2;
   string source = 3;
+  uint32 version = 4;
 }
 
 message ListTriggerEventsRequest {
   int32 limit = 1;
+  uint32 version = 2;
 }
 
 message ScheduleResponse {
   string result_json = 1;
+  uint32 version = 2;
 }

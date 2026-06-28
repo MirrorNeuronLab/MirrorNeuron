@@ -22,6 +22,7 @@ message NetworkHandshakeRequest {
   string token = 1;
   string node_name = 2;
   string node_info_json = 3;
+  uint32 version = 4;
 }
 
 message NetworkHandshakeResponse {
@@ -38,55 +39,70 @@ message NetworkHandshakeResponse {
   string node_info_json = 11;
   string grpc_auth_token = 12;
   string grpc_admin_token = 13;
+  uint32 version = 14;
 }
 
-message GetSystemSummaryRequest {}
+message GetSystemSummaryRequest {
+  uint32 version = 1;
+}
 
 message GetSystemSummaryResponse {
   string summary_json = 1;
+  uint32 version = 2;
 }
 
-message GetResourceRequest {}
+message GetResourceRequest {
+  uint32 version = 1;
+}
 
 message GetResourceResponse {
   string resource_json = 1;
+  uint32 version = 2;
 }
 
 message SetResourceRequest {
   string resource_json = 1;
+  uint32 version = 2;
 }
 
 message SetResourceResponse {
   string resource_json = 1;
+  uint32 version = 2;
 }
 
 message AddNodeRequest {
   string node_name = 1;
   string token = 2;
+  uint32 version = 3;
 }
 
 message AddNodeResponse {
   string node_name = 1;
   string status = 2;
+  uint32 version = 3;
 }
 
 message RemoveNodeRequest {
   string node_name = 1;
+  uint32 version = 2;
 }
 
 message RemoveNodeResponse {
   string node_name = 1;
   string status = 2;
+  uint32 version = 3;
 }
 
 message ReconcileNodeRequest {
   string node_name = 1;
   string reason = 2;
   bool dry_run = 3;
+  uint32 version = 4;
 }
 
 message ReconcileNodeResponse {
   string result_json = 1;
+  uint32 version = 2;
 }
 
 message DrainNodeRequest {
@@ -96,61 +112,75 @@ message DrainNodeRequest {
   int64 deadline_ms = 4;
   bool ignore_system_jobs = 5;
   bool wait = 6;
+  uint32 version = 7;
 }
 
 message DrainNodeResponse {
   string result_json = 1;
+  uint32 version = 2;
 }
 
 message CancelNodeDrainRequest {
   string node_name = 1;
   string reason = 2;
   bool mark_eligible = 3;
+  uint32 version = 4;
 }
 
 message CancelNodeDrainResponse {
   string result_json = 1;
+  uint32 version = 2;
 }
 
 message SetNodeMaintenanceRequest {
   string node_name = 1;
   bool enabled = 2;
   string reason = 3;
+  uint32 version = 4;
 }
 
 message SetNodeMaintenanceResponse {
   string result_json = 1;
+  uint32 version = 2;
 }
 
 message GetNodeDrainStatusRequest {
   string node_name = 1;
+  uint32 version = 2;
 }
 
 message GetNodeDrainStatusResponse {
   string result_json = 1;
+  uint32 version = 2;
 }
 
 message ListServicesRequest {
   string query_json = 1;
+  uint32 version = 2;
 }
 
 message ListServicesResponse {
   string result_json = 1;
+  uint32 version = 2;
 }
 
 message ResolveServiceRequest {
   string name = 1;
   string query_json = 2;
+  uint32 version = 3;
 }
 
 message ResolveServiceResponse {
   string result_json = 1;
+  uint32 version = 2;
 }
 
 message CheckServicesRequest {
   string services_json = 1;
+  uint32 version = 2;
 }
 
 message CheckServicesResponse {
   string result_json = 1;
+  uint32 version = 2;
 }

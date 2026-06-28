@@ -10,8 +10,10 @@ message StreamEventsRequest {
   bool follow = 2;
   int32 heartbeat_interval_ms = 3;
   int32 limit = 4;
+  uint32 version = 5;
 }
 
 message EventResponse {
   string event_json = 1;
+  uint32 version = 2;
 }
