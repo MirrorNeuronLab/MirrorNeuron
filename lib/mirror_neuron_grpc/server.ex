@@ -1138,14 +1138,12 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
         end)
 
         Enum.each(peer_nodes, fn peer ->
-          peer_cookie = if peer == NodeAdapter.self(), do: local_cookie(), else: cookie
-
           _ =
             NodeAdapter.rpc_call(
               remote_node,
               __MODULE__,
               :set_peer_cookie,
-              [Atom.to_string(peer), peer_cookie],
+              [Atom.to_string(peer), cookie],
               2_000
             )
         end)
@@ -1167,11 +1165,6 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
   end
 
   defp sync_remote_cookie_with_cluster(_node_name, _token), do: :ok
-
-  defp local_cookie do
-    Node.get_cookie()
-    |> Atom.to_string()
-  end
 
   defp disconnect_node_from_cluster(node_name) when is_binary(node_name) and node_name != "" do
     case MirrorNeuron.SafeAccess.node_name_to_atom(node_name) do

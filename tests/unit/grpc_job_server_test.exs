@@ -575,7 +575,6 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     peer_a = :"peer-a@lab"
     peer_b = :"peer-b@lab"
     cookie = cookie_from_token("join-secret")
-    primary_cookie = Node.get_cookie() |> Atom.to_string()
 
     ClusterNodeAdapterStub.put_list([peer_a, remote_node, peer_b])
 
@@ -605,7 +604,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
                     ["peer-b@lab", ^cookie], 2_000}
 
     assert_receive {:rpc_call, ^remote_node, ClusterServer, :set_peer_cookie,
-                    ["mirror_neuron@test", ^primary_cookie], 2_000}
+                    ["mirror_neuron@test", ^cookie], 2_000}
 
     assert_receive {:rpc_call, ^remote_node, ClusterServer, :connect_peer, ["mirror_neuron@test"],
                     2_000}
