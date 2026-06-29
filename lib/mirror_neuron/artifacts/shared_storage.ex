@@ -13,6 +13,7 @@ defmodule MirrorNeuron.Artifacts.SharedStorage do
     "source" => :source,
     "target_path" => :target_path,
     "target" => :target,
+    "output_copy_executor" => :output_copy_executor,
     "submission_path" => :submission_path
   }
 
@@ -47,23 +48,31 @@ defmodule MirrorNeuron.Artifacts.SharedStorage do
         {:ok, []}
 
       storage ->
-        warnings = copy_outputs(storage, status)
-        fatal? = Enum.any?(warnings, &fatal_warning?/1)
-
-        if fatal? do
-          Logger.warning(
-            "shared storage output finalization for #{job_id} completed with warnings: #{inspect(warnings)}"
-          )
-
-          {:error, warnings}
+        if master_host_output_copy?(storage) do
+          {:ok, []}
         else
-          cleanup_storage(storage, job_id)
-          {:ok, warnings}
+          finalize_runtime_output_copy(job_id, storage, status)
         end
     end
   end
 
   def finalize_terminal_job(_job_id, _manifest, _status), do: {:ok, []}
+
+  defp finalize_runtime_output_copy(job_id, storage, status) do
+    warnings = copy_outputs(storage, status)
+    fatal? = Enum.any?(warnings, &fatal_warning?/1)
+
+    if fatal? do
+      Logger.warning(
+        "shared storage output finalization for #{job_id} completed with warnings: #{inspect(warnings)}"
+      )
+
+      {:error, warnings}
+    else
+      cleanup_storage(storage, job_id)
+      {:ok, warnings}
+    end
+  end
 
   def cleanup_job(job_id, job_map) do
     case job_manifest(job_map) do
@@ -287,6 +296,10 @@ defmodule MirrorNeuron.Artifacts.SharedStorage do
       _ ->
         nil
     end)
+  end
+
+  defp master_host_output_copy?(storage) do
+    first_string(map_get(storage, "output_copy_executor"), nil) == "master_host"
   end
 
   defp ensure_writable(root) do

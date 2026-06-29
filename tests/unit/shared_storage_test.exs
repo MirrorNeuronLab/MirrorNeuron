@@ -41,6 +41,29 @@ defmodule MirrorNeuron.Artifacts.SharedStorageTest do
     refute File.exists?(submission)
   end
 
+  test "master host output copy leaves shared submission for launcher", %{root: root} do
+    submission = Path.join([root, "submissions", "sub-master-host"])
+    source = Path.join([submission, "outputs", "user"])
+    target = Path.join(root, "target-master-host")
+    File.mkdir_p!(source)
+    File.write!(Path.join(source, "report.txt"), "done")
+
+    manifest =
+      manifest(submission, source, target)
+      |> put_in(["metadata", "mn_storage", "output_copy_executor"], "master_host")
+
+    assert {:ok, []} =
+             SharedStorage.finalize_terminal_job(
+               "job-master-host",
+               manifest,
+               "completed"
+             )
+
+    assert File.read!(Path.join(source, "report.txt")) == "done"
+    refute File.exists?(target)
+    assert File.exists?(submission)
+  end
+
   test "terminal cancel removes submission storage when outputs are missing", %{root: root} do
     submission = Path.join([root, "submissions", "sub-cancel"])
     source = Path.join([submission, "outputs", "user"])

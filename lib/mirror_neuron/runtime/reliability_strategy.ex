@@ -120,7 +120,9 @@ defmodule MirrorNeuron.Runtime.ReliabilityStrategy do
   defp archived_bundle?(manifest_ref) when is_map(manifest_ref) do
     storage = manifest_ref["bundle_storage"] || manifest_ref[:bundle_storage]
     fingerprint = manifest_ref["bundle_fingerprint"] || manifest_ref[:bundle_fingerprint]
-    storage == "redis" and is_binary(fingerprint) and fingerprint != ""
+
+    storage in ["redis", "shared_fs", "shared_fs_cas"] and is_binary(fingerprint) and
+      fingerprint != ""
   end
 
   defp archived_bundle?(_manifest_ref), do: false

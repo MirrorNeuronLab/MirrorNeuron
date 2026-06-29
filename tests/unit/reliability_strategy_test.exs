@@ -38,6 +38,21 @@ defmodule MirrorNeuron.Runtime.ReliabilityStrategyTest do
     refute reliability["reliability_degraded"]
   end
 
+  test "healthy multi-node auto job with shared filesystem bundle resolves to cluster recovery" do
+    reliability =
+      manifest()
+      |> ReliabilityStrategy.resolve(
+        healthy_multi_node_opts(%{
+          "bundle_storage" => "shared_fs_cas",
+          "bundle_fingerprint" => "sha256-test"
+        })
+      )
+
+    assert reliability["mode"] == "multi_node"
+    assert reliability["effective_recovery_policy"] == "cluster_recover"
+    refute reliability["reliability_degraded"]
+  end
+
   test "explicit cluster recovery on a single node starts degraded as local restart" do
     reliability = ReliabilityStrategy.resolve(manifest("cluster_recover"))
 
@@ -240,7 +255,14 @@ defmodule MirrorNeuron.Runtime.ReliabilityStrategyTest do
     manifest
   end
 
-  defp healthy_multi_node_opts(remote_state \\ nil) do
+  defp healthy_multi_node_opts(manifest_ref_or_remote_state \\ nil)
+
+  defp healthy_multi_node_opts(%{"bundle_storage" => _storage} = manifest_ref) do
+    healthy_multi_node_opts(nil)
+    |> Keyword.put(:manifest_ref, manifest_ref)
+  end
+
+  defp healthy_multi_node_opts(remote_state) do
     self_node = to_string(Node.self())
 
     remote_state =
