@@ -636,9 +636,7 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
   def network_handshake(request, _stream) do
     authorize_network_join!(Map.get(request, :token, ""))
 
-    if MirrorNeuron.Grpc.NetworkOnly.enabled?() do
-      maybe_connect_joining_peer(request)
-    else
+    unless MirrorNeuron.Grpc.NetworkOnly.enabled?() do
       maybe_record_joining_node(request)
     end
 
@@ -1000,18 +998,6 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
     :ok
   end
 
-  defp maybe_connect_joining_peer(request) do
-    node_name = request |> Map.get(:node_name, "") |> to_string() |> String.trim()
-    token = request |> Map.get(:token, "") |> to_string()
-
-    if node_name != "" do
-      _ = maybe_set_remote_cookie(node_name, token)
-      _ = connect_peer(node_name)
-    end
-
-    :ok
-  end
-
   defp handshake_node_status(node_name) do
     case MirrorNeuron.Cluster.NodeState.fetch(node_name) do
       {:ok, %{"status" => status}} when status in ["healthy", "maintenance", "draining"] ->
@@ -1152,12 +1138,14 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
         end)
 
         Enum.each(peer_nodes, fn peer ->
+          peer_cookie = if peer == NodeAdapter.self(), do: local_cookie(), else: cookie
+
           _ =
             NodeAdapter.rpc_call(
               remote_node,
               __MODULE__,
               :set_peer_cookie,
-              [Atom.to_string(peer), cookie],
+              [Atom.to_string(peer), peer_cookie],
               2_000
             )
         end)
@@ -1179,6 +1167,11 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
   end
 
   defp sync_remote_cookie_with_cluster(_node_name, _token), do: :ok
+
+  defp local_cookie do
+    Node.get_cookie()
+    |> Atom.to_string()
+  end
 
   defp disconnect_node_from_cluster(node_name) when is_binary(node_name) and node_name != "" do
     case MirrorNeuron.SafeAccess.node_name_to_atom(node_name) do
