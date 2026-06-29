@@ -636,7 +636,9 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
   def network_handshake(request, _stream) do
     authorize_network_join!(Map.get(request, :token, ""))
 
-    unless MirrorNeuron.Grpc.NetworkOnly.enabled?() do
+    if MirrorNeuron.Grpc.NetworkOnly.enabled?() do
+      maybe_connect_joining_peer(request)
+    else
       maybe_record_joining_node(request)
     end
 
@@ -998,6 +1000,18 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
     :ok
   end
 
+  defp maybe_connect_joining_peer(request) do
+    node_name = request |> Map.get(:node_name, "") |> to_string() |> String.trim()
+    token = request |> Map.get(:token, "") |> to_string()
+
+    if node_name != "" do
+      _ = maybe_set_remote_cookie(node_name, token)
+      _ = connect_peer(node_name)
+    end
+
+    :ok
+  end
+
   defp handshake_node_status(node_name) do
     case MirrorNeuron.Cluster.NodeState.fetch(node_name) do
       {:ok, %{"status" => status}} when status in ["healthy", "maintenance", "draining"] ->
@@ -1126,11 +1140,18 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
       {:ok, remote_node} ->
         cookie = cookie_from_token(token)
 
-        NodeAdapter.list()
-        |> Enum.reject(&(&1 == remote_node))
+        peer_nodes =
+          [NodeAdapter.self() | NodeAdapter.list()]
+          |> Enum.uniq()
+          |> Enum.reject(&(&1 == remote_node))
+
+        peer_nodes
+        |> Enum.reject(&(&1 == NodeAdapter.self()))
         |> Enum.each(fn peer ->
           _ = NodeAdapter.rpc_call(peer, __MODULE__, :set_peer_cookie, [node_name, cookie], 2_000)
+        end)
 
+        Enum.each(peer_nodes, fn peer ->
           _ =
             NodeAdapter.rpc_call(
               remote_node,
@@ -1140,6 +1161,15 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
               2_000
             )
         end)
+
+        _ =
+          NodeAdapter.rpc_call(
+            remote_node,
+            __MODULE__,
+            :connect_peer,
+            [Atom.to_string(NodeAdapter.self())],
+            2_000
+          )
 
         :ok
 

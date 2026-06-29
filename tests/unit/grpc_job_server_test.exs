@@ -157,6 +157,8 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     old_grpc_port = System.get_env("MN_GRPC_PORT")
     old_dist_port = System.get_env("MN_DIST_PORT")
     old_cluster_nodes = System.get_env("MN_CLUSTER_NODES")
+    old_host_shared_storage_root = System.get_env("MN_HOST_SHARED_STORAGE_ROOT")
+    old_runtime_shared_storage_root = System.get_env("MN_RUNTIME_SHARED_STORAGE_ROOT")
     old_reconnect_attempts = System.get_env("MN_REDIS_RECONNECT_ATTEMPTS")
     old_namespace = Application.get_env(:mirror_neuron, :redis_namespace)
 
@@ -184,6 +186,8 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     System.delete_env("MN_NETWORK_ONLY")
     System.delete_env("MN_NETWORK_JOIN_TOKEN")
     System.delete_env("MN_REDIS_URL")
+    System.put_env("MN_HOST_SHARED_STORAGE_ROOT", "/tmp/mn-shared")
+    System.put_env("MN_RUNTIME_SHARED_STORAGE_ROOT", "/root/.mn/shared")
 
     on_exit(fn ->
       if redis_available?(), do: cleanup_namespace(namespace)
@@ -208,6 +212,8 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       restore_env("MN_GRPC_PORT", old_grpc_port)
       restore_env("MN_DIST_PORT", old_dist_port)
       restore_env("MN_CLUSTER_NODES", old_cluster_nodes)
+      restore_env("MN_HOST_SHARED_STORAGE_ROOT", old_host_shared_storage_root)
+      restore_env("MN_RUNTIME_SHARED_STORAGE_ROOT", old_runtime_shared_storage_root)
       restore_env("MN_REDIS_RECONNECT_ATTEMPTS", old_reconnect_attempts)
     end)
   end
@@ -399,11 +405,13 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert response.grpc_admin_token == "stale-admin-token"
   end
 
-  test "network-only handshake does not record joining node metadata" do
+  test "network-only handshake connects back to joining peer without recording metadata" do
     System.put_env("MN_NETWORK_ONLY", "true")
     System.put_env("MN_NETWORK_JOIN_TOKEN", "join-secret")
 
     joining_node = "mirror_neuron@10.0.0.90"
+    joining_atom = String.to_atom(joining_node)
+    cookie = cookie_from_token("join-secret")
 
     _response =
       ClusterServer.network_handshake(
@@ -415,6 +423,9 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
         nil
       )
 
+    assert_receive {:set_cookie, ^joining_atom, cookie_atom}
+    assert Atom.to_string(cookie_atom) == cookie
+    assert_receive {:connect, ^joining_atom}
     assert {:error, _reason} = NodeState.fetch(joining_node)
   end
 
@@ -596,6 +607,12 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
     assert_receive {:rpc_call, ^remote_node, ClusterServer, :set_peer_cookie,
                     ["peer-b@lab", ^cookie], 2_000}
+
+    assert_receive {:rpc_call, ^remote_node, ClusterServer, :set_peer_cookie,
+                    ["mirror_neuron@test", ^cookie], 2_000}
+
+    assert_receive {:rpc_call, ^remote_node, ClusterServer, :connect_peer, ["mirror_neuron@test"],
+                    2_000}
   end
 
   test "remove_node disconnects cluster peers before marking operator disconnect locally" do
