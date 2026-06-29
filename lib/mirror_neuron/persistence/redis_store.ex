@@ -1986,6 +1986,12 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   defp pipeline_local(commands, attempts_left, backoff_ms) do
     case safe_pipeline(MirrorNeuron.Redis.Connection, commands) do
+      {:ok, results} ->
+        case readonly_error_in_results(results) do
+          nil -> {:ok, results}
+          reason -> forward_or_error(:redis_pipeline_from_peer, [commands], {:error, reason})
+        end
+
       {:error, reason} = error ->
         cond do
           readonly_error?(reason) ->
@@ -1999,11 +2005,14 @@ defmodule MirrorNeuron.Persistence.RedisStore do
           true ->
             error
         end
-
-      other ->
-        other
     end
   end
+
+  defp readonly_error_in_results(results) when is_list(results) do
+    Enum.find(results, &readonly_error?/1)
+  end
+
+  defp readonly_error_in_results(_results), do: nil
 
   defp maybe_forward_pipeline(commands) do
     case forwarding_primary_node() do
