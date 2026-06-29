@@ -47,6 +47,7 @@ defmodule MirrorNeuron.Bundle.Archive do
   defp store_with_fingerprint(%JobBundle{} = bundle, fingerprint) do
     case maybe_store_shared_cache(bundle, fingerprint) do
       {:ok, archive_ref} ->
+        maybe_store_redis_backup(bundle, fingerprint)
         {:ok, archive_ref}
 
       :skip ->
@@ -55,6 +56,20 @@ defmodule MirrorNeuron.Bundle.Archive do
       {:error, reason} ->
         Logger.warning("failed to cache bundle in shared storage: #{inspect(reason)}")
         store_redis_archive(bundle, fingerprint)
+    end
+  end
+
+  defp maybe_store_redis_backup(%JobBundle{} = bundle, fingerprint) do
+    case store_redis_archive(bundle, fingerprint) do
+      {:ok, _archive_ref} ->
+        :ok
+
+      {:error, {:bundle_too_large, _total_bytes, _max_bytes}} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("failed to store Redis backup for shared bundle cache: #{inspect(reason)}")
+        :ok
     end
   end
 
