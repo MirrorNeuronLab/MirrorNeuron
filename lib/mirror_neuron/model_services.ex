@@ -9,17 +9,20 @@ defmodule MirrorNeuron.ModelServices do
     "MN_NODE_MODELS",
     "MN_NODE_RUNTIME_MODELS",
     "MN_DOCKER_MODEL_RUNNER_MODEL",
-    "MN_LLM_MODEL_RUNNER_MODEL"
+    "MN_LLM_MODEL_RUNNER_MODEL",
+    "MN_LLM_RUNTIME_MODEL"
   ]
   @model_runner_endpoint_env_vars [
     "MN_DOCKER_MODEL_RUNNER_API_BASE",
     "MN_MODEL_RUNNER_API_BASE",
     "DOCKER_MODEL_RUNNER_API_BASE",
-    "MODEL_RUNNER_HOST"
+    "MODEL_RUNNER_HOST",
+    "MN_LLM_API_BASE"
   ]
   @model_service_node_env "MN_MODEL_SERVICE_NODE_NAME"
   @network_advertise_host_env "MN_NETWORK_ADVERTISE_HOST"
   @model_remotes_path_env "MN_MODEL_REMOTES_PATH"
+  @runtime_compose_env_path_env "MN_RUNTIME_COMPOSE_ENV"
   @default_node_name "mirror_neuron"
 
   def env_model_refs(env \\ System.get_env()) when is_map(env) do
@@ -57,7 +60,36 @@ defmodule MirrorNeuron.ModelServices do
   def advertise_env_models(node_name \\ Node.self(), env \\ System.get_env()) when is_map(env) do
     node_name = advertised_node_name(node_name, env)
     services = service_instances_for_env(env, node_name)
+    register_model_services(services, node_name)
+  end
 
+  def advertise_models(model_refs, node_name \\ Node.self(), env \\ System.get_env())
+      when is_map(env) do
+    node_name = advertised_node_name(node_name, env)
+
+    services =
+      model_refs
+      |> service_instances_for_models(node_name)
+      |> Enum.map(&with_runtime_health_check(&1, env))
+
+    register_model_services(services, node_name)
+  end
+
+  def persist_node_runtime_model(model_ref, env \\ System.get_env()) do
+    model_ref = model_ref |> to_string() |> String.trim()
+
+    if model_ref != "" do
+      env
+      |> runtime_compose_env_path()
+      |> upsert_runtime_model_ref(model_ref)
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp register_model_services(services, node_name) do
     case services do
       [] ->
         :ok
@@ -123,6 +155,44 @@ defmodule MirrorNeuron.ModelServices do
   defp model_remotes_path(env) do
     normalized_env(env, @model_remotes_path_env) ||
       Path.join(normalized_env(env, "MN_HOME") || Path.expand("~/.mn"), "model-remotes.json")
+  end
+
+  defp runtime_compose_env_path(env) do
+    normalized_env(env, @runtime_compose_env_path_env) ||
+      Path.join(normalized_env(env, "MN_HOME") || Path.expand("~/.mn"), "docker-compose.env")
+  end
+
+  defp upsert_runtime_model_ref(path, model_ref) do
+    File.mkdir_p!(Path.dirname(path))
+    existing = if File.regular?(path), do: File.read!(path), else: ""
+    {lines, found?} = upsert_env_list_line(String.split(existing, "\n", trim: false), model_ref)
+    lines = if found?, do: lines, else: lines ++ ["MN_NODE_RUNTIME_MODELS=#{model_ref}"]
+    File.write!(path, lines |> trim_trailing_blank_lines() |> Enum.join("\n") |> Kernel.<>("\n"))
+  end
+
+  defp upsert_env_list_line(lines, model_ref) do
+    Enum.map_reduce(lines, false, fn line, found? ->
+      case String.split(line, "=", parts: 2) do
+        ["MN_NODE_RUNTIME_MODELS", value] ->
+          refs =
+            value
+            |> split_env_list()
+            |> Kernel.++([model_ref])
+            |> Enum.uniq_by(&(String.downcase(&1)))
+
+          {"MN_NODE_RUNTIME_MODELS=#{Enum.join(refs, ",")}", true}
+
+        _ ->
+          {line, found?}
+      end
+    end)
+  end
+
+  defp trim_trailing_blank_lines(lines) do
+    lines
+    |> Enum.reverse()
+    |> Enum.drop_while(&(&1 == ""))
+    |> Enum.reverse()
   end
 
   defp read_model_remotes(path) do

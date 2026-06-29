@@ -4,6 +4,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
   alias MirrorNeuron.Config
   alias MirrorNeuron.Artifacts.SharedStorage
   alias MirrorNeuron.Message
+  alias MirrorNeuron.ModelServices
   alias MirrorNeuron.Sandbox.DockerJobSandbox
 
   @default_container_workdir "/mn/job"
@@ -28,6 +29,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
            :ok <- copy_build_context_uploads(base_dir, config, opts),
            :ok <- write_runtime_files(base_dir, message, opts),
            {:ok, image} <- resolve_image(config, base_dir, opts),
+           :ok <- ensure_docker_model_runner_model(config, opts),
            {:ok, output, exit_code, command_name} <-
              run_worker_command(image, base_dir, config, opts) do
         result =
@@ -193,6 +195,85 @@ defmodule MirrorNeuron.Runner.DockerWorker do
 
   defp docker_buildkit_value(_value), do: "0"
 
+  defp ensure_docker_model_runner_model(config, opts) do
+    env = extra_env(config)
+    provider = env |> Map.get("MN_LLM_PROVIDER", "") |> to_string() |> String.trim()
+
+    if provider in ["docker_model_runner", "docker-model-runner", "dmr"] do
+      model =
+        env
+        |> Map.get("MN_LLM_RUNTIME_MODEL", Map.get(env, "MN_LLM_MODEL", ""))
+        |> to_string()
+        |> String.trim()
+
+      if model == "" do
+        :ok
+      else
+        do_ensure_docker_model_runner_model(model, env, config, opts)
+      end
+    else
+      :ok
+    end
+  end
+
+  defp do_ensure_docker_model_runner_model(model, env, config, opts) do
+    docker = docker_bin(config)
+
+    case System.cmd(docker, ["model", "inspect", model], stderr_to_stdout: true) do
+      {_output, 0} ->
+        ModelServices.persist_node_runtime_model(model, Map.merge(System.get_env(), env))
+        ModelServices.advertise_models([model], Node.self(), Map.merge(System.get_env(), env))
+        :ok
+
+      _ ->
+        emit_runner_event(opts, "docker_worker_model_install_started", %{
+          "category" => "system",
+          "message" => "DockerWorker runtime model install started",
+          "status" => "started",
+          "runner" => "docker_worker",
+          "model" => model,
+          "node_name" => to_string(Node.self())
+        })
+
+        with {pull_output, 0} <- System.cmd(docker, ["model", "pull", model], stderr_to_stdout: true),
+             {run_output, 0} <- System.cmd(docker, ["model", "run", "--detach", model], stderr_to_stdout: true) do
+          ModelServices.persist_node_runtime_model(model, Map.merge(System.get_env(), env))
+          ModelServices.advertise_models([model], Node.self(), Map.merge(System.get_env(), env))
+
+          emit_runner_event(opts, "docker_worker_model_install_completed", %{
+            "category" => "system",
+            "message" => "DockerWorker runtime model install completed",
+            "status" => "completed",
+            "runner" => "docker_worker",
+            "model" => model,
+            "node_name" => to_string(Node.self()),
+            "result_summary" => compact_output_tail(pull_output <> "\n" <> run_output)
+          })
+
+          :ok
+        else
+          {output, exit_code} ->
+            emit_runner_event(opts, "docker_worker_model_install_failed", %{
+              "category" => "error",
+              "message" => "DockerWorker runtime model install failed",
+              "status" => "failed",
+              "runner" => "docker_worker",
+              "model" => model,
+              "node_name" => to_string(Node.self()),
+              "result_summary" => compact_output_tail(output),
+              "details" => %{"exit_code" => exit_code}
+            })
+
+            {:error,
+             "failed to install Docker Model Runner model #{model} on #{Node.self()}: #{String.trim(output)}"}
+        end
+    end
+  rescue
+    error ->
+      {:error,
+       "failed to prepare Docker Model Runner model #{model} on #{Node.self()}: #{Exception.message(error)}"}
+  end
+
   defp reject_published_ports(config) do
     docker = Map.get(config, "docker", %{})
 
@@ -274,7 +355,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     container_name = docker_name(config, opts)
     container_workdir = container_workdir(config)
     payloads_dir = @default_payloads_dir
-    command = normalize_command(Map.get(config, "command"))
+    command = normalize_command(Map.get(config, "command")) |> wrap_runtime_bootstrap_command()
     env = runtime_env(container_workdir, payloads_dir, config, opts)
 
     args =
@@ -328,7 +409,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
 
   defp build_docker_exec_args(container_name, remote_dir, config, opts) do
     workdir = resolve_shared_workdir(config, remote_dir)
-    command = normalize_command(Map.get(config, "command"))
+    command = normalize_command(Map.get(config, "command")) |> wrap_runtime_bootstrap_command()
     env = runtime_env(workdir, remote_dir, config, opts, remote_dir)
 
     args =
@@ -586,6 +667,27 @@ defmodule MirrorNeuron.Runner.DockerWorker do
   defp put_env_args(args, env) do
     env
     |> Enum.reduce(args, fn {key, value}, acc -> acc ++ ["-e", "#{key}=#{value}"] end)
+  end
+
+  defp wrap_runtime_bootstrap_command(command) do
+    [
+      "sh",
+      "-lc",
+      """
+      for root in "$MN_WORKDIR/.mn-local-skills" "$MN_BUNDLE_ROOT/.mn-local-skills" "/mn/job/.mn-local-skills"; do
+        if [ -d "$root" ]; then
+          for src in "$root"/*/src; do
+            if [ -d "$src" ]; then
+              PYTHONPATH="$src${PYTHONPATH:+:$PYTHONPATH}"
+            fi
+          done
+        fi
+      done
+      export PYTHONPATH
+      exec "$@"
+      """,
+      "mn-docker-worker-runtime"
+    ] ++ command
   end
 
   defp run_docker(args, container_name, config, opts) do

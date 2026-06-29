@@ -74,13 +74,12 @@ defmodule MirrorNeuron.Scheduler.ResourceInference do
     state
     |> maybe_add_gpu_request(entry, min_vram_mb, min_unified_mb, required_capabilities)
     |> maybe_add_capability_constraint(required_capabilities)
-    |> maybe_add_service_requirement(entry)
+    |> maybe_add_service_requirement(entry, min_vram_mb, min_unified_mb, required_capabilities)
     |> add_model_summary(entry, min_vram_mb, min_unified_mb, required_capabilities)
   end
 
   defp maybe_add_gpu_request(state, entry, min_vram_mb, min_unified_mb, required_capabilities) do
-    if needs_gpu?(entry, min_vram_mb, min_unified_mb, required_capabilities) and
-         not service_backed_model?(entry) do
+    if needs_gpu?(entry, min_vram_mb, min_unified_mb, required_capabilities) do
       request =
         %{
           "kind" => "gpu",
@@ -118,8 +117,10 @@ defmodule MirrorNeuron.Scheduler.ResourceInference do
     Map.update(state, "constraints", [constraint], &(&1 ++ [constraint]))
   end
 
-  defp maybe_add_service_requirement(state, entry) do
-    if ModelCatalog.provider(entry) in @service_model_providers do
+  defp maybe_add_service_requirement(state, entry, min_vram_mb, min_unified_mb, required_capabilities) do
+    if ModelCatalog.provider(entry) in @service_model_providers and
+         (truthy?(Map.get(entry, "service_required")) or
+            not needs_gpu?(entry, min_vram_mb, min_unified_mb, required_capabilities)) do
       requirement = ModelCatalog.service_requirement(entry)
       Map.update(state, "requires_services", [requirement], &(&1 ++ [requirement]))
     else
@@ -197,6 +198,14 @@ defmodule MirrorNeuron.Scheduler.ResourceInference do
   defp service_backed_model?(entry) do
     ModelCatalog.provider(entry) in @service_model_providers
   end
+
+  defp truthy?(value) when value in [true, 1, "1"], do: true
+
+  defp truthy?(value) when is_binary(value) do
+    value |> String.trim() |> String.downcase() in ["true", "yes", "on"]
+  end
+
+  defp truthy?(_value), do: false
 
   defp nvidia_required?(required_capabilities),
     do: Enum.any?(required_capabilities, &String.contains?(&1, "nvidia"))
