@@ -335,6 +335,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     System.put_env("MN_NETWORK_ADVERTISE_HOST", "192.168.4.10")
     System.put_env("MN_NETWORK_REDIS_HOST", "192.168.4.10")
     System.put_env("MN_NETWORK_REDIS_PORT", "6380")
+    System.put_env("MN_REDIS_URL", "redis://:redis-secret@redis:6379/0")
     System.put_env("MN_GRPC_PORT", "50055")
     System.put_env("MN_DIST_PORT", "4500")
     System.put_env("MN_CLUSTER_NODES", "mirror_neuron@192.168.4.10")
@@ -351,7 +352,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert response.dist_port == 4_500
     assert response.redis_host == "192.168.4.10"
     assert response.redis_port == 6_380
-    assert response.redis_url == "redis://192.168.4.10:6380/0"
+    assert response.redis_url == "redis://:redis-secret@192.168.4.10:6380/0"
     assert response.cluster_nodes == "mirror_neuron@192.168.4.10"
     assert response.grpc_auth_token == "primary-auth-token"
     assert response.grpc_admin_token == "primary-admin-token"
@@ -360,6 +361,20 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert node_info["node_name"] == "mirror_neuron@test"
     assert is_binary(node_info["display_name"])
     assert is_integer(node_info["gpu_count"])
+  end
+
+  test "network handshake preserves unauthenticated Redis URLs when configured without auth" do
+    System.put_env("MN_NETWORK_ONLY", "true")
+    System.put_env("MN_NETWORK_JOIN_TOKEN", "join-secret")
+    System.put_env("MN_NETWORK_ADVERTISE_HOST", "192.168.4.10")
+    System.put_env("MN_NETWORK_REDIS_HOST", "192.168.4.10")
+    System.put_env("MN_NETWORK_REDIS_PORT", "6380")
+    System.put_env("MN_REDIS_URL", "redis://redis:6379/0")
+
+    response =
+      ClusterServer.network_handshake(%NetworkHandshakeRequest{token: "join-secret"}, nil)
+
+    assert response.redis_url == "redis://192.168.4.10:6380/0"
   end
 
   test "network handshake returns direct grpc tokens before file tokens" do

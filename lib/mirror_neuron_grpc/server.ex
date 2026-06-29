@@ -1196,8 +1196,9 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
     port = redis_port()
     path = uri.path || "/0"
     scheme = uri.scheme || "redis"
+    userinfo = if uri.userinfo in [nil, ""], do: "", else: "#{uri.userinfo}@"
 
-    "#{scheme}://#{host}:#{port}#{path}"
+    "#{scheme}://#{userinfo}#{host}:#{port}#{path}"
   end
 
   defp redis_uri do
