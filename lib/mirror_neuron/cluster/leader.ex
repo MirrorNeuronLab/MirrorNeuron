@@ -31,12 +31,56 @@ defmodule MirrorNeuron.Cluster.Leader do
       sweep_ref: nil
     }
 
-    Process.send_after(self(), :campaign, 500)
+    unless MirrorNeuron.Grpc.NetworkOnly.enabled?() do
+      Process.send_after(self(), :campaign, 500)
+    end
+
     {:ok, state}
   end
 
   @impl true
   def handle_info(:campaign, state) do
+    if MirrorNeuron.Grpc.NetworkOnly.enabled?() do
+      {:noreply, state}
+    else
+      campaign(state)
+    end
+  end
+
+  def handle_info(:sweep_orphaned_jobs, %{is_leader: true} = state) do
+    _ = sweep_orphaned_jobs()
+    {:noreply, schedule_sweep(state)}
+  end
+
+  def handle_info(:sweep_orphaned_jobs, state), do: {:noreply, %{state | sweep_ref: nil}}
+
+  def handle_info({:sweep_orphaned_jobs, node_name}, %{is_leader: true} = state) do
+    _ = sweep_orphaned_jobs(node_name)
+    {:noreply, state}
+  end
+
+  def handle_info({:sweep_orphaned_jobs, _node_name}, state), do: {:noreply, state}
+
+  @impl true
+  def handle_call(:sweep_now, _from, state) do
+    result =
+      if state.is_leader,
+        do: sweep_orphaned_jobs(),
+        else: %{checked: 0, recovered: 0, failed: 0, blocked: 0}
+
+    {:reply, {:ok, result}, state}
+  end
+
+  @impl true
+  def handle_cast({:node_down, node_name}, state) do
+    if state.is_leader do
+      Process.send_after(self(), {:sweep_orphaned_jobs, node_name}, @node_down_sweep_delay_ms)
+    end
+
+    {:noreply, state}
+  end
+
+  defp campaign(state) do
     current_node = to_string(Node.self())
 
     # If the node name changed (e.g. CLI fully initialized)
@@ -78,39 +122,6 @@ defmodule MirrorNeuron.Cluster.Leader do
 
     Process.send_after(self(), :campaign, @refresh_interval_ms)
     {:noreply, new_state}
-  end
-
-  def handle_info(:sweep_orphaned_jobs, %{is_leader: true} = state) do
-    _ = sweep_orphaned_jobs()
-    {:noreply, schedule_sweep(state)}
-  end
-
-  def handle_info(:sweep_orphaned_jobs, state), do: {:noreply, %{state | sweep_ref: nil}}
-
-  def handle_info({:sweep_orphaned_jobs, node_name}, %{is_leader: true} = state) do
-    _ = sweep_orphaned_jobs(node_name)
-    {:noreply, state}
-  end
-
-  def handle_info({:sweep_orphaned_jobs, _node_name}, state), do: {:noreply, state}
-
-  @impl true
-  def handle_call(:sweep_now, _from, state) do
-    result =
-      if state.is_leader,
-        do: sweep_orphaned_jobs(),
-        else: %{checked: 0, recovered: 0, failed: 0, blocked: 0}
-
-    {:reply, {:ok, result}, state}
-  end
-
-  @impl true
-  def handle_cast({:node_down, node_name}, state) do
-    if state.is_leader do
-      Process.send_after(self(), {:sweep_orphaned_jobs, node_name}, @node_down_sweep_delay_ms)
-    end
-
-    {:noreply, state}
   end
 
   defp handle_became_leader(state) do
