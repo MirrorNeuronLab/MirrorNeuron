@@ -95,6 +95,37 @@ defmodule MirrorNeuron.ModelCatalogTest do
            ] = service["checks"]
   end
 
+  test "remote model declarations advertise model runner services" do
+    path =
+      Path.join(System.tmp_dir!(), "mn-model-remotes-#{System.unique_integer([:positive])}.json")
+
+    File.write!(
+      path,
+      Jason.encode!(%{
+        "version" => 1,
+        "remotes" => %{
+          "spark" => %{
+            "name" => "spark",
+            "model" => "ai/qwen3-coder",
+            "api_model" => "ai/qwen3-coder",
+            "base_url" => "http://192.168.4.173:12434/v1"
+          }
+        }
+      })
+    )
+
+    on_exit(fn -> File.rm(path) end)
+
+    [service] = ModelServices.service_instances_for_env(%{"MN_MODEL_REMOTES_PATH" => path}, "node@lab")
+
+    assert service["name"] == "docker-model-runner"
+    assert service["origin"] == "external"
+    assert service["address"] == "http://192.168.4.173:12434/v1"
+    assert service["meta"]["api_model"] == "ai/qwen3-coder"
+    assert "model:ai/qwen3-coder" in service["tags"]
+    assert [%{"url" => "http://192.168.4.173:12434/v1/models"}] = service["checks"]
+  end
+
   test "model services use advertised host identity when docker hostname differs" do
     env = %{"MN_NETWORK_ADVERTISE_HOST" => "192.168.4.173"}
 
