@@ -202,7 +202,12 @@ defmodule MirrorNeuron.Scheduler.ResourceInference do
   defp truthy?(value) when value in [true, 1, "1"], do: true
 
   defp truthy?(value) when is_binary(value) do
-    value |> String.trim() |> String.downcase() in ["true", "yes", "on"]
+    normalized =
+      value
+      |> String.trim()
+      |> String.downcase()
+
+    normalized in ["true", "yes", "on"]
   end
 
   defp truthy?(_value), do: false
