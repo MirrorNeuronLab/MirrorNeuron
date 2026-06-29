@@ -1397,7 +1397,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp register_job_services(state) do
     services =
       ServiceSpec.service_instances_for_job(state.manifest, state.job_id,
-        bundle_root: state.bundle && state.bundle.root_path
+        bundle_root: runtime_bundle_root(state)
       )
 
     register_services(state, services)
@@ -1413,7 +1413,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         state.job_id,
         node,
         target_node,
-        bundle_root: state.bundle && state.bundle.root_path
+        bundle_root: runtime_bundle_root(state)
       )
 
     register_services(state, services)
@@ -2136,16 +2136,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp do_wait_for_agents_ready(state, started_at, timeout_ms) do
-    missing_agents =
-      Enum.reject(state.agent_ids, fn agent_id ->
-        match?(
-          [{_pid, _meta}],
-          Horde.Registry.lookup(
-            MirrorNeuron.DistributedRegistry,
-            {:agent, state.job_id, agent_id}
-          )
-        )
-      end)
+    missing_agents = Enum.reject(state.agent_ids, &agent_ready?(state, &1))
 
     case missing_agents do
       [] ->
@@ -2582,11 +2573,12 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   defp agent_runtime_context(state) do
     lease = Keyword.get(state.opts, :job_lease)
+    bundle_paths = runtime_bundle_paths(state)
 
     %{
-      bundle_root: state.bundle && state.bundle.root_path,
-      manifest_path: state.bundle && state.bundle.manifest_path,
-      payloads_path: state.bundle && state.bundle.payloads_path,
+      bundle_root: bundle_paths.bundle_root,
+      manifest_path: bundle_paths.manifest_path,
+      payloads_path: bundle_paths.payloads_path,
       artifact_refs:
         MirrorNeuron.Artifacts.BlobRef.collect(MirrorNeuron.Manifest.to_map(state.manifest)),
       manifest_ref: manifest_ref(state),
@@ -2624,13 +2616,39 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   defp manifest_ref(state) do
     Keyword.get(state.opts, :bundle_ref) ||
-      %{
-        graph_id: state.manifest.graph_id,
-        manifest_version: state.manifest.manifest_version,
-        manifest_path: state.bundle && state.bundle.manifest_path,
-        job_path: state.bundle && state.bundle.root_path
-      }
+      Runtime.bundle_ref(state.manifest, state.bundle)
   end
+
+  defp runtime_bundle_root(state), do: runtime_bundle_paths(state).bundle_root
+
+  defp runtime_bundle_paths(state) do
+    case shared_bundle_cache_path(manifest_ref(state)) do
+      nil ->
+        %{
+          bundle_root: state.bundle && state.bundle.root_path,
+          manifest_path: state.bundle && state.bundle.manifest_path,
+          payloads_path: state.bundle && state.bundle.payloads_path
+        }
+
+      cache_path ->
+        %{
+          bundle_root: cache_path,
+          manifest_path: Path.join(cache_path, "manifest.json"),
+          payloads_path: Path.join(cache_path, "payloads")
+        }
+    end
+  end
+
+  defp shared_bundle_cache_path(manifest_ref) when is_map(manifest_ref) do
+    storage = Map.get(manifest_ref, "bundle_storage") || Map.get(manifest_ref, :bundle_storage)
+    cache_path = Map.get(manifest_ref, "cache_path") || Map.get(manifest_ref, :cache_path)
+
+    if storage in ["shared_fs", "shared_fs_cas"] and is_binary(cache_path) and cache_path != "" do
+      cache_path
+    end
+  end
+
+  defp shared_bundle_cache_path(_manifest_ref), do: nil
 
   defp scheduler_plan(state) do
     scheduler_plan_from(state.manifest, state.opts)

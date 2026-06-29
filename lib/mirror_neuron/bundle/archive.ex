@@ -4,6 +4,7 @@ defmodule MirrorNeuron.Bundle.Archive do
   require Logger
 
   alias MirrorNeuron.Bundle.Fingerprint
+  alias MirrorNeuron.Artifacts.SharedStorage
   alias MirrorNeuron.JobBundle
   alias MirrorNeuron.PathSafety
   alias MirrorNeuron.Persistence.RedisStore
@@ -44,6 +45,39 @@ defmodule MirrorNeuron.Bundle.Archive do
   def cache_path(fingerprint), do: Path.join(cache_root(), fingerprint)
 
   defp store_with_fingerprint(%JobBundle{} = bundle, fingerprint) do
+    case maybe_store_shared_cache(bundle, fingerprint) do
+      {:ok, archive_ref} ->
+        {:ok, archive_ref}
+
+      :skip ->
+        store_redis_archive(bundle, fingerprint)
+
+      {:error, reason} ->
+        Logger.warning("failed to cache bundle in shared storage: #{inspect(reason)}")
+        store_redis_archive(bundle, fingerprint)
+    end
+  end
+
+  defp maybe_store_shared_cache(%JobBundle{} = bundle, fingerprint) do
+    if shared_cache_root?() do
+      store_filesystem_cache(bundle, fingerprint, "shared_fs_cas")
+    else
+      :skip
+    end
+  end
+
+  defp store_filesystem_cache(%JobBundle{root_path: root_path}, fingerprint, storage)
+       when is_binary(root_path) do
+    with {:ok, _file_specs, total_bytes} <- collect_file_specs(root_path),
+         :ok <- copy_local_cache(fingerprint, root_path) do
+      {:ok, %{fingerprint: fingerprint, storage: storage, total_bytes: total_bytes}}
+    end
+  end
+
+  defp store_filesystem_cache(_bundle, _fingerprint, _storage),
+    do: {:error, :bundle_has_no_root_path}
+
+  defp store_redis_archive(%JobBundle{} = bundle, fingerprint) do
     case cached_archive(fingerprint) do
       {:ok, archive} ->
         _ = restore_to_cache(fingerprint, archive)
@@ -173,7 +207,8 @@ defmodule MirrorNeuron.Bundle.Archive do
   defp copy_local_cache(fingerprint, root_path) do
     target = cache_path(fingerprint)
 
-    unless File.dir?(target) do
+    unless valid_bundle_cache?(target) do
+      _ = File.rm_rf(target)
       File.mkdir_p!(Path.dirname(target))
       File.cp_r(root_path, target)
     end
@@ -183,9 +218,28 @@ defmodule MirrorNeuron.Bundle.Archive do
     error -> {:error, error}
   end
 
+  defp valid_bundle_cache?(target) do
+    case JobBundle.load(target) do
+      {:ok, _bundle} -> true
+      {:error, _reason} -> false
+    end
+  end
+
   defp cache_root do
     MirrorNeuron.Config.optional_string("MN_BUNDLE_CACHE_DIR", :bundle_cache_dir) ||
+      Path.join(SharedStorage.root(), "bundle_cache")
+  rescue
+    _ ->
       Path.join(MirrorNeuron.Config.string("MN_TEMP_DIR", :temp_dir), "bundle_cache")
+  end
+
+  defp shared_cache_root? do
+    cache_root = Path.expand(cache_root())
+    shared_root = Path.expand(SharedStorage.root())
+
+    cache_root == shared_root or String.starts_with?(cache_root, shared_root <> "/")
+  rescue
+    _ -> false
   end
 
   defp max_archive_bytes do

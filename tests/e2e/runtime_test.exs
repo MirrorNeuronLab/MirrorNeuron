@@ -7,6 +7,33 @@ defmodule MirrorNeuron.RuntimeTest do
   alias MirrorNeuron.Runtime.AgentWorker
   alias MirrorNeuron.ServiceRegistry
 
+  defmodule BundlePathEchoRunner do
+    def run(_payload, _config, opts) do
+      bundle_root = Keyword.get(opts, :bundle_root)
+      manifest_path = Keyword.get(opts, :manifest_path)
+      payloads_path = Keyword.get(opts, :payloads_path)
+
+      {:ok,
+       %{
+         "sandbox_name" => "bundle-path-echo",
+         "exit_code" => 0,
+         "stdout" =>
+           Jason.encode!(%{
+             "complete_run" => %{
+               "bundle_root" => bundle_root,
+               "manifest_path" => manifest_path,
+               "payloads_path" => payloads_path,
+               "bundle_exists" => File.dir?(bundle_root || ""),
+               "manifest_exists" => File.exists?(manifest_path || ""),
+               "payloads_exists" => File.dir?(payloads_path || "")
+             }
+           }),
+         "stderr" => "",
+         "logs" => ""
+       }}
+    end
+  end
+
   defmodule StreamProducerRunner do
     def run(_payload, _config, opts) do
       job_id = Keyword.fetch!(opts, :job_id)
@@ -747,6 +774,131 @@ defmodule MirrorNeuron.RuntimeTest do
 
     RedisStore.delete_job(job_id)
     File.rm_rf(volume_root)
+  end
+
+  test "agent workers materialize archived bundles when original bundle path is unavailable" do
+    job_id = "remote-bundle-agent-#{System.unique_integer([:positive])}"
+    bundle_root = Path.join(System.tmp_dir!(), "#{job_id}-bundle")
+    File.mkdir_p!(Path.join(bundle_root, "payloads"))
+
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => job_id,
+      "entrypoints" => ["worker"],
+      "nodes" => [
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "config" => %{
+            "runner_module" => BundlePathEchoRunner,
+            "output_message_type" => nil
+          }
+        }
+      ],
+      "edges" => []
+    }
+
+    File.write!(Path.join(bundle_root, "manifest.json"), Jason.encode!(flow_manifest(manifest)))
+
+    {:ok, bundle} = MirrorNeuron.JobBundle.load(bundle_root)
+    manifest_ref = Runtime.bundle_ref(bundle.manifest, bundle)
+    missing_root = Path.join(System.tmp_dir!(), "#{job_id}-missing")
+    File.rm_rf!(missing_root)
+
+    node = %{
+      node_id: "worker",
+      agent_type: "executor",
+      role: nil,
+      type: "generic",
+      config: %{
+        "runner_module" => BundlePathEchoRunner,
+        "output_message_type" => nil
+      }
+    }
+
+    runtime_context = %{
+      bundle_root: missing_root,
+      manifest_path: Path.join(missing_root, "manifest.json"),
+      payloads_path: Path.join(missing_root, "payloads"),
+      manifest_ref: manifest_ref,
+      scheduler: %{"placements" => []},
+      artifact_refs: []
+    }
+
+    {:ok, pid} =
+      AgentWorker.start_link({job_id, node, [], [], self(), runtime_context, nil})
+
+    message =
+      Message.new(job_id, "runtime", "worker", "init", %{"start" => true}, class: "command")
+
+    GenServer.cast(pid, {:deliver, message})
+
+    assert_receive {:agent_completed_run, "worker", result}, 2_000
+    assert result["bundle_root"] == manifest_ref["cache_path"]
+    assert result["manifest_path"] == Path.join(manifest_ref["cache_path"], "manifest.json")
+    assert result["payloads_path"] == Path.join(manifest_ref["cache_path"], "payloads")
+    assert result["bundle_exists"] == true
+    assert result["manifest_exists"] == true
+    assert result["payloads_exists"] == true
+
+    GenServer.stop(pid)
+    RedisStore.delete_job(job_id)
+    File.rm_rf!(bundle_root)
+  end
+
+  test "single node jobs use shared bundle cache as runtime context" do
+    old_cache_dir = System.get_env("MN_BUNDLE_CACHE_DIR")
+    old_shared_root = System.get_env("MN_RUNTIME_SHARED_STORAGE_ROOT")
+
+    shared_root =
+      Path.join(System.tmp_dir!(), "mn-shared-runtime-#{System.unique_integer([:positive])}")
+
+    System.delete_env("MN_BUNDLE_CACHE_DIR")
+    System.put_env("MN_RUNTIME_SHARED_STORAGE_ROOT", shared_root)
+
+    bundle_dir =
+      Path.join(System.tmp_dir!(), "mn-shared-bundle-#{System.unique_integer([:positive])}")
+
+    on_exit(fn ->
+      restore_system_env("MN_BUNDLE_CACHE_DIR", old_cache_dir)
+      restore_system_env("MN_RUNTIME_SHARED_STORAGE_ROOT", old_shared_root)
+      File.rm_rf!(shared_root)
+      File.rm_rf!(bundle_dir)
+    end)
+
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "shared_bundle_context_runtime_test",
+      "entrypoints" => ["worker"],
+      "initial_inputs" => %{"worker" => [%{"start" => true}]},
+      "nodes" => [
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "role" => "root_coordinator",
+          "config" => %{
+            "runner_module" => BundlePathEchoRunner,
+            "output_message_type" => nil
+          }
+        }
+      ],
+      "edges" => []
+    }
+
+    File.mkdir_p!(Path.join(bundle_dir, "payloads"))
+    File.write!(Path.join(bundle_dir, "manifest.json"), Jason.encode!(flow_manifest(manifest)))
+
+    assert {:ok, job_id, job} = MirrorNeuron.run_manifest(bundle_dir, await: true, timeout: 2_000)
+
+    output = bundle_echo_output(job)
+    bundle_root = output["bundle_root"]
+    assert job["status"] == "completed"
+    assert String.starts_with?(bundle_root, Path.join(shared_root, "bundle_cache") <> "/")
+    assert output["bundle_exists"] == true
+    assert output["manifest_exists"] == true
+    assert output["payloads_exists"] == true
+
+    RedisStore.delete_job(job_id)
   end
 
   test "omitted recovery policy persists auto request with local effective policy on a single node" do
@@ -3186,6 +3338,35 @@ defmodule MirrorNeuron.RuntimeTest do
   defp run_manifest(input, opts \\ []) do
     MirrorNeuron.run_manifest(flow_manifest(input), opts)
   end
+
+  defp bundle_echo_output(job) do
+    candidates = [
+      get_in(job, ["result", "output"]),
+      get_in(job, ["result", "output", "output"]),
+      get_in(job, ["result", "output", "complete_run"]),
+      get_in(job, ["result", "complete_run"]),
+      decode_bundle_echo_stdout(get_in(job, ["result", "output", "sandbox", "stdout"])),
+      decode_bundle_echo_stdout(get_in(job, ["result", "sandbox", "stdout"]))
+    ]
+
+    case Enum.find(candidates, &(is_map(&1) and is_binary(Map.get(&1, "bundle_root")))) do
+      nil -> flunk("bundle echo output missing from job result: #{inspect(job["result"])}")
+      output -> output
+    end
+  end
+
+  defp decode_bundle_echo_stdout(stdout) when is_binary(stdout) do
+    case Jason.decode(stdout) do
+      {:ok, %{"complete_run" => output}} when is_map(output) -> output
+      {:ok, output} when is_map(output) -> output
+      _ -> nil
+    end
+  end
+
+  defp decode_bundle_echo_stdout(_stdout), do: nil
+
+  defp restore_system_env(key, nil), do: System.delete_env(key)
+  defp restore_system_env(key, value), do: System.put_env(key, value)
 
   defp deploy_manifest(input, opts) do
     MirrorNeuron.deploy_manifest(flow_manifest(input), opts)

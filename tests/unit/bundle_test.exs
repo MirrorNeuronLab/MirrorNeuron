@@ -154,6 +154,28 @@ defmodule MirrorNeuron.BundleTest do
     assert File.dir?(Path.join(cache_dir, result.fingerprint))
   end
 
+  test "Archive stores bundles in runtime shared storage by default", %{dir: dir} do
+    old_cache_dir = System.get_env("MN_BUNDLE_CACHE_DIR")
+    old_shared_root = System.get_env("MN_RUNTIME_SHARED_STORAGE_ROOT")
+    shared_root = Path.join(dir, "shared")
+
+    System.delete_env("MN_BUNDLE_CACHE_DIR")
+    System.put_env("MN_RUNTIME_SHARED_STORAGE_ROOT", shared_root)
+
+    on_exit(fn ->
+      restore_system_env("MN_BUNDLE_CACHE_DIR", old_cache_dir)
+      restore_system_env("MN_RUNTIME_SHARED_STORAGE_ROOT", old_shared_root)
+    end)
+
+    bundle_dir = create_bundle(dir, "shared_cache_bundle")
+
+    assert {:ok, bundle} = JobBundle.load(bundle_dir)
+    assert {:ok, result} = Archive.store(bundle)
+
+    assert result.storage == "shared_fs_cas"
+    assert File.dir?(Path.join([shared_root, "bundle_cache", result.fingerprint]))
+  end
+
   defp restore_system_env(key, nil), do: System.delete_env(key)
   defp restore_system_env(key, value), do: System.put_env(key, value)
 end

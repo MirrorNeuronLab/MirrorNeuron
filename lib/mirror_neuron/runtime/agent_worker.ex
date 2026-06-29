@@ -4,6 +4,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
 
   alias MirrorNeuron.AgentRegistry
   alias MirrorNeuron.Message
+  alias MirrorNeuron.Bundle.Archive, as: BundleArchive
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.ResourceSpec
   alias MirrorNeuron.Runtime
@@ -73,6 +74,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     recovery_snapshot = recovery_snapshot || load_recovery_snapshot(job_id, node.node_id)
     module = AgentRegistry.fetch!(node.agent_type)
 
+    runtime_context = materialize_runtime_bundle_context(runtime_context)
     node = inject_runtime_paths(node, runtime_context)
 
     case initialize_local_state(module, node, recovery_snapshot) do
@@ -703,6 +705,57 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
 
     %{node | config: runtime_config}
   end
+
+  defp materialize_runtime_bundle_context(runtime_context) when is_map(runtime_context) do
+    if local_bundle_available?(runtime_context[:bundle_root]) do
+      runtime_context
+    else
+      runtime_context
+      |> bundle_fingerprint()
+      |> load_archived_bundle(runtime_context)
+    end
+  end
+
+  defp materialize_runtime_bundle_context(runtime_context), do: runtime_context
+
+  defp local_bundle_available?(path) when is_binary(path) and path != "" do
+    File.dir?(path)
+  end
+
+  defp local_bundle_available?(_path), do: false
+
+  defp bundle_fingerprint(runtime_context) do
+    manifest_ref = runtime_context[:manifest_ref]
+
+    cond do
+      is_map(manifest_ref) ->
+        Map.get(manifest_ref, "bundle_fingerprint") || Map.get(manifest_ref, :bundle_fingerprint)
+
+      true ->
+        nil
+    end
+  end
+
+  defp load_archived_bundle(fingerprint, runtime_context)
+       when is_binary(fingerprint) and fingerprint != "" do
+    case BundleArchive.load(fingerprint) do
+      {:ok, bundle} ->
+        runtime_context
+        |> Map.put(:bundle_root, bundle.root_path)
+        |> Map.put(:manifest_path, bundle.manifest_path)
+        |> Map.put(:payloads_path, bundle.payloads_path)
+
+      {:error, reason} ->
+        Logger.warning("failed to materialize runtime bundle for remote agent",
+          fingerprint: fingerprint,
+          reason: inspect(reason)
+        )
+
+        runtime_context
+    end
+  end
+
+  defp load_archived_bundle(_fingerprint, runtime_context), do: runtime_context
 
   defp put_allocation_environment(config, allocation) do
     allocation_env = ResourceSpec.allocation_env(allocation)
