@@ -200,6 +200,34 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
     assert eval["attempt"] == 1
   end
 
+  test "loads shared filesystem CAS bundle references during recovery" do
+    root = shared_bundle_root()
+
+    job =
+      running_job("shared-cas-job")
+      |> put_in(["manifest_ref"], %{
+        "bundle_storage" => "shared_fs_cas",
+        "bundle_fingerprint" => "shared-cas-fingerprint",
+        "cache_path" => root
+      })
+
+    RedisStoreStub.put_jobs([job])
+    RedisStoreStub.put_agents("shared-cas-job", [agent_snapshot("worker")])
+    {:ok, coordinator} = CoordinatorStub.start_link(self())
+
+    assert {:ok, result} =
+             Reconciler.reconcile_node("small@lab",
+               redis_store: RedisStoreStub,
+               event_bus: EventBusStub,
+               lookup_coordinator: fn "shared-cas-job" -> {:ok, coordinator} end,
+               scheduler_opts: [nodes: [small_node(), large_node()], jobs: [job]]
+             )
+
+    assert result.recovered == 1
+    assert_receive {:coordinator_rescheduled, ["worker"], scheduler_plan, _reason}
+    assert [%{"agent_id" => "worker", "node" => "large@lab"}] = scheduler_plan["placements"]
+  end
+
   test "does not relocate node-scoped system allocations to a different node" do
     job =
       running_job("system-job")
@@ -898,6 +926,21 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
       "pending_messages" => [],
       "metadata" => %{}
     }
+  end
+
+  defp shared_bundle_root do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "mn-reconciler-shared-cas-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(Path.join(root, "payloads"))
+    File.write!(Path.join(root, "manifest.json"), Jason.encode!(manifest()))
+
+    on_exit(fn -> File.rm_rf(root) end)
+
+    root
   end
 
   defp manifest do

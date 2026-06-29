@@ -339,6 +339,8 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     System.put_env("MN_GRPC_PORT", "50055")
     System.put_env("MN_DIST_PORT", "4500")
     System.put_env("MN_CLUSTER_NODES", "mirror_neuron@192.168.4.10")
+    System.put_env("MN_HOST_SHARED_STORAGE_ROOT", "/mnt/mn-shared")
+    System.put_env("MN_RUNTIME_SHARED_STORAGE_ROOT", "/root/.mn/shared")
     System.put_env(@operator_token_env, "primary-auth-token")
     System.put_env(@admin_token_env, "primary-admin-token")
 
@@ -359,6 +361,8 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
     node_info = Jason.decode!(response.node_info_json)
     assert node_info["node_name"] == "mirror_neuron@test"
+    assert node_info["host_shared_storage_root"] == "/mnt/mn-shared"
+    assert node_info["runtime_shared_storage_root"] == "/root/.mn/shared"
     assert is_binary(node_info["display_name"])
     assert is_integer(node_info["gpu_count"])
   end

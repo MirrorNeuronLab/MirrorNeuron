@@ -120,6 +120,9 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
 
   defp recover_job_map(%{"job_id" => job_id, "status" => status} = job, opts) do
     cond do
+      paused_for_review?(job) and not Keyword.get(opts, :manual_resume, false) ->
+        {:ok, %{job_id: job_id, action: :skipped, reason: "job is paused for review"}}
+
       not recoverable_job_status?(job) ->
         {:ok, %{job_id: job_id, action: :skipped, reason: "job is #{status}"}}
 
@@ -144,6 +147,12 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
 
   defp recover_job_map(%{"job_id" => job_id}, _opts),
     do: {:ok, %{job_id: job_id, action: :skipped, reason: "job status is unknown"}}
+
+  defp paused_for_review?(job) do
+    Map.get(job, "recovery_status") == "paused_for_review" or
+      get_in(job, ["recovery", "status"]) == "paused_for_review" or
+      Map.get(job, "recovery_requires_review") == true
+  end
 
   defp do_recover_job(job, opts) do
     job_id = job["job_id"]

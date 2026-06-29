@@ -145,22 +145,18 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       timestamp: Runtime.timestamp()
     })
 
-    with :ok <- start_agents(state),
-         :ok <- wait_for_agents_ready(state),
-         :ok <- register_runtime_services(state),
-         :ok <- seed_entrypoints(state) do
-      {workflow_state, workflow_events} = WorkflowLedger.job_running(state.workflow_state)
-      next_state = %{state | status: "running", workflow_state: workflow_state}
+    with {:ok, boot_state} <- start_agents(state),
+         {:ok, next_state, workflow_events} <- complete_bootstrap(boot_state) do
       persist_job(next_state)
       EventBus.publish(state.job_id, %{type: :job_running, timestamp: Runtime.timestamp()})
       publish_workflow_events(next_state, workflow_events)
       schedule_health_check(next_state.health_check_interval_ms)
       {:noreply, next_state}
     else
-      {:error, {:execution_profile_unavailable, profile, agent_id}} ->
+      {:error, {:execution_profile_unavailable, profile, agent_id}, failed_state} ->
         paused_state =
           pause_for_profile_review(
-            state,
+            failed_state,
             profile,
             agent_id,
             "execution profile #{profile} has no eligible runtime nodes"
@@ -168,11 +164,22 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
         {:stop, :normal, paused_state}
 
-      {:error, reason} ->
+      {:error, reason, failed_state} ->
         failed_state =
-          finalize_job(state, "failed", %{error: reason}, :job_failed, %{reason: reason})
+          finalize_job(failed_state, "failed", %{error: reason}, :job_failed, %{reason: reason})
 
         {:stop, {:shutdown, reason}, failed_state}
+    end
+  end
+
+  defp complete_bootstrap(state) do
+    with :ok <- wait_for_agents_ready(state),
+         :ok <- register_runtime_services(state),
+         :ok <- seed_entrypoints(state) do
+      {workflow_state, workflow_events} = WorkflowLedger.job_running(state.workflow_state)
+      {:ok, %{state | status: "running", workflow_state: workflow_state}, workflow_events}
+    else
+      {:error, reason} -> {:error, reason, state}
     end
   end
 
@@ -1248,7 +1255,40 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     state
   end
 
-  defp start_agents(state) do
+  defp start_agents(state), do: start_agents(state, [])
+
+  defp start_agents(state, excluded_nodes) do
+    case do_start_agents(state) do
+      :ok ->
+        {:ok, state}
+
+      {:error, {:target_node_unavailable, target_node, agent_id}} ->
+        if target_node in excluded_nodes do
+          {:error,
+           "failed to start agent #{agent_id}: {:target_node_unavailable, #{inspect(target_node)}}",
+           state}
+        else
+          terminate_agent_workers(state)
+          _ = wait_for_agents_stopped(state, 5_000)
+
+          case replan_after_unavailable_target(state, target_node, agent_id) do
+            {:ok, next_state} ->
+              start_agents(next_state, [target_node | excluded_nodes])
+
+            {:error, reason} ->
+              {:error, reason, state}
+          end
+        end
+
+      {:error, {:execution_profile_unavailable, profile, agent_id}} ->
+        {:error, {:execution_profile_unavailable, profile, agent_id}, state}
+
+      {:error, reason} ->
+        {:error, reason, state}
+    end
+  end
+
+  defp do_start_agents(state) do
     Enum.reduce_while(state.runtime_nodes, :ok, fn node, :ok ->
       case start_agent(state, node.node_id) do
         {:ok, _pid} ->
@@ -1260,10 +1300,44 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         {:error, {:no_eligible_execution_profile_nodes, profile}} ->
           {:halt, {:error, {:execution_profile_unavailable, profile, node.node_id}}}
 
+        {:error, {:target_node_unavailable, target_node}} ->
+          {:halt, {:error, {:target_node_unavailable, target_node, node.node_id}}}
+
         {:error, reason} ->
           {:halt, {:error, "failed to start agent #{node.node_id}: #{inspect(reason)}"}}
       end
     end)
+  end
+
+  defp replan_after_unavailable_target(state, target_node, agent_id) do
+    scheduler_opts =
+      state.opts
+      |> Keyword.delete(:scheduler_plan)
+      |> Keyword.update(:exclude_nodes, [target_node], fn nodes ->
+        [target_node | List.wrap(nodes)] |> Enum.map(&to_string/1) |> Enum.uniq()
+      end)
+      |> Keyword.update(:ignore_job_ids, [state.job_id], fn job_ids ->
+        [state.job_id | List.wrap(job_ids)] |> Enum.map(&to_string/1) |> Enum.uniq()
+      end)
+
+    case Scheduler.plan(state.manifest, scheduler_opts) do
+      {:ok, scheduler_plan} ->
+        next_state = put_runtime_scheduler_plan(state, scheduler_plan)
+
+        EventBus.publish(state.job_id, %{
+          type: :job_scheduler_replanned,
+          reason: "scheduled target #{target_node} was unavailable while starting #{agent_id}",
+          excluded_nodes: [target_node],
+          scheduler: scheduler_plan,
+          timestamp: Runtime.timestamp()
+        })
+
+        {:ok, next_state}
+
+      {:error, reason} ->
+        {:error,
+         "failed to replan after unavailable target #{target_node} for agent #{agent_id}: #{inspect(reason)}"}
+    end
   end
 
   defp refresh_pressure(state) do
@@ -1853,6 +1927,30 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
             "workflow_state" => state.workflow_state
           }),
         deployment_context: stringify_map(deployment_context)
+    }
+    |> put_scheduler_plan(scheduler_plan)
+  end
+
+  defp put_runtime_scheduler_plan(state, scheduler_plan) do
+    topology = build_runtime_topology(state.manifest, scheduler_plan)
+
+    %{
+      state
+      | runtime_nodes: topology.nodes,
+        runtime_edges: topology.edges,
+        runtime_entrypoints: topology.entrypoints,
+        agent_ids: topology.agent_ids,
+        source_agent_ids: topology.source_agent_ids,
+        system_targets: topology.system_targets,
+        agents_by_system_target: topology.agents_by_system_target,
+        nodes_by_id: Map.new(topology.nodes, &{&1.node_id, &1}),
+        outbound_edges_by_node: Enum.group_by(topology.edges, & &1.from_node),
+        inbound_edges_by_node: Enum.group_by(topology.edges, & &1.to_node),
+        downstream_by_node: build_downstream_index(topology.edges),
+        workflow_state:
+          WorkflowLedger.new(state.manifest, topology.nodes, %{
+            "workflow_state" => state.workflow_state
+          })
     }
     |> put_scheduler_plan(scheduler_plan)
   end

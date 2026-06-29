@@ -4,6 +4,7 @@ defmodule MirrorNeuron.Cluster.Reconciler do
   require Logger
 
   alias MirrorNeuron.Bundle.Archive
+  alias MirrorNeuron.JobBundle
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.{EventBus, JobRunner, LifecyclePolicy, RecoverySafety}
@@ -1179,14 +1180,25 @@ defmodule MirrorNeuron.Cluster.Reconciler do
     manifest_ref = job["manifest_ref"] || %{}
     storage = manifest_ref["bundle_storage"] || manifest_ref[:bundle_storage]
     fingerprint = manifest_ref["bundle_fingerprint"] || manifest_ref[:bundle_fingerprint]
+    shared_path = shared_bundle_path(manifest_ref)
 
     cond do
       storage == "redis" and is_binary(fingerprint) and fingerprint != "" ->
         Archive.load(fingerprint)
 
+      storage in ["shared_fs", "shared_fs_cas"] and is_binary(shared_path) and shared_path != "" ->
+        JobBundle.load_filesystem_path(shared_path)
+
       true ->
         {:error, :missing_durable_bundle_reference}
     end
+  end
+
+  defp shared_bundle_path(manifest_ref) do
+    Map.get(manifest_ref, "cache_path") ||
+      Map.get(manifest_ref, :cache_path) ||
+      Map.get(manifest_ref, "job_path") ||
+      Map.get(manifest_ref, :job_path)
   end
 
   defp release_job_lease(job_id, job, opts) do

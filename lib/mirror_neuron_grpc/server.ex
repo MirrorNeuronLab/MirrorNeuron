@@ -1027,6 +1027,13 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
     %{
       "node_name" => to_string(NodeAdapter.self()),
       "node_role" => MirrorNeuron.Application.node_role(),
+      "host_shared_storage_root" =>
+        MirrorNeuron.Config.optional_string(
+          "MN_HOST_SHARED_STORAGE_ROOT",
+          :host_shared_storage_root
+        ),
+      "runtime_shared_storage_root" =>
+        MirrorNeuron.Config.string("MN_RUNTIME_SHARED_STORAGE_ROOT", :runtime_shared_storage_root),
       "display_name" => map_value(platform, "display_name"),
       "hostname" => map_value(platform, "hostname"),
       "cpu_cores" => map_value(cpu, "logical_processors"),
