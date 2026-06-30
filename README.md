@@ -513,7 +513,7 @@ present. Production does not require any `.env` file.
 | `MN_NODE_CAPABILITIES` | Comma-separated runtime capabilities such as `video-codec:h264` or `ffmpeg`. |
 | `MN_NODE_GPU` | Optional override for whether this runtime node advertises GPU capacity. |
 | `MN_RESOURCE_ADMISSION_ENABLED` | Enables local resource checks before accepting work. |
-| `MN_BLOB_STORE_ROOT` | Durable content-addressed blob root. In LAN clusters, point this at a host-mounted NFS path such as `/root/.mn/shared/blobs`. |
+| `MN_BLOB_STORE_ROOT` | Durable content-addressed blob root. In LAN clusters, keep this under the replicated shared-storage root such as `/root/.mn/shared/blobs`. |
 | `MN_JOB_ARTIFACT_ROOT` | Per-job artifact staging root. Defaults next to the blob root and is cleaned when terminal jobs age out or are deleted. |
 
 Development example:
@@ -551,13 +551,13 @@ and release deployment settings, start from `.env.example` and the documentation
 repo. Do not commit real `.env` files or secrets.
 
 Large job payloads are shared by filesystem path, not by a MirrorNeuron HTTP
-artifact server. For a LAN cluster, mount the same NFS export on every host and
-bind-mount it into each container at the same logical location. The Docker
-Compose default expects `${MN_HOST_SHARED_STORAGE_ROOT:-./mn/shared}` to contain
-`blobs/` for durable sha256 content and `jobs/` for temporary per-job staging.
-The CLI prepares this path as a best-effort NFS export during primary runtime
-startup and mounts the primary export during joined-node startup. Set
-`MN_NFS_REQUIRED=1` to fail startup/join when NFS cannot be exported or mounted.
+artifact server. For a LAN cluster, each host bind-mounts its local
+`${MN_HOST_SHARED_STORAGE_ROOT:-./mn/shared}` at the same logical container
+location, and the CLI uses a Syncthing sidecar to replicate that directory
+between joined nodes. The shared root contains `blobs/` for durable sha256
+content and `jobs/` for temporary per-job staging. Set
+`MN_SYNCTHING_REQUIRED=1` to fail startup/join when replication cannot be
+started or peer-configured.
 
 ---
 
@@ -693,7 +693,7 @@ See [RELEASE.md](RELEASE.md) for the full release process.
 | Cluster nodes do not join | Verify `MN_NODE_NAME`, `MN_CLUSTER_NODES`, `MN_COOKIE`, EPMD connectivity, and Erlang distribution ports. |
 | Resource admission rejects jobs | Check `MN_RESOURCE_ADMISSION_ENABLED` and resource threshold variables. |
 | Expected GPU work is not placed on a node | Check `MN_NODE_GPU`, `MN_NODE_CAPABILITIES`, execution profiles, and manifest constraints. |
-| Large blob payloads are missing on a peer node | Confirm every cluster host has the same NFS export mounted and that `MN_BLOB_STORE_ROOT` points at the shared `blobs/` directory. |
+| Large blob payloads are missing on a peer node | Confirm every cluster host has Syncthing replication running and that `MN_BLOB_STORE_ROOT` points at the shared `blobs/` directory. |
 | Redis Sentinel failover is not resolving | Verify `MN_REDIS_SENTINELS`, `MN_REDIS_SENTINEL_MASTER`, credentials, and optional host mapping. |
 | OTP release fails after extraction | Make sure the release asset matches the target OS and CPU architecture. |
 
