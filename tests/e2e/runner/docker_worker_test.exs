@@ -183,6 +183,52 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     refute Enum.any?(calls, &(List.first(&1) == "model"))
   end
 
+  test "uses advertised node runtime model instead of docker model cli", %{tmp_dir: tmp_dir} do
+    fake_docker = Path.join(tmp_dir, "fake-docker-node-runtime-model")
+    args_log = Path.join(tmp_dir, "node-runtime-model-args.log")
+
+    File.write!(fake_docker, """
+    #!/usr/bin/env bash
+    printf '%s\\n' "$@" >> #{args_log}
+    printf -- '---\\n' >> #{args_log}
+    if [ "$1" = "model" ]; then
+      exit 9
+    fi
+    if [ "$1" = "run" ]; then
+      echo "worker output"
+      exit 0
+    fi
+    exit 0
+    """)
+
+    File.chmod!(fake_docker, 0o755)
+    System.put_env("MN_DOCKER_BIN", fake_docker)
+
+    assert {:ok, result} =
+             DockerWorker.run(
+               %{},
+               %{
+                 "image" => "example/worker:latest",
+                 "command" => ["sh", "-lc", "echo worker output"],
+                 "docker_bin" => fake_docker,
+                 "reuse_shared_container" => false,
+                 "environment" => %{
+                   "MN_LLM_PROVIDER" => "docker_model_runner",
+                   "MN_LLM_RUNTIME_MODEL" => "ai/nemotron3:latest",
+                   "MN_NODE_RUNTIME_MODELS" => "gemma4:e2b,nemotron3:latest"
+                 }
+               },
+               job_id: "job-node-runtime-model",
+               agent_id: "worker"
+             )
+
+    assert result["stdout"] =~ "worker output"
+
+    calls = docker_calls(args_log)
+    assert Enum.any?(calls, &(List.first(&1) == "run"))
+    refute Enum.any?(calls, &(List.first(&1) == "model"))
+  end
+
   test "mounts shared storage into shared docker containers", %{tmp_dir: tmp_dir} do
     fake_docker = Path.join(tmp_dir, "fake-docker-shared-storage")
     args_log = Path.join(tmp_dir, "shared-storage-args.log")

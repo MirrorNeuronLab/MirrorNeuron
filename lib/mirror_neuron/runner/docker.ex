@@ -10,6 +10,12 @@ defmodule MirrorNeuron.Runner.DockerWorker do
   @default_container_workdir "/mn/job"
   @default_payloads_dir "/mn/payloads"
   @default_agent_event_prefix "__MN_EVENT__"
+  @prepared_model_env_vars [
+    "MN_NODE_RUNTIME_MODELS",
+    "MN_NODE_MODELS",
+    "MN_DOCKER_MODEL_RUNNER_MODEL",
+    "MN_LLM_MODEL_RUNNER_MODEL"
+  ]
 
   def run(payload, config, opts \\ []) do
     runner_name = build_runner_name(config, opts)
@@ -223,6 +229,9 @@ defmodule MirrorNeuron.Runner.DockerWorker do
       model_endpoint_prepared?(model, env) ->
         :ok
 
+      node_runtime_model_prepared?(model, env) ->
+        :ok
+
       true ->
         case System.cmd(docker, ["model", "inspect", model], stderr_to_stdout: true) do
           {_output, 0} ->
@@ -307,6 +316,36 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     else
       _ -> false
     end
+  end
+
+  defp node_runtime_model_prepared?(model, env) do
+    requested_keys = model_match_keys(model)
+
+    env
+    |> prepared_model_refs()
+    |> Enum.any?(fn ref ->
+      not MapSet.disjoint?(requested_keys, model_match_keys(ref))
+    end)
+  end
+
+  defp prepared_model_refs(env) do
+    @prepared_model_env_vars
+    |> Enum.flat_map(fn name ->
+      env
+      |> Map.get(name)
+      |> split_env_list()
+    end)
+    |> Enum.uniq_by(&(to_string(&1) |> String.downcase()))
+  end
+
+  defp split_env_list(nil), do: []
+
+  defp split_env_list(value) do
+    value
+    |> to_string()
+    |> String.split([",", "\n"], trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
   end
 
   defp model_match_keys(value) do
