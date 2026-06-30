@@ -224,19 +224,20 @@ defmodule MirrorNeuron.Runner.DockerWorker do
 
   defp do_ensure_docker_model_runner_model(model, env, config, opts) do
     docker = docker_bin(config)
+    runtime_env = Map.merge(System.get_env(), env)
 
     cond do
-      model_endpoint_prepared?(model, env) ->
+      model_endpoint_prepared?(model, runtime_env) ->
         :ok
 
-      node_runtime_model_prepared?(model, env) ->
+      node_runtime_model_prepared?(model, runtime_env) ->
         :ok
 
       true ->
         case System.cmd(docker, ["model", "inspect", model], stderr_to_stdout: true) do
           {_output, 0} ->
-            ModelServices.persist_node_runtime_model(model, Map.merge(System.get_env(), env))
-            ModelServices.advertise_models([model], Node.self(), Map.merge(System.get_env(), env))
+            ModelServices.persist_node_runtime_model(model, runtime_env)
+            ModelServices.advertise_models([model], Node.self(), runtime_env)
             :ok
 
           _ ->
@@ -253,12 +254,12 @@ defmodule MirrorNeuron.Runner.DockerWorker do
                    System.cmd(docker, ["model", "pull", model], stderr_to_stdout: true),
                  {run_output, 0} <-
                    System.cmd(docker, ["model", "run", "--detach", model], stderr_to_stdout: true) do
-              ModelServices.persist_node_runtime_model(model, Map.merge(System.get_env(), env))
+              ModelServices.persist_node_runtime_model(model, runtime_env)
 
               ModelServices.advertise_models(
                 [model],
                 Node.self(),
-                Map.merge(System.get_env(), env)
+                runtime_env
               )
 
               emit_runner_event(opts, "docker_worker_model_install_completed", %{

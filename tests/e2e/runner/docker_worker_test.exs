@@ -10,6 +10,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     previous_workspace_root = System.get_env("MN_WORKSPACE_ROOT")
     previous_buildkit = System.get_env("DOCKER_BUILDKIT")
     previous_worker_buildkit = System.get_env("MN_DOCKER_WORKER_BUILDKIT")
+    previous_node_runtime_models = System.get_env("MN_NODE_RUNTIME_MODELS")
 
     tmp_dir =
       Path.join(System.tmp_dir!(), "mn-docker-worker-test-#{System.unique_integer([:positive])}")
@@ -38,6 +39,10 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
       if is_nil(previous_worker_buildkit),
         do: System.delete_env("MN_DOCKER_WORKER_BUILDKIT"),
         else: System.put_env("MN_DOCKER_WORKER_BUILDKIT", previous_worker_buildkit)
+
+      if is_nil(previous_node_runtime_models),
+        do: System.delete_env("MN_NODE_RUNTIME_MODELS"),
+        else: System.put_env("MN_NODE_RUNTIME_MODELS", previous_node_runtime_models)
 
       File.rm_rf(tmp_dir)
     end)
@@ -203,6 +208,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
 
     File.chmod!(fake_docker, 0o755)
     System.put_env("MN_DOCKER_BIN", fake_docker)
+    System.put_env("MN_NODE_RUNTIME_MODELS", "gemma4:e2b,nemotron3:latest")
 
     assert {:ok, result} =
              DockerWorker.run(
@@ -214,8 +220,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
                  "reuse_shared_container" => false,
                  "environment" => %{
                    "MN_LLM_PROVIDER" => "docker_model_runner",
-                   "MN_LLM_RUNTIME_MODEL" => "ai/nemotron3:latest",
-                   "MN_NODE_RUNTIME_MODELS" => "gemma4:e2b,nemotron3:latest"
+                   "MN_LLM_RUNTIME_MODEL" => "ai/nemotron3:latest"
                  }
                },
                job_id: "job-node-runtime-model",
