@@ -55,6 +55,7 @@ defmodule MirrorNeuron.Application do
               MirrorNeuron.DistributedRegistry,
               MirrorNeuron.Runtime.JobSupervisor,
               MirrorNeuron.Runtime.AgentSupervisor,
+              MirrorNeuron.Runtime.LocalAgentSupervisor,
               MirrorNeuron.Runtime.HordeCluster,
               {Task.Supervisor, name: MirrorNeuron.Runtime.RecoveryTaskSupervisor},
               MirrorNeuron.ServiceMonitor,

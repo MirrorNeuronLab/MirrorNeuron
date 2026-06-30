@@ -1663,7 +1663,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         Scheduler.target_node(scheduler_plan(state), agent_id)
       )
 
-    case Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.AgentSupervisor, spec) do
+    case start_agent_on_target(spec, Scheduler.target_node(scheduler_plan(state), agent_id)) do
       {:error, {:already_started, _pid}} when retry_count < 10 ->
         Process.sleep(100)
         start_agent(state, agent_id, recovery_snapshot, retry_count + 1)
@@ -1675,6 +1675,45 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       other ->
         other
     end
+  end
+
+  defp start_agent_on_target(spec, nil), do: start_agent_here(spec)
+  defp start_agent_on_target(spec, ""), do: start_agent_here(spec)
+
+  defp start_agent_on_target(spec, target_node) when is_binary(target_node) do
+    case MirrorNeuron.SafeAccess.node_name_to_atom(target_node) do
+      {:ok, node} -> start_agent_on_target(spec, node)
+      {:error, _reason} -> {:error, {:target_node_unavailable, target_node}}
+    end
+  end
+
+  defp start_agent_on_target(spec, target_node) when is_atom(target_node) do
+    cond do
+      target_node == Node.self() ->
+        start_agent_here(spec)
+
+      Node.connect(target_node) ->
+        case :rpc.call(
+               target_node,
+               DynamicSupervisor,
+               :start_child,
+               [MirrorNeuron.Runtime.LocalAgentSupervisor, spec],
+               30_000
+             ) do
+          {:ok, _pid} = ok -> ok
+          {:error, {:already_started, _pid}} = already_started -> already_started
+          {:error, reason} -> {:error, reason}
+          {:badrpc, reason} -> {:error, reason}
+          other -> {:error, other}
+        end
+
+      true ->
+        {:error, {:target_node_unavailable, to_string(target_node)}}
+    end
+  end
+
+  defp start_agent_here(spec) do
+    DynamicSupervisor.start_child(MirrorNeuron.Runtime.LocalAgentSupervisor, spec)
   end
 
   defp apply_execution_profile(%{config: config} = node) do
@@ -2294,7 +2333,20 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp safe_terminate_agent_child(pid) do
-    Horde.DynamicSupervisor.terminate_child(MirrorNeuron.Runtime.AgentSupervisor, pid)
+    if node(pid) == Node.self() do
+      DynamicSupervisor.terminate_child(MirrorNeuron.Runtime.LocalAgentSupervisor, pid)
+    else
+      case :rpc.call(
+             node(pid),
+             DynamicSupervisor,
+             :terminate_child,
+             [MirrorNeuron.Runtime.LocalAgentSupervisor, pid],
+             10_000
+           ) do
+        {:badrpc, reason} -> {:error, reason}
+        other -> other
+      end
+    end
   rescue
     exception -> {:error, {exception.__struct__, Exception.message(exception)}}
   catch
