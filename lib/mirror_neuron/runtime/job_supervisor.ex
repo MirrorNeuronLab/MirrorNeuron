@@ -10,7 +10,7 @@ defmodule MirrorNeuron.Runtime.JobSupervisor do
     [
       strategy: :one_for_one,
       distribution_strategy: MirrorNeuron.Runtime.ProfileDistribution,
-      members: :auto
+      members: MirrorNeuron.Runtime.HordeCluster.initial_members(__MODULE__)
     ]
     |> Horde.DynamicSupervisor.init()
   end

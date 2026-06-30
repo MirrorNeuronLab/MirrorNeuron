@@ -7,7 +7,7 @@ defmodule MirrorNeuron.DistributedRegistry do
 
   @impl true
   def init(init_arg) do
-    [members: :auto]
+    [members: MirrorNeuron.Runtime.HordeCluster.initial_members(__MODULE__)]
     |> Keyword.merge(init_arg)
     |> Horde.Registry.init()
   end
