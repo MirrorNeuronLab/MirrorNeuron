@@ -219,59 +219,121 @@ defmodule MirrorNeuron.Runner.DockerWorker do
   defp do_ensure_docker_model_runner_model(model, env, config, opts) do
     docker = docker_bin(config)
 
-    case System.cmd(docker, ["model", "inspect", model], stderr_to_stdout: true) do
-      {_output, 0} ->
-        ModelServices.persist_node_runtime_model(model, Map.merge(System.get_env(), env))
-        ModelServices.advertise_models([model], Node.self(), Map.merge(System.get_env(), env))
+    cond do
+      model_endpoint_prepared?(model, env) ->
         :ok
 
-      _ ->
-        emit_runner_event(opts, "docker_worker_model_install_started", %{
-          "category" => "system",
-          "message" => "DockerWorker runtime model install started",
-          "status" => "started",
-          "runner" => "docker_worker",
-          "model" => model,
-          "node_name" => to_string(Node.self())
-        })
+      true ->
+        case System.cmd(docker, ["model", "inspect", model], stderr_to_stdout: true) do
+          {_output, 0} ->
+            ModelServices.persist_node_runtime_model(model, Map.merge(System.get_env(), env))
+            ModelServices.advertise_models([model], Node.self(), Map.merge(System.get_env(), env))
+            :ok
 
-        with {pull_output, 0} <- System.cmd(docker, ["model", "pull", model], stderr_to_stdout: true),
-             {run_output, 0} <- System.cmd(docker, ["model", "run", "--detach", model], stderr_to_stdout: true) do
-          ModelServices.persist_node_runtime_model(model, Map.merge(System.get_env(), env))
-          ModelServices.advertise_models([model], Node.self(), Map.merge(System.get_env(), env))
-
-          emit_runner_event(opts, "docker_worker_model_install_completed", %{
-            "category" => "system",
-            "message" => "DockerWorker runtime model install completed",
-            "status" => "completed",
-            "runner" => "docker_worker",
-            "model" => model,
-            "node_name" => to_string(Node.self()),
-            "result_summary" => compact_output_tail(pull_output <> "\n" <> run_output)
-          })
-
-          :ok
-        else
-          {output, exit_code} ->
-            emit_runner_event(opts, "docker_worker_model_install_failed", %{
-              "category" => "error",
-              "message" => "DockerWorker runtime model install failed",
-              "status" => "failed",
+          _ ->
+            emit_runner_event(opts, "docker_worker_model_install_started", %{
+              "category" => "system",
+              "message" => "DockerWorker runtime model install started",
+              "status" => "started",
               "runner" => "docker_worker",
               "model" => model,
-              "node_name" => to_string(Node.self()),
-              "result_summary" => compact_output_tail(output),
-              "details" => %{"exit_code" => exit_code}
+              "node_name" => to_string(Node.self())
             })
 
-            {:error,
-             "failed to install Docker Model Runner model #{model} on #{Node.self()}: #{String.trim(output)}"}
+            with {pull_output, 0} <-
+                   System.cmd(docker, ["model", "pull", model], stderr_to_stdout: true),
+                 {run_output, 0} <-
+                   System.cmd(docker, ["model", "run", "--detach", model], stderr_to_stdout: true) do
+              ModelServices.persist_node_runtime_model(model, Map.merge(System.get_env(), env))
+
+              ModelServices.advertise_models(
+                [model],
+                Node.self(),
+                Map.merge(System.get_env(), env)
+              )
+
+              emit_runner_event(opts, "docker_worker_model_install_completed", %{
+                "category" => "system",
+                "message" => "DockerWorker runtime model install completed",
+                "status" => "completed",
+                "runner" => "docker_worker",
+                "model" => model,
+                "node_name" => to_string(Node.self()),
+                "result_summary" => compact_output_tail(pull_output <> "\n" <> run_output)
+              })
+
+              :ok
+            else
+              {output, exit_code} ->
+                emit_runner_event(opts, "docker_worker_model_install_failed", %{
+                  "category" => "error",
+                  "message" => "DockerWorker runtime model install failed",
+                  "status" => "failed",
+                  "runner" => "docker_worker",
+                  "model" => model,
+                  "node_name" => to_string(Node.self()),
+                  "result_summary" => compact_output_tail(output),
+                  "details" => %{"exit_code" => exit_code}
+                })
+
+                {:error,
+                 "failed to install Docker Model Runner model #{model} on #{Node.self()}: #{String.trim(output)}"}
+            end
         end
     end
   rescue
     error ->
       {:error,
        "failed to prepare Docker Model Runner model #{model} on #{Node.self()}: #{Exception.message(error)}"}
+  end
+
+  defp model_endpoint_prepared?(model, env) do
+    endpoints = Map.get(env, "MN_MODEL_ENDPOINTS_JSON", "")
+
+    with true <- is_binary(endpoints) and String.trim(endpoints) != "",
+         {:ok, decoded} <- Jason.decode(endpoints),
+         true <- is_map(decoded) do
+      model_keys = model_match_keys(model)
+
+      Enum.any?(decoded, fn {key, value} ->
+        endpoint_keys =
+          [key]
+          |> Kernel.++(if(is_map(value), do: [value["model"], value["runtime_model"]], else: []))
+          |> Enum.flat_map(&model_match_keys/1)
+          |> MapSet.new()
+
+        not MapSet.disjoint?(model_keys, endpoint_keys)
+      end)
+    else
+      _ -> false
+    end
+  end
+
+  defp model_match_keys(value) do
+    text =
+      value
+      |> to_string()
+      |> String.trim()
+
+    if text == "" do
+      MapSet.new()
+    else
+      lower = String.downcase(text)
+
+      keys =
+        cond do
+          String.starts_with?(lower, "ai/") ->
+            [lower, String.replace_prefix(lower, "ai/", "")]
+
+          not String.contains?(lower, "/") ->
+            [lower, "ai/#{lower}"]
+
+          true ->
+            [lower]
+        end
+
+      MapSet.new(keys)
+    end
   end
 
   defp reject_published_ports(config) do

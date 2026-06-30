@@ -128,6 +128,61 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     refute "--publish" in run_call
   end
 
+  test "uses prepared model endpoint instead of docker model cli", %{tmp_dir: tmp_dir} do
+    fake_docker = Path.join(tmp_dir, "fake-docker-model-endpoint")
+    args_log = Path.join(tmp_dir, "model-endpoint-args.log")
+
+    File.write!(fake_docker, """
+    #!/usr/bin/env bash
+    printf '%s\\n' "$@" >> #{args_log}
+    printf -- '---\\n' >> #{args_log}
+    if [ "$1" = "model" ]; then
+      exit 9
+    fi
+    if [ "$1" = "run" ]; then
+      echo "worker output"
+      exit 0
+    fi
+    exit 0
+    """)
+
+    File.chmod!(fake_docker, 0o755)
+    System.put_env("MN_DOCKER_BIN", fake_docker)
+
+    endpoints =
+      Jason.encode!(%{
+        "nemotron3:latest" => %{
+          "model" => "ai/nemotron3:latest",
+          "runtime_model" => "ai/nemotron3:latest",
+          "api_base" => "http://host.docker.internal:12434/engines/v1"
+        }
+      })
+
+    assert {:ok, result} =
+             DockerWorker.run(
+               %{},
+               %{
+                 "image" => "example/worker:latest",
+                 "command" => ["sh", "-lc", "echo worker output"],
+                 "docker_bin" => fake_docker,
+                 "reuse_shared_container" => false,
+                 "environment" => %{
+                   "MN_LLM_PROVIDER" => "docker_model_runner",
+                   "MN_LLM_RUNTIME_MODEL" => "ai/nemotron3:latest",
+                   "MN_MODEL_ENDPOINTS_JSON" => endpoints
+                 }
+               },
+               job_id: "job-model-endpoint",
+               agent_id: "worker"
+             )
+
+    assert result["stdout"] =~ "worker output"
+
+    calls = docker_calls(args_log)
+    assert Enum.any?(calls, &(List.first(&1) == "run"))
+    refute Enum.any?(calls, &(List.first(&1) == "model"))
+  end
+
   test "mounts shared storage into shared docker containers", %{tmp_dir: tmp_dir} do
     fake_docker = Path.join(tmp_dir, "fake-docker-shared-storage")
     args_log = Path.join(tmp_dir, "shared-storage-args.log")

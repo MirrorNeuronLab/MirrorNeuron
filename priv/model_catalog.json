@@ -24,6 +24,35 @@
       ]
     },
     {
+      "id": "nemotron3:latest",
+      "name": "Nemotron 3 Latest",
+      "description": "Large Docker Model Runner LLM for 48GB-or-above GPU or integrated-GPU nodes.",
+      "provider": "docker_model_runner",
+      "model": "ai/nemotron3:latest",
+      "api_model": "ai/nemotron3:latest",
+      "aliases": [
+        "nemotron3",
+        "nvidia-nemotron3-latest",
+        "nemotron3-latest"
+      ],
+      "backend": "llama.cpp",
+      "backends": [
+        "llama.cpp"
+      ],
+      "context_size": 8192,
+      "quantization": "MOSTLY_Q4_K_M",
+      "parameter_count_b": 31.58,
+      "fallback_model": "gemma4:e2b",
+      "requirements": {
+        "min_vram_gb": 48,
+        "min_unified_memory_gb": 48
+      },
+      "hardware_notes": [
+        "Requires a 48GB-or-above GPU or integrated GPU memory pool.",
+        "DGX Spark / GB10 and Apple Silicon shared CPU-GPU memory are reported by MirrorNeuron as model-placement memory."
+      ]
+    },
+    {
       "id": "otterdesk-video-watch:default",
       "name": "OtterDesk Video Watch VLM",
       "description": "Default NVIDIA-accelerated multimodal model for the video watch assistant.",

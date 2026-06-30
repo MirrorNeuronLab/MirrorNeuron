@@ -11,6 +11,11 @@ defmodule MirrorNeuron.ModelCatalogTest do
     assert gemma["id"] == "gemma4:e2b"
     assert gemma["model"] == "ai/gemma4:E2B"
 
+    assert {:ok, latest_nemotron} = ModelCatalog.resolve("nvidia-nemotron3-latest", catalog)
+    assert latest_nemotron["id"] == "nemotron3:latest"
+    assert latest_nemotron["model"] == "ai/nemotron3:latest"
+    assert get_in(latest_nemotron, ["requirements", "min_unified_memory_gb"]) == 48
+
     assert {:ok, nemotron} = ModelCatalog.resolve("nemotron3-33b", catalog)
     assert nemotron["id"] == "ollama/nemotron3:33b"
     assert get_in(nemotron, ["requirements", "min_vram_gb"]) == 24
@@ -116,7 +121,8 @@ defmodule MirrorNeuron.ModelCatalogTest do
 
     on_exit(fn -> File.rm(path) end)
 
-    [service] = ModelServices.service_instances_for_env(%{"MN_MODEL_REMOTES_PATH" => path}, "node@lab")
+    [service] =
+      ModelServices.service_instances_for_env(%{"MN_MODEL_REMOTES_PATH" => path}, "node@lab")
 
     assert service["name"] == "docker-model-runner"
     assert service["origin"] == "external"
