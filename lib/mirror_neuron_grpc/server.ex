@@ -1034,6 +1034,7 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
         ),
       "runtime_shared_storage_root" =>
         MirrorNeuron.Config.string("MN_RUNTIME_SHARED_STORAGE_ROOT", :runtime_shared_storage_root),
+      "syncthing" => syncthing_node_info(),
       "redis_ha" => redis_ha_node_info(),
       "display_name" => map_value(platform, "display_name"),
       "hostname" => map_value(platform, "hostname"),
@@ -1070,6 +1071,26 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
           "MN_REDIS_RECONNECT_MAX_BACKOFF_MS",
           :redis_reconnect_max_backoff_ms
         )
+    }
+  end
+
+  defp syncthing_node_info do
+    enabled =
+      MirrorNeuron.Config.string("MN_SYNCTHING_ENABLED", :syncthing_enabled)
+      |> String.trim()
+      |> String.downcase()
+
+    %{
+      "enabled" => enabled not in ["", "0", "false", "no", "n", "off", "disabled"],
+      "device_id" => MirrorNeuron.Config.string("MN_SYNCTHING_DEVICE_ID", :syncthing_device_id),
+      "api_key" => MirrorNeuron.Config.string("MN_SYNCTHING_API_KEY", :syncthing_api_key),
+      "host" =>
+        MirrorNeuron.Config.string("MN_SYNCTHING_ADVERTISE_HOST", :syncthing_advertise_host),
+      "gui_port" => MirrorNeuron.Config.integer("MN_SYNCTHING_GUI_PORT", :syncthing_gui_port),
+      "sync_port" => MirrorNeuron.Config.integer("MN_SYNCTHING_SYNC_PORT", :syncthing_sync_port),
+      "folder_id" => MirrorNeuron.Config.string("MN_SYNCTHING_FOLDER_ID", :syncthing_folder_id),
+      "folder_path" =>
+        MirrorNeuron.Config.string("MN_SYNCTHING_FOLDER_PATH", :syncthing_folder_path)
     }
   end
 

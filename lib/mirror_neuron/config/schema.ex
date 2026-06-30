@@ -90,7 +90,9 @@ defmodule MirrorNeuron.Config.Schema do
       spec(
         "MN_BLUEPRINT_PYTHON_ENV_SETUP_TIMEOUT_MS",
         :blueprint_python_env_setup_timeout_ms,
-        :integer, default: 600_000),
+        :integer,
+        default: 600_000
+      ),
       spec("MN_SKILLS_ROOT", :skills_root, :path),
       spec("MN_WORKSPACE_ROOT", :workspace_root, :path),
       spec("MN_MAX_COMMAND_LENGTH", :max_command_length, :integer, default: 32_768),
@@ -103,6 +105,18 @@ defmodule MirrorNeuron.Config.Schema do
       spec("MN_SHARED_STORAGE_ROOT", :shared_storage_root, :path, default: {:home, ".mn/shared"}),
       spec("MN_HOST_SHARED_STORAGE_ROOT", :host_shared_storage_root, :path),
       spec("MN_RUNTIME_SHARED_STORAGE_ROOT", :runtime_shared_storage_root, :path),
+      spec("MN_SYNCTHING_ENABLED", :syncthing_enabled, :string, default: "auto"),
+      spec("MN_SYNCTHING_API_KEY", :syncthing_api_key, :string, default: ""),
+      spec("MN_SYNCTHING_DEVICE_ID", :syncthing_device_id, :string, default: ""),
+      spec("MN_SYNCTHING_ADVERTISE_HOST", :syncthing_advertise_host, :string, default: ""),
+      spec("MN_SYNCTHING_GUI_PORT", :syncthing_gui_port, :integer, default: 58_384),
+      spec("MN_SYNCTHING_SYNC_PORT", :syncthing_sync_port, :integer, default: 22_000),
+      spec("MN_SYNCTHING_FOLDER_ID", :syncthing_folder_id, :string,
+        default: "mirror-neuron-shared"
+      ),
+      spec("MN_SYNCTHING_FOLDER_PATH", :syncthing_folder_path, :path,
+        default: "/var/syncthing/MirrorNeuronShared"
+      ),
       spec("MN_RESOURCE_ADMISSION_ENABLED", :resource_admission_enabled, :boolean, default: true)
     ]
   end
