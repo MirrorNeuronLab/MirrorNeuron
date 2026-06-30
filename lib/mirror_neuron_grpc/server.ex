@@ -1034,6 +1034,7 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
         ),
       "runtime_shared_storage_root" =>
         MirrorNeuron.Config.string("MN_RUNTIME_SHARED_STORAGE_ROOT", :runtime_shared_storage_root),
+      "redis_ha" => redis_ha_node_info(),
       "display_name" => map_value(platform, "display_name"),
       "hostname" => map_value(platform, "hostname"),
       "cpu_cores" => map_value(cpu, "logical_processors"),
@@ -1042,6 +1043,33 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
       "gpu_model" => List.first(gpu_models(gpu)),
       "gpu_models" => gpu_models(gpu),
       "memory_gb" => memory_gb(memory)
+    }
+  end
+
+  defp redis_ha_node_info do
+    %{
+      "mode" => MirrorNeuron.Config.string("MN_REDIS_HA_MODE", :redis_ha_mode),
+      "sentinels" => MirrorNeuron.Config.string("MN_REDIS_SENTINELS", :redis_sentinels),
+      "sentinel_master" =>
+        MirrorNeuron.Config.string("MN_REDIS_SENTINEL_MASTER", :redis_sentinel_master),
+      "sentinel_host_map" =>
+        MirrorNeuron.Config.string("MN_REDIS_SENTINEL_HOST_MAP", :redis_sentinel_host_map),
+      "db" => MirrorNeuron.Config.integer("MN_REDIS_DB", :redis_db),
+      "sentinel_port" =>
+        MirrorNeuron.Config.integer("MN_REDIS_SENTINEL_PORT", :redis_sentinel_port),
+      "wait_replicas" =>
+        MirrorNeuron.Config.integer("MN_REDIS_WAIT_REPLICAS", :redis_wait_replicas),
+      "wait_timeout_ms" =>
+        MirrorNeuron.Config.integer("MN_REDIS_WAIT_TIMEOUT_MS", :redis_wait_timeout_ms),
+      "reconnect_attempts" =>
+        MirrorNeuron.Config.integer("MN_REDIS_RECONNECT_ATTEMPTS", :redis_reconnect_attempts),
+      "reconnect_backoff_ms" =>
+        MirrorNeuron.Config.integer("MN_REDIS_RECONNECT_BACKOFF_MS", :redis_reconnect_backoff_ms),
+      "reconnect_max_backoff_ms" =>
+        MirrorNeuron.Config.integer(
+          "MN_REDIS_RECONNECT_MAX_BACKOFF_MS",
+          :redis_reconnect_max_backoff_ms
+        )
     }
   end
 

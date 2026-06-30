@@ -23,6 +23,7 @@ defmodule MirrorNeuron.Config.Schema do
       spec("MN_REDIS_HA_MODE", :redis_ha_mode, :string, default: "single"),
       spec("MN_REDIS_SENTINELS", :redis_sentinels, :string, default: ""),
       spec("MN_REDIS_SENTINEL_MASTER", :redis_sentinel_master, :string, default: "mirror-neuron"),
+      spec("MN_REDIS_SENTINEL_PORT", :redis_sentinel_port, :integer, default: 26_379),
       spec("MN_REDIS_SENTINEL_HOST_MAP", :redis_sentinel_host_map, :string, default: ""),
       spec("MN_REDIS_DB", :redis_db, :integer, default: 0),
       spec("MN_REDIS_USERNAME", :redis_username, :secret),

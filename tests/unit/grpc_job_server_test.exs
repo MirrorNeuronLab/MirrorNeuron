@@ -154,6 +154,11 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     old_redis_host = System.get_env("MN_NETWORK_REDIS_HOST")
     old_redis_port = System.get_env("MN_NETWORK_REDIS_PORT")
     old_redis_url = System.get_env("MN_REDIS_URL")
+    old_redis_ha_mode = System.get_env("MN_REDIS_HA_MODE")
+    old_redis_sentinels = System.get_env("MN_REDIS_SENTINELS")
+    old_redis_sentinel_master = System.get_env("MN_REDIS_SENTINEL_MASTER")
+    old_redis_wait_replicas = System.get_env("MN_REDIS_WAIT_REPLICAS")
+    old_redis_wait_timeout_ms = System.get_env("MN_REDIS_WAIT_TIMEOUT_MS")
     old_grpc_port = System.get_env("MN_GRPC_PORT")
     old_dist_port = System.get_env("MN_DIST_PORT")
     old_cluster_nodes = System.get_env("MN_CLUSTER_NODES")
@@ -186,6 +191,11 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     System.delete_env("MN_NETWORK_ONLY")
     System.delete_env("MN_NETWORK_JOIN_TOKEN")
     System.delete_env("MN_REDIS_URL")
+    System.delete_env("MN_REDIS_HA_MODE")
+    System.delete_env("MN_REDIS_SENTINELS")
+    System.delete_env("MN_REDIS_SENTINEL_MASTER")
+    System.delete_env("MN_REDIS_WAIT_REPLICAS")
+    System.delete_env("MN_REDIS_WAIT_TIMEOUT_MS")
     System.put_env("MN_HOST_SHARED_STORAGE_ROOT", "/tmp/mn-shared")
     System.put_env("MN_RUNTIME_SHARED_STORAGE_ROOT", "/root/.mn/shared")
 
@@ -209,6 +219,11 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       restore_env("MN_NETWORK_REDIS_HOST", old_redis_host)
       restore_env("MN_NETWORK_REDIS_PORT", old_redis_port)
       restore_env("MN_REDIS_URL", old_redis_url)
+      restore_env("MN_REDIS_HA_MODE", old_redis_ha_mode)
+      restore_env("MN_REDIS_SENTINELS", old_redis_sentinels)
+      restore_env("MN_REDIS_SENTINEL_MASTER", old_redis_sentinel_master)
+      restore_env("MN_REDIS_WAIT_REPLICAS", old_redis_wait_replicas)
+      restore_env("MN_REDIS_WAIT_TIMEOUT_MS", old_redis_wait_timeout_ms)
       restore_env("MN_GRPC_PORT", old_grpc_port)
       restore_env("MN_DIST_PORT", old_dist_port)
       restore_env("MN_CLUSTER_NODES", old_cluster_nodes)
@@ -342,6 +357,11 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     System.put_env("MN_NETWORK_REDIS_HOST", "192.168.4.10")
     System.put_env("MN_NETWORK_REDIS_PORT", "6380")
     System.put_env("MN_REDIS_URL", "redis://:redis-secret@redis:6379/0")
+    System.put_env("MN_REDIS_HA_MODE", "sentinel")
+    System.put_env("MN_REDIS_SENTINELS", "192.168.4.10:26379,192.168.4.20:26379")
+    System.put_env("MN_REDIS_SENTINEL_MASTER", "mirror-neuron")
+    System.put_env("MN_REDIS_WAIT_REPLICAS", "1")
+    System.put_env("MN_REDIS_WAIT_TIMEOUT_MS", "1000")
     System.put_env("MN_GRPC_PORT", "50055")
     System.put_env("MN_DIST_PORT", "4500")
     System.put_env("MN_CLUSTER_NODES", "mirror_neuron@192.168.4.10")
@@ -369,6 +389,10 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert node_info["node_name"] == "mirror_neuron@test"
     assert node_info["host_shared_storage_root"] == "/mnt/mn-shared"
     assert node_info["runtime_shared_storage_root"] == "/root/.mn/shared"
+    assert node_info["redis_ha"]["mode"] == "sentinel"
+    assert node_info["redis_ha"]["sentinels"] == "192.168.4.10:26379,192.168.4.20:26379"
+    assert node_info["redis_ha"]["wait_replicas"] == 1
+    assert node_info["redis_ha"]["wait_timeout_ms"] == 1000
     assert is_binary(node_info["display_name"])
     assert is_integer(node_info["gpu_count"])
   end
