@@ -1057,6 +1057,43 @@ defmodule MirrorNeuron.SchedulerTest do
     assert get_in(model, ["service", "name"]) == "docker-model-runner"
   end
 
+  test "runtime model inference shares one DMR service across multiple LLM workers" do
+    {:ok, manifest} =
+      load_manifest(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "shared-dmr-service-workers",
+        "runtime" => %{
+          "models" => %{
+            "primary" => %{
+              "provider" => "docker_model_runner",
+              "model" => "nemotron3:latest"
+            }
+          }
+        },
+        "entrypoints" => ["worker_a"],
+        "nodes" => [
+          %{"node_id" => "worker_a", "agent_type" => "executor"},
+          %{"node_id" => "worker_b", "agent_type" => "executor"},
+          %{"node_id" => "worker_c", "agent_type" => "executor"}
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "cluster_recover"}
+      })
+
+    assert {:ok, plan} =
+             Scheduler.plan(manifest,
+               nodes: [small_node(), put_gpu_memory(h100_node(), 60_000)],
+               jobs: [],
+               service_instances: [
+                 model_service("nemotron3:latest", "h100@lab")
+               ]
+             )
+
+    assert Enum.map(plan["placements"], & &1["node"]) == ["h100@lab", "h100@lab", "h100@lab"]
+    assert Enum.all?(plan["placements"], &(get_in(&1, ["allocations", "devices"]) == []))
+    assert Enum.all?(plan["placements"], &(get_in(&1, ["resources", "gpu_count"]) in [nil, 0]))
+  end
+
   test "runtime model inference ignores stale services on offline GPU nodes" do
     {:ok, manifest} =
       load_manifest(%{
