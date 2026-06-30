@@ -201,13 +201,13 @@ defmodule MirrorNeuron.Bundle.Archive do
 
   defp restore_to_cache(fingerprint, %{"files" => files}) when is_list(files) do
     root = cache_path(fingerprint)
-    File.mkdir_p!(root)
-    File.mkdir_p!(Path.join(root, "payloads"))
+    mkdir_shared_cache_dir!(root)
+    mkdir_shared_cache_dir!(Path.join(root, "payloads"))
 
     Enum.each(files, fn %{"path" => relative_path, "data" => encoded} ->
       if PathSafety.safe_relative_path?(relative_path) do
         target = Path.join(root, relative_path)
-        File.mkdir_p!(Path.dirname(target))
+        mkdir_shared_cache_dir!(Path.dirname(target))
         File.write!(target, Base.decode64!(encoded))
       end
     end)
@@ -224,13 +224,40 @@ defmodule MirrorNeuron.Bundle.Archive do
 
     unless valid_bundle_cache?(target) do
       _ = File.rm_rf(target)
-      File.mkdir_p!(Path.dirname(target))
+      mkdir_shared_cache_dir!(Path.dirname(target))
       File.cp_r(root_path, target)
+      chmod_cache_dirs(target)
     end
 
     :ok
   rescue
     error -> {:error, error}
+  end
+
+  defp mkdir_shared_cache_dir!(path) do
+    File.mkdir_p!(path)
+    chmod_shared_cache_dir(path)
+  end
+
+  defp chmod_cache_dirs(root) do
+    chmod_shared_cache_dir(root)
+
+    root
+    |> File.ls!()
+    |> Enum.each(fn entry ->
+      path = Path.join(root, entry)
+
+      if File.dir?(path) do
+        chmod_cache_dirs(path)
+      end
+    end)
+  end
+
+  defp chmod_shared_cache_dir(path) do
+    case File.chmod(path, 0o777) do
+      :ok -> :ok
+      {:error, _reason} -> :ok
+    end
   end
 
   defp valid_bundle_cache?(target) do

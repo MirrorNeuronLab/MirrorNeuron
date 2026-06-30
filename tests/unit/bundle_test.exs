@@ -173,7 +173,12 @@ defmodule MirrorNeuron.BundleTest do
     assert {:ok, result} = Archive.store(bundle)
 
     assert result.storage == "shared_fs_cas"
-    assert File.dir?(Path.join([shared_root, "bundle_cache", result.fingerprint]))
+    cache_path = Path.join([shared_root, "bundle_cache", result.fingerprint])
+    payloads_path = Path.join(cache_path, "payloads")
+
+    assert File.dir?(cache_path)
+    assert Bitwise.band(File.stat!(cache_path).mode, 0o777) == 0o777
+    assert Bitwise.band(File.stat!(payloads_path).mode, 0o777) == 0o777
   end
 
   test "Archive restores shared-cache bundles from Redis when local shared path is missing", %{
