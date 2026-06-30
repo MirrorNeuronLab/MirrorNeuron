@@ -3,6 +3,27 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
 
   alias MirrorNeuron.Runner.HostLocal
 
+  test "list_all_files includes hidden runtime payload directories" do
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "mirror_neuron_host_local_hidden_files_test_#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      File.mkdir_p!(Path.join(tmp_dir, ".mn-local-skills/evidence_engine_skill/src"))
+      File.write!(Path.join(tmp_dir, ".mn-local-skills/evidence_engine_skill/src/__init__.py"), "")
+      File.write!(Path.join(tmp_dir, "visible.txt"), "ok")
+
+      assert HostLocal.list_all_files(tmp_dir) == [
+               ".mn-local-skills/evidence_engine_skill/src/__init__.py",
+               "visible.txt"
+             ]
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
   test "parses structured agent event stdout lines without keeping them in stdout" do
     tmp_dir =
       Path.join(

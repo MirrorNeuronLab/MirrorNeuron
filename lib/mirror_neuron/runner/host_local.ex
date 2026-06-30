@@ -819,14 +819,25 @@ defmodule MirrorNeuron.Runner.HostLocal do
   @doc false
   def list_all_files(dir) do
     if File.dir?(dir) do
-      dir
-      |> Path.join("**/*")
-      |> Path.wildcard()
-      |> Enum.reject(&File.dir?/1)
-      |> Enum.map(&Path.relative_to(&1, dir))
+      do_list_all_files(dir, dir)
+      |> Enum.sort()
     else
       []
     end
+  end
+
+  defp do_list_all_files(root, dir) do
+    dir
+    |> File.ls!()
+    |> Enum.flat_map(fn name ->
+      path = Path.join(dir, name)
+
+      cond do
+        File.dir?(path) -> do_list_all_files(root, path)
+        File.regular?(path) -> [Path.relative_to(path, root)]
+        true -> []
+      end
+    end)
   end
 
   defp resolve_upload_source(source, nil), do: {:ok, Path.expand(source)}
