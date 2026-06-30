@@ -226,8 +226,9 @@ defmodule MirrorNeuron.Bundle.Archive do
       _ = File.rm_rf(target)
       mkdir_shared_cache_dir!(Path.dirname(target))
       File.cp_r(root_path, target)
-      chmod_cache_dirs(target)
     end
+
+    chmod_cache_dirs(target)
 
     :ok
   rescue
