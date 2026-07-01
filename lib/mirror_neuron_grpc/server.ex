@@ -617,6 +617,7 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
   alias MirrorNeuron.Cluster.JoinClaim
   alias MirrorNeuron.Cluster.NodeAdapter
   alias MirrorNeuron.Cluster.NodeState
+  alias MirrorNeuron.ModelServices
 
   alias Mirrorneuron.Cluster.V1.{
     AddNodeResponse,
@@ -709,6 +710,7 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
       {:ok, %{status: status}} ->
         confirm_remote_join_claim(request.node_name)
         sync_remote_cookie_with_cluster(request.node_name, token)
+        advertise_remote_model_services(request.node_name)
 
         %AddNodeResponse{
           node_name: request.node_name,
@@ -776,6 +778,11 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
   @doc false
   def clear_join_claim(owner_node_name) do
     JoinClaim.clear(owner_node_name)
+  end
+
+  @doc false
+  def node_advertisement_info do
+    handshake_node_info()
   end
 
   def remove_node(request, _stream) do
@@ -1130,7 +1137,8 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
       "gpu_count" => gpu_count(gpu),
       "gpu_model" => List.first(gpu_models(gpu)),
       "gpu_models" => gpu_models(gpu),
-      "memory_gb" => memory_gb(memory)
+      "memory_gb" => memory_gb(memory),
+      "runtime_models" => ModelServices.env_model_refs()
     }
   end
 
@@ -1320,6 +1328,43 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
   end
 
   defp confirm_remote_join_claim(_node_name), do: :ok
+
+  defp advertise_remote_model_services(node_name) when is_binary(node_name) and node_name != "" do
+    with {:ok, remote_node} <- MirrorNeuron.SafeAccess.node_name_to_atom(node_name),
+         %{} = info <-
+           NodeAdapter.rpc_call(remote_node, __MODULE__, :node_advertisement_info, [], 2_000) do
+      refs = model_refs_from_node_info(info)
+
+      if refs != [] do
+        services = ModelServices.service_instances_for_models(refs, node_name)
+        _ = service_registry().register_many(services)
+      end
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp advertise_remote_model_services(_node_name), do: :ok
+
+  defp model_refs_from_node_info(info) when is_map(info) do
+    (List.wrap(Map.get(info, "runtime_models")) ++
+       List.wrap(Map.get(info, :runtime_models)) ++
+       List.wrap(Map.get(info, "models")) ++
+       List.wrap(Map.get(info, :models)))
+    |> Enum.flat_map(fn
+      value when is_binary(value) -> String.split(value, ",", trim: true)
+      value -> List.wrap(value)
+    end)
+    |> Enum.map(&(to_string(&1) |> String.trim()))
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp service_registry do
+    Application.get_env(:mirror_neuron, :service_registry, MirrorNeuron.ServiceRegistry)
+  end
 
   defp clear_remote_join_claim(node_name) when is_binary(node_name) and node_name != "" do
     with {:ok, remote_node} <- MirrorNeuron.SafeAccess.node_name_to_atom(node_name) do

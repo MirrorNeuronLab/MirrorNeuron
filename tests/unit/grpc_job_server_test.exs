@@ -141,6 +141,22 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     end
   end
 
+  defmodule ServiceRegistryStub do
+    @test_pid_name :grpc_job_server_test_pid
+
+    def register_many(services) do
+      notify({:services_registered, services})
+      {:ok, services}
+    end
+
+    defp notify(message) do
+      case Process.whereis(@test_pid_name) do
+        nil -> :ok
+        pid -> send(pid, message)
+      end
+    end
+  end
+
   setup do
     if Process.whereis(@test_pid_name), do: Process.unregister(@test_pid_name)
     Process.register(self(), @test_pid_name)
@@ -164,6 +180,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     old_grpc_port = System.get_env("MN_GRPC_PORT")
     old_dist_port = System.get_env("MN_DIST_PORT")
     old_cluster_nodes = System.get_env("MN_CLUSTER_NODES")
+    old_node_runtime_models = System.get_env("MN_NODE_RUNTIME_MODELS")
     old_host_shared_storage_root = System.get_env("MN_HOST_SHARED_STORAGE_ROOT")
     old_runtime_shared_storage_root = System.get_env("MN_RUNTIME_SHARED_STORAGE_ROOT")
     old_reconnect_attempts = System.get_env("MN_REDIS_RECONNECT_ATTEMPTS")
@@ -174,6 +191,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
     old_cluster_node_adapter = Application.get_env(:mirror_neuron, :cluster_node_adapter)
     old_node_state_store = Application.get_env(:mirror_neuron, :node_state_store)
+    old_service_registry = Application.get_env(:mirror_neuron, :service_registry)
     old_system_namespace = System.get_env("MN_REDIS_NAMESPACE")
     namespace = "mirror_neuron_grpc_job_server_test_#{System.unique_integer([:positive])}"
     mn_home = Path.join(System.tmp_dir!(), "mn-home-#{System.unique_integer([:positive])}")
@@ -182,6 +200,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     NodeStateStoreStub.reset()
     Application.put_env(:mirror_neuron, :cluster_node_adapter, ClusterNodeAdapterStub)
     Application.put_env(:mirror_neuron, :node_state_store, NodeStateStoreStub)
+    Application.put_env(:mirror_neuron, :service_registry, ServiceRegistryStub)
     Application.put_env(:mirror_neuron, :redis_namespace, namespace)
     Application.put_env(:mirror_neuron, :redis_reconnect_attempts, 0)
     System.put_env("MN_REDIS_NAMESPACE", namespace)
@@ -212,6 +231,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       restore_env(:redis_reconnect_attempts, old_application_reconnect_attempts)
       restore_env(:cluster_node_adapter, old_cluster_node_adapter)
       restore_env(:node_state_store, old_node_state_store)
+      restore_env(:service_registry, old_service_registry)
       restore_system_env("MN_REDIS_NAMESPACE", old_system_namespace)
       restore_env(@admin_token_env, old_token)
       restore_env(@admin_token_file_env, old_token_file)
@@ -232,6 +252,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       restore_env("MN_GRPC_PORT", old_grpc_port)
       restore_env("MN_DIST_PORT", old_dist_port)
       restore_env("MN_CLUSTER_NODES", old_cluster_nodes)
+      restore_env("MN_NODE_RUNTIME_MODELS", old_node_runtime_models)
       restore_env("MN_HOST_SHARED_STORAGE_ROOT", old_host_shared_storage_root)
       restore_env("MN_RUNTIME_SHARED_STORAGE_ROOT", old_runtime_shared_storage_root)
       restore_env("MN_REDIS_RECONNECT_ATTEMPTS", old_reconnect_attempts)
@@ -371,6 +392,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     System.put_env("MN_GRPC_PORT", "50055")
     System.put_env("MN_DIST_PORT", "4500")
     System.put_env("MN_CLUSTER_NODES", "mirror_neuron@192.168.4.10")
+    System.put_env("MN_NODE_RUNTIME_MODELS", "nemotron3")
     System.put_env("MN_HOST_SHARED_STORAGE_ROOT", "/mnt/mn-shared")
     System.put_env("MN_RUNTIME_SHARED_STORAGE_ROOT", "/root/.mn/shared")
     System.put_env(@operator_token_env, "primary-auth-token")
@@ -405,6 +427,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert node_info["redis_ha"]["sentinels"] == "192.168.4.10:26379,192.168.4.20:26379"
     assert node_info["redis_ha"]["wait_replicas"] == 1
     assert node_info["redis_ha"]["wait_timeout_ms"] == 1000
+    assert node_info["runtime_models"] == ["nemotron3"]
     assert is_binary(node_info["display_name"])
     assert is_integer(node_info["gpu_count"])
   end
@@ -677,6 +700,16 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
     ClusterNodeAdapterStub.put_list([peer_a, remote_node, peer_b])
 
+    ClusterNodeAdapterStub.put_rpc_result(
+      remote_node,
+      ClusterServer,
+      :node_advertisement_info,
+      [],
+      %{
+        "runtime_models" => ["nemotron3"]
+      }
+    )
+
     response =
       ClusterServer.add_node(%AddNodeRequest{node_name: node_name, token: "join-secret"}, nil)
 
@@ -710,6 +743,10 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
     assert_receive {:rpc_call, ^remote_node, ClusterServer, :connect_peer, ["mirror_neuron@test"],
                     2_000}
+
+    assert_receive {:services_registered, services}
+    assert [%{"name" => "docker-model-runner", "node" => ^node_name} = service] = services
+    assert "model:nemotron3" in service["tags"]
   end
 
   test "add_node clears stale disconnected scheduling state when a worker rejoins" do
