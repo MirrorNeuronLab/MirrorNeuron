@@ -222,8 +222,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     end
   end
 
-  defp do_ensure_docker_model_runner_model(model, env, config, opts) do
-    docker = docker_bin(config)
+  defp do_ensure_docker_model_runner_model(model, env, _config, opts) do
     runtime_env = Map.merge(System.get_env(), env)
 
     cond do
@@ -234,61 +233,45 @@ defmodule MirrorNeuron.Runner.DockerWorker do
         :ok
 
       true ->
-        case System.cmd(docker, ["model", "inspect", model], stderr_to_stdout: true) do
-          {_output, 0} ->
+        emit_runner_event(opts, "docker_worker_model_install_started", %{
+          "category" => "system",
+          "message" => "DockerWorker runtime model install started",
+          "status" => "started",
+          "runner" => "docker_worker",
+          "model" => model,
+          "node_name" => to_string(Node.self())
+        })
+
+        case ModelServices.prepare_runtime_model(%{"model" => model}) do
+          {:ok, result} ->
             ModelServices.persist_node_runtime_model(model, runtime_env)
             ModelServices.advertise_models([model], Node.self(), runtime_env)
-            :ok
 
-          _ ->
-            emit_runner_event(opts, "docker_worker_model_install_started", %{
+            emit_runner_event(opts, "docker_worker_model_install_completed", %{
               "category" => "system",
-              "message" => "DockerWorker runtime model install started",
-              "status" => "started",
+              "message" => "DockerWorker runtime model install completed",
+              "status" => "completed",
               "runner" => "docker_worker",
               "model" => model,
-              "node_name" => to_string(Node.self())
+              "node_name" => to_string(Node.self()),
+              "result_summary" => compact_output_tail(Jason.encode!(result))
             })
 
-            with {pull_output, 0} <-
-                   System.cmd(docker, ["model", "pull", model], stderr_to_stdout: true),
-                 {run_output, 0} <-
-                   System.cmd(docker, ["model", "run", "--detach", model], stderr_to_stdout: true) do
-              ModelServices.persist_node_runtime_model(model, runtime_env)
+            :ok
 
-              ModelServices.advertise_models(
-                [model],
-                Node.self(),
-                runtime_env
-              )
+          {:error, reason} ->
+            emit_runner_event(opts, "docker_worker_model_install_failed", %{
+              "category" => "error",
+              "message" => "DockerWorker runtime model install failed",
+              "status" => "failed",
+              "runner" => "docker_worker",
+              "model" => model,
+              "node_name" => to_string(Node.self()),
+              "result_summary" => compact_output_tail(to_string(reason))
+            })
 
-              emit_runner_event(opts, "docker_worker_model_install_completed", %{
-                "category" => "system",
-                "message" => "DockerWorker runtime model install completed",
-                "status" => "completed",
-                "runner" => "docker_worker",
-                "model" => model,
-                "node_name" => to_string(Node.self()),
-                "result_summary" => compact_output_tail(pull_output <> "\n" <> run_output)
-              })
-
-              :ok
-            else
-              {output, exit_code} ->
-                emit_runner_event(opts, "docker_worker_model_install_failed", %{
-                  "category" => "error",
-                  "message" => "DockerWorker runtime model install failed",
-                  "status" => "failed",
-                  "runner" => "docker_worker",
-                  "model" => model,
-                  "node_name" => to_string(Node.self()),
-                  "result_summary" => compact_output_tail(output),
-                  "details" => %{"exit_code" => exit_code}
-                })
-
-                {:error,
-                 "failed to install Docker Model Runner model #{model} on #{Node.self()}: #{String.trim(output)}"}
-            end
+            {:error,
+             "failed to install Docker Model Runner model #{model} on #{Node.self()}: #{reason}"}
         end
     end
   rescue

@@ -25,6 +25,7 @@ defmodule MirrorNeuron.ModelServices do
   @model_remotes_path_env "MN_MODEL_REMOTES_PATH"
   @runtime_compose_env_path_env "MN_RUNTIME_COMPOSE_ENV"
   @default_node_name "mirror_neuron"
+  @dmr_request_timeout 1_200_000
 
   def env_model_refs(env \\ System.get_env()) when is_map(env) do
     @model_env_vars
@@ -131,7 +132,7 @@ defmodule MirrorNeuron.ModelServices do
     docker = System.find_executable("docker") || "docker"
     env = System.get_env()
 
-    with :ok <- ensure_docker_model(docker, model_ref),
+    with :ok <- ensure_docker_model(docker, model_ref, env),
          :ok <- persist_node_runtime_model(model_ref, env) do
       _ = advertise_models([model_ref], NodeAdapter.self(), env)
 
@@ -151,7 +152,24 @@ defmodule MirrorNeuron.ModelServices do
     error -> {:error, Exception.message(error)}
   end
 
-  defp ensure_docker_model(docker, model_ref) do
+  defp ensure_docker_model(docker, model_ref, env) do
+    case ensure_dmr_api_model(model_ref, env) do
+      :ok ->
+        :ok
+
+      {:error, api_reason} ->
+        case ensure_docker_cli_model(docker, model_ref) do
+          :ok ->
+            :ok
+
+          {:error, cli_reason} ->
+            {:error,
+             "DMR API prepare failed: #{api_reason}; Docker CLI prepare failed: #{cli_reason}"}
+        end
+    end
+  end
+
+  defp ensure_docker_cli_model(docker, model_ref) do
     case System.cmd(docker, ["model", "inspect", model_ref], stderr_to_stdout: true) do
       {_output, 0} ->
         :ok
@@ -167,6 +185,111 @@ defmodule MirrorNeuron.ModelServices do
             {:error, String.trim(output)}
         end
     end
+  end
+
+  defp ensure_dmr_api_model(model_ref, env) do
+    with {:ok, root} <- reachable_dmr_api_root(env),
+         :ok <- maybe_pull_dmr_api_model(root, model_ref) do
+      :ok
+    end
+  end
+
+  defp reachable_dmr_api_root(env) do
+    dmr_api_roots(env)
+    |> Enum.find_value(fn root ->
+      case dmr_api_request(root, "/models", "GET") do
+        {:ok, payload} -> {:ok, root, payload}
+        {:error, _reason} -> nil
+      end
+    end)
+    |> case do
+      {:ok, root, _payload} -> {:ok, root}
+      nil -> {:error, "Docker Model Runner API is not reachable from #{NodeAdapter.self()}"}
+    end
+  end
+
+  defp maybe_pull_dmr_api_model(root, model_ref) do
+    case dmr_api_request(root, "/models/create", "POST", %{"from" => model_ref}) do
+      {:ok, _payload} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp dmr_api_request(root, path, method, payload \\ nil) do
+    :inets.start()
+
+    url =
+      root
+      |> String.trim_trailing("/")
+      |> Kernel.<>(path)
+      |> String.to_charlist()
+
+    headers = [{~c"content-type", ~c"application/json"}]
+    http_options = [timeout: @dmr_request_timeout, connect_timeout: 5_000]
+    body_options = [body_format: :binary]
+
+    request =
+      case payload do
+        nil -> {url, headers}
+        value -> {url, headers, ~c"application/json", Jason.encode!(value)}
+      end
+
+    case :httpc.request(
+           String.downcase(method) |> String.to_atom(),
+           request,
+           http_options,
+           body_options
+         ) do
+      {:ok, {{_version, status, _reason}, _headers, body}} when status in 200..299 ->
+        {:ok, decode_dmr_response(body)}
+
+      {:ok, {{_version, status, reason}, _headers, body}} ->
+        detail = body |> to_string() |> String.trim()
+        {:error, "HTTP #{status} #{reason}#{if detail != "", do: ": #{detail}", else: ""}"}
+
+      {:error, reason} ->
+        {:error, inspect(reason)}
+    end
+  end
+
+  defp decode_dmr_response(body) do
+    text = to_string(body)
+
+    case Jason.decode(text) do
+      {:ok, payload} -> payload
+      {:error, _reason} -> text
+    end
+  end
+
+  defp dmr_api_roots(env) do
+    configured =
+      @model_runner_endpoint_env_vars
+      |> Enum.flat_map(fn name ->
+        env
+        |> Map.get(name)
+        |> split_env_list()
+      end)
+
+    host = node_host(NodeAdapter.self())
+
+    (configured ++
+       [
+         "http://#{host}:12434",
+         "http://host.docker.internal:12434",
+         "http://host.docker.internal",
+         "http://localhost:12434"
+       ])
+    |> Enum.map(&native_dmr_api_root/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp native_dmr_api_root(value) do
+    value
+    |> to_string()
+    |> String.trim()
+    |> String.trim_trailing("/")
+    |> String.replace(~r"/engines(?:/[^/]+)?/v1$", "")
   end
 
   defp runtime_model_endpoint(model_ref, env) do
