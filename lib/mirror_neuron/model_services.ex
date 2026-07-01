@@ -2,6 +2,7 @@ defmodule MirrorNeuron.ModelServices do
   @moduledoc false
 
   alias MirrorNeuron.ModelCatalog
+  alias MirrorNeuron.Cluster.NodeAdapter
   alias MirrorNeuron.ServiceRegistry
 
   @active_node_statuses ["healthy", "joining"]
@@ -87,6 +88,133 @@ defmodule MirrorNeuron.ModelServices do
     :ok
   rescue
     _ -> :ok
+  end
+
+  def prepare_runtime_model_on_node(node_name, attrs, timeout \\ 1_200_000) when is_map(attrs) do
+    target = normalize_node_name(node_name)
+
+    cond do
+      target in ["", to_string(NodeAdapter.self())] ->
+        prepare_runtime_model(attrs)
+
+      true ->
+        case NodeAdapter.rpc_call(
+               String.to_atom(target),
+               __MODULE__,
+               :prepare_runtime_model,
+               [attrs],
+               timeout
+             ) do
+          {:badrpc, reason} ->
+            {:error, "failed to prepare runtime model on #{target}: #{inspect(reason)}"}
+
+          other ->
+            other
+        end
+    end
+  end
+
+  def prepare_runtime_model(attrs) when is_map(attrs) do
+    model_ref = normalized_value(attrs, "model") || normalized_value(attrs, :model)
+    backend = normalized_value(attrs, "backend") || normalized_value(attrs, :backend) || "auto"
+
+    cond do
+      model_ref in [nil, ""] ->
+        {:error, "runtime model is required"}
+
+      true ->
+        do_prepare_runtime_model(model_ref, backend)
+    end
+  end
+
+  defp do_prepare_runtime_model(model_ref, backend) do
+    docker = System.find_executable("docker") || "docker"
+    env = System.get_env()
+
+    with :ok <- ensure_docker_model(docker, model_ref),
+         :ok <- persist_node_runtime_model(model_ref, env) do
+      _ = advertise_models([model_ref], NodeAdapter.self(), env)
+
+      {:ok,
+       %{
+         "status" => "installed",
+         "model" => model_ref,
+         "backend" => backend,
+         "node" => to_string(NodeAdapter.self()),
+         "endpoint" => runtime_model_endpoint(model_ref, env)
+       }}
+    else
+      {:error, reason} -> {:error, reason}
+      other -> {:error, inspect(other)}
+    end
+  rescue
+    error -> {:error, Exception.message(error)}
+  end
+
+  defp ensure_docker_model(docker, model_ref) do
+    case System.cmd(docker, ["model", "inspect", model_ref], stderr_to_stdout: true) do
+      {_output, 0} ->
+        :ok
+
+      _ ->
+        with {_pull_output, 0} <-
+               System.cmd(docker, ["model", "pull", model_ref], stderr_to_stdout: true),
+             {_run_output, 0} <-
+               System.cmd(docker, ["model", "run", "--detach", model_ref], stderr_to_stdout: true) do
+          :ok
+        else
+          {output, _exit_code} ->
+            {:error, String.trim(output)}
+        end
+    end
+  end
+
+  defp runtime_model_endpoint(model_ref, env) do
+    node = to_string(NodeAdapter.self())
+    host = node_host(node)
+
+    api_base =
+      case model_runner_endpoint(env) do
+        nil -> "http://#{host}:12434/engines/v1"
+        value -> public_model_runner_endpoint(value, host)
+      end
+
+    %{
+      "provider" => "docker_model_runner",
+      "model" => model_ref,
+      "runtime_model" => model_ref,
+      "api_model" => model_ref,
+      "api_base" => api_base,
+      "node" => node,
+      "source" => "cluster_node_install"
+    }
+  end
+
+  defp public_model_runner_endpoint(value, host) do
+    value = String.trim_trailing(to_string(value), "/")
+
+    cond do
+      String.contains?(value, "host.docker.internal") or
+        String.contains?(value, "127.0.0.1") or
+          String.contains?(value, "localhost") ->
+        "http://#{host}:12434/engines/v1"
+
+      true ->
+        value
+    end
+  end
+
+  defp node_host(node) do
+    case String.split(to_string(node), "@", parts: 2) do
+      [_name, host] when host != "" -> host
+      _ -> "host.docker.internal"
+    end
+  end
+
+  defp normalize_node_name(value) do
+    value
+    |> to_string()
+    |> String.trim()
   end
 
   defp register_model_services(services, node_name) do
@@ -178,7 +306,7 @@ defmodule MirrorNeuron.ModelServices do
             value
             |> split_env_list()
             |> Kernel.++([model_ref])
-            |> Enum.uniq_by(&(String.downcase(&1)))
+            |> Enum.uniq_by(&String.downcase(&1))
 
           {"MN_NODE_RUNTIME_MODELS=#{Enum.join(refs, ",")}", true}
 
@@ -215,7 +343,9 @@ defmodule MirrorNeuron.ModelServices do
 
   defp remote_service_instance(remote, node_name, catalog) do
     model = normalized_remote_value(remote, "model")
-    endpoint = normalized_remote_value(remote, "base_url") || normalized_remote_value(remote, "api_base")
+
+    endpoint =
+      normalized_remote_value(remote, "base_url") || normalized_remote_value(remote, "api_base")
 
     if model in [nil, ""] or endpoint in [nil, ""] do
       []
@@ -234,14 +364,19 @@ defmodule MirrorNeuron.ModelServices do
             }
         end
 
-      api_model = normalized_remote_value(remote, "api_model") || Map.get(entry, "api_model") || model
+      api_model =
+        normalized_remote_value(remote, "api_model") || Map.get(entry, "api_model") || model
+
       name = normalized_remote_value(remote, "name") || model
       service_node = normalized_remote_value(remote, "node") || to_string(node_name)
 
       service =
         entry
         |> ModelCatalog.service_instance(service_node)
-        |> Map.put("id", "#{service_node}:docker-model-runner:remote:#{ModelCatalog.normalize_tag(name)}")
+        |> Map.put(
+          "id",
+          "#{service_node}:docker-model-runner:remote:#{ModelCatalog.normalize_tag(name)}"
+        )
         |> Map.put("origin", "external")
         |> Map.put("address", endpoint)
         |> put_in(["meta", "api_model"], api_model)
@@ -256,7 +391,9 @@ defmodule MirrorNeuron.ModelServices do
     remote
     |> Map.get(key)
     |> case do
-      nil -> nil
+      nil ->
+        nil
+
       value ->
         value
         |> to_string()
@@ -344,6 +481,24 @@ defmodule MirrorNeuron.ModelServices do
     |> case do
       "" -> nil
       value -> value
+    end
+  end
+
+  defp normalized_value(map, key) when is_map(map) do
+    map
+    |> Map.get(key)
+    |> case do
+      nil ->
+        nil
+
+      value ->
+        value
+        |> to_string()
+        |> String.trim()
+        |> case do
+          "" -> nil
+          text -> text
+        end
     end
   end
 

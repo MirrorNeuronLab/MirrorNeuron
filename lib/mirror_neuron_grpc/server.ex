@@ -701,6 +701,29 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
     end
   end
 
+  def prepare_runtime_model(request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("PrepareRuntimeModel")
+
+    with {:ok, attrs} when is_map(attrs) <- Jason.decode(request.resource_json),
+         node_name <- Map.get(attrs, "node") || Map.get(attrs, :node),
+         {:ok, result} <- ModelServices.prepare_runtime_model_on_node(node_name, attrs) do
+      %SetResourceResponse{resource_json: versioned_json(result), version: @interface_version}
+    else
+      {:error, %Jason.DecodeError{} = error} ->
+        raise GRPC.RPCError,
+          status: :invalid_argument,
+          message: "runtime model prepare body must be valid JSON: #{Exception.message(error)}"
+
+      {:ok, _other} ->
+        raise GRPC.RPCError,
+          status: :invalid_argument,
+          message: "runtime model prepare body must be a JSON object"
+
+      {:error, reason} ->
+        raise GRPC.RPCError, status: :failed_precondition, message: to_string(reason)
+    end
+  end
+
   def add_node(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("AddNode")
     token = Map.get(request, :token, "")

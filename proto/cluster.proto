@@ -16,6 +16,7 @@ service ClusterService {
   rpc ListServices (ListServicesRequest) returns (ListServicesResponse);
   rpc ResolveService (ResolveServiceRequest) returns (ResolveServiceResponse);
   rpc CheckServices (CheckServicesRequest) returns (CheckServicesResponse);
+  rpc PrepareRuntimeModel (SetResourceRequest) returns (SetResourceResponse);
 }
 
 message NetworkHandshakeRequest {

@@ -421,6 +421,10 @@ defmodule Mirrorneuron.Cluster.V1.ClusterService.Service do
   rpc :CheckServices,
       Mirrorneuron.Cluster.V1.CheckServicesRequest,
       Mirrorneuron.Cluster.V1.CheckServicesResponse
+
+  rpc :PrepareRuntimeModel,
+      Mirrorneuron.Cluster.V1.SetResourceRequest,
+      Mirrorneuron.Cluster.V1.SetResourceResponse
 end
 
 defmodule Mirrorneuron.Cluster.V1.ClusterService.Stub do
