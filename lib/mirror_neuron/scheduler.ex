@@ -1311,12 +1311,12 @@ defmodule MirrorNeuron.Scheduler do
 
   defp port_key(_request), do: nil
 
-  defp volume_available?(%{"source" => source}, host_paths, node_name) do
+  defp volume_available?(%{"source" => source}, host_paths, _node_name) do
     source = Path.expand(to_string(source))
 
     Enum.any?(host_paths, fn host_path ->
       source == host_path or String.starts_with?(source, host_path <> "/")
-    end) or (node_name == to_string(Node.self()) and File.exists?(source))
+    end)
   end
 
   defp volume_available?(_volume, _host_paths, _node_name), do: false

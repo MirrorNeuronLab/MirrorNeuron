@@ -19,19 +19,27 @@ defmodule MirrorNeuron.Sandbox.OpenShellJobSandbox do
   end
 
   def ensure(job_id, config) do
-    with {:ok, pid} <- ensure_process(job_id, config) do
-      GenServer.call(pid, {:ensure, config}, :infinity)
+    if native_sandbox_prep_enabled?() do
+      with {:ok, pid} <- ensure_process(job_id, config) do
+        GenServer.call(pid, {:ensure, config}, :infinity)
+      end
+    else
+      prepared_sandbox(job_id, config)
     end
   end
 
   def cleanup_job_local(job_id, config \\ %{}) do
-    case if(Process.whereis(@registry), do: Registry.lookup(@registry, job_id), else: []) do
-      [{pid, _meta}] ->
-        GenServer.stop(pid, :normal, :infinity)
-        :ok
+    if native_sandbox_prep_enabled?() do
+      case if(Process.whereis(@registry), do: Registry.lookup(@registry, job_id), else: []) do
+        [{pid, _meta}] ->
+          GenServer.stop(pid, :normal, :infinity)
+          :ok
 
-      [] ->
-        cleanup_sandbox_by_job_id(job_id, config)
+        [] ->
+          cleanup_sandbox_by_job_id(job_id, config)
+      end
+    else
+      :ok
     end
   end
 
@@ -365,6 +373,38 @@ defmodule MirrorNeuron.Sandbox.OpenShellJobSandbox do
     suffix = "-#{digest}"
     keep = max(63 - String.length(suffix), 1)
     String.slice(base, 0, keep) <> suffix
+  end
+
+  defp prepared_sandbox(job_id, config) do
+    sandbox_name =
+      Map.get(config, "sandbox_name") ||
+        Map.get(config, "openshell_sandbox_name") ||
+        System.get_env("MN_OPENSHELL_SANDBOX_NAME")
+
+    ssh_host =
+      Map.get(config, "ssh_host") ||
+        Map.get(config, "openshell_ssh_host") ||
+        System.get_env("MN_OPENSHELL_SSH_HOST")
+
+    cond do
+      is_binary(sandbox_name) and sandbox_name != "" ->
+        {:ok,
+         %{
+           "sandbox_name" => sandbox_name,
+           "ssh_host" => ssh_host || ssh_host(sandbox_name)
+         }}
+
+      true ->
+        {:error,
+         "OpenShell sandbox for job #{job_id} is not prepared; prepare OpenShell resources with mn-python-sdk/API/CLI and provide sandbox_name or MN_OPENSHELL_SANDBOX_NAME"}
+    end
+  end
+
+  defp native_sandbox_prep_enabled? do
+    System.get_env("MN_CORE_ALLOW_NATIVE_SANDBOX_PREP")
+    |> to_string()
+    |> String.downcase()
+    |> then(&(&1 in ["1", "true", "yes", "on"]))
   end
 
   defp maybe_put_flag(args, _flag, false), do: args

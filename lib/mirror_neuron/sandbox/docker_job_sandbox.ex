@@ -23,19 +23,27 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
   end
 
   def ensure(job_id, image, config, opts \\ []) do
-    with {:ok, pid} <- ensure_process(job_id, image, config, opts) do
-      GenServer.call(pid, {:ensure, image, config, opts}, :infinity)
+    if native_sandbox_prep_enabled?() do
+      with {:ok, pid} <- ensure_process(job_id, image, config, opts) do
+        GenServer.call(pid, {:ensure, image, config, opts}, :infinity)
+      end
+    else
+      prepared_sandbox(job_id, image, config)
     end
   end
 
   def cleanup_job_local(job_id, config \\ %{}) do
-    case if(Process.whereis(@registry), do: Registry.lookup(@registry, key(job_id)), else: []) do
-      [{pid, _meta}] ->
-        GenServer.stop(pid, :normal, :infinity)
-        :ok
+    if native_sandbox_prep_enabled?() do
+      case if(Process.whereis(@registry), do: Registry.lookup(@registry, key(job_id)), else: []) do
+        [{pid, _meta}] ->
+          GenServer.stop(pid, :normal, :infinity)
+          :ok
 
-      [] ->
-        cleanup_container_by_job_id(job_id, config)
+        [] ->
+          cleanup_container_by_job_id(job_id, config)
+      end
+    else
+      :ok
     end
   end
 
@@ -372,6 +380,39 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
       MirrorNeuron.Config.optional_string("MN_DOCKER_BIN", :docker_bin) ||
       System.find_executable("docker") ||
       "docker"
+  end
+
+  defp prepared_sandbox(job_id, image, config) do
+    case prepared_container_name(config) do
+      name when is_binary(name) and name != "" ->
+        {:ok,
+         %{
+           "container_name" => name,
+           "image" => image,
+           "workdir_root" => @container_root
+         }}
+
+      _ ->
+        {:error,
+         "docker_worker sandbox for job #{job_id} is not prepared; prepare DockerWorker resources with mn-python-sdk/API/CLI and provide docker_worker_container_name or MN_DOCKER_WORKER_CONTAINER_NAME"}
+    end
+  end
+
+  defp prepared_container_name(config) do
+    env = config_env(config)
+
+    Map.get(config, "docker_worker_container_name") ||
+      Map.get(config, "container_name") ||
+      get_in(config, ["docker", "container_name"]) ||
+      Map.get(env, "MN_DOCKER_WORKER_CONTAINER_NAME") ||
+      System.get_env("MN_DOCKER_WORKER_CONTAINER_NAME")
+  end
+
+  defp native_sandbox_prep_enabled? do
+    System.get_env("MN_CORE_ALLOW_NATIVE_SANDBOX_PREP")
+    |> to_string()
+    |> String.downcase()
+    |> then(&(&1 in ["1", "true", "yes", "on"]))
   end
 
   defp truthy?(value) when value in [true, 1], do: true

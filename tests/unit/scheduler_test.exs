@@ -2,7 +2,6 @@ defmodule MirrorNeuron.SchedulerTest do
   use ExUnit.Case, async: false
 
   alias MirrorNeuron.Manifest
-  alias MirrorNeuron.ModelCatalog
   alias MirrorNeuron.Scheduler
 
   defmodule ResourceStore do
@@ -977,7 +976,16 @@ defmodule MirrorNeuron.SchedulerTest do
           %{
             "node_id" => "worker",
             "agent_type" => "executor",
-            "role" => "root"
+            "role" => "root",
+            "requires_services" => [model_service_requirement("otterdesk-voice-llm:default")],
+            "placement_requirements" => %{
+              "models" => [
+                model_placement_requirement("otterdesk-voice-llm:default", [
+                  "nvidia-h100",
+                  "nvidia-gb10"
+                ])
+              ]
+            }
           }
         ],
         "edges" => [],
@@ -1027,7 +1035,9 @@ defmodule MirrorNeuron.SchedulerTest do
           %{
             "node_id" => "worker",
             "agent_type" => "executor",
-            "role" => "root"
+            "role" => "root",
+            "requires_services" => [model_service_requirement("gemma4:e2b")],
+            "placement_requirements" => %{"models" => [model_placement_requirement("gemma4:e2b")]}
           }
         ],
         "edges" => [],
@@ -1072,9 +1082,24 @@ defmodule MirrorNeuron.SchedulerTest do
         },
         "entrypoints" => ["worker_a"],
         "nodes" => [
-          %{"node_id" => "worker_a", "agent_type" => "executor"},
-          %{"node_id" => "worker_b", "agent_type" => "executor"},
-          %{"node_id" => "worker_c", "agent_type" => "executor"}
+          %{
+            "node_id" => "worker_a",
+            "agent_type" => "executor",
+            "requires_services" => [model_service_requirement("nemotron3")],
+            "placement_requirements" => %{"models" => [model_placement_requirement("nemotron3")]}
+          },
+          %{
+            "node_id" => "worker_b",
+            "agent_type" => "executor",
+            "requires_services" => [model_service_requirement("nemotron3")],
+            "placement_requirements" => %{"models" => [model_placement_requirement("nemotron3")]}
+          },
+          %{
+            "node_id" => "worker_c",
+            "agent_type" => "executor",
+            "requires_services" => [model_service_requirement("nemotron3")],
+            "placement_requirements" => %{"models" => [model_placement_requirement("nemotron3")]}
+          }
         ],
         "edges" => [],
         "policies" => %{"recovery_mode" => "cluster_recover"}
@@ -1108,7 +1133,16 @@ defmodule MirrorNeuron.SchedulerTest do
           }
         },
         "entrypoints" => ["worker"],
-        "nodes" => [%{"node_id" => "worker", "agent_type" => "executor"}],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "requires_services" => [model_service_requirement("otterdesk-voice-llm:default")],
+            "placement_requirements" => %{
+              "models" => [model_placement_requirement("otterdesk-voice-llm:default")]
+            }
+          }
+        ],
         "edges" => [],
         "policies" => %{"recovery_mode" => "cluster_recover"}
       })
@@ -1131,7 +1165,7 @@ defmodule MirrorNeuron.SchedulerTest do
              )
 
     assert reason =~ "worker"
-    assert reason =~ "small@lab: constraints not matched"
+    assert reason =~ "small@lab: required services not available"
     assert reason =~ "h100-fresh@lab: required services not available"
     assert reason =~ "h100@lab: status \"offline\""
     refute reason =~ "placed"
@@ -1174,7 +1208,7 @@ defmodule MirrorNeuron.SchedulerTest do
            ] = plan["placements"]
   end
 
-  test "runtime model inference only reads runtime model environment keys" do
+  test "runtime model environment keys do not create core model requirements" do
     {:ok, manifest} =
       load_manifest(%{
         "manifest_version" => "1.0",
@@ -1211,12 +1245,10 @@ defmodule MirrorNeuron.SchedulerTest do
                ]
              )
 
-    assert [%{"placement_requirements" => %{"models" => models}}] = plan["placements"]
-    assert Enum.map(models, & &1["id"]) == ["otterdesk-voice-llm:default", "gemma4:e2b"]
-    refute Enum.any?(models, &(&1["id"] == "ollama/nemotron3:33b"))
+    assert [%{"placement_requirements" => %{"models" => []}}] = plan["placements"]
   end
 
-  test "runtime model inference lets explicit node model override blueprint default llm" do
+  test "explicit service requirements drive model placement independently of config refs" do
     blueprint_config =
       Jason.encode!(%{
         "llm" => %{
@@ -1241,6 +1273,10 @@ defmodule MirrorNeuron.SchedulerTest do
                 "MN_LLM_RUNTIME_MODEL" => "otterdesk-video-watch:default",
                 "MN_BLUEPRINT_CONFIG_JSON" => blueprint_config
               }
+            },
+            "requires_services" => [model_service_requirement("otterdesk-video-watch:default")],
+            "placement_requirements" => %{
+              "models" => [model_placement_requirement("otterdesk-video-watch:default")]
             }
           }
         ],
@@ -1975,9 +2011,38 @@ defmodule MirrorNeuron.SchedulerTest do
   end
 
   defp model_service(model, node) do
-    model
-    |> ModelCatalog.resolve!()
-    |> ModelCatalog.service_instance(node)
+    %{
+      "id" => "#{node}:docker-model-runner:#{model}",
+      "name" => "docker-model-runner",
+      "node" => node,
+      "provider" => "mirror_neuron",
+      "origin" => "external",
+      "status" => "passing",
+      "tags" => ["docker-model-runner", "model:#{model}", "model-id:#{model}"],
+      "meta" => %{
+        "model_id" => model,
+        "model" => model,
+        "model_provider" => "docker_model_runner"
+      }
+    }
+  end
+
+  defp model_service_requirement(model) do
+    %{
+      "name" => "docker-model-runner",
+      "tags" => ["model-id:#{model}", "model:#{model}"],
+      "required" => true
+    }
+  end
+
+  defp model_placement_requirement(model, required_capabilities \\ []) do
+    %{
+      "id" => model,
+      "model" => model,
+      "provider" => "docker_model_runner",
+      "service" => model_service_requirement(model),
+      "required_capabilities" => required_capabilities
+    }
   end
 
   defp metal_node do

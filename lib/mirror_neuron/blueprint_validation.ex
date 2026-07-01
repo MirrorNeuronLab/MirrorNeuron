@@ -238,95 +238,43 @@ defmodule MirrorNeuron.BlueprintValidation do
          rule: rule_ref(rule)
        )}
 
-  defp run_command_rule(rule, %JobBundle{root_path: root_path} = bundle) do
-    with {:ok, command} <- normalize_command(map_get(rule, "command")) do
-      [executable | args] = command
-      timeout_ms = timeout_ms(map_get(rule, "timeout_seconds"))
-      env = validation_env(rule, bundle.manifest)
-
-      task =
-        Task.async(fn ->
-          executable = executable_path(executable, root_path)
-
-          try do
-            {:ok,
-             System.cmd(executable, args,
-               cd: root_path,
-               env: env,
-               stderr_to_stdout: true
-             )}
-          rescue
-            error in ErlangError -> {:error, Exception.message(error)}
-          end
-        end)
-
-      case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
-        {:ok, {:ok, {output, 0}}} ->
-          case structured_command_report(output, rule) do
-            {false, [issue | _]} -> {:error, issue}
-            _ -> :ok
-          end
-
-        {:ok, {:ok, {output, status}}} ->
-          case structured_command_report(output, rule) do
-            {_ok, [issue | _]} ->
-              {:error, issue}
-
-            _ ->
-              {:error,
-               issue(
-                 "validator.command_failed",
-                 "#{rule_name(rule)} exited #{status}: #{String.trim(output)}",
-                 help:
-                   map_get(rule, "help") || map_get(rule, "fix") ||
-                     "Review the input value and validator diagnostic output.",
-                 source: "validator",
-                 path: map_get(rule, "path") || map_get(rule, "input") || "",
-                 expected: "validator exits with code 0",
-                 actual: "exit code #{status}",
-                 rule: rule_ref(rule),
-                 debug: %{"output" => truncate_debug(output), "returncode" => status}
-               )}
-          end
-
-        {:ok, {:error, reason}} ->
-          {:error,
-           issue("validator.command_unavailable", "#{rule_name(rule)} failed: #{reason}",
-             help:
-               map_get(rule, "help") || map_get(rule, "fix") ||
-                 "Install the validation dependency or update the command path.",
-             source: "validator",
-             path: map_get(rule, "path") || map_get(rule, "input") || "",
-             expected: "executable command",
-             actual: List.first(command),
-             rule: rule_ref(rule)
-           )}
-
-        nil ->
-          {:error,
-           issue(
-             "validator.command_timeout",
-             "#{rule_name(rule)} timed out after #{Float.round(timeout_ms / 1000, 1)}s",
-             help:
-               map_get(rule, "help") || map_get(rule, "fix") ||
-                 "Check the input value or increase timeout_seconds for this validation rule.",
-             source: "validator",
-             path: map_get(rule, "path") || map_get(rule, "input") || "",
-             expected: "command completes within #{Float.round(timeout_ms / 1000, 1)}s",
-             actual: "timeout",
-             rule: rule_ref(rule),
-             debug: %{"timeout_seconds" => timeout_ms / 1000}
-           )}
-      end
-    end
-  rescue
-    error in ErlangError ->
+  defp run_command_rule(rule, %JobBundle{}) do
+    if legacy_command_validation_enabled?() do
       {:error,
-       issue("validator.command_failed", "#{rule_name(rule)} failed: #{Exception.message(error)}",
+       issue(
+         "validator.command_legacy_disabled",
+         "#{rule_name(rule)} must be validated before Core submission",
+         help:
+           map_get(rule, "help") || map_get(rule, "fix") ||
+             "Run command input validation in mn-python-sdk/API/CLI and submit only after it passes.",
          source: "validator",
          path: map_get(rule, "path") || map_get(rule, "input") || "",
+         expected: "prevalidated command rule",
+         actual: "command rule reached Core",
          rule: rule_ref(rule)
        )}
+    else
+      {:error,
+       issue(
+         "validator.command_prevalidation_required",
+         "#{rule_name(rule)} must be validated before Core submission",
+         help:
+           map_get(rule, "help") || map_get(rule, "fix") ||
+             "Run command input validation in mn-python-sdk/API/CLI and submit only after it passes.",
+         source: "validator",
+         path: map_get(rule, "path") || map_get(rule, "input") || "",
+         expected: "prevalidated command rule",
+         actual: "command rule reached Core",
+         rule: rule_ref(rule)
+       )}
+    end
+  end
+
+  defp legacy_command_validation_enabled? do
+    System.get_env("MN_CORE_ALLOW_COMMAND_VALIDATION")
+    |> to_string()
+    |> String.downcase()
+    |> then(&(&1 in ["1", "true", "yes", "on"]))
   end
 
   defp validation_report(issues) do

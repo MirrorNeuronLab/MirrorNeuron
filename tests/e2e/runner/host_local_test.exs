@@ -12,7 +12,12 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
 
     try do
       File.mkdir_p!(Path.join(tmp_dir, ".mn-local-skills/evidence_engine_skill/src"))
-      File.write!(Path.join(tmp_dir, ".mn-local-skills/evidence_engine_skill/src/__init__.py"), "")
+
+      File.write!(
+        Path.join(tmp_dir, ".mn-local-skills/evidence_engine_skill/src/__init__.py"),
+        ""
+      )
+
       File.write!(Path.join(tmp_dir, "visible.txt"), "ok")
 
       assert HostLocal.list_all_files(tmp_dir) == [
@@ -187,6 +192,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
     env_root = Path.join(tmp_dir, "python_envs")
     wheel_path = Path.join(tmp_dir, "mn_test_pkg-0.1-py3-none-any.whl")
     old_env_root = System.get_env("MN_BLUEPRINT_PYTHON_ENVS_DIR")
+    old_native_prep = System.get_env("MN_CORE_ALLOW_NATIVE_RESOURCE_PREP")
 
     try do
       File.mkdir_p!(Path.join(upload_dir, "scripts"))
@@ -211,6 +217,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
       )
 
       System.put_env("MN_BLUEPRINT_PYTHON_ENVS_DIR", env_root)
+      System.put_env("MN_CORE_ALLOW_NATIVE_RESOURCE_PREP", "1")
 
       config = %{
         "upload_path" => "bundle",
@@ -269,6 +276,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
       assert metadata["requirements"]["path"] == "bundle/requirements.txt"
     after
       restore_env("MN_BLUEPRINT_PYTHON_ENVS_DIR", old_env_root)
+      restore_env("MN_CORE_ALLOW_NATIVE_RESOURCE_PREP", old_native_prep)
       File.rm_rf!(tmp_dir)
     end
   end

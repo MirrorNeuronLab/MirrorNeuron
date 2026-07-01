@@ -875,9 +875,44 @@ defmodule MirrorNeuron.Runner.HostLocal do
     with {:ok, spec} <- python_environment_spec(config, opts) do
       case spec do
         nil -> {:ok, nil}
-        spec -> ensure_cached_python_environment(spec)
+        spec -> prepared_or_legacy_python_environment(config, spec)
       end
     end
+  end
+
+  defp prepared_or_legacy_python_environment(config, spec) do
+    cond do
+      native_prep_enabled?() ->
+        ensure_cached_python_environment(spec)
+
+      prepared_python_env = prepared_python_environment(config) ->
+        {:ok, prepared_python_env}
+
+      true ->
+        {:error,
+         "python_environment preparation is owned by mn-python-sdk/API/CLI; prepare the environment before submission and provide python_environment.path, MN_PYTHON_ENV, or VIRTUAL_ENV"}
+    end
+  end
+
+  defp prepared_python_environment(config) do
+    env = extra_env(config)
+
+    dir =
+      get_in(config, ["python_environment", "path"]) ||
+        get_in(config, ["python_environment", "prepared_path"]) ||
+        Map.get(env, "MN_PYTHON_ENV") ||
+        Map.get(env, "VIRTUAL_ENV")
+
+    if is_binary(dir) and dir != "" do
+      python_environment(Path.expand(dir))
+    end
+  end
+
+  defp native_prep_enabled? do
+    System.get_env("MN_CORE_ALLOW_NATIVE_RESOURCE_PREP")
+    |> to_string()
+    |> String.downcase()
+    |> then(&(&1 in ["1", "true", "yes", "on"]))
   end
 
   defp python_environment_spec(config, opts) do

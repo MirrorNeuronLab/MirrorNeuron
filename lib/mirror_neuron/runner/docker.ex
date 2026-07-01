@@ -4,7 +4,6 @@ defmodule MirrorNeuron.Runner.DockerWorker do
   alias MirrorNeuron.Config
   alias MirrorNeuron.Artifacts.SharedStorage
   alias MirrorNeuron.Message
-  alias MirrorNeuron.ModelServices
   alias MirrorNeuron.Sandbox.DockerJobSandbox
 
   @default_container_workdir "/mn/job"
@@ -85,6 +84,15 @@ defmodule MirrorNeuron.Runner.DockerWorker do
   end
 
   defp build_worker_image(base_dir, build_source, image, config, opts) do
+    if not native_prep_enabled?() do
+      {:error,
+       "docker_worker image build is owned by mn-python-sdk/API/CLI; submit a prepared image via config.image or config.docker.image instead of docker_worker_image/build"}
+    else
+      legacy_build_worker_image(base_dir, build_source, image, config, opts)
+    end
+  end
+
+  defp legacy_build_worker_image(base_dir, build_source, image, config, opts) do
     with {:ok, source_path} <- resolve_build_source(base_dir, build_source),
          image_ref <- build_image_ref(source_path, image),
          :ok <-
@@ -233,51 +241,21 @@ defmodule MirrorNeuron.Runner.DockerWorker do
         :ok
 
       true ->
-        emit_runner_event(opts, "docker_worker_model_install_started", %{
-          "category" => "system",
-          "message" => "DockerWorker runtime model install started",
-          "status" => "started",
+        emit_runner_event(opts, "docker_worker_model_not_prepared", %{
+          "category" => "error",
+          "message" => "DockerWorker runtime model was not prepared",
+          "status" => "failed",
           "runner" => "docker_worker",
           "model" => model,
           "node_name" => to_string(Node.self())
         })
 
-        case ModelServices.prepare_runtime_model(%{"model" => model}) do
-          {:ok, result} ->
-            ModelServices.persist_node_runtime_model(model, runtime_env)
-            ModelServices.advertise_models([model], Node.self(), runtime_env)
-
-            emit_runner_event(opts, "docker_worker_model_install_completed", %{
-              "category" => "system",
-              "message" => "DockerWorker runtime model install completed",
-              "status" => "completed",
-              "runner" => "docker_worker",
-              "model" => model,
-              "node_name" => to_string(Node.self()),
-              "result_summary" => compact_output_tail(Jason.encode!(result))
-            })
-
-            :ok
-
-          {:error, reason} ->
-            emit_runner_event(opts, "docker_worker_model_install_failed", %{
-              "category" => "error",
-              "message" => "DockerWorker runtime model install failed",
-              "status" => "failed",
-              "runner" => "docker_worker",
-              "model" => model,
-              "node_name" => to_string(Node.self()),
-              "result_summary" => compact_output_tail(to_string(reason))
-            })
-
-            {:error,
-             "failed to install Docker Model Runner model #{model} on #{Node.self()}: #{reason}"}
-        end
+        {:error,
+         "Docker Model Runner model #{model} is not prepared on #{Node.self()}; prepare it with mn-python-sdk/API/CLI before submitting the job or provide MN_MODEL_ENDPOINTS_JSON"}
     end
   rescue
     error ->
-      {:error,
-       "failed to prepare Docker Model Runner model #{model} on #{Node.self()}: #{Exception.message(error)}"}
+      {:error, "failed to check Docker Model Runner model #{model}: #{Exception.message(error)}"}
   end
 
   defp model_endpoint_prepared?(model, env) do
@@ -313,13 +291,29 @@ defmodule MirrorNeuron.Runner.DockerWorker do
   end
 
   defp prepared_model_refs(env) do
-    @prepared_model_env_vars
-    |> Enum.flat_map(fn name ->
-      env
-      |> Map.get(name)
-      |> split_env_list()
-    end)
+    env_refs =
+      @prepared_model_env_vars
+      |> Enum.flat_map(fn name ->
+        env
+        |> Map.get(name)
+        |> split_env_list()
+      end)
+
+    (env_refs ++ prepared_runtime_model_refs(env))
     |> Enum.uniq_by(&(to_string(&1) |> String.downcase()))
+  end
+
+  defp prepared_runtime_model_refs(env) do
+    raw = Map.get(env, "MN_PREPARED_RUNTIME_MODELS_JSON", "")
+
+    with true <- is_binary(raw) and String.trim(raw) != "",
+         {:ok, values} when is_list(values) <- Jason.decode(raw) do
+      values
+      |> Enum.map(&(to_string(&1) |> String.trim()))
+      |> Enum.reject(&(&1 == ""))
+    else
+      _ -> []
+    end
   end
 
   defp split_env_list(nil), do: []
@@ -1422,6 +1416,13 @@ defmodule MirrorNeuron.Runner.DockerWorker do
       Config.optional_string("MN_DOCKER_BIN", :docker_bin) ||
       System.find_executable("docker") ||
       "docker"
+  end
+
+  defp native_prep_enabled? do
+    System.get_env("MN_CORE_ALLOW_NATIVE_SANDBOX_PREP")
+    |> to_string()
+    |> String.downcase()
+    |> then(&(&1 in ["1", "true", "yes", "on"]))
   end
 
   defp timeout_ms(config) do

@@ -42,7 +42,7 @@ defmodule MirrorNeuron.ServiceCheckTest do
     assert report["status"] == "passing"
   end
 
-  test "script checks run from the bundle root without shell expansion" do
+  test "script checks are reported as SDK-owned preparation" do
     root = Path.join(System.tmp_dir!(), "mn-service-check-#{System.unique_integer([:positive])}")
     Process.put(:service_check_root, root)
     File.mkdir_p!(root)
@@ -60,7 +60,10 @@ defmodule MirrorNeuron.ServiceCheckTest do
         bundle_root: root
       )
 
-    assert report["status"] == "passing"
+    assert report["status"] == "critical"
+
+    assert get_in(report, ["checks", Access.at(0), "error"]) =~
+             "script service checks are owned by mn-python-sdk"
   after
     if root = Process.delete(:service_check_root), do: File.rm_rf(root)
   end

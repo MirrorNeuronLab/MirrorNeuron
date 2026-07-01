@@ -103,7 +103,7 @@ defmodule MirrorNeuron.BlueprintValidationTest do
              BlueprintValidation.check_requirements(manifest, %{nodes: []})
   end
 
-  test "runs pattern and command input validation rules from a bundle" do
+  test "runs pattern validation but requires command validation before Core submission" do
     root = Path.join(System.tmp_dir!(), "mn-validation-#{System.unique_integer([:positive])}")
     on_exit(fn -> File.rm_rf!(root) end)
     File.mkdir_p!(Path.join(root, "payloads/validation"))
@@ -159,7 +159,15 @@ defmodule MirrorNeuron.BlueprintValidationTest do
     assert {:ok, manifest} = Manifest.load(manifest_map)
     bundle = %JobBundle{root_path: root, manifest: manifest}
 
-    assert :ok = BlueprintValidation.run_input_validation(bundle)
+    assert {:error, "input_validation_failed:" <> reason} =
+             BlueprintValidation.run_input_validation(bundle)
+
+    assert {:ok, report} = Jason.decode(String.trim(reason))
+
+    assert Enum.any?(
+             report["issues"],
+             &(&1["code"] == "validator.command_prevalidation_required")
+           )
   end
 
   test "force metadata skips validation and requirements" do

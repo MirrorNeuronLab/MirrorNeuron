@@ -734,6 +734,12 @@ defmodule MirrorNeuron.Manifest do
       config: Map.get(raw, "config", %{}),
       resources: Map.get(raw, "resources", get_in(raw, ["config", "resources"]) || %{}),
       constraints: Map.get(raw, "constraints", get_in(raw, ["config", "constraints"]) || []),
+      placement_requirements:
+        Map.get(
+          raw,
+          "placement_requirements",
+          get_in(raw, ["config", "placement_requirements"]) || %{}
+        ),
       tool_bindings: Map.get(raw, "tool_bindings", []),
       retry_policy: Map.get(raw, "retry_policy", %{}),
       checkpoint_policy: Map.get(raw, "checkpoint_policy", %{}),
@@ -756,6 +762,7 @@ defmodule MirrorNeuron.Manifest do
       "config" => json_safe(node.config),
       "resources" => json_safe(node.resources),
       "constraints" => json_safe(node.constraints),
+      "placement_requirements" => json_safe(Map.get(node, :placement_requirements, %{})),
       "tool_bindings" => json_safe(node.tool_bindings),
       "retry_policy" => json_safe(node.retry_policy),
       "checkpoint_policy" => json_safe(node.checkpoint_policy),

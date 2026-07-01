@@ -1161,7 +1161,8 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
       "gpu_model" => List.first(gpu_models(gpu)),
       "gpu_models" => gpu_models(gpu),
       "memory_gb" => memory_gb(memory),
-      "runtime_models" => ModelServices.env_model_refs()
+      "runtime_models" => ModelServices.env_model_refs(),
+      "services" => ModelServices.service_instances_for_env(System.get_env(), NodeAdapter.self())
     }
   end
 
@@ -1356,10 +1357,9 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
     with {:ok, remote_node} <- MirrorNeuron.SafeAccess.node_name_to_atom(node_name),
          %{} = info <-
            NodeAdapter.rpc_call(remote_node, __MODULE__, :node_advertisement_info, [], 2_000) do
-      refs = model_refs_from_node_info(info)
+      services = services_from_node_info(info)
 
-      if refs != [] do
-        services = ModelServices.service_instances_for_models(refs, node_name)
+      if services != [] do
         _ = service_registry().register_many(services)
       end
     end
@@ -1371,18 +1371,9 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
 
   defp advertise_remote_model_services(_node_name), do: :ok
 
-  defp model_refs_from_node_info(info) when is_map(info) do
-    (List.wrap(Map.get(info, "runtime_models")) ++
-       List.wrap(Map.get(info, :runtime_models)) ++
-       List.wrap(Map.get(info, "models")) ++
-       List.wrap(Map.get(info, :models)))
-    |> Enum.flat_map(fn
-      value when is_binary(value) -> String.split(value, ",", trim: true)
-      value -> List.wrap(value)
-    end)
-    |> Enum.map(&(to_string(&1) |> String.trim()))
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.uniq()
+  defp services_from_node_info(info) when is_map(info) do
+    (List.wrap(Map.get(info, "services")) ++ List.wrap(Map.get(info, :services)))
+    |> Enum.filter(&is_map/1)
   end
 
   defp service_registry do

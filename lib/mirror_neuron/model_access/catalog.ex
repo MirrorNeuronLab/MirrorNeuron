@@ -1,18 +1,22 @@
 defmodule MirrorNeuron.ModelAccess.Catalog do
   @moduledoc false
 
-  alias MirrorNeuron.ModelCatalog
+  def load, do: %{}
+  def list_entries(_catalog \\ %{}), do: []
 
-  def load, do: ModelCatalog.load_catalog()
-  def list_entries(catalog \\ ModelCatalog.load_catalog()), do: ModelCatalog.list_entries(catalog)
+  def resolve(_model, _catalog \\ %{}), do: {:error, :model_catalog_owned_by_sdk}
 
-  def resolve(model, catalog \\ ModelCatalog.load_catalog()),
-    do: ModelCatalog.resolve(model, catalog)
+  def resolve!(model, _catalog \\ %{}) do
+    raise ArgumentError,
+          "model catalog resolution for #{inspect(model)} is owned by mn-python-sdk"
+  end
 
-  def resolve!(model, catalog \\ ModelCatalog.load_catalog()),
-    do: ModelCatalog.resolve!(model, catalog)
+  def service_requirement(_entry),
+    do: raise(ArgumentError, "model service expansion is owned by mn-python-sdk")
 
-  def service_requirement(entry), do: ModelCatalog.service_requirement(entry)
-  def service_instance(entry, node_name), do: ModelCatalog.service_instance(entry, node_name)
-  def service_tags(entry), do: ModelCatalog.service_tags(entry)
+  def service_instance(_entry, _node_name),
+    do: raise(ArgumentError, "model service expansion is owned by mn-python-sdk")
+
+  def service_tags(_entry),
+    do: raise(ArgumentError, "model service expansion is owned by mn-python-sdk")
 end

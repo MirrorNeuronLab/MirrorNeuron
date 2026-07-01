@@ -144,7 +144,7 @@ defmodule MirrorNeuron.Execution.Profile do
     configured
     |> Map.take(advertised)
     |> Enum.into(%{}, fn {name, profile} ->
-      {name, warm_profile(profile)}
+      {name, warm_profile(name, profile)}
     end)
   end
 
@@ -201,22 +201,21 @@ defmodule MirrorNeuron.Execution.Profile do
     end
   end
 
-  defp warm_profile(profile) do
-    case Map.get(profile, "warmup_command") || get_in(profile, ["openshell", "warmup_command"]) do
-      command when is_binary(command) and command != "" ->
-        case System.cmd("sh", ["-lc", command], stderr_to_stdout: true) do
-          {_output, 0} ->
-            %{"status" => "healthy"}
+  defp warm_profile(name, profile) do
+    profile_health = advertised_profile_health(name)
 
-          {output, exit_code} ->
-            %{
-              "status" => "unhealthy",
-              "reason" => "warmup failed with exit #{exit_code}",
-              "logs" => String.slice(output, 0, 2_000)
-            }
-        end
+    cond do
+      is_map(profile_health) ->
+        profile_health
 
-      _ ->
+      warmup_command?(profile) ->
+        %{
+          "status" => "not_ready",
+          "reason" =>
+            "execution profile warmup is owned by mn-python-sdk/API/CLI; advertise profile_health before submitting jobs"
+        }
+
+      true ->
         %{"status" => "healthy"}
     end
   rescue
@@ -257,15 +256,38 @@ defmodule MirrorNeuron.Execution.Profile do
     case MirrorNeuron.Config.optional_string("MN_NODE_GPU", :node_gpu) do
       value when value in ["1", "true", "TRUE", "True", "yes", "on"] -> true
       value when value in ["0", "false", "FALSE", "False", "no", "off"] -> false
-      _ -> hardware_gpu?()
+      _ -> false
     end
   end
 
-  defp hardware_gpu? do
-    gpu = MirrorNeuron.Cluster.Hardware.info() |> Map.get(:gpu)
-    gpu not in [nil, [], "", "Unknown", "Unknown or None", "Unsupported", "Not available"]
+  defp hardware_gpu?, do: node_gpu?()
+
+  defp warmup_command?(profile) do
+    command =
+      Map.get(profile, "warmup_command") || get_in(profile, ["openshell", "warmup_command"])
+
+    is_binary(command) and String.trim(command) != ""
+  end
+
+  defp advertised_profile_health(nil), do: nil
+
+  defp advertised_profile_health(name) do
+    case System.get_env("MN_EXECUTION_PROFILE_HEALTH_JSON") do
+      value when is_binary(value) and value != "" ->
+        case Jason.decode(value) do
+          {:ok, health} when is_map(health) ->
+            status = Map.get(health, name)
+            if is_map(status), do: status
+
+          _ ->
+            nil
+        end
+
+      _ ->
+        nil
+    end
   rescue
-    _ -> false
+    _ -> nil
   end
 
   defp gpu_requirement_met?(profile, node_state) do

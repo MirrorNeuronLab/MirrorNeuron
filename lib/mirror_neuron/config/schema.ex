@@ -60,7 +60,6 @@ defmodule MirrorNeuron.Config.Schema do
       spec("MN_NODE_HOST_PATHS", :node_host_paths, :list, default: []),
       spec("MN_NODE_RUNTIME_DRIVERS", :node_runtime_drivers, :list, default: []),
       spec("MN_EXECUTION_PROFILES_JSON", :execution_profiles, :json_map, default: %{}),
-      spec("MN_MODEL_CATALOG_PATH", :model_catalog_path, :path),
       spec("MN_BUNDLES_DIR", :bundles_dir, :path),
       spec("MN_BUNDLE_CACHE_DIR", :bundle_cache_dir, :path),
       spec("MN_BUNDLE_ARCHIVE_MAX_BYTES", :bundle_archive_max_bytes, :integer),

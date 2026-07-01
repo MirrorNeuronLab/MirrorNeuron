@@ -18,6 +18,14 @@ defmodule MirrorNeuron.Cluster.HardwareTest do
           "MN_NODE_GPU_NAME",
           "MN_NODE_GPU_API_VERSION",
           "MN_NODE_GPU_DRIVER_VERSION",
+          "MN_NODE_HARDWARE_JSON",
+          "MN_NODE_CPU_CORES",
+          "MN_NODE_MEMORY_TOTAL_MB",
+          "MN_NODE_MEMORY_AVAILABLE_MB",
+          "MN_NODE_DISK_TOTAL_MB",
+          "MN_NODE_DISK_AVAILABLE_MB",
+          "MN_NODE_RUNTIME_DRIVERS",
+          "MN_NODE_HOST_PATHS",
           "MN_DOCKER_WORKER_ENABLED",
           "MN_DOCKER_BIN"
         ],
@@ -236,14 +244,39 @@ defmodule MirrorNeuron.Cluster.HardwareTest do
     assert is_binary(hardware.platform.hostname)
   end
 
-  test "advertises docker worker only when docker daemon is reachable" do
+  test "uses SDK-advertised hardware JSON as the source of truth" do
+    System.put_env(
+      "MN_NODE_HARDWARE_JSON",
+      Jason.encode!(%{
+        "platform" => %{"display_name" => "sdk-node", "hostname" => "sdk-host"},
+        "cpu" => %{"logical_processors" => 16, "model" => "SDK CPU"},
+        "memory" => %{"total_mb" => 65_536, "available_mb" => 60_000},
+        "disk" => %{"total_mb" => 1_000_000, "available_mb" => 900_000},
+        "gpu" => [],
+        "devices" => [],
+        "capabilities" => ["sdk-advertised"],
+        "host_paths" => ["/srv/mn"],
+        "runtime_drivers" => ["host_local", "docker_worker"]
+      })
+    )
+
+    hardware = Hardware.info()
+
+    assert hardware.platform.display_name == "sdk-node"
+    assert hardware.cpu.logical_processors == 16
+    assert hardware.memory.total_mb == 65_536
+    assert hardware.host_paths == ["/srv/mn"]
+    assert hardware.runtime_drivers == ["host_local", "docker_worker"]
+    assert "sdk-advertised" in hardware.capabilities
+  end
+
+  test "does not probe docker daemon to advertise docker_worker" do
     System.put_env("MN_DOCKER_WORKER_ENABLED", "1")
     System.put_env("MN_DOCKER_BIN", "false")
 
-    refute "docker_worker" in Hardware.info().runtime_drivers
-
-    System.put_env("MN_DOCKER_BIN", "true")
-
     assert "docker_worker" in Hardware.info().runtime_drivers
+
+    System.put_env("MN_DOCKER_WORKER_ENABLED", "0")
+    refute "docker_worker" in Hardware.info().runtime_drivers
   end
 end

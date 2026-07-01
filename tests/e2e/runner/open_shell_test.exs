@@ -5,6 +5,17 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
   alias MirrorNeuron.Runner.OpenShell
   alias MirrorNeuron.Sandbox.OpenShellJobSandbox
 
+  setup do
+    previous = System.get_env("MN_CORE_ALLOW_NATIVE_SANDBOX_PREP")
+    System.put_env("MN_CORE_ALLOW_NATIVE_SANDBOX_PREP", "1")
+
+    on_exit(fn ->
+      if is_nil(previous),
+        do: System.delete_env("MN_CORE_ALLOW_NATIVE_SANDBOX_PREP"),
+        else: System.put_env("MN_CORE_ALLOW_NATIVE_SANDBOX_PREP", previous)
+    end)
+  end
+
   test "stages uploads and executes a command through the configured sandbox cli" do
     tmp_dir =
       Path.join(

@@ -7,6 +7,13 @@ defmodule MirrorNeuron.Cluster.Hardware do
   alias MirrorNeuron.ResourceSpec
 
   def info do
+    case advertised_info() do
+      {:ok, hardware} -> hardware
+      :error -> runtime_advertisement_info()
+    end
+  end
+
+  defp runtime_advertisement_info do
     platform = platform_info()
     cpu = cpu_info()
     memory = memory_info()
@@ -27,6 +34,23 @@ defmodule MirrorNeuron.Cluster.Hardware do
     }
   end
 
+  defp advertised_info do
+    case System.get_env("MN_NODE_HARDWARE_JSON") do
+      value when is_binary(value) and value != "" ->
+        with {:ok, decoded} <- Jason.decode(value),
+             true <- is_map(decoded) do
+          {:ok, atomize_hardware(decoded)}
+        else
+          _ -> :error
+        end
+
+      _ ->
+        :error
+    end
+  rescue
+    _ -> :error
+  end
+
   defp platform_info do
     {family, name} = :os.type()
     hostname = host_name()
@@ -41,79 +65,30 @@ defmodule MirrorNeuron.Cluster.Hardware do
   end
 
   defp cpu_info do
-    logical_processors = :erlang.system_info(:logical_processors)
-    load_average_1m = load_average_1m()
+    logical_processors =
+      configured_integer("MN_NODE_CPU_CORES") ||
+        configured_integer("MN_NODE_LOGICAL_PROCESSORS") ||
+        :erlang.system_info(:logical_processors)
 
     %{
       logical_processors: logical_processors,
       architecture: to_string(:erlang.system_info(:system_architecture)),
       model: cpu_model(),
-      load_average_1m: load_average_1m,
-      load_ratio: ratio(load_average_1m, logical_processors)
+      load_average_1m: configured_float("MN_NODE_CPU_LOAD_AVERAGE_1M"),
+      load_ratio: configured_float("MN_NODE_CPU_LOAD_RATIO")
     }
   end
 
   defp memory_info do
-    case :os.type() do
-      {:unix, :darwin} ->
-        with {:ok, total_bytes} <- darwin_total_memory(),
-             {:ok, available_bytes} <- darwin_available_memory() do
-          memory_pressure(total_bytes, available_bytes)
-        else
-          _ -> %{total_bytes: 0, total_mb: 0}
-        end
-
-      {:unix, :linux} ->
-        with {:ok, meminfo} <- File.read("/proc/meminfo"),
-             {:ok, total_kb} <- meminfo_value(meminfo, "MemTotal"),
-             {:ok, available_kb} <- meminfo_value(meminfo, "MemAvailable") do
-          memory_pressure(total_kb * 1024, available_kb * 1024)
-        else
-          _ -> %{total_bytes: 0, total_mb: 0}
-        end
-
-      _ ->
-        %{total_bytes: 0, total_mb: 0}
-    end
+    total_mb = configured_float("MN_NODE_MEMORY_TOTAL_MB") || 0
+    available_mb = configured_float("MN_NODE_MEMORY_AVAILABLE_MB") || total_mb
+    memory_pressure(trunc(total_mb * 1024 * 1024), trunc(available_mb * 1024 * 1024))
   rescue
     _ -> %{total_bytes: 0, total_mb: 0}
   end
 
   defp gpu_info(memory) do
-    case configured_gpu_info(memory) do
-      nil ->
-        case :os.type() do
-          {:unix, :darwin} ->
-            case System.cmd("system_profiler", ["SPDisplaysDataType"]) do
-              {output, 0} ->
-                parse_darwin_gpu(output, memory)
-
-              _ ->
-                "Unknown"
-            end
-
-          {:unix, :linux} ->
-            case System.cmd("nvidia-smi", [
-                   "--query-gpu=index,uuid,name,driver_version,utilization.gpu,memory.used,memory.free,memory.total",
-                   "--format=csv,noheader,nounits"
-                 ]) do
-              {output, 0} ->
-                parse_nvidia_gpu(output, memory, %{"cuda_version" => nvidia_cuda_version()})
-
-              _ ->
-                case linux_pci_gpu_info(memory) do
-                  [] -> "Unknown or None"
-                  devices -> devices
-                end
-            end
-
-          _ ->
-            "Unsupported"
-        end
-
-      configured ->
-        configured
-    end
+    configured_gpu_info(memory) || []
   rescue
     _ -> "Not available"
   end
@@ -135,13 +110,15 @@ defmodule MirrorNeuron.Cluster.Hardware do
   end
 
   defp disk_info do
-    case System.cmd("df", ["-k", "."]) do
-      {output, 0} ->
-        parse_disk_df(output)
+    total_mb = configured_float("MN_NODE_DISK_TOTAL_MB") || 0
+    available_mb = configured_float("MN_NODE_DISK_AVAILABLE_MB") || total_mb
 
-      _ ->
-        %{total_bytes: 0, total_mb: 0, available_bytes: 0, available_mb: 0}
-    end
+    %{
+      total_bytes: trunc(total_mb * 1024 * 1024),
+      total_mb: total_mb,
+      available_bytes: trunc(available_mb * 1024 * 1024),
+      available_mb: available_mb
+    }
   rescue
     _ -> %{total_bytes: 0, total_mb: 0, available_bytes: 0, available_mb: 0}
   end
@@ -185,110 +162,24 @@ defmodule MirrorNeuron.Cluster.Hardware do
   end
 
   defp load_average_1m do
-    case :os.type() do
-      {:unix, :darwin} ->
-        case System.cmd("sysctl", ["-n", "vm.loadavg"]) do
-          {output, 0} ->
-            output
-            |> String.replace(["{", "}"], "")
-            |> String.split()
-            |> List.first()
-            |> parse_float()
-
-          _ ->
-            nil
-        end
-
-      {:unix, :linux} ->
-        with {:ok, output} <- File.read("/proc/loadavg") do
-          output |> String.split() |> List.first() |> parse_float()
-        else
-          _ -> nil
-        end
-
-      _ ->
-        nil
-    end
-  rescue
-    _ -> nil
+    configured_float("MN_NODE_CPU_LOAD_AVERAGE_1M")
   end
 
   defp cpu_model do
-    blank_to_nil(Config.optional_string("MN_NODE_CPU_MODEL", :node_cpu_model)) ||
-      case :os.type() do
-        {:unix, :darwin} -> darwin_cpu_model()
-        {:unix, :linux} -> linux_cpu_model()
-        {:win32, _name} -> windows_cpu_model()
-        _ -> nil
-      end
+    blank_to_nil(Config.optional_string("MN_NODE_CPU_MODEL", :node_cpu_model))
   rescue
     _ -> nil
   end
 
-  defp darwin_cpu_model do
-    case System.cmd("sysctl", ["-n", "machdep.cpu.brand_string"]) do
-      {output, 0} -> blank_to_nil(output)
-      _ -> nil
-    end
-  end
+  defp darwin_cpu_model, do: nil
 
-  defp linux_cpu_model do
-    with {:ok, cpuinfo} <- File.read("/proc/cpuinfo") do
-      cpuinfo
-      |> String.split("\n")
-      |> Enum.find_value(fn line ->
-        case String.split(line, ":", parts: 2) do
-          [key, value] ->
-            key = key |> String.trim() |> String.downcase()
+  defp linux_cpu_model, do: nil
 
-            if key in ["model name", "hardware", "processor", "cpu model"] do
-              blank_to_nil(value)
-            end
+  defp windows_cpu_model, do: nil
 
-          _ ->
-            nil
-        end
-      end)
-    else
-      _ -> nil
-    end
-  end
+  defp darwin_total_memory, do: {:error, :owned_by_sdk}
 
-  defp windows_cpu_model do
-    case System.cmd("wmic", ["cpu", "get", "Name", "/value"]) do
-      {output, 0} ->
-        output
-        |> String.split("\n")
-        |> Enum.find_value(fn line ->
-          case String.split(line, "=", parts: 2) do
-            ["Name", value] -> blank_to_nil(value)
-            _ -> nil
-          end
-        end)
-
-      _ ->
-        nil
-    end
-  end
-
-  defp darwin_total_memory do
-    case System.cmd("sysctl", ["-n", "hw.memsize"]) do
-      {output, 0} -> {:ok, String.trim(output) |> String.to_integer()}
-      _ -> {:error, :unknown}
-    end
-  end
-
-  defp darwin_available_memory do
-    with {page_size_output, 0} <- System.cmd("sysctl", ["-n", "hw.pagesize"]),
-         {vm_stat, 0} <- System.cmd("vm_stat", []),
-         page_size <- String.trim(page_size_output) |> String.to_integer(),
-         free <- vm_stat_pages(vm_stat, "Pages free"),
-         speculative <- vm_stat_pages(vm_stat, "Pages speculative") do
-      {:ok, (free + speculative) * page_size}
-    else
-      _ -> {:error, :unknown}
-    end
-  end
+  defp darwin_available_memory, do: {:error, :owned_by_sdk}
 
   defp vm_stat_pages(output, label) do
     output
@@ -743,14 +634,7 @@ defmodule MirrorNeuron.Cluster.Hardware do
     |> Enum.sort()
   end
 
-  defp linux_pci_gpu_info(_memory) do
-    case System.cmd("lspci", ["-mm"]) do
-      {output, 0} -> parse_lspci_gpu(output, rocm_version())
-      _ -> []
-    end
-  rescue
-    _ -> []
-  end
+  defp linux_pci_gpu_info(_memory), do: []
 
   defp advertised_node_capabilities do
     Config.list("MN_NODE_CAPABILITIES", :node_capabilities)
@@ -758,13 +642,7 @@ defmodule MirrorNeuron.Cluster.Hardware do
 
   defp nvidia_cuda_version do
     blank_to_nil(System.get_env("CUDA_VERSION")) ||
-      case System.cmd("nvidia-smi", []) do
-        {output, 0} ->
-          version_after(output, "CUDA Version:")
-
-        _ ->
-          nil
-      end
+      blank_to_nil(System.get_env("MN_NODE_GPU_API_VERSION"))
   rescue
     _ -> nil
   end
@@ -772,26 +650,12 @@ defmodule MirrorNeuron.Cluster.Hardware do
   defp rocm_version do
     blank_to_nil(System.get_env("ROCM_VERSION")) ||
       blank_to_nil(System.get_env("HIP_VERSION")) ||
-      rocm_version_file() ||
-      case System.cmd("rocminfo", []) do
-        {output, 0} ->
-          version_after(output, "ROCm Version") ||
-            version_after(output, "ROCM Version") ||
-            version_after(output, "HSA Runtime Version")
-
-        _ ->
-          nil
-      end
+      blank_to_nil(System.get_env("MN_NODE_GPU_API_VERSION"))
   rescue
     _ -> nil
   end
 
-  defp rocm_version_file do
-    case File.read("/opt/rocm/.info/version") do
-      {:ok, value} -> blank_to_nil(value)
-      _ -> nil
-    end
-  end
+  defp rocm_version_file, do: nil
 
   defp nvidia_gpu_capabilities(name) do
     normalized = String.downcase(to_string(name || ""))
@@ -869,7 +733,7 @@ defmodule MirrorNeuron.Cluster.Hardware do
   end
 
   defp openshell_driver do
-    if System.find_executable("openshell") || System.get_env("OPENSHELL_GATEWAY") do
+    if System.get_env("OPENSHELL_GATEWAY") do
       ["openshell"]
     else
       []
@@ -877,30 +741,65 @@ defmodule MirrorNeuron.Cluster.Hardware do
   end
 
   defp docker_worker_driver do
-    docker_bin = Config.optional_string("MN_DOCKER_BIN", :docker_bin) || "docker"
-
     case Config.optional_string("MN_DOCKER_WORKER_ENABLED", :docker_worker_enabled) do
       value when value in ["0", "false", "FALSE", "no", "NO", "off", "OFF"] ->
         []
 
       value when value in ["1", "true", "TRUE", "yes", "YES", "on", "ON"] ->
-        if docker_worker_available?(docker_bin), do: ["docker_worker"], else: []
+        ["docker_worker"]
 
       _ ->
-        if docker_worker_available?(docker_bin), do: ["docker_worker"], else: []
+        []
     end
   end
 
-  defp docker_worker_available?(docker_bin) do
-    with executable when is_binary(executable) <- System.find_executable(docker_bin),
-         {_output, 0} <- System.cmd(executable, ["version"], stderr_to_stdout: true) do
-      true
-    else
-      _ -> false
+  defp docker_worker_available?(_docker_bin), do: false
+
+  defp configured_integer(env) do
+    case System.get_env(env) do
+      value when is_binary(value) ->
+        case Integer.parse(String.trim(value)) do
+          {integer, ""} -> integer
+          _ -> nil
+        end
+
+      _ ->
+        nil
     end
-  rescue
-    _ -> false
   end
+
+  defp configured_float(env) do
+    case System.get_env(env) do
+      value when is_binary(value) ->
+        case Float.parse(String.trim(value)) do
+          {float, ""} -> float
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp atomize_hardware(value) when is_map(value) do
+    Map.new(value, fn {key, nested} ->
+      atom_key =
+        if is_binary(key) do
+          try do
+            String.to_existing_atom(key)
+          rescue
+            ArgumentError -> key
+          end
+        else
+          key
+        end
+
+      {atom_key, atomize_hardware(nested)}
+    end)
+  end
+
+  defp atomize_hardware(value) when is_list(value), do: Enum.map(value, &atomize_hardware/1)
+  defp atomize_hardware(value), do: value
 
   defp parse_disk_df(output) do
     output

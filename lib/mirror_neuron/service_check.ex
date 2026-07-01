@@ -127,6 +127,15 @@ defmodule MirrorNeuron.ServiceCheck do
   end
 
   defp script_check(check, service, opts) do
+    if not legacy_script_checks_enabled?() do
+      {:error,
+       "script service checks are owned by mn-python-sdk/API/CLI; advertise a concrete service health result before Core checks it"}
+    else
+      legacy_script_check(check, service, opts)
+    end
+  end
+
+  defp legacy_script_check(check, service, opts) do
     with {:ok, command} <- normalize_command(Map.get(check, "command")),
          {:ok, root_path} <- script_root(check, service, opts) do
       timeout = timeout_ms(check)
@@ -162,6 +171,13 @@ defmodule MirrorNeuron.ServiceCheck do
           {:error, "script timed out after #{timeout}ms"}
       end
     end
+  end
+
+  defp legacy_script_checks_enabled? do
+    System.get_env("MN_CORE_ALLOW_SCRIPT_CHECKS")
+    |> to_string()
+    |> String.downcase()
+    |> then(&(&1 in ["1", "true", "yes", "on"]))
   end
 
   defp grpc_check(check, service) do
