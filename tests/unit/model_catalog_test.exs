@@ -137,6 +137,16 @@ defmodule MirrorNeuron.ModelCatalogTest do
     assert [%{"url" => "http://192.168.4.173:12434/v1/models"}] = service["checks"]
   end
 
+  test "model runner services advertise aliases and latest variants" do
+    [service] = ModelServices.service_instances_for_models(["nemotron3"], "spark")
+
+    assert service["name"] == "docker-model-runner"
+    assert "model:nemotron3" in service["tags"]
+    assert "model:nemotron3:latest" in service["tags"]
+    assert "model:ai/nemotron3:latest" in service["tags"]
+    assert "model-id:nemotron3" in service["tags"]
+  end
+
   test "model services use advertised host identity when docker hostname differs" do
     env = %{"MN_NETWORK_ADVERTISE_HOST" => "192.168.4.173"}
 

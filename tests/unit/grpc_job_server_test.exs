@@ -747,6 +747,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert_receive {:services_registered, services}
     assert [%{"name" => "docker-model-runner", "node" => ^node_name} = service] = services
     assert "model:nemotron3" in service["tags"]
+    assert "model:ai/nemotron3:latest" in service["tags"]
   end
 
   test "add_node clears stale disconnected scheduling state when a worker rejoins" do

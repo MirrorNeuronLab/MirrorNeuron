@@ -127,15 +127,24 @@ defmodule MirrorNeuron.ModelCatalog do
     requirements = Map.get(entry, "requirements", %{})
     service_kind = Map.get(entry, "service_kind")
 
+    model_tags =
+      entry
+      |> lookup_values()
+      |> Enum.flat_map(&MapSet.to_list(lookup_keys(&1)))
+      |> Enum.map(&"model:#{&1}")
+
+    model_id_tags =
+      [model_id(entry) || docker_model_name(entry)]
+      |> Enum.flat_map(&MapSet.to_list(lookup_keys(&1)))
+      |> Enum.map(&"model-id:#{&1}")
+
     base =
       [
         service_name(entry),
         provider,
         String.replace(provider, "_", "-"),
-        "provider:#{String.replace(provider, "_", "-")}",
-        "model:#{model_tag_value(entry)}",
-        "model-id:#{model_id_tag_value(entry)}"
-      ]
+        "provider:#{String.replace(provider, "_", "-")}"
+      ] ++ model_tags ++ model_id_tags
 
     accelerator =
       requirements
@@ -278,9 +287,6 @@ defmodule MirrorNeuron.ModelCatalog do
   end
 
   defp model_tag_value(entry), do: docker_model_name(entry) |> normalize_tag()
-
-  defp model_id_tag_value(entry),
-    do: (model_id(entry) || docker_model_name(entry)) |> normalize_tag()
 
   defp deep_merge(left, right) when is_map(left) and is_map(right) do
     Map.merge(left, right, fn _key, left_value, right_value ->
