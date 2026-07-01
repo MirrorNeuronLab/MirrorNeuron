@@ -616,6 +616,7 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
 
   alias MirrorNeuron.Cluster.JoinClaim
   alias MirrorNeuron.Cluster.NodeAdapter
+  alias MirrorNeuron.Cluster.NodeState
 
   alias Mirrorneuron.Cluster.V1.{
     AddNodeResponse,
@@ -779,14 +780,15 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
 
   def remove_node(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("RemoveNode")
-    clear_remote_join_claim(request.node_name)
-    disconnect_node_from_cluster(request.node_name)
 
-    case MirrorNeuron.remove_node(request.node_name) do
-      {:ok, %{status: status}} ->
+    case mark_node_operator_disconnected(request.node_name) do
+      {:ok, remote_node} ->
+        clear_remote_join_claim(request.node_name)
+        _ = NodeAdapter.disconnect(remote_node)
+
         %RemoveNodeResponse{
           node_name: request.node_name,
-          status: status,
+          status: "disconnected",
           version: @interface_version
         }
 
@@ -1338,30 +1340,25 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
 
   defp clear_remote_join_claim(_node_name), do: :ok
 
-  defp disconnect_node_from_cluster(node_name) when is_binary(node_name) and node_name != "" do
+  defp mark_node_operator_disconnected(node_name) when is_binary(node_name) do
     case MirrorNeuron.SafeAccess.node_name_to_atom(node_name) do
       {:ok, remote_node} ->
-        connected_nodes = NodeAdapter.list()
-        peer_nodes = Enum.reject(connected_nodes, &(&1 == remote_node))
-        peer_names = Enum.map(peer_nodes, &Atom.to_string/1)
-
-        if remote_node in connected_nodes do
-          _ =
-            NodeAdapter.rpc_call(remote_node, __MODULE__, :disconnect_peers, [peer_names], 2_000)
+        case NodeState.mark(node_name, "disconnected", %{
+               "operator_disconnect" => true,
+               "scheduling_eligible" => false,
+               "reason" => "operator requested disconnect"
+             }) do
+          {:ok, _state} -> {:ok, remote_node}
+          {:error, reason} -> {:error, to_string(reason)}
         end
 
-        Enum.each(peer_nodes, fn peer ->
-          _ = NodeAdapter.rpc_call(peer, __MODULE__, :disconnect_peer, [node_name], 2_000)
-        end)
-
-        :ok
-
       {:error, _reason} ->
-        :ok
+        {:error, "invalid node name #{inspect(node_name)}"}
     end
   end
 
-  defp disconnect_node_from_cluster(_node_name), do: :ok
+  defp mark_node_operator_disconnected(node_name),
+    do: {:error, "invalid node name #{inspect(node_name)}"}
 
   defp cookie_from_token(token) do
     :crypto.hash(:sha256, "mirror-neuron:cookie:#{token}")

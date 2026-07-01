@@ -736,27 +736,14 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert NodeState.schedulable?(node_name)
   end
 
-  test "remove_node disconnects cluster peers before marking operator disconnect locally" do
+  test "remove_node marks operator disconnect before clearing claim and disconnecting locally" do
     node_name = "mirror_neuron@10.0.0.42"
     remote_node = String.to_atom(node_name)
-    peer_a = :"peer-a@lab"
-    peer_b = :"peer-b@lab"
-
-    ClusterNodeAdapterStub.put_list([remote_node, peer_a, peer_b])
 
     response = ClusterServer.remove_node(%RemoveNodeRequest{node_name: node_name}, nil)
 
     assert response.node_name == node_name
     assert response.status == "disconnected"
-
-    assert_receive {:rpc_call, ^remote_node, ClusterServer, :clear_join_claim,
-                    ["mirror_neuron@test"], 2_000}
-
-    assert_receive {:rpc_call, ^remote_node, ClusterServer, :disconnect_peers,
-                    [["peer-a@lab", "peer-b@lab"]], 2_000}
-
-    assert_receive {:rpc_call, ^peer_a, ClusterServer, :disconnect_peer, [^node_name], 2_000}
-    assert_receive {:rpc_call, ^peer_b, ClusterServer, :disconnect_peer, [^node_name], 2_000}
 
     assert_receive {:node_state_persisted, ^node_name,
                     %{
@@ -764,6 +751,9 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
                       "operator_disconnect" => true,
                       "scheduling_eligible" => false
                     }}
+
+    assert_receive {:rpc_call, ^remote_node, ClusterServer, :clear_join_claim,
+                    ["mirror_neuron@test"], 2_000}
 
     assert_receive {:disconnect, ^remote_node}
   end
