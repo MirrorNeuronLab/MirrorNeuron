@@ -162,6 +162,44 @@ defmodule MirrorNeuron.Cluster.NodeStateTest do
     assert NodeState.schedulable?("node-c@lab")
   end
 
+  test "mark_connected clears stale disconnected cordon when add-node makes it eligible" do
+    assert {:ok, _state} =
+             NodeState.mark("node-rejoin@lab", "disconnected", %{
+               "scheduling_eligible" => false,
+               "reason" => "operator requested disconnect"
+             })
+
+    assert {:ok, reconnected} =
+             NodeState.mark_connected("node-rejoin@lab", %{
+               "operator_disconnect" => false,
+               "scheduling_eligible" => true,
+               "node_role" => "runtime"
+             })
+
+    assert reconnected["status"] == "healthy"
+    assert reconnected["operator_disconnect"] == false
+    assert reconnected["scheduling_eligible"] == true
+    assert reconnected["node_role"] == "runtime"
+    assert NodeState.schedulable?("node-rejoin@lab")
+  end
+
+  test "advertise_self clears stale self disconnect state on fresh runtime start" do
+    self_node = Node.self() |> to_string()
+
+    assert {:ok, _state} =
+             NodeState.mark(self_node, "disconnected", %{
+               "operator_disconnect" => true,
+               "scheduling_eligible" => false
+             })
+
+    assert {:ok, advertised} = NodeState.advertise_self("healthy", %{"hardware" => %{}})
+
+    assert advertised["status"] == "healthy"
+    assert advertised["operator_disconnect"] == false
+    assert advertised["scheduling_eligible"] == true
+    assert NodeState.schedulable?(self_node)
+  end
+
   test "direct node monitor marks preserve operator disconnect until explicitly cleared" do
     assert {:ok, _state} =
              NodeState.mark("node-d@lab", "disconnected", %{

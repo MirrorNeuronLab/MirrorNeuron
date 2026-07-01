@@ -712,6 +712,30 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
                     2_000}
   end
 
+  test "add_node clears stale disconnected scheduling state when a worker rejoins" do
+    node_name = "mirror_neuron@10.0.0.42"
+    remote_node = String.to_atom(node_name)
+
+    assert {:ok, _state} =
+             NodeState.mark(node_name, "disconnected", %{
+               "scheduling_eligible" => false,
+               "reason" => "operator requested disconnect"
+             })
+
+    assert_receive {:node_state_persisted, ^node_name, %{"status" => "disconnected"}}
+
+    response =
+      ClusterServer.add_node(%AddNodeRequest{node_name: node_name, token: "join-secret"}, nil)
+
+    assert response.node_name == node_name
+    assert response.status == "connected"
+    assert_receive {:connect, ^remote_node}
+    assert_receive {:node_state_persisted, ^node_name, %{"status" => "healthy"} = state}
+    assert state["operator_disconnect"] == false
+    assert state["scheduling_eligible"] == true
+    assert NodeState.schedulable?(node_name)
+  end
+
   test "remove_node disconnects cluster peers before marking operator disconnect locally" do
     node_name = "mirror_neuron@10.0.0.42"
     remote_node = String.to_atom(node_name)

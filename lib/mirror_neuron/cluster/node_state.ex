@@ -28,21 +28,39 @@ defmodule MirrorNeuron.Cluster.NodeState do
 
     case fetch(node_name) do
       {:ok, %{"operator_disconnect" => true} = existing} ->
-        if Map.get(attrs, "operator_disconnect") == false do
+        if clears_cordon?(attrs) do
           mark(
             node_name,
             "healthy",
-            Map.merge(existing, attrs) |> Map.put("scheduling_eligible", true)
+            existing
+            |> Map.merge(attrs)
+            |> Map.put("operator_disconnect", false)
+            |> Map.put("scheduling_eligible", true)
           )
         else
           mark(node_name, Map.get(existing, "status", "disconnected"), Map.merge(existing, attrs))
         end
 
       {:ok, %{"status" => status} = existing} when status in @operator_statuses ->
-        mark(node_name, status, Map.merge(existing, attrs))
+        mark(
+          node_name,
+          status,
+          Map.merge(existing, attrs) |> Map.put("scheduling_eligible", false)
+        )
 
       {:ok, %{"scheduling_eligible" => false} = existing} ->
-        mark(node_name, Map.get(existing, "status", "maintenance"), Map.merge(existing, attrs))
+        if clears_cordon?(attrs) do
+          mark(
+            node_name,
+            "healthy",
+            existing
+            |> Map.merge(attrs)
+            |> Map.put("operator_disconnect", false)
+            |> Map.put("scheduling_eligible", true)
+          )
+        else
+          mark(node_name, Map.get(existing, "status", "maintenance"), Map.merge(existing, attrs))
+        end
 
       _ ->
         mark(node_name, "healthy", attrs)
@@ -94,6 +112,8 @@ defmodule MirrorNeuron.Cluster.NodeState do
       |> Map.merge(Profile.node_advertisement())
       |> Map.merge(MirrorNeuron.Artifacts.Registry.node_advertisement())
       |> Map.merge(attrs)
+      |> Map.put_new("operator_disconnect", false)
+      |> Map.put_new("scheduling_eligible", true)
       |> merge_capabilities(hardware)
 
     ModelServices.advertise_env_models(NodeAdapter.self())
@@ -171,6 +191,12 @@ defmodule MirrorNeuron.Cluster.NodeState do
   defp clears_operator_disconnect?(attrs) do
     Map.get(attrs, "operator_disconnect") == false or
       Map.get(attrs, :operator_disconnect) == false
+  end
+
+  defp clears_cordon?(attrs) do
+    clears_operator_disconnect?(attrs) or
+      Map.get(attrs, "scheduling_eligible") == true or
+      Map.get(attrs, :scheduling_eligible) == true
   end
 
   defp merge_capabilities(attrs, hardware) do
