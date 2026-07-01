@@ -702,6 +702,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       |> Map.put("__mirror_neuron_allocation", allocation)
       |> put_artifact_environment(runtime_context[:artifact_refs] || [])
       |> put_allocation_environment(allocation)
+      |> put_runtime_environment(runtime_context[:runtime_env] || %{})
 
     %{node | config: runtime_config}
   end
@@ -774,6 +775,21 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       _env -> artifact_env
     end)
   end
+
+  defp put_runtime_environment(config, runtime_env) when is_map(runtime_env) do
+    runtime_env =
+      runtime_env
+      |> Enum.into(%{}, fn {key, value} -> {to_string(key), to_string(value)} end)
+      |> Enum.reject(fn {_key, value} -> value == "" end)
+      |> Map.new()
+
+    Map.update(config, "environment", runtime_env, fn
+      env when is_map(env) -> Map.merge(env, runtime_env)
+      _env -> runtime_env
+    end)
+  end
+
+  defp put_runtime_environment(config, _runtime_env), do: config
 
   defp maybe_recover_actions(%{recovered_snapshot: nil} = state), do: {:ok, state}
 

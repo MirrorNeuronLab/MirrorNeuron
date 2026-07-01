@@ -2748,6 +2748,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       policy_state: state.policy_state,
       deployment: deployment_job_fields(state),
       submitted_at: state.submitted_at,
+      runtime_env: MirrorNeuron.Runtime.RedisEnvironment.agent_env(),
       manifest_version: state.manifest.manifest_version,
       lease_epoch: lease && lease["epoch"],
       lease_owner: lease && lease["owner_id"],
