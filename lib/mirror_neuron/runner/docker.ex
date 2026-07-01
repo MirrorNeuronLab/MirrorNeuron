@@ -462,7 +462,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
   end
 
   defp run_worker_command(image, base_dir, config, opts) do
-    if shared_container?(config, opts) do
+    if shared_container?(config, opts) or not native_sandbox_prep_enabled?() do
       run_shared_docker(image, base_dir, config, opts)
     else
       with {:ok, docker_args, command_name} <- build_docker_args(image, base_dir, config, opts),

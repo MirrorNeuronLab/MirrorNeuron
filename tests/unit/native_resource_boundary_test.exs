@@ -41,6 +41,23 @@ defmodule MirrorNeuron.NativeResourceBoundaryTest do
     assert sandbox["image"] == "worker:latest"
   end
 
+  test "DockerWorker runner refuses unprepared ad hoc containers by default" do
+    assert {:error, reason} =
+             DockerWorker.run(
+               %{},
+               %{
+                 "image" => "worker:latest",
+                 "command" => ["sh", "-lc", "true"],
+                 "reuse_shared_container" => false
+               },
+               job_id: "job-boundary",
+               agent_id: "docker"
+             )
+
+    assert reason =~ "docker_worker sandbox"
+    assert reason =~ "prepare DockerWorker resources"
+  end
+
   test "OpenShell sandbox requires a prepared sandbox by default" do
     assert {:error, reason} = OpenShellJobSandbox.ensure("job-boundary", %{})
     assert reason =~ "OpenShell sandbox"
