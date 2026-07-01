@@ -3,6 +3,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
   alias MirrorNeuron.Grpc.ClusterServer
   alias MirrorNeuron.Grpc.JobServer
+  alias MirrorNeuron.Cluster.JoinClaim
   alias MirrorNeuron.Cluster.NodeState
 
   alias Mirrorneuron.Cluster.V1.{
@@ -150,6 +151,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     old_operator_token_file = System.get_env(@operator_token_file_env)
     old_network_only = System.get_env("MN_NETWORK_ONLY")
     old_network_token = System.get_env("MN_NETWORK_JOIN_TOKEN")
+    old_mn_home = System.get_env("MN_HOME")
     old_advertise_host = System.get_env("MN_NETWORK_ADVERTISE_HOST")
     old_redis_host = System.get_env("MN_NETWORK_REDIS_HOST")
     old_redis_port = System.get_env("MN_NETWORK_REDIS_PORT")
@@ -174,6 +176,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     old_node_state_store = Application.get_env(:mirror_neuron, :node_state_store)
     old_system_namespace = System.get_env("MN_REDIS_NAMESPACE")
     namespace = "mirror_neuron_grpc_job_server_test_#{System.unique_integer([:positive])}"
+    mn_home = Path.join(System.tmp_dir!(), "mn-home-#{System.unique_integer([:positive])}")
 
     ClusterNodeAdapterStub.reset()
     NodeStateStoreStub.reset()
@@ -183,6 +186,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     Application.put_env(:mirror_neuron, :redis_reconnect_attempts, 0)
     System.put_env("MN_REDIS_NAMESPACE", namespace)
     System.put_env("MN_REDIS_RECONNECT_ATTEMPTS", "0")
+    System.put_env("MN_HOME", mn_home)
 
     System.delete_env(@admin_token_env)
     System.delete_env(@admin_token_file_env)
@@ -215,6 +219,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       restore_env(@operator_token_file_env, old_operator_token_file)
       restore_env("MN_NETWORK_ONLY", old_network_only)
       restore_env("MN_NETWORK_JOIN_TOKEN", old_network_token)
+      restore_env("MN_HOME", old_mn_home)
       restore_env("MN_NETWORK_ADVERTISE_HOST", old_advertise_host)
       restore_env("MN_NETWORK_REDIS_HOST", old_redis_host)
       restore_env("MN_NETWORK_REDIS_PORT", old_redis_port)
@@ -230,6 +235,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       restore_env("MN_HOST_SHARED_STORAGE_ROOT", old_host_shared_storage_root)
       restore_env("MN_RUNTIME_SHARED_STORAGE_ROOT", old_runtime_shared_storage_root)
       restore_env("MN_REDIS_RECONNECT_ATTEMPTS", old_reconnect_attempts)
+      File.rm_rf(mn_home)
     end)
   end
 
@@ -371,7 +377,13 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     System.put_env(@admin_token_env, "primary-admin-token")
 
     response =
-      ClusterServer.network_handshake(%NetworkHandshakeRequest{token: "join-secret"}, nil)
+      ClusterServer.network_handshake(
+        %NetworkHandshakeRequest{
+          token: "join-secret",
+          node_name: "mirror_neuron@192.168.4.20"
+        },
+        nil
+      )
 
     assert response.network_only
     assert response.runtime_mode == "network_only"
@@ -406,7 +418,13 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     System.put_env("MN_REDIS_URL", "redis://redis:6379/0")
 
     response =
-      ClusterServer.network_handshake(%NetworkHandshakeRequest{token: "join-secret"}, nil)
+      ClusterServer.network_handshake(
+        %NetworkHandshakeRequest{
+          token: "join-secret",
+          node_name: "mirror_neuron@192.168.4.20"
+        },
+        nil
+      )
 
     assert response.redis_url == "redis://192.168.4.10:6380/0"
   end
@@ -423,7 +441,13 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     System.put_env(@admin_token_file_env, admin_file)
 
     response =
-      ClusterServer.network_handshake(%NetworkHandshakeRequest{token: "join-secret"}, nil)
+      ClusterServer.network_handshake(
+        %NetworkHandshakeRequest{
+          token: "join-secret",
+          node_name: "mirror_neuron@192.168.4.20"
+        },
+        nil
+      )
 
     assert response.grpc_auth_token == "stale-auth-token"
     assert response.grpc_admin_token == "stale-admin-token"
@@ -446,6 +470,57 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       )
 
     assert {:error, _reason} = NodeState.fetch(joining_node)
+  end
+
+  test "network-only handshake keeps worker claimed by the first master" do
+    System.put_env("MN_NETWORK_ONLY", "true")
+    System.put_env("MN_NETWORK_JOIN_TOKEN", "join-secret")
+
+    owner_a = "mirror_neuron@10.0.0.11"
+    owner_b = "mirror_neuron@10.0.0.12"
+
+    response =
+      ClusterServer.network_handshake(
+        %NetworkHandshakeRequest{token: "join-secret", node_name: owner_a},
+        nil
+      )
+
+    assert response.network_only
+    assert {:ok, %{"state" => "pending", "owner_node" => ^owner_a}} = JoinClaim.read()
+
+    retry =
+      ClusterServer.network_handshake(
+        %NetworkHandshakeRequest{token: "join-secret", node_name: owner_a},
+        nil
+      )
+
+    assert retry.network_only
+
+    error =
+      assert_raise GRPC.RPCError, fn ->
+        ClusterServer.network_handshake(
+          %NetworkHandshakeRequest{token: "join-secret", node_name: owner_b},
+          nil
+        )
+      end
+
+    assert error.status == GRPC.Status.already_exists()
+    assert Exception.message(error) =~ "already join a cluster"
+  end
+
+  test "join claim confirm and clear helpers update worker-local ownership" do
+    owner = "mirror_neuron@10.0.0.11"
+
+    assert {:ok, %{"state" => "pending"}} = JoinClaim.reserve(owner)
+    assert :ok = ClusterServer.confirm_join_claim(owner)
+    assert {:ok, %{"state" => "confirmed", "owner_node" => ^owner} = claim} = JoinClaim.read()
+    refute Map.has_key?(claim, "expires_at")
+
+    assert {:error, {:already_joined, ^owner}} =
+             ClusterServer.confirm_join_claim("mirror_neuron@10.0.0.12")
+
+    assert :ok = ClusterServer.clear_join_claim(owner)
+    assert {:error, :missing} = JoinClaim.read()
   end
 
   test "network handshake records joining node metadata for scheduling" do
@@ -615,6 +690,9 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert state["operator_disconnect"] == false
     assert state["scheduling_eligible"] == true
 
+    assert_receive {:rpc_call, ^remote_node, ClusterServer, :confirm_join_claim,
+                    ["mirror_neuron@test"], 2_000}
+
     assert_receive {:rpc_call, ^peer_a, ClusterServer, :set_peer_cookie, [^node_name, ^cookie],
                     2_000}
 
@@ -646,6 +724,9 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
     assert response.node_name == node_name
     assert response.status == "disconnected"
+
+    assert_receive {:rpc_call, ^remote_node, ClusterServer, :clear_join_claim,
+                    ["mirror_neuron@test"], 2_000}
 
     assert_receive {:rpc_call, ^remote_node, ClusterServer, :disconnect_peers,
                     [["peer-a@lab", "peer-b@lab"]], 2_000}

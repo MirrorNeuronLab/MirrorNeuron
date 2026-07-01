@@ -81,6 +81,13 @@ defmodule MirrorNeuron.Config.Schema do
       ),
       spec("MN_NODE_RECONNECT_ATTEMPTS", :node_reconnect_attempts, :integer, default: 3),
       spec("MN_NODE_RECONNECT_BACKOFF_MS", :node_reconnect_backoff_ms, :integer, default: 1_000),
+      spec("MN_NODE_HEALTH_PROBE_INTERVAL_MS", :node_health_probe_interval_ms, :integer,
+        default: 10_000
+      ),
+      spec("MN_NODE_HEALTH_MISSES", :node_health_misses, :integer, default: 3),
+      spec("MN_NODE_HEALTH_PROBE_TIMEOUT_MS", :node_health_probe_timeout_ms, :integer,
+        default: 2_000
+      ),
       spec("MN_OPENSHELL_BIN", :openshell_bin, :path, default: "openshell"),
       spec("MN_DOCKER_BIN", :docker_bin, :path, default: "docker"),
       spec("MN_DOCKER_WORKER_ENABLED", :docker_worker_enabled, :boolean),

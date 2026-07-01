@@ -1066,7 +1066,7 @@ defmodule MirrorNeuron.SchedulerTest do
           "models" => %{
             "primary" => %{
               "provider" => "docker_model_runner",
-              "model" => "nemotron3:latest"
+              "model" => "nemotron3"
             }
           }
         },
@@ -1085,7 +1085,7 @@ defmodule MirrorNeuron.SchedulerTest do
                nodes: [small_node(), put_gpu_memory(h100_node(), 60_000)],
                jobs: [],
                service_instances: [
-                 model_service("nemotron3:latest", "h100@lab")
+                 model_service("nemotron3", "h100@lab")
                ]
              )
 

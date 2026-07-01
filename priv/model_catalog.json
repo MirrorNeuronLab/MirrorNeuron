@@ -24,14 +24,15 @@
       ]
     },
     {
-      "id": "nemotron3:latest",
+      "id": "nemotron3",
       "name": "Nemotron 3 Latest",
       "description": "Large Docker Model Runner LLM for 48GB-or-above GPU or integrated-GPU nodes.",
       "provider": "docker_model_runner",
-      "model": "ai/nemotron3:latest",
-      "api_model": "ai/nemotron3:latest",
+      "model": "nemotron3",
+      "api_model": "nemotron3",
       "aliases": [
-        "nemotron3",
+        "nemotron3:latest",
+        "ai/nemotron3:latest",
         "nvidia-nemotron3-latest",
         "nemotron3-latest"
       ],

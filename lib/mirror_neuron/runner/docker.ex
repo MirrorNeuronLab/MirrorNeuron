@@ -360,20 +360,27 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     else
       lower = String.downcase(text)
 
-      keys =
-        cond do
-          String.starts_with?(lower, "ai/") ->
-            [lower, String.replace_prefix(lower, "ai/", "")]
-
-          not String.contains?(lower, "/") ->
-            [lower, "ai/#{lower}"]
-
-          true ->
-            [lower]
-        end
-
-      MapSet.new(keys)
+      lower
+      |> model_match_key_variants()
+      |> MapSet.new()
     end
+  end
+
+  defp model_match_key_variants(value) do
+    no_ai = String.replace_prefix(value, "ai/", "")
+    no_latest = String.replace_suffix(value, ":latest", "")
+    no_ai_latest = no_ai |> String.replace_suffix(":latest", "")
+
+    [value, no_ai, no_latest, no_ai_latest]
+    |> Enum.flat_map(fn key ->
+      if String.contains?(key, "/") do
+        [key]
+      else
+        [key, "ai/#{key}"]
+      end
+    end)
+    |> Enum.reject(&(&1 == "" or &1 == "ai/"))
+    |> Enum.uniq()
   end
 
   defp reject_published_ports(config) do

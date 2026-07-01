@@ -68,6 +68,9 @@ defmodule MirrorNeuron.ServiceRegistry do
   def deregister_service(service_id), do: RedisStore.delete_service_instance(service_id)
   def deregister_job(job_id), do: RedisStore.delete_service_instances(job_id: job_id)
 
+  def deregister_node(node_name),
+    do: RedisStore.delete_service_instances(node: to_string(node_name))
+
   def deregister_agent(job_id, agent_id),
     do: RedisStore.delete_service_instances(job_id: job_id, agent_id: agent_id)
 

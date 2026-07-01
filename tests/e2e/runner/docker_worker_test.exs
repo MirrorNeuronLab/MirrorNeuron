@@ -156,9 +156,9 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
 
     endpoints =
       Jason.encode!(%{
-        "nemotron3:latest" => %{
-          "model" => "ai/nemotron3:latest",
-          "runtime_model" => "ai/nemotron3:latest",
+        "nemotron3" => %{
+          "model" => "nemotron3",
+          "runtime_model" => "nemotron3",
           "api_base" => "http://host.docker.internal:12434/engines/v1"
         }
       })
@@ -208,7 +208,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
 
     File.chmod!(fake_docker, 0o755)
     System.put_env("MN_DOCKER_BIN", fake_docker)
-    System.put_env("MN_NODE_RUNTIME_MODELS", "gemma4:e2b,nemotron3:latest")
+    System.put_env("MN_NODE_RUNTIME_MODELS", "gemma4:e2b,nemotron3")
 
     assert {:ok, result} =
              DockerWorker.run(

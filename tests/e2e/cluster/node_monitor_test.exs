@@ -72,6 +72,13 @@ defmodule MirrorNeuron.Cluster.NodeMonitorTest do
     end
   end
 
+  defmodule ServiceRegistryStub do
+    def deregister_node(node_name) do
+      send(Process.whereis(:node_monitor_test_pid), {:services_deregistered, node_name})
+      :ok
+    end
+  end
+
   setup do
     if Process.whereis(@test_pid_name), do: Process.unregister(@test_pid_name)
     Process.register(self(), @test_pid_name)
@@ -293,6 +300,7 @@ defmodule MirrorNeuron.Cluster.NodeMonitorTest do
     assert opts[:reason] == "node reconnect failed after 3 attempts"
     assert opts[:redis_store] == RedisStoreStub
     assert opts[:event_bus] == EventBusStub
+    assert_receive {:services_deregistered, ^node_name}
 
     send(monitor, {:nodeup, Node.self()})
     assert_receive {:node_state_marked, _node, "healthy", %{}}
@@ -340,7 +348,42 @@ defmodule MirrorNeuron.Cluster.NodeMonitorTest do
     assert_receive {:reconcile_node, ^node, offline_opts}, 500
     assert offline_opts[:node_status] == "offline"
     assert offline_opts[:force] == true
+    assert_receive {:services_deregistered, node_name}
+    assert node_name == Atom.to_string(node)
     assert_receive {:leader_node_down, ^node}, 500
+  end
+
+  test "health probes enter reconnect path after configured misses" do
+    node = :worker@lab
+
+    monitor =
+      start_monitor(
+        list_nodes: fn -> [node] end,
+        health_probe_interval_ms: 5,
+        health_misses: 2,
+        health_probe_timeout_ms: 7,
+        reconnect_attempts: 1,
+        reconnect_backoff_ms: 5,
+        connect: fn ^node ->
+          send(parent_pid(), {:connect_attempted, node})
+          false
+        end,
+        health_probe: fn ^node, 7 ->
+          send(parent_pid(), {:health_probe, node})
+          false
+        end
+      )
+
+    assert is_pid(monitor)
+    assert_receive {:health_probe, ^node}, 100
+    refute_received {:node_state_marked, ^node, "reconnecting", %{}}
+
+    assert_receive {:health_probe, ^node}, 100
+    assert_receive {:node_state_marked, ^node, "reconnecting", %{}}, 100
+    assert_receive {:connect_attempted, ^node}, 100
+    assert_receive {:node_state_marked, ^node, "offline", %{}}, 100
+    assert_receive {:services_deregistered, "worker@lab"}, 100
+    assert_receive {:leader_node_down, ^node}, 100
   end
 
   test "nodeup during disconnected grace cancels offline recovery" do
@@ -393,7 +436,8 @@ defmodule MirrorNeuron.Cluster.NodeMonitorTest do
            leader: LeaderStub,
            reconciler: ReconcilerStub,
            redis_store: RedisStoreStub,
-           event_bus: EventBusStub
+           event_bus: EventBusStub,
+           service_registry: ServiceRegistryStub
          ],
          opts
        )}

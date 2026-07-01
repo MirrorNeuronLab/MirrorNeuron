@@ -5,10 +5,14 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
   alias MirrorNeuron.Cluster.Reconciler
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime.EventBus
+  alias MirrorNeuron.ServiceRegistry
 
   @default_reconnect_attempts 3
   @default_reconnect_backoff_ms 1_000
   @default_disconnect_grace_ms 30_000
+  @default_health_probe_interval_ms 10_000
+  @default_health_misses 3
+  @default_health_probe_timeout_ms 2_000
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -21,42 +25,69 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
       node_state(opts).advertise_self("healthy", %{"self" => true})
     end
 
-    {:ok,
-     %{
-       reconnecting: %{},
-       disconnecting: %{},
-       connect: Keyword.get(opts, :connect, &Node.connect/1),
-       lease_manager_module:
-         Keyword.get(opts, :lease_manager_module, MirrorNeuron.Execution.LeaseManager),
-       lease_manager_server:
-         Keyword.get(opts, :lease_manager_server, MirrorNeuron.Execution.LeaseManager),
-       leader: Keyword.get(opts, :leader, MirrorNeuron.Cluster.Leader),
-       node_state: node_state(opts),
-       reconciler: Keyword.get(opts, :reconciler, Reconciler),
-       redis_store: Keyword.get(opts, :redis_store, RedisStore),
-       event_bus: Keyword.get(opts, :event_bus, EventBus),
-       reconnect_attempts:
-         Keyword.get(opts, :reconnect_attempts) ||
-           config_positive_integer(
-             "MN_NODE_RECONNECT_ATTEMPTS",
-             :node_reconnect_attempts,
-             @default_reconnect_attempts
-           ),
-       reconnect_backoff_ms:
-         Keyword.get(opts, :reconnect_backoff_ms) ||
-           config_positive_integer(
-             "MN_NODE_RECONNECT_BACKOFF_MS",
-             :node_reconnect_backoff_ms,
-             @default_reconnect_backoff_ms
-           ),
-       disconnect_grace_ms:
-         Keyword.get(opts, :disconnect_grace_ms) ||
-           config_non_negative_integer(
-             "MN_NODE_DISCONNECT_GRACE_MS",
-             :node_disconnect_grace_ms,
-             @default_disconnect_grace_ms
-           )
-     }}
+    state = %{
+      reconnecting: %{},
+      disconnecting: %{},
+      health_probe_timer_ref: nil,
+      health_misses: %{},
+      connect: Keyword.get(opts, :connect, &Node.connect/1),
+      list_nodes: Keyword.get(opts, :list_nodes, &Node.list/0),
+      health_probe: Keyword.get(opts, :health_probe, &default_health_probe/2),
+      lease_manager_module:
+        Keyword.get(opts, :lease_manager_module, MirrorNeuron.Execution.LeaseManager),
+      lease_manager_server:
+        Keyword.get(opts, :lease_manager_server, MirrorNeuron.Execution.LeaseManager),
+      leader: Keyword.get(opts, :leader, MirrorNeuron.Cluster.Leader),
+      node_state: node_state(opts),
+      reconciler: Keyword.get(opts, :reconciler, Reconciler),
+      redis_store: Keyword.get(opts, :redis_store, RedisStore),
+      event_bus: Keyword.get(opts, :event_bus, EventBus),
+      service_registry: Keyword.get(opts, :service_registry, ServiceRegistry),
+      reconnect_attempts:
+        Keyword.get(opts, :reconnect_attempts) ||
+          config_positive_integer(
+            "MN_NODE_RECONNECT_ATTEMPTS",
+            :node_reconnect_attempts,
+            @default_reconnect_attempts
+          ),
+      reconnect_backoff_ms:
+        Keyword.get(opts, :reconnect_backoff_ms) ||
+          config_positive_integer(
+            "MN_NODE_RECONNECT_BACKOFF_MS",
+            :node_reconnect_backoff_ms,
+            @default_reconnect_backoff_ms
+          ),
+      disconnect_grace_ms:
+        Keyword.get(opts, :disconnect_grace_ms) ||
+          config_non_negative_integer(
+            "MN_NODE_DISCONNECT_GRACE_MS",
+            :node_disconnect_grace_ms,
+            @default_disconnect_grace_ms
+          ),
+      health_probe_interval_ms:
+        Keyword.get(opts, :health_probe_interval_ms) ||
+          config_non_negative_integer(
+            "MN_NODE_HEALTH_PROBE_INTERVAL_MS",
+            :node_health_probe_interval_ms,
+            @default_health_probe_interval_ms
+          ),
+      health_misses_allowed:
+        Keyword.get(opts, :health_misses) ||
+          config_positive_integer(
+            "MN_NODE_HEALTH_MISSES",
+            :node_health_misses,
+            @default_health_misses
+          ),
+      health_probe_timeout_ms:
+        Keyword.get(opts, :health_probe_timeout_ms) ||
+          config_positive_integer(
+            "MN_NODE_HEALTH_PROBE_TIMEOUT_MS",
+            :node_health_probe_timeout_ms,
+            @default_health_probe_timeout_ms
+          )
+    }
+
+    {:ok, schedule_health_probe(state)}
   end
 
   @impl true
@@ -68,6 +99,7 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
       |> node_name()
       |> cancel_reconnect(state)
       |> cancel_disconnect(node_name(node))
+      |> clear_health_misses(node_name(node))
 
     restore_executor_capacity(state)
     mark_node_connected(state.node_state, node)
@@ -77,9 +109,7 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
   end
 
   def handle_info({:nodedown, node}, state) do
-    Logger.notice("Node left cluster: #{node}")
-    state.node_state.mark(node, "reconnecting")
-    {:noreply, schedule_reconnect(node, 1, state)}
+    {:noreply, begin_reconnect(node, "Node left cluster: #{node}", state)}
   end
 
   def handle_info({:reconnect_node, node, attempt}, state) do
@@ -106,7 +136,60 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
     end
   end
 
+  def handle_info(:health_probe, state) do
+    state =
+      state
+      |> run_health_probes()
+      |> schedule_health_probe()
+
+    {:noreply, state}
+  end
+
   def handle_info(_msg, state), do: {:noreply, state}
+
+  defp begin_reconnect(node, log_message, state) do
+    Logger.notice(log_message)
+    state.node_state.mark(node, "reconnecting")
+
+    state
+    |> clear_health_misses(node_name(node))
+    |> then(&schedule_reconnect(node, 1, &1))
+  end
+
+  defp run_health_probes(state) do
+    state.list_nodes.()
+    |> Enum.reject(&(&1 == Node.self()))
+    |> Enum.reduce(state, fn node, acc -> probe_node(node, acc) end)
+  end
+
+  defp probe_node(node, state) do
+    name = node_name(node)
+
+    cond do
+      Map.has_key?(state.reconnecting, name) ->
+        state
+
+      Map.has_key?(state.disconnecting, name) ->
+        state
+
+      state.health_probe.(node, state.health_probe_timeout_ms) ->
+        clear_health_misses(state, name)
+
+      true ->
+        misses = Map.get(state.health_misses, name, 0) + 1
+        state = put_in(state.health_misses[name], misses)
+
+        if misses >= state.health_misses_allowed do
+          begin_reconnect(
+            node,
+            "Node health probe failed #{misses} time(s): #{node}",
+            state
+          )
+        else
+          state
+        end
+    end
+  end
 
   defp reconnect_node(node, attempt, state) do
     if state.connect.(node) do
@@ -114,7 +197,14 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
       restore_executor_capacity(state)
       mark_node_connected(state.node_state, node)
       wake_blocked_evals(node, state)
-      {:noreply, cancel_reconnect(node_name(node), state)}
+
+      state =
+        node
+        |> node_name()
+        |> cancel_reconnect(state)
+        |> clear_health_misses(node_name(node))
+
+      {:noreply, state}
     else
       if attempt >= state.reconnect_attempts do
         {:noreply, exhaust_reconnect(node, state)}
@@ -134,6 +224,7 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
       node
       |> node_name()
       |> cancel_reconnect(state)
+      |> clear_health_misses(node_name(node))
 
     if state.disconnect_grace_ms > 0 do
       wait_until = iso_after(state.disconnect_grace_ms)
@@ -149,6 +240,7 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
     else
       state.node_state.mark(node, "offline")
       reconcile_node(node, reason, state, node_status: "offline")
+      deregister_node_services(node, state)
       state.leader.node_down(node)
       state
     end
@@ -160,6 +252,7 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
     Logger.warning("#{reason}: #{node}")
     state.node_state.mark(node, "offline", %{"reason" => reason})
     reconcile_node(node, reason, state, node_status: "offline", force: true)
+    deregister_node_services(node, state)
     state.leader.node_down(node)
 
     cancel_disconnect(state, node_name(node))
@@ -218,6 +311,26 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
     end
   end
 
+  defp clear_health_misses(state, name) do
+    %{state | health_misses: Map.delete(state.health_misses, name)}
+  end
+
+  defp schedule_health_probe(%{health_probe_interval_ms: interval_ms} = state)
+       when interval_ms > 0 do
+    state = cancel_health_probe(state)
+    timer_ref = Process.send_after(self(), :health_probe, interval_ms)
+    %{state | health_probe_timer_ref: timer_ref}
+  end
+
+  defp schedule_health_probe(state), do: state
+
+  defp cancel_health_probe(%{health_probe_timer_ref: nil} = state), do: state
+
+  defp cancel_health_probe(%{health_probe_timer_ref: timer_ref} = state) do
+    Process.cancel_timer(timer_ref)
+    %{state | health_probe_timer_ref: nil}
+  end
+
   defp reconnect_delay(attempt, initial_backoff_ms) do
     trunc(initial_backoff_ms * :math.pow(2, attempt - 1))
   end
@@ -252,6 +365,14 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
           "failed to reconcile jobs for unavailable node #{node}: #{inspect(reconcile_reason)}"
         )
     end
+  end
+
+  defp deregister_node_services(node, state) do
+    if function_exported?(state.service_registry, :deregister_node, 1) do
+      _ = state.service_registry.deregister_node(to_string(node))
+    end
+  rescue
+    _ -> :ok
   end
 
   defp wake_blocked_evals(node, state) do
@@ -330,4 +451,11 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
   defp node_name(node) when is_atom(node), do: Atom.to_string(node)
   defp node_name(node) when is_binary(node), do: node
   defp node_name(node), do: to_string(node)
+
+  defp default_health_probe(node, timeout_ms) do
+    case :rpc.call(node, :erlang, :node, [], timeout_ms) do
+      ^node -> true
+      _other -> false
+    end
+  end
 end

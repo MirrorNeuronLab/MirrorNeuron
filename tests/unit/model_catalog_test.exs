@@ -12,9 +12,14 @@ defmodule MirrorNeuron.ModelCatalogTest do
     assert gemma["model"] == "ai/gemma4:E2B"
 
     assert {:ok, latest_nemotron} = ModelCatalog.resolve("nvidia-nemotron3-latest", catalog)
-    assert latest_nemotron["id"] == "nemotron3:latest"
-    assert latest_nemotron["model"] == "ai/nemotron3:latest"
+    assert latest_nemotron["id"] == "nemotron3"
+    assert latest_nemotron["model"] == "nemotron3"
     assert get_in(latest_nemotron, ["requirements", "min_unified_memory_gb"]) == 48
+
+    for legacy_ref <- ["nemotron3:latest", "ai/nemotron3:latest", "ai/nemotron3"] do
+      assert {:ok, legacy_nemotron} = ModelCatalog.resolve(legacy_ref, catalog)
+      assert legacy_nemotron["id"] == "nemotron3"
+    end
 
     assert {:ok, nemotron} = ModelCatalog.resolve("nemotron3-33b", catalog)
     assert nemotron["id"] == "ollama/nemotron3:33b"

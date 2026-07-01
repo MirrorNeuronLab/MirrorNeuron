@@ -40,14 +40,18 @@ defmodule MirrorNeuron.ModelCatalog do
   end
 
   def resolve(model, catalog \\ load_catalog()) do
-    requested = normalize_lookup(model || "gemma4:e2b")
+    requested = lookup_keys(model || "gemma4:e2b")
 
     catalog
     |> Map.values()
     |> Enum.find(fn entry ->
       entry
       |> lookup_values()
-      |> Enum.any?(&(normalize_lookup(&1) == requested))
+      |> Enum.any?(fn value ->
+        value
+        |> lookup_keys()
+        |> Enum.any?(&MapSet.member?(requested, &1))
+      end)
     end)
     |> case do
       nil -> {:error, :unknown_model}
@@ -249,7 +253,29 @@ defmodule MirrorNeuron.ModelCatalog do
     |> Enum.reject(&is_nil/1)
   end
 
+  defp lookup_keys(value) do
+    normalized = normalize_lookup(value)
+    no_ai = strip_ai_prefix(normalized)
+    no_latest = strip_latest_tag(normalized)
+    no_ai_latest = no_ai |> strip_latest_tag()
+
+    [normalized, no_ai, no_latest, no_ai_latest]
+    |> Enum.reject(&(&1 == ""))
+    |> MapSet.new()
+  end
+
   defp normalize_lookup(value), do: value |> to_string() |> String.trim() |> String.downcase()
+
+  defp strip_ai_prefix("ai/" <> value), do: value
+  defp strip_ai_prefix(value), do: value
+
+  defp strip_latest_tag(value) do
+    if String.ends_with?(value, ":latest") do
+      String.replace_suffix(value, ":latest", "")
+    else
+      value
+    end
+  end
 
   defp model_tag_value(entry), do: docker_model_name(entry) |> normalize_tag()
 

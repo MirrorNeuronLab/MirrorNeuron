@@ -614,6 +614,7 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
   use GRPC.Server, service: Mirrorneuron.Cluster.V1.ClusterService.Service
   @interface_version 1
 
+  alias MirrorNeuron.Cluster.JoinClaim
   alias MirrorNeuron.Cluster.NodeAdapter
 
   alias Mirrorneuron.Cluster.V1.{
@@ -633,10 +634,12 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
     SetResourceResponse
   }
 
-  def network_handshake(request, _stream) do
+  def network_handshake(request, stream) do
     authorize_network_join!(Map.get(request, :token, ""))
 
-    unless MirrorNeuron.Grpc.NetworkOnly.enabled?() do
+    if MirrorNeuron.Grpc.NetworkOnly.enabled?() do
+      reserve_join_claim!(request, stream)
+    else
       maybe_record_joining_node(request)
     end
 
@@ -703,6 +706,7 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
 
     case MirrorNeuron.add_node(request.node_name) do
       {:ok, %{status: status}} ->
+        confirm_remote_join_claim(request.node_name)
         sync_remote_cookie_with_cluster(request.node_name, token)
 
         %AddNodeResponse{
@@ -763,8 +767,19 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
     :ok
   end
 
+  @doc false
+  def confirm_join_claim(owner_node_name) do
+    JoinClaim.confirm(owner_node_name)
+  end
+
+  @doc false
+  def clear_join_claim(owner_node_name) do
+    JoinClaim.clear(owner_node_name)
+  end
+
   def remove_node(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("RemoveNode")
+    clear_remote_join_claim(request.node_name)
     disconnect_node_from_cluster(request.node_name)
 
     case MirrorNeuron.remove_node(request.node_name) do
@@ -998,6 +1013,76 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
     :ok
   end
 
+  defp reserve_join_claim!(request, stream) do
+    owner = join_claim_owner(request, stream)
+    owner_info = request |> Map.get(:node_info_json, "") |> decode_node_info()
+
+    attrs =
+      %{
+        "owner_peer" => peer_identity(stream),
+        "owner_grpc_host" => Map.get(owner_info, "grpc_host"),
+        "owner_grpc_port" => Map.get(owner_info, "grpc_port")
+      }
+      |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
+      |> Map.new()
+
+    case JoinClaim.reserve(owner, attrs) do
+      {:ok, _claim} ->
+        :ok
+
+      {:error, :missing_owner} ->
+        raise GRPC.RPCError,
+          status: GRPC.Status.invalid_argument(),
+          message: "joining node_name is required"
+
+      {:error, {:already_joined, _existing_owner}} ->
+        raise GRPC.RPCError,
+          status: GRPC.Status.already_exists(),
+          message: "already join a cluster"
+
+      {:error, reason} ->
+        raise GRPC.RPCError,
+          status: GRPC.Status.internal(),
+          message: "failed to record join claim: #{inspect(reason)}"
+    end
+  end
+
+  defp join_claim_owner(request, stream) do
+    [
+      Map.get(request, :node_name, ""),
+      request |> Map.get(:node_info_json, "") |> decode_node_info() |> Map.get("node_name"),
+      peer_identity(stream)
+    ]
+    |> Enum.find_value(fn
+      value when is_binary(value) ->
+        value = String.trim(value)
+        if value == "", do: nil, else: value
+
+      value when not is_nil(value) ->
+        value |> to_string() |> String.trim() |> blank_to_nil()
+
+      _value ->
+        nil
+    end)
+  end
+
+  defp peer_identity(%{adapter: adapter, payload: payload})
+       when is_atom(adapter) and not is_nil(payload) do
+    if Code.ensure_loaded?(adapter) and function_exported?(adapter, :get_peer, 1) do
+      case adapter.get_peer(payload) do
+        {address, port} -> "peer:#{format_address(address)}:#{port}"
+        address -> "peer:#{format_address(address)}"
+      end
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp peer_identity(_stream), do: nil
+
+  defp format_address(address) when is_tuple(address), do: address |> :inet.ntoa() |> to_string()
+  defp format_address(address), do: to_string(address)
+
   defp handshake_node_status(node_name) do
     case MirrorNeuron.Cluster.NodeState.fetch(node_name) do
       {:ok, %{"status" => status}} when status in ["healthy", "maintenance", "draining"] ->
@@ -1214,6 +1299,44 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
   end
 
   defp sync_remote_cookie_with_cluster(_node_name, _token), do: :ok
+
+  defp confirm_remote_join_claim(node_name) when is_binary(node_name) and node_name != "" do
+    with {:ok, remote_node} <- MirrorNeuron.SafeAccess.node_name_to_atom(node_name) do
+      _ =
+        NodeAdapter.rpc_call(
+          remote_node,
+          __MODULE__,
+          :confirm_join_claim,
+          [Atom.to_string(NodeAdapter.self())],
+          2_000
+        )
+
+      :ok
+    else
+      {:error, _reason} -> :ok
+    end
+  end
+
+  defp confirm_remote_join_claim(_node_name), do: :ok
+
+  defp clear_remote_join_claim(node_name) when is_binary(node_name) and node_name != "" do
+    with {:ok, remote_node} <- MirrorNeuron.SafeAccess.node_name_to_atom(node_name) do
+      _ =
+        NodeAdapter.rpc_call(
+          remote_node,
+          __MODULE__,
+          :clear_join_claim,
+          [Atom.to_string(NodeAdapter.self())],
+          2_000
+        )
+
+      :ok
+    else
+      {:error, _reason} -> :ok
+    end
+  end
+
+  defp clear_remote_join_claim(_node_name), do: :ok
 
   defp disconnect_node_from_cluster(node_name) when is_binary(node_name) and node_name != "" do
     case MirrorNeuron.SafeAccess.node_name_to_atom(node_name) do
