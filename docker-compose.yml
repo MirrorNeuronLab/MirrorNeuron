@@ -23,6 +23,28 @@ services:
           - redis
           - ${MN_NODE_ALIAS:-mirror-neuron}-redis
 
+  syncthing:
+    image: ${MN_SYNCTHING_IMAGE:-syncthing/syncthing:latest}
+    container_name: mirror-neuron-syncthing
+    profiles:
+      - syncthing
+    restart: unless-stopped
+    user: "0:0"
+    environment:
+      STGUIADDRESS: 0.0.0.0:8384
+      STGUIAPIKEY: ${MN_SYNCTHING_API_KEY:-}
+      STHOMEDIR: /var/syncthing/config
+      MN_HOST_SHARED_STORAGE_ROOT: ${MN_HOST_SHARED_STORAGE_ROOT:-${MN_SHARED_STORAGE_ROOT:-./mn/shared}}
+      MN_SYNCTHING_API_KEY: ${MN_SYNCTHING_API_KEY:-}
+    ports:
+      - "${MN_SYNCTHING_BIND_HOST:-0.0.0.0}:${MN_SYNCTHING_GUI_PORT:-58384}:8384/tcp"
+      - "${MN_SYNCTHING_BIND_HOST:-0.0.0.0}:${MN_SYNCTHING_SYNC_PORT:-22000}:22000/tcp"
+    volumes:
+      - ${MN_HOST_HOME_DIR:-./mn}/syncthing:/var/syncthing/config:rw
+      - ${MN_HOST_SHARED_STORAGE_ROOT:-${MN_SHARED_STORAGE_ROOT:-./mn/shared}}:${MN_SYNCTHING_FOLDER_PATH:-/var/syncthing/MirrorNeuronShared}:rw
+    networks:
+      - runtime
+
   openshell:
     image: ${OPENSHELL_GATEWAY_IMAGE:-ghcr.io/nvidia/openshell/gateway:0.0.47}
     container_name: openshell-cluster-openshell

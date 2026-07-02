@@ -21,6 +21,7 @@ defmodule MirrorNeuron.Cluster.Manager do
               address: Map.get(state, "address") || node_host(node),
               grpc_host: Map.get(state, "grpc_host") || node_host(node),
               grpc_port: Map.get(state, "grpc_port") || node_grpc_port(state),
+              native_sdk_grpc: native_sdk_grpc_info(node, state, hardware_info),
               status: Map.get(state, "status", "healthy"),
               scheduling_eligible: Map.get(state, "scheduling_eligible", true),
               drain: Map.get(state, "drain"),
@@ -74,7 +75,7 @@ defmodule MirrorNeuron.Cluster.Manager do
 
   defp fetch_node_info(node) do
     if node == NodeAdapter.self() do
-      {:ok, {LeaseManager.stats(), MirrorNeuron.Cluster.Hardware.info()}}
+      {:ok, {LeaseManager.stats(), local_hardware_info()}}
     else
       case NodeAdapter.rpc_call(node, __MODULE__, :local_info, [], 5_000) do
         {:badrpc, reason} -> {:error, inspect(reason)}
@@ -86,7 +87,12 @@ defmodule MirrorNeuron.Cluster.Manager do
 
   @doc false
   def local_info do
-    {LeaseManager.stats(), MirrorNeuron.Cluster.Hardware.info()}
+    {LeaseManager.stats(), local_hardware_info()}
+  end
+
+  defp local_hardware_info do
+    MirrorNeuron.Cluster.Hardware.info()
+    |> Map.put("native_sdk_grpc", native_sdk_grpc_node_info())
   end
 
   defp runtime_connected_nodes(self_node) do
@@ -130,6 +136,38 @@ defmodule MirrorNeuron.Cluster.Manager do
   defp node_grpc_port(state) do
     Map.get(state, "grpc_port") ||
       advertised_grpc_port()
+  end
+
+  defp native_sdk_grpc_info(node, state, hardware) do
+    Map.get(state, "native_sdk_grpc") ||
+      Map.get(state, :native_sdk_grpc) ||
+      Map.get(hardware, "native_sdk_grpc") ||
+      Map.get(hardware, :native_sdk_grpc) ||
+      if(node == NodeAdapter.self(), do: native_sdk_grpc_node_info(), else: nil)
+  end
+
+  defp native_sdk_grpc_node_info do
+    host =
+      System.get_env("MN_NATIVE_SDK_GRPC_ADVERTISE_HOST") ||
+        System.get_env("MN_NETWORK_ADVERTISE_HOST") ||
+        node_host(NodeAdapter.self())
+
+    port = native_sdk_grpc_port()
+    target = if host in [nil, ""], do: "", else: "#{host}:#{port}"
+
+    %{
+      "enabled" => host not in [nil, ""] and port not in [nil, ""],
+      "host" => host || "",
+      "port" => port,
+      "target" => target,
+      "bind_host" => System.get_env("MN_NATIVE_SDK_GRPC_HOST") || ""
+    }
+  end
+
+  defp native_sdk_grpc_port do
+    System.get_env("MN_NATIVE_SDK_GRPC_ADVERTISE_PORT") ||
+      System.get_env("MN_NATIVE_SDK_GRPC_PORT") ||
+      "55052"
   end
 
   defp advertised_grpc_port do
