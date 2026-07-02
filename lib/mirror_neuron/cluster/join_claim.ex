@@ -169,7 +169,11 @@ defmodule MirrorNeuron.Cluster.JoinClaim do
 
   defp maybe_refresh_pending_expiry(claim, _now), do: claim
 
-  defp active_claim?(%{"state" => "confirmed"}, _now), do: true
+  defp active_claim?(%{"state" => "confirmed", "owner_node" => owner}, _now) do
+    connected_owner?(owner)
+  end
+
+  defp active_claim?(%{"state" => "confirmed"}, _now), do: false
 
   defp active_claim?(%{"state" => "pending", "expires_at" => expires_at}, now)
        when is_binary(expires_at) do
@@ -180,6 +184,17 @@ defmodule MirrorNeuron.Cluster.JoinClaim do
   end
 
   defp active_claim?(_claim, _now), do: false
+
+  defp connected_owner?(owner) do
+    owner = normalize_owner(owner)
+
+    owner != "" and
+      NodeAdapter.list()
+      |> Enum.map(&to_string/1)
+      |> Enum.any?(&(&1 == owner))
+  rescue
+    _ -> false
+  end
 
   defp connected_owner_conflict(owner) do
     connected =

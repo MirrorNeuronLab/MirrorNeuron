@@ -598,11 +598,36 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert {:ok, %{"state" => "confirmed", "owner_node" => ^owner} = claim} = JoinClaim.read()
     refute Map.has_key?(claim, "expires_at")
 
+    ClusterNodeAdapterStub.put_list([String.to_atom(owner)])
+
     assert {:error, {:already_joined, ^owner}} =
              ClusterServer.confirm_join_claim("mirror_neuron@10.0.0.12")
 
     assert :ok = ClusterServer.clear_join_claim(owner)
     assert {:error, :missing} = JoinClaim.read()
+  end
+
+  test "confirmed join claim from disconnected owner is replaceable by explicit join" do
+    System.put_env("MN_NETWORK_ONLY", "true")
+    System.put_env("MN_NETWORK_JOIN_TOKEN", "join-secret")
+
+    old_owner = "mirror_neuron@10.0.0.11"
+    new_owner = "mirror_neuron@10.0.0.12"
+
+    assert {:ok, %{"state" => "pending"}} = JoinClaim.reserve(old_owner)
+    assert :ok = ClusterServer.confirm_join_claim(old_owner)
+    assert {:ok, %{"state" => "confirmed", "owner_node" => ^old_owner}} = JoinClaim.read()
+
+    ClusterNodeAdapterStub.put_list([])
+
+    response =
+      ClusterServer.network_handshake(
+        %NetworkHandshakeRequest{token: "join-secret", node_name: new_owner},
+        nil
+      )
+
+    assert response.network_only
+    assert {:ok, %{"state" => "pending", "owner_node" => ^new_owner}} = JoinClaim.read()
   end
 
   test "network handshake records joining node metadata for scheduling" do
