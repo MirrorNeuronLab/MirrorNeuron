@@ -930,6 +930,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         workflow_agent_active?(acc_state, agent_id) ->
           {:cont, {:ok, acc_state}}
 
+        workflow_agent_inactive?(acc_state, agent_id) ->
+          {:cont, {:ok, acc_state}}
+
         pending_policy_action?(acc_state, agent_id) ->
           {:cont, {:ok, acc_state}}
 
@@ -1019,6 +1022,11 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp workflow_agent_active?(state, agent_id) do
     workflow_agent?(state, agent_id) and
       agent_id in WorkflowLedger.active_agent_ids(state.workflow_state)
+  end
+
+  defp workflow_agent_inactive?(state, agent_id) do
+    workflow_controls_runtime?(state) and workflow_agent?(state, agent_id) and
+      not workflow_agent_active?(state, agent_id)
   end
 
   defp workflow_agent?(state, agent_id) do
@@ -1544,6 +1552,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         agent_ready?(acc_state, agent_id) ->
           {:cont, {:ok, acc_state}}
 
+        workflow_agent_inactive?(acc_state, agent_id) ->
+          {:cont, {:ok, acc_state}}
+
         true ->
           case recover_agent(acc_state, agent_id) do
             {:ok, next_state} -> {:cont, {:ok, next_state}}
@@ -1611,34 +1622,36 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
     case start_agent(state, agent_id, recovery_snapshot) do
       {:ok, _pid} ->
-        wait_result = wait_for_agent_ready(state, agent_id, 30_000)
+        finalize_agent_recovery(state, agent_id, attempt)
 
-        case wait_result do
+      {:error, {:already_started, _pid}} ->
+        finalize_agent_recovery(state, agent_id, attempt)
+
+      {:error, reason} ->
+        {:error, "failed to recover agent #{agent_id}: #{inspect(reason)}", state}
+    end
+  end
+
+  defp finalize_agent_recovery(state, agent_id, attempt) do
+    case wait_for_agent_ready(state, agent_id, 30_000) do
+      :ok ->
+        case register_agent_services(state, agent_id) do
           :ok ->
-            case register_agent_services(state, agent_id) do
-              :ok ->
-                EventBus.publish(state.job_id, %{
-                  type: :agent_recovered,
-                  agent_id: agent_id,
-                  attempt: attempt,
-                  timestamp: Runtime.timestamp()
-                })
+            EventBus.publish(state.job_id, %{
+              type: :agent_recovered,
+              agent_id: agent_id,
+              attempt: attempt,
+              timestamp: Runtime.timestamp()
+            })
 
-                {:ok, mark_policy_idle(state, agent_id)}
-
-              {:error, reason} ->
-                {:error, reason, state}
-            end
+            {:ok, mark_policy_idle(state, agent_id)}
 
           {:error, reason} ->
             {:error, reason, state}
         end
 
-      {:error, {:already_started, _pid}} ->
-        {:ok, state}
-
       {:error, reason} ->
-        {:error, "failed to recover agent #{agent_id}: #{inspect(reason)}", state}
+        {:error, reason, state}
     end
   end
 

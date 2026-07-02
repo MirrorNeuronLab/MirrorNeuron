@@ -702,8 +702,6 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
   end
 
   def prepare_runtime_model(request, _stream) do
-    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("PrepareRuntimeModel")
-
     with {:ok, attrs} when is_map(attrs) <- Jason.decode(request.resource_json),
          node_name <- Map.get(attrs, "node") || Map.get(attrs, :node),
          {:ok, result} <- ModelServices.prepare_runtime_model_on_node(node_name, attrs) do
