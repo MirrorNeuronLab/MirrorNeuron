@@ -9,6 +9,9 @@ defmodule MirrorNeuron.ModelServices do
   @active_node_statuses ["healthy", "joining"]
   @native_sdk_grpc_target_env "MN_NATIVE_SDK_GRPC_TARGET"
   @native_sdk_grpc_timeout_env "MN_NATIVE_SDK_GRPC_TIMEOUT_MS"
+  @default_llm_model "gemma4:e2b"
+  @default_context_engine_model "hf.co/homerquan/mn-context-engine-model-v-Q4_K_M"
+  @default_knowledge_rag_model "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M"
   @service_env_vars [
     "MN_NODE_SERVICES_JSON",
     "MN_MODEL_SERVICES_JSON"
@@ -125,7 +128,8 @@ defmodule MirrorNeuron.ModelServices do
 
   @doc false
   def prepare_runtime_model(attrs, timeout \\ 1_200_000) when is_map(attrs) do
-    with {:ok, target} <- native_sdk_grpc_target(),
+    with {:ok, attrs} <- normalize_runtime_model_prepare_attrs(attrs),
+         {:ok, target} <- native_sdk_grpc_target(),
          {:ok, response} <- native_sdk_prepare(target, attrs, timeout),
          {:ok, result} when is_map(result) <- Jason.decode(response.resource_json) do
       {:ok, result}
@@ -235,6 +239,66 @@ defmodule MirrorNeuron.ModelServices do
       :native_sdk_grpc_client,
       &__MODULE__.grpc_prepare_runtime_model/3
     )
+  end
+
+  defp normalize_runtime_model_prepare_attrs(attrs) when is_map(attrs) do
+    case runtime_model_for_prepare_purpose(prepare_model_ref(attrs), prepare_model_purpose(attrs)) do
+      {:ok, model} ->
+        {:ok,
+         attrs
+         |> Map.put("model", model)
+         |> Map.put("runtime_model", model)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp prepare_model_ref(attrs) do
+    attrs
+    |> first_present(["model", :model, "runtime_model", :runtime_model, "id", :id])
+    |> to_string()
+    |> String.trim()
+  end
+
+  defp prepare_model_purpose(attrs) do
+    attrs
+    |> first_present(["purpose", :purpose, "model_purpose", :model_purpose])
+    |> to_string()
+    |> String.trim()
+    |> String.downcase()
+    |> String.replace("-", "_")
+  end
+
+  defp runtime_model_for_prepare_purpose("", purpose) do
+    case purpose do
+      "" -> {:ok, @default_llm_model}
+      "llm" -> {:ok, @default_llm_model}
+      "runtime" -> {:ok, @default_llm_model}
+      "runtime_llm" -> {:ok, @default_llm_model}
+      "default" -> {:ok, @default_llm_model}
+      "context" -> {:ok, @default_context_engine_model}
+      "context_engine" -> {:ok, @default_context_engine_model}
+      "context_model" -> {:ok, @default_context_engine_model}
+      "context_engine_model" -> {:ok, @default_context_engine_model}
+      "knowledge_rag" -> {:ok, @default_knowledge_rag_model}
+      "rag" -> {:ok, @default_knowledge_rag_model}
+      "embedding" -> {:ok, @default_knowledge_rag_model}
+      "knowledge_rag_embedding" -> {:ok, @default_knowledge_rag_model}
+      other -> {:error, "unsupported runtime model prepare purpose: #{other}"}
+    end
+  end
+
+  defp runtime_model_for_prepare_purpose("default", _purpose), do: {:ok, @default_llm_model}
+  defp runtime_model_for_prepare_purpose(model, _purpose), do: {:ok, model}
+
+  defp first_present(attrs, keys) do
+    Enum.find_value(keys, "", fn key ->
+      case Map.get(attrs, key) do
+        nil -> nil
+        value -> value
+      end
+    end)
   end
 
   defp native_sdk_json_command(attrs, timeout, client_env, default_client, label) do

@@ -78,6 +78,45 @@ defmodule MirrorNeuron.ModelServicesTest do
     end
   end
 
+  test "runtime model preparation normalizes default and purpose requests before forwarding" do
+    previous = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
+    previous_client = Application.get_env(:mirror_neuron, :native_sdk_grpc_client)
+    System.put_env("MN_NATIVE_SDK_GRPC_TARGET", "127.0.0.1:55052")
+    parent = self()
+
+    cases = [
+      {%{}, "gemma4:e2b"},
+      {%{"model" => "default"}, "gemma4:e2b"},
+      {%{"purpose" => "context_engine"}, "hf.co/homerquan/mn-context-engine-model-v-Q4_K_M"},
+      {%{"purpose" => "knowledge_rag"},
+       "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M"}
+    ]
+
+    try do
+      Application.put_env(:mirror_neuron, :native_sdk_grpc_client, fn target, request, timeout ->
+        attrs = Jason.decode!(request.resource_json)
+        send(parent, {:prepare_forwarded, target, attrs, timeout})
+
+        {:ok,
+         %Mirrorneuron.Cluster.V1.SetResourceResponse{
+           resource_json: Jason.encode!(%{"status" => "installed", "model" => attrs["model"]}),
+           version: 1
+         }}
+      end)
+
+      for {attrs, expected_model} <- cases do
+        assert {:ok, %{"status" => "installed", "model" => ^expected_model}} =
+                 ModelServices.prepare_runtime_model(attrs, 1234)
+
+        assert_receive {:prepare_forwarded, "127.0.0.1:55052",
+                        %{"model" => ^expected_model, "runtime_model" => ^expected_model}, 1234}
+      end
+    after
+      restore_env("MN_NATIVE_SDK_GRPC_TARGET", previous)
+      restore_app_env(:native_sdk_grpc_client, previous_client)
+    end
+  end
+
   test "runtime model preparation refuses requests sent to the wrong node" do
     assert {:error, message} =
              ModelServices.prepare_runtime_model_on_node("mirror_neuron@remote", %{

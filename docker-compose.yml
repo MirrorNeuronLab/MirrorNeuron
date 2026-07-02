@@ -92,11 +92,9 @@ services:
       MN_CONTEXT_DEBUG_DIR: /tmp/mn-context-engine/context-views
       MN_CONTEXT_MODEL_COMPRESSION_ENABLED: ${MN_CONTEXT_MODEL_COMPRESSION_ENABLED:-true}
       MN_CONTEXT_COMPRESSION_COMMAND: /usr/local/bin/mn_context_model_client.py
+      MN_CONTEXT_MODEL_ENDPOINT: ${MN_CONTEXT_MODEL_ENDPOINT:-http://model-runner.docker.internal/engines/v1}
+      MN_CONTEXT_MODEL_NAME: ${MN_CONTEXT_MODEL_NAME:-${MN_CONTEXT_MODEL_RUNNER_MODEL:-hf.co/homerquan/mn-context-engine-model-v-Q4_K_M}}
       MN_CONTEXT_MODEL_TIMEOUT_SECONDS: ${MN_CONTEXT_MODEL_TIMEOUT_SECONDS:-300}
-    models:
-      context-engine-model:
-        endpoint_var: MN_CONTEXT_MODEL_ENDPOINT
-        model_var: MN_CONTEXT_MODEL_NAME
     depends_on:
       redis:
         condition: service_started
@@ -271,8 +269,3 @@ networks:
 volumes:
   redis-data:
   context-debug:
-
-models:
-  context-engine-model:
-    model: ${MN_CONTEXT_MODEL_RUNNER_MODEL:-hf.co/homerquan/mn-context-engine-model-v-Q4_K_M}
-    context_size: 16384

@@ -317,7 +317,10 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
     try do
       Application.put_env(:mirror_neuron, :native_sdk_grpc_client, fn target, request, timeout ->
-        send(parent, {:native_prepare_forwarded, target, Jason.decode!(request.resource_json), timeout})
+        send(
+          parent,
+          {:native_prepare_forwarded, target, Jason.decode!(request.resource_json), timeout}
+        )
 
         {:ok,
          %Mirrorneuron.Cluster.V1.SetResourceResponse{
@@ -349,6 +352,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
         )
 
       assert %Mirrorneuron.Cluster.V1.SetResourceResponse{} = response
+
       assert %{"status" => "installed", "endpoint" => %{"source" => "sdk_native_runtime_service"}} =
                Jason.decode!(response.resource_json)
 
@@ -358,6 +362,51 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
                         "model" => "nemotron3",
                         "backend" => "llama.cpp",
                         "source" => "mn-python-sdk"
+                      }, _timeout}
+    after
+      restore_env("MN_NATIVE_SDK_GRPC_TARGET", previous_target)
+      restore_env(:native_sdk_grpc_client, previous_client)
+    end
+  end
+
+  test "prepare runtime model command forwards normalized default payload" do
+    previous_target = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
+    previous_client = Application.get_env(:mirror_neuron, :native_sdk_grpc_client)
+    System.put_env("MN_NATIVE_SDK_GRPC_TARGET", "mn-native-sdk-grpc:55052")
+    parent = self()
+
+    try do
+      Application.put_env(:mirror_neuron, :native_sdk_grpc_client, fn target, request, timeout ->
+        send(
+          parent,
+          {:native_prepare_forwarded, target, Jason.decode!(request.resource_json), timeout}
+        )
+
+        {:ok,
+         %Mirrorneuron.Cluster.V1.SetResourceResponse{
+           resource_json: Jason.encode!(%{"status" => "installed"}),
+           version: 1
+         }}
+      end)
+
+      response =
+        ClusterServer.prepare_runtime_model(
+          %SetResourceRequest{
+            resource_json: Jason.encode!(%{"purpose" => "knowledge_rag"})
+          },
+          nil
+        )
+
+      assert %Mirrorneuron.Cluster.V1.SetResourceResponse{} = response
+      assert %{"status" => "installed"} = Jason.decode!(response.resource_json)
+
+      assert_receive {:native_prepare_forwarded, "mn-native-sdk-grpc:55052",
+                      %{
+                        "purpose" => "knowledge_rag",
+                        "model" =>
+                          "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M",
+                        "runtime_model" =>
+                          "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M"
                       }, _timeout}
     after
       restore_env("MN_NATIVE_SDK_GRPC_TARGET", previous_target)
