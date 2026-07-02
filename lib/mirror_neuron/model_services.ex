@@ -2,8 +2,13 @@ defmodule MirrorNeuron.ModelServices do
   @moduledoc false
 
   alias MirrorNeuron.ServiceRegistry
+  alias Mirrorneuron.Cluster.V1.ClusterService
+  alias Mirrorneuron.Cluster.V1.SetResourceRequest
 
+  @interface_version 1
   @active_node_statuses ["healthy", "joining"]
+  @native_sdk_grpc_target_env "MN_NATIVE_SDK_GRPC_TARGET"
+  @native_sdk_grpc_timeout_env "MN_NATIVE_SDK_GRPC_TIMEOUT_MS"
   @service_env_vars [
     "MN_NODE_SERVICES_JSON",
     "MN_MODEL_SERVICES_JSON"
@@ -68,14 +73,37 @@ defmodule MirrorNeuron.ModelServices do
   def persist_node_runtime_model(_model_ref, _env \\ System.get_env()), do: :ok
 
   @doc false
-  def prepare_runtime_model_on_node(_node_name, _attrs, _timeout \\ 1_200_000),
-    do: prepare_runtime_model(%{})
+  def prepare_runtime_model_on_node(node_name, attrs, timeout \\ 1_200_000) when is_map(attrs) do
+    target_node = normalize_node_name(node_name)
+    self_node = to_string(Node.self())
+
+    cond do
+      target_node in [nil, "", self_node] ->
+        prepare_runtime_model(attrs, timeout)
+
+      true ->
+        {:error,
+         "runtime model prepare request for #{target_node} reached #{self_node}; send PrepareRuntimeModel gRPC to the target node runtime so its local mn-python-sdk can prepare native resources"}
+    end
+  end
 
   @doc false
-  def prepare_runtime_model(_attrs),
-    do:
-      {:error,
-       "runtime model preparation is owned by mn-python-sdk/API/CLI; MirrorNeuron Core only consumes advertised model services"}
+  def prepare_runtime_model(attrs, timeout \\ 1_200_000) when is_map(attrs) do
+    with {:ok, target} <- native_sdk_grpc_target(),
+         {:ok, response} <- native_sdk_prepare(target, attrs, timeout),
+         {:ok, result} when is_map(result) <- Jason.decode(response.resource_json) do
+      {:ok, result}
+    else
+      {:error, %Jason.DecodeError{} = error} ->
+        {:error, "native SDK runtime model prepare returned invalid JSON: #{Exception.message(error)}"}
+
+      {:ok, _other} ->
+        {:error, "native SDK runtime model prepare returned a non-object response"}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
 
   defp register_model_services(services, node_name) do
     case services do
@@ -91,6 +119,80 @@ defmodule MirrorNeuron.ModelServices do
   rescue
     _ -> :ok
   end
+
+  @doc false
+  def grpc_prepare_runtime_model(target, request, timeout) do
+    with {:ok, channel} <- GRPC.Stub.connect(target, timeout: timeout),
+         {:ok, response} <- ClusterService.Stub.prepare_runtime_model(channel, request, timeout: timeout) do
+      {:ok, response}
+    else
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error, "native SDK gRPC prepare failed for #{target}: #{Exception.message(error)}"}
+
+      {:error, reason} ->
+        {:error, "native SDK gRPC prepare failed for #{target}: #{inspect(reason)}"}
+    end
+  end
+
+  defp native_sdk_prepare(target, attrs, timeout) do
+    request = %SetResourceRequest{
+      resource_json: Jason.encode!(attrs),
+      version: @interface_version
+    }
+
+    client =
+      Application.get_env(
+        :mirror_neuron,
+        :native_sdk_grpc_client,
+        &__MODULE__.grpc_prepare_runtime_model/3
+      )
+
+    client.(target, request, native_sdk_timeout(timeout))
+  end
+
+  defp native_sdk_grpc_target do
+    case System.get_env(@native_sdk_grpc_target_env) do
+      value when is_binary(value) ->
+        value = String.trim(value)
+        if value == "", do: {:error, native_sdk_unavailable_message()}, else: {:ok, value}
+
+      _ ->
+        {:error, native_sdk_unavailable_message()}
+    end
+  end
+
+  defp native_sdk_unavailable_message do
+    "runtime model preparation is owned by mn-python-sdk/API/CLI; #{inspect(@native_sdk_grpc_target_env)} is not configured, so Core cannot forward this request to the node-local SDK service"
+  end
+
+  defp native_sdk_timeout(timeout) when is_integer(timeout) and timeout > 0 do
+    env_timeout =
+      @native_sdk_grpc_timeout_env
+      |> System.get_env()
+      |> parse_positive_integer()
+
+    env_timeout || timeout
+  end
+
+  defp native_sdk_timeout(_timeout), do: 1_200_000
+
+  defp parse_positive_integer(value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {number, ""} when number > 0 -> number
+      _ -> nil
+    end
+  end
+
+  defp parse_positive_integer(_value), do: nil
+
+  defp normalize_node_name(value) when is_atom(value), do: value |> to_string() |> normalize_node_name()
+
+  defp normalize_node_name(value) when is_binary(value) do
+    value = String.trim(value)
+    if value == "", do: nil, else: value
+  end
+
+  defp normalize_node_name(_value), do: nil
 
   @doc false
   def advertised_node_name(node_name \\ Node.self(), env \\ System.get_env()) when is_map(env) do

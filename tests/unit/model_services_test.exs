@@ -1,5 +1,5 @@
 defmodule MirrorNeuron.ModelServicesTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias MirrorNeuron.ModelServices
 
@@ -38,9 +38,53 @@ defmodule MirrorNeuron.ModelServicesTest do
     assert ModelServices.service_instances_for_models(["gemma4:e2b"], "node@lab") == []
   end
 
-  test "runtime model preparation is rejected by core" do
-    assert {:error, message} = ModelServices.prepare_runtime_model(%{"model" => "gemma4:e2b"})
-    assert message =~ "mn-python-sdk"
+  test "runtime model preparation is rejected when native SDK target is missing" do
+    previous = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
+    System.delete_env("MN_NATIVE_SDK_GRPC_TARGET")
+
+    try do
+      assert {:error, message} = ModelServices.prepare_runtime_model(%{"model" => "gemma4:e2b"})
+      assert message =~ "mn-python-sdk"
+      assert message =~ "MN_NATIVE_SDK_GRPC_TARGET"
+    after
+      restore_env("MN_NATIVE_SDK_GRPC_TARGET", previous)
+    end
+  end
+
+  test "runtime model preparation forwards to node-local SDK gRPC service" do
+    previous = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
+    previous_client = Application.get_env(:mirror_neuron, :native_sdk_grpc_client)
+    System.put_env("MN_NATIVE_SDK_GRPC_TARGET", "127.0.0.1:55052")
+    parent = self()
+
+    try do
+      Application.put_env(:mirror_neuron, :native_sdk_grpc_client, fn target, request, timeout ->
+        send(parent, {:prepare_forwarded, target, Jason.decode!(request.resource_json), timeout})
+
+        {:ok,
+         %Mirrorneuron.Cluster.V1.SetResourceResponse{
+           resource_json: Jason.encode!(%{"status" => "installed"}),
+           version: 1
+         }}
+      end)
+
+      assert {:ok, %{"status" => "installed"}} =
+               ModelServices.prepare_runtime_model(%{"model" => "gemma4:e2b"}, 1234)
+
+      assert_receive {:prepare_forwarded, "127.0.0.1:55052", %{"model" => "gemma4:e2b"}, 1234}
+    after
+      restore_env("MN_NATIVE_SDK_GRPC_TARGET", previous)
+      restore_app_env(:native_sdk_grpc_client, previous_client)
+    end
+  end
+
+  test "runtime model preparation refuses requests sent to the wrong node" do
+    assert {:error, message} =
+             ModelServices.prepare_runtime_model_on_node("mirror_neuron@remote", %{
+               "model" => "gemma4:e2b"
+             })
+
+    assert message =~ "send PrepareRuntimeModel gRPC to the target node runtime"
   end
 
   test "model services use advertised host identity when docker hostname differs" do
@@ -59,4 +103,10 @@ defmodule MirrorNeuron.ModelServicesTest do
     assert ModelServices.advertised_node_name(:"mirror_neuron@mn-c13e508c", env) ==
              "mirror_neuron@gpu-node"
   end
+
+  defp restore_env(key, nil), do: System.delete_env(key)
+  defp restore_env(key, value), do: System.put_env(key, value)
+
+  defp restore_app_env(key, nil), do: Application.delete_env(:mirror_neuron, key)
+  defp restore_app_env(key, value), do: Application.put_env(:mirror_neuron, key, value)
 end

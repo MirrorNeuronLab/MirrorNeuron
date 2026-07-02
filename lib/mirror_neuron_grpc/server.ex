@@ -650,7 +650,7 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
       runtime_mode:
         if(MirrorNeuron.Grpc.NetworkOnly.enabled?(), do: "network_only", else: "full"),
       grpc_host: advertised_host(),
-      grpc_port: env_integer("MN_GRPC_PORT", 50_051),
+      grpc_port: advertised_grpc_port(),
       dist_port: env_integer("MN_DIST_PORT", 4_370),
       redis_host: redis_host(),
       redis_port: redis_port(),
@@ -1144,6 +1144,8 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
     %{
       "node_name" => to_string(NodeAdapter.self()),
       "node_role" => MirrorNeuron.Application.node_role(),
+      "grpc_host" => advertised_host(),
+      "grpc_port" => advertised_grpc_port(),
       "host_shared_storage_root" =>
         MirrorNeuron.Config.optional_string(
           "MN_HOST_SHARED_STORAGE_ROOT",
@@ -1427,6 +1429,14 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
   defp advertised_host do
     MirrorNeuron.Config.optional_string("MN_NETWORK_ADVERTISE_HOST", :network_advertise_host) ||
       MirrorNeuron.Config.string("MN_CORE_HOST", :core_host)
+  end
+
+  defp advertised_grpc_port do
+    case System.get_env("MN_GRPC_ADVERTISE_PORT") do
+      nil -> env_integer("MN_GRPC_PORT", 50_051)
+      "" -> env_integer("MN_GRPC_PORT", 50_051)
+      value -> parse_integer(value, "MN_GRPC_ADVERTISE_PORT")
+    end
   end
 
   defp redis_host do

@@ -1425,6 +1425,8 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     |> then(&(&1 in ["1", "true", "yes", "on"]))
   end
 
+  defp native_sandbox_prep_enabled?, do: native_prep_enabled?()
+
   defp timeout_ms(config) do
     case Map.get(config, "timeout_seconds") do
       value when is_integer(value) and value > 0 -> value * 1000

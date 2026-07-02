@@ -18,6 +18,9 @@ defmodule MirrorNeuron.Cluster.Manager do
               name: to_string(node),
               display_name: node_display_name(node, state, hardware_info),
               hostname: node_hostname(hardware_info),
+              address: Map.get(state, "address") || node_host(node),
+              grpc_host: Map.get(state, "grpc_host") || node_host(node),
+              grpc_port: Map.get(state, "grpc_port") || node_grpc_port(state),
               status: Map.get(state, "status", "healthy"),
               scheduling_eligible: Map.get(state, "scheduling_eligible", true),
               drain: Map.get(state, "drain"),
@@ -112,5 +115,35 @@ defmodule MirrorNeuron.Cluster.Manager do
 
   defp node_hostname(hardware) do
     get_in(hardware, [:platform, :hostname]) || get_in(hardware, ["platform", "hostname"])
+  end
+
+  defp node_host(node) do
+    node
+    |> to_string()
+    |> String.split("@", parts: 2)
+    |> case do
+      [_name, host] -> host
+      _ -> nil
+    end
+  end
+
+  defp node_grpc_port(state) do
+    Map.get(state, "grpc_port") ||
+      advertised_grpc_port()
+  end
+
+  defp advertised_grpc_port do
+    case System.get_env("MN_GRPC_ADVERTISE_PORT") do
+      nil -> MirrorNeuron.Config.integer("MN_GRPC_PORT", :grpc_port)
+      "" -> MirrorNeuron.Config.integer("MN_GRPC_PORT", :grpc_port)
+      value -> parse_grpc_port(value)
+    end
+  end
+
+  defp parse_grpc_port(value) do
+    case Integer.parse(value) do
+      {port, ""} -> port
+      _ -> MirrorNeuron.Config.integer("MN_GRPC_PORT", :grpc_port)
+    end
   end
 end
