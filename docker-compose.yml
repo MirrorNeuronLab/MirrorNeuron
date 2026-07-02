@@ -113,7 +113,8 @@ services:
       sh -c 'mkdir -p /root/.mn/models/litellm-gateway;
       test -f /root/.mn/models/litellm-gateway/config.yaml ||
       printf "{\"model_list\":[]}\n" > /root/.mn/models/litellm-gateway/config.yaml;
-      exec litellm --config /root/.mn/models/litellm-gateway/config.yaml --host 0.0.0.0 --port 4000'
+      if command -v litellm >/dev/null 2>&1; then runner=litellm; else runner="python3 -m litellm"; fi;
+      exec $$runner --config /root/.mn/models/litellm-gateway/config.yaml --host 0.0.0.0 --port 4000'
     expose:
       - "4000"
     ports:
