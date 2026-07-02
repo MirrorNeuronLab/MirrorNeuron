@@ -105,6 +105,41 @@ services:
     networks:
       - runtime
 
+  mn-litellm-proxy:
+    image: mirror-neuron-core:latest
+    container_name: mn-litellm-proxy
+    restart: unless-stopped
+    command: >
+      sh -c 'mkdir -p /root/.mn/models/litellm-gateway;
+      test -f /root/.mn/models/litellm-gateway/config.yaml ||
+      printf "{\"model_list\":[]}\n" > /root/.mn/models/litellm-gateway/config.yaml;
+      exec litellm --config /root/.mn/models/litellm-gateway/config.yaml --host 0.0.0.0 --port 4000'
+    expose:
+      - "4000"
+    ports:
+      - "${MN_LITELLM_GATEWAY_BIND_HOST:-127.0.0.1}:${MN_LITELLM_GATEWAY_PORT:-4000}:4000"
+    env_file:
+      - path: ${MN_LITELLM_GATEWAY_ENV_FILE:-./docker-compose.env}
+        required: false
+    environment:
+      HOME: /root
+      MN_LITELLM_GATEWAY_INTERNAL_API_BASE: ${MN_LITELLM_GATEWAY_INTERNAL_API_BASE:-http://mn-litellm-proxy:4000/v1}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:4000/v1/models >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    volumes:
+      - ${MN_HOST_HOME_DIR:-./mn}:/root/.mn
+      - ${MN_HOST_HOME_DIR:-./mn}:/opt/mirror_neuron/.mn
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      runtime:
+        aliases:
+          - mn-litellm-proxy
+
   mirror-neuron-core:
     image: mirror-neuron-core:latest
     container_name: mirror-neuron-core

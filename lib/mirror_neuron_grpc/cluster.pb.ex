@@ -422,6 +422,14 @@ defmodule Mirrorneuron.Cluster.V1.ClusterService.Service do
       Mirrorneuron.Cluster.V1.CheckServicesRequest,
       Mirrorneuron.Cluster.V1.CheckServicesResponse
 
+  rpc :SyncLiteLLMGateway,
+      Mirrorneuron.Cluster.V1.SetResourceRequest,
+      Mirrorneuron.Cluster.V1.SetResourceResponse
+
+  rpc :RemoveLiteLLMGatewayRoute,
+      Mirrorneuron.Cluster.V1.SetResourceRequest,
+      Mirrorneuron.Cluster.V1.SetResourceResponse
+
   rpc :PrepareRuntimeModel,
       Mirrorneuron.Cluster.V1.SetResourceRequest,
       Mirrorneuron.Cluster.V1.SetResourceResponse

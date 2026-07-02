@@ -10,8 +10,11 @@ RUN apt-get update && apt-get install -y \
     protobuf-compiler \
     curl \
     python3 \
+    python3-pip \
     python3-venv \
     && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m pip install --no-cache-dir --break-system-packages "litellm[proxy]>=1.72.0"
 
 ARG DOCKER_CLI_VERSION=29.2.1
 RUN set -eux; \

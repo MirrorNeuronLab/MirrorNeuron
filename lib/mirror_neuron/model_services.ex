@@ -74,16 +74,52 @@ defmodule MirrorNeuron.ModelServices do
 
   @doc false
   def prepare_runtime_model_on_node(node_name, attrs, timeout \\ 1_200_000) when is_map(attrs) do
+    native_command_on_node(
+      node_name,
+      attrs,
+      timeout,
+      &prepare_runtime_model/2,
+      "runtime model prepare request",
+      "PrepareRuntimeModel gRPC"
+    )
+  end
+
+  @doc false
+  def sync_litellm_gateway_on_node(node_name, attrs, timeout \\ 120_000) when is_map(attrs) do
+    native_command_on_node(
+      node_name,
+      attrs,
+      timeout,
+      &sync_litellm_gateway/2,
+      "LiteLLM gateway sync request",
+      "the matching gRPC command"
+    )
+  end
+
+  @doc false
+  def remove_litellm_gateway_route_on_node(node_name, attrs, timeout \\ 120_000)
+      when is_map(attrs) do
+    native_command_on_node(
+      node_name,
+      attrs,
+      timeout,
+      &remove_litellm_gateway_route/2,
+      "LiteLLM gateway route removal request",
+      "the matching gRPC command"
+    )
+  end
+
+  defp native_command_on_node(node_name, attrs, timeout, local_fun, description, command_hint) do
     target_node = normalize_node_name(node_name)
     self_node = to_string(Node.self())
 
     cond do
       target_node in [nil, "", self_node] ->
-        prepare_runtime_model(attrs, timeout)
+        local_fun.(attrs, timeout)
 
       true ->
         {:error,
-         "runtime model prepare request for #{target_node} reached #{self_node}; send PrepareRuntimeModel gRPC to the target node runtime so its local mn-python-sdk can prepare native resources"}
+         "#{description} for #{target_node} reached #{self_node}; send #{command_hint} to the target node runtime so its local mn-python-sdk can prepare native resources"}
     end
   end
 
@@ -95,7 +131,8 @@ defmodule MirrorNeuron.ModelServices do
       {:ok, result}
     else
       {:error, %Jason.DecodeError{} = error} ->
-        {:error, "native SDK runtime model prepare returned invalid JSON: #{Exception.message(error)}"}
+        {:error,
+         "native SDK runtime model prepare returned invalid JSON: #{Exception.message(error)}"}
 
       {:ok, _other} ->
         {:error, "native SDK runtime model prepare returned a non-object response"}
@@ -103,6 +140,28 @@ defmodule MirrorNeuron.ModelServices do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  @doc false
+  def sync_litellm_gateway(attrs, timeout \\ 120_000) when is_map(attrs) do
+    native_sdk_json_command(
+      attrs,
+      timeout,
+      :native_sdk_grpc_sync_client,
+      &__MODULE__.grpc_sync_litellm_gateway/3,
+      "native SDK LiteLLM gateway sync"
+    )
+  end
+
+  @doc false
+  def remove_litellm_gateway_route(attrs, timeout \\ 120_000) when is_map(attrs) do
+    native_sdk_json_command(
+      attrs,
+      timeout,
+      :native_sdk_grpc_remove_gateway_route_client,
+      &__MODULE__.grpc_remove_litellm_gateway_route/3,
+      "native SDK LiteLLM gateway route removal"
+    )
   end
 
   defp register_model_services(services, node_name) do
@@ -123,7 +182,8 @@ defmodule MirrorNeuron.ModelServices do
   @doc false
   def grpc_prepare_runtime_model(target, request, timeout) do
     with {:ok, channel} <- GRPC.Stub.connect(target, timeout: timeout),
-         {:ok, response} <- ClusterService.Stub.prepare_runtime_model(channel, request, timeout: timeout) do
+         {:ok, response} <-
+           ClusterService.Stub.prepare_runtime_model(channel, request, timeout: timeout) do
       {:ok, response}
     else
       {:error, %GRPC.RPCError{} = error} ->
@@ -134,7 +194,67 @@ defmodule MirrorNeuron.ModelServices do
     end
   end
 
+  @doc false
+  def grpc_sync_litellm_gateway(target, request, timeout) do
+    with {:ok, channel} <- GRPC.Stub.connect(target, timeout: timeout),
+         {:ok, response} <-
+           ClusterService.Stub.sync_lite_llm_gateway(channel, request, timeout: timeout) do
+      {:ok, response}
+    else
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error,
+         "native SDK gRPC LiteLLM gateway sync failed for #{target}: #{Exception.message(error)}"}
+
+      {:error, reason} ->
+        {:error, "native SDK gRPC LiteLLM gateway sync failed for #{target}: #{inspect(reason)}"}
+    end
+  end
+
+  @doc false
+  def grpc_remove_litellm_gateway_route(target, request, timeout) do
+    with {:ok, channel} <- GRPC.Stub.connect(target, timeout: timeout),
+         {:ok, response} <-
+           ClusterService.Stub.remove_lite_llm_gateway_route(channel, request, timeout: timeout) do
+      {:ok, response}
+    else
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error,
+         "native SDK gRPC LiteLLM gateway route removal failed for #{target}: #{Exception.message(error)}"}
+
+      {:error, reason} ->
+        {:error,
+         "native SDK gRPC LiteLLM gateway route removal failed for #{target}: #{inspect(reason)}"}
+    end
+  end
+
   defp native_sdk_prepare(target, attrs, timeout) do
+    native_sdk_request(
+      target,
+      attrs,
+      timeout,
+      :native_sdk_grpc_client,
+      &__MODULE__.grpc_prepare_runtime_model/3
+    )
+  end
+
+  defp native_sdk_json_command(attrs, timeout, client_env, default_client, label) do
+    with {:ok, target} <- native_sdk_grpc_target(),
+         {:ok, response} <- native_sdk_request(target, attrs, timeout, client_env, default_client),
+         {:ok, result} when is_map(result) <- Jason.decode(response.resource_json) do
+      {:ok, result}
+    else
+      {:error, %Jason.DecodeError{} = error} ->
+        {:error, "#{label} returned invalid JSON: #{Exception.message(error)}"}
+
+      {:ok, _other} ->
+        {:error, "#{label} returned a non-object response"}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp native_sdk_request(target, attrs, timeout, client_env, default_client) do
     request = %SetResourceRequest{
       resource_json: Jason.encode!(attrs),
       version: @interface_version
@@ -143,8 +263,8 @@ defmodule MirrorNeuron.ModelServices do
     client =
       Application.get_env(
         :mirror_neuron,
-        :native_sdk_grpc_client,
-        &__MODULE__.grpc_prepare_runtime_model/3
+        client_env,
+        default_client
       )
 
     client.(target, request, native_sdk_timeout(timeout))
@@ -185,7 +305,8 @@ defmodule MirrorNeuron.ModelServices do
 
   defp parse_positive_integer(_value), do: nil
 
-  defp normalize_node_name(value) when is_atom(value), do: value |> to_string() |> normalize_node_name()
+  defp normalize_node_name(value) when is_atom(value),
+    do: value |> to_string() |> normalize_node_name()
 
   defp normalize_node_name(value) when is_binary(value) do
     value = String.trim(value)

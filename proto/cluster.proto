@@ -16,6 +16,8 @@ service ClusterService {
   rpc ListServices (ListServicesRequest) returns (ListServicesResponse);
   rpc ResolveService (ResolveServiceRequest) returns (ResolveServiceResponse);
   rpc CheckServices (CheckServicesRequest) returns (CheckServicesResponse);
+  rpc SyncLiteLLMGateway (SetResourceRequest) returns (SetResourceResponse);
+  rpc RemoveLiteLLMGatewayRoute (SetResourceRequest) returns (SetResourceResponse);
   rpc PrepareRuntimeModel (SetResourceRequest) returns (SetResourceResponse);
 }
 
