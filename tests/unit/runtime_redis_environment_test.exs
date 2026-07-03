@@ -27,9 +27,21 @@ defmodule MirrorNeuron.Runtime.RedisEnvironmentTest do
     :ok
   end
 
-  test "agent env rewrites Redis URLs to the advertised network endpoint" do
+  test "agent env preserves compose-internal Redis URLs" do
     System.put_env("MN_REDIS_URL", "redis://:secret@redis:6379/0")
     System.put_env("MN_CONTEXT_REDIS_URL", "redis://:secret@redis:6379/1")
+    System.put_env("MN_NETWORK_REDIS_HOST", "192.168.4.51")
+    System.put_env("MN_NETWORK_REDIS_PORT", "56380")
+
+    assert RedisEnvironment.agent_env() == %{
+             "MN_REDIS_URL" => "redis://:secret@redis:6379/0",
+             "MN_CONTEXT_REDIS_URL" => "redis://:secret@redis:6379/1"
+           }
+  end
+
+  test "agent env rewrites non-internal Redis URLs to the advertised network endpoint" do
+    System.put_env("MN_REDIS_URL", "redis://:secret@10.0.0.4:6379/0")
+    System.put_env("MN_CONTEXT_REDIS_URL", "redis://:secret@10.0.0.4:6379/1")
     System.put_env("MN_NETWORK_REDIS_HOST", "192.168.4.51")
     System.put_env("MN_NETWORK_REDIS_PORT", "56380")
 
@@ -39,13 +51,13 @@ defmodule MirrorNeuron.Runtime.RedisEnvironmentTest do
            }
   end
 
-  test "agent env derives context Redis URL from runtime Redis when unset" do
+  test "agent env derives context Redis URL from internal runtime Redis when unset" do
     System.put_env("MN_REDIS_URL", "redis://:secret@redis:6379/0")
     System.put_env("MN_NETWORK_REDIS_HOST", "192.168.4.51")
     System.put_env("MN_NETWORK_REDIS_PORT", "56380")
 
     assert RedisEnvironment.agent_env()["MN_CONTEXT_REDIS_URL"] ==
-             "redis://:secret@192.168.4.51:56380/1"
+             "redis://:secret@redis:6379/1"
   end
 
   test "rewrite leaves URLs unchanged without an advertised Redis endpoint" do

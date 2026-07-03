@@ -228,12 +228,17 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
 
   defp put_network_args(args, config) do
     docker = Map.get(config, "docker", %{})
+    environment = config_env(config)
+    configured_network = Map.get(docker, "network") || Map.get(config, "network")
 
     network =
-      Map.get(docker, "network") ||
-        Map.get(config, "network") ||
-        MirrorNeuron.Config.optional_string("MN_DOCKER_WORKER_NETWORK", :docker_worker_network) ||
-        "bridge"
+      if is_binary(configured_network) do
+        configured_network
+      else
+        nonempty_string(Map.get(environment, "MN_DOCKER_WORKER_NETWORK")) ||
+          MirrorNeuron.Config.optional_string("MN_DOCKER_WORKER_NETWORK", :docker_worker_network) ||
+          "bridge"
+      end
 
     if is_binary(network) and network != "" do
       args ++ ["--network", network]
@@ -241,6 +246,13 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
       args
     end
   end
+
+  defp nonempty_string(value) when is_binary(value) do
+    value = String.trim(value)
+    if value == "", do: nil, else: value
+  end
+
+  defp nonempty_string(_value), do: nil
 
   defp put_host_gateway_args(args, config) do
     docker = Map.get(config, "docker", %{})

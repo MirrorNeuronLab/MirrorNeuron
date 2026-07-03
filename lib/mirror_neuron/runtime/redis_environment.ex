@@ -20,6 +20,7 @@ defmodule MirrorNeuron.Runtime.RedisEnvironment do
 
   def rewrite_for_advertised_endpoint(url) when is_binary(url) do
     with {:ok, uri} <- redis_uri(url),
+         false <- compose_internal_redis_endpoint?(uri),
          host when is_binary(host) <- advertised_redis_host() do
       port = advertised_redis_port() || uri.port
       URI.to_string(%{uri | host: host, port: port})
@@ -60,6 +61,15 @@ defmodule MirrorNeuron.Runtime.RedisEnvironment do
       :error
     end
   end
+
+  defp compose_internal_redis_endpoint?(%URI{host: host, port: port}) when is_binary(host) do
+    normalized_host = String.downcase(host)
+
+    port in [nil, 6_379] and
+      (normalized_host == "redis" or String.ends_with?(normalized_host, "-redis"))
+  end
+
+  defp compose_internal_redis_endpoint?(_uri), do: false
 
   defp advertised_redis_host do
     Config.optional_string("MN_NETWORK_REDIS_HOST", :network_redis_host)
