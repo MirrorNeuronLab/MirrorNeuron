@@ -504,7 +504,8 @@ present. Production does not require any `.env` file.
 | `MN_COOKIE` | Erlang distribution cookie; use a strong non-default value for distributed nodes. |
 | `MN_JOB_LEASE_DURATION_MS` | Job lease duration for fenced runtime ownership; defaults to 60000. |
 | `MN_JOB_LEASE_RENEW_INTERVAL_MS` | Job lease renewal cadence; defaults to 10000. |
-| `MN_JOB_CALL_TIMEOUT_MS` | Timeout for runtime job control calls such as pause, resume, cancel, pressure, and external message submit; defaults to 15000. |
+| `MN_JOB_CALL_TIMEOUT_MS` | Timeout for runtime job control calls such as pause, resume, pressure, and external message submit; defaults to 15000. |
+| `MN_CANCEL_JOB_CALL_TIMEOUT_MS` | Timeout for cancel before forcing durable cancellation of active orphaned jobs; defaults to 5000. |
 | `MN_DELIVERY_RETRY_ATTEMPTS` | Number of agent lookup retries before a delivery becomes a dead letter; defaults to 50. |
 | `MN_DELIVERY_RETRY_INTERVAL_MS` | Delay between delivery lookup retries; defaults to 50. |
 | `MN_RELIABILITY_STRATEGY` | Conservative runtime strategy resolver for new jobs. |

@@ -19,6 +19,7 @@ defmodule MirrorNeuron.Runtime do
   }
 
   @default_job_call_timeout_ms 15_000
+  @default_cancel_job_call_timeout_ms 5_000
   @default_delivery_retry_attempts 50
   @default_delivery_retry_interval_ms 50
 
@@ -28,6 +29,14 @@ defmodule MirrorNeuron.Runtime do
         "MN_JOB_CALL_TIMEOUT_MS",
         :job_call_timeout_ms,
         @default_job_call_timeout_ms
+      )
+
+  def cancel_job_call_timeout_ms,
+    do:
+      config_positive_integer(
+        "MN_CANCEL_JOB_CALL_TIMEOUT_MS",
+        :cancel_job_call_timeout_ms,
+        @default_cancel_job_call_timeout_ms
       )
 
   def delivery_retry_attempts,
@@ -227,7 +236,7 @@ defmodule MirrorNeuron.Runtime do
     end
   end
 
-  def cancel_job(job_id), do: call_job(job_id, :cancel)
+  def cancel_job(job_id), do: call_job(job_id, :cancel, timeout_ms: cancel_job_call_timeout_ms())
 
   def cleanup_jobs(opts \\ []) do
     force_all = Keyword.get(opts, :all, false)
@@ -288,9 +297,9 @@ defmodule MirrorNeuron.Runtime do
     )
   end
 
-  defp call_job(job_id, message) do
+  defp call_job(job_id, message, opts \\ []) do
     case lookup_job(job_id) do
-      {:ok, pid} -> safe_job_call(job_id, pid, message)
+      {:ok, pid} -> safe_job_call(job_id, pid, message, opts)
       :missing -> {:error, {:job_not_running, job_id}}
       {:error, reason} -> {:error, reason}
     end
@@ -304,8 +313,8 @@ defmodule MirrorNeuron.Runtime do
     end
   end
 
-  defp safe_job_call(job_id, pid, message) do
-    timeout_ms = job_call_timeout_ms()
+  defp safe_job_call(job_id, pid, message, opts) do
+    timeout_ms = Keyword.get(opts, :timeout_ms, job_call_timeout_ms())
 
     try do
       GenServer.call(pid, message, timeout_ms)

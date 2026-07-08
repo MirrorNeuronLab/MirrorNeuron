@@ -190,6 +190,7 @@ defmodule MirrorNeuron.ConfigTest do
 
   test "validate rejects invalid runtime control timing settings" do
     previous_job_call_timeout = System.get_env("MN_JOB_CALL_TIMEOUT_MS")
+    previous_cancel_job_call_timeout = System.get_env("MN_CANCEL_JOB_CALL_TIMEOUT_MS")
     previous_delivery_retry_attempts = System.get_env("MN_DELIVERY_RETRY_ATTEMPTS")
     previous_delivery_retry_interval = System.get_env("MN_DELIVERY_RETRY_INTERVAL_MS")
 
@@ -201,6 +202,13 @@ defmodule MirrorNeuron.ConfigTest do
       end
 
       System.delete_env("MN_JOB_CALL_TIMEOUT_MS")
+      System.put_env("MN_CANCEL_JOB_CALL_TIMEOUT_MS", "0")
+
+      assert_raise ArgumentError, ~r/MN_CANCEL_JOB_CALL_TIMEOUT_MS/, fn ->
+        Config.validate!()
+      end
+
+      System.delete_env("MN_CANCEL_JOB_CALL_TIMEOUT_MS")
       System.put_env("MN_DELIVERY_RETRY_ATTEMPTS", "-1")
 
       assert_raise ArgumentError, ~r/MN_DELIVERY_RETRY_ATTEMPTS/, fn ->
@@ -215,6 +223,7 @@ defmodule MirrorNeuron.ConfigTest do
       end
     after
       restore_env("MN_JOB_CALL_TIMEOUT_MS", previous_job_call_timeout)
+      restore_env("MN_CANCEL_JOB_CALL_TIMEOUT_MS", previous_cancel_job_call_timeout)
       restore_env("MN_DELIVERY_RETRY_ATTEMPTS", previous_delivery_retry_attempts)
       restore_env("MN_DELIVERY_RETRY_INTERVAL_MS", previous_delivery_retry_interval)
     end

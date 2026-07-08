@@ -351,6 +351,7 @@ defmodule MirrorNeuron.Config do
     optional_positive_int!("MN_LEASE_QUEUE_TIMEOUT_MS")
     optional_nonnegative_int!("MN_LEASE_MAX_QUEUE_LENGTH")
     optional_positive_int!("MN_JOB_CALL_TIMEOUT_MS")
+    optional_positive_int!("MN_CANCEL_JOB_CALL_TIMEOUT_MS")
     optional_nonnegative_int!("MN_DELIVERY_RETRY_ATTEMPTS")
     optional_nonnegative_int!("MN_DELIVERY_RETRY_INTERVAL_MS")
   end

@@ -356,7 +356,7 @@ defmodule MirrorNeuron do
 
     case result do
       {:error, reason} = error ->
-        if job_not_running_error?(reason) do
+        if cancel_force_fallback_error?(reason) do
           force_cancel_orphaned_job(job_id, Runtime.error_message(reason))
         else
           error
@@ -371,7 +371,10 @@ defmodule MirrorNeuron do
     case RedisStore.fetch_job(job_id) do
       {:ok, %{"status" => status} = job} when status in ["pending", "running", "paused"] ->
         require Logger
-        Logger.info("Job #{job_id} process not found, forcefully cancelling via Redis.")
+
+        Logger.info(
+          "Job #{job_id} process not found or did not respond, forcefully cancelling via Redis."
+        )
 
         updates = %{
           "status" => "cancelled",
@@ -397,7 +400,11 @@ defmodule MirrorNeuron do
           timestamp: Runtime.timestamp()
         })
 
-        {:ok, "force cancelled"}
+        {:ok, "cancelled"}
+
+      {:ok, %{"status" => "cancelled"}} ->
+        cleanup_job_sandboxes(job_id)
+        {:ok, "cancelled"}
 
       {:ok, _job} ->
         cleanup_job_sandboxes(job_id)
@@ -522,6 +529,9 @@ defmodule MirrorNeuron do
     do: String.starts_with?(reason, "job ") and String.contains?(reason, "not running")
 
   defp job_not_running_error?(_reason), do: false
+
+  defp cancel_force_fallback_error?({:job_call_timeout, _job_id, _timeout_ms}), do: true
+  defp cancel_force_fallback_error?(reason), do: job_not_running_error?(reason)
 
   defp runtime_lookup_unavailable_error?({:runtime_lookup_unavailable, _job_id, _reason}),
     do: true

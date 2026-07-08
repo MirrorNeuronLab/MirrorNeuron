@@ -71,6 +71,9 @@ defmodule MirrorNeuron.Config.Schema do
         default: 10_000
       ),
       spec("MN_JOB_CALL_TIMEOUT_MS", :job_call_timeout_ms, :integer, default: 15_000),
+      spec("MN_CANCEL_JOB_CALL_TIMEOUT_MS", :cancel_job_call_timeout_ms, :integer,
+        default: 5_000
+      ),
       spec("MN_DELIVERY_RETRY_ATTEMPTS", :delivery_retry_attempts, :integer, default: 50),
       spec("MN_DELIVERY_RETRY_INTERVAL_MS", :delivery_retry_interval_ms, :integer, default: 50),
       spec("MN_RELIABILITY_STRATEGY", :reliability_strategy, :string, default: "auto"),
