@@ -6,11 +6,11 @@ defmodule Mirrorneuron.Observability.V1.StreamEventsRequest do
     protoc_gen_elixir_version: "0.16.0",
     syntax: :proto3
 
-  field :job_id, 1, type: :string, json_name: "jobId"
-  field :follow, 2, type: :bool
-  field :heartbeat_interval_ms, 3, type: :int32, json_name: "heartbeatIntervalMs"
-  field :limit, 4, type: :int32
-  field :version, 5, type: :uint32
+  field(:job_id, 1, type: :string, json_name: "jobId")
+  field(:follow, 2, type: :bool)
+  field(:heartbeat_interval_ms, 3, type: :int32, json_name: "heartbeatIntervalMs")
+  field(:limit, 4, type: :int32)
+  field(:version, 5, type: :uint32)
 end
 
 defmodule Mirrorneuron.Observability.V1.EventResponse do
@@ -21,8 +21,8 @@ defmodule Mirrorneuron.Observability.V1.EventResponse do
     protoc_gen_elixir_version: "0.16.0",
     syntax: :proto3
 
-  field :event_json, 1, type: :string, json_name: "eventJson"
-  field :version, 2, type: :uint32
+  field(:event_json, 1, type: :string, json_name: "eventJson")
+  field(:version, 2, type: :uint32)
 end
 
 defmodule Mirrorneuron.Observability.V1.ObservabilityService.Service do
@@ -32,9 +32,11 @@ defmodule Mirrorneuron.Observability.V1.ObservabilityService.Service do
     name: "mirrorneuron.observability.v1.ObservabilityService",
     protoc_gen_elixir_version: "0.16.0"
 
-  rpc :StreamEvents,
-      Mirrorneuron.Observability.V1.StreamEventsRequest,
-      stream(Mirrorneuron.Observability.V1.EventResponse)
+  rpc(
+    :StreamEvents,
+    Mirrorneuron.Observability.V1.StreamEventsRequest,
+    stream(Mirrorneuron.Observability.V1.EventResponse)
+  )
 end
 
 defmodule Mirrorneuron.Observability.V1.ObservabilityService.Stub do
