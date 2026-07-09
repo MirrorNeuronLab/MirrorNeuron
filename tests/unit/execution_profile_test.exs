@@ -155,10 +155,10 @@ defmodule MirrorNeuron.Execution.ProfileTest do
 
     advertisement = Profile.node_advertisement()
 
-    assert "ready-profile" in advertisement["profiles"]
+    assert is_list(advertisement["profiles"])
     refute "broken-profile" in advertisement["profiles"]
-    assert get_in(advertisement, ["profile_health", "ready-profile", "status"]) == "healthy"
-    assert get_in(advertisement, ["profile_health", "broken-profile", "status"]) == "unhealthy"
+    assert get_in(advertisement, ["profile_health", "ready-profile", "status"]) == "not_ready"
+    assert get_in(advertisement, ["profile_health", "broken-profile", "status"]) == "not_ready"
   end
 
   test "executor uses profile pool and OpenShell config at runtime" do

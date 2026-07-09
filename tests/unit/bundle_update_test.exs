@@ -96,7 +96,8 @@ defmodule MirrorNeuron.BundleUpdateTest do
                spawn_policy: %{},
                tool_bindings: [],
                services: [],
-               requires_services: []
+               requires_services: [],
+               placement_requirements: %{}
              }
            ]
 

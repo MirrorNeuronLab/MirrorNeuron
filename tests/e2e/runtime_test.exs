@@ -1559,8 +1559,7 @@ defmodule MirrorNeuron.RuntimeTest do
                })
              )
 
-    assert {:ok, result} = MirrorNeuron.recover_unfinished_jobs(reason: "test_false_failed")
-    recovered = Enum.find(result.jobs, &(&1.job_id == job_id))
+    assert {:ok, recovered} = MirrorNeuron.recover_job(job_id)
     assert recovered.action in [:started, :already_running]
 
     assert {:ok, completed} = MirrorNeuron.wait_for_job(job_id, 3_000)
