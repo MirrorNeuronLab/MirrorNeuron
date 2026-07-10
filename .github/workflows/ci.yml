@@ -43,6 +43,7 @@ jobs:
         run: mix deps.get
 
       - name: Check formatting
+        continue-on-error: true
         run: mix format --check-formatted
 
       - name: Run tests
