@@ -9,10 +9,13 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     protobuf-compiler \
     curl \
+    python3-minimal \
     python3 \
     python3-pip \
     python3-venv \
     && rm -rf /var/lib/apt/lists/*
+
+RUN test -x /usr/bin/python3 && python3 --version && python3 -m pip --version
 
 RUN python3 -m pip install --no-cache-dir --break-system-packages "litellm[proxy]>=1.72.0"
 
