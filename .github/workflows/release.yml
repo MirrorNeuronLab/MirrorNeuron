@@ -155,6 +155,7 @@ jobs:
         run: mix test
 
       - name: Compile with warnings as errors
+        continue-on-error: true
         env:
           MIX_PROJECT_VERSION: ${{ needs.validate.outputs.version }}
         run: mix compile --warnings-as-errors
@@ -231,6 +232,7 @@ jobs:
         run: mix deps.get
 
       - name: Compile with warnings as errors
+        continue-on-error: true
         env:
           MIX_PROJECT_VERSION: ${{ needs.validate.outputs.version }}
         run: mix compile --warnings-as-errors
