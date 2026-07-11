@@ -3,6 +3,9 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   alias MirrorNeuron.Cluster.NodeAdapter
   alias MirrorNeuron.Config
   alias MirrorNeuron.JobId
+  alias MirrorNeuron.Persistence.DiskCheckpoint
+
+  require Logger
 
   @jobs_set "jobs"
   @deployments_set "deployments"
@@ -44,6 +47,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     encoded_summary = Jason.encode!(job_summary(job_id, job_map))
 
     with :ok <- validate_job_lease_epoch(job_id, job_map),
+         :ok <- persist_disk_job(job_id, job_map),
          {:ok, results} <-
            transaction([
              ["SET", key("job", job_id), encoded],
@@ -52,7 +56,8 @@ defmodule MirrorNeuron.Persistence.RedisStore do
            ]),
          :ok <- expect_persist_job_results(results),
          :ok <- apply_job_retention(job_id, job_map),
-         :ok <- wait_for_replicas() do
+         :ok <- wait_for_replicas(),
+         :ok <- cleanup_terminal_disk_checkpoint(job_id, job_map) do
       {:ok, job_map}
     end
   end
@@ -387,6 +392,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     encoded = Jason.encode!(snapshot)
 
     with :ok <- validate_agent_lease_epoch(job_id, snapshot),
+         :ok <- persist_disk_agent(job_id, agent_id, snapshot),
          {:ok, results} <-
            transaction([
              ["SET", key("job", job_id, "agent", agent_id), encoded],
@@ -436,6 +442,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     _ = delete_service_instances(job_id: job_id)
     _ = SharedStorage.cleanup_job(job_id, job_map)
     _ = JobStore.cleanup_job(job_id)
+    _ = DiskCheckpoint.delete_job(job_id)
 
     with {:ok, agent_ids} <- command(["SMEMBERS", key("job", job_id, "agents")]) do
       keys =
@@ -452,6 +459,20 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       :ok
     else
       {:error, _reason} -> :ok
+    end
+  end
+
+  def refresh_disk_checkpoint(job_id) do
+    with {:ok, job} <- fetch_job(job_id),
+         {:ok, agents} <- list_agents(job_id),
+         :ok <- DiskCheckpoint.persist_job(job_id, job),
+         :ok <- persist_disk_agents(job_id, agents),
+         :ok <-
+           DiskCheckpoint.prune_agents(
+             job_id,
+             Enum.map(agents, &(Map.get(&1, "agent_id") || Map.get(&1, "node_id")))
+           ) do
+      :ok
     end
   end
 
@@ -474,6 +495,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
             {:error, _reason} ->
               _ = command(["SREM", key(@jobs_set), job_id])
               _ = JobStore.cleanup_job(job_id)
+              _ = DiskCheckpoint.delete_job(job_id)
               Map.update!(acc, :stale_job_ids, &[job_id | &1])
           end
         end)
@@ -1546,6 +1568,91 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
       {incoming, existing} ->
         {:error, {:stale_lease_epoch, incoming, existing}}
+    end
+  end
+
+  defp persist_disk_job(job_id, job_map) do
+    case DiskCheckpoint.persist_job(job_id, job_map) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("failed to persist disk job checkpoint for #{job_id}: #{inspect(reason)}")
+        :ok
+    end
+  end
+
+  defp persist_disk_agent(job_id, agent_id, snapshot) do
+    case fetch_job(job_id) do
+      {:ok, %{"status" => status}} when status in @terminal_statuses ->
+        _ = DiskCheckpoint.delete_job(job_id)
+        :ok
+
+      _ ->
+        case DiskCheckpoint.persist_agent(job_id, agent_id, snapshot) do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            handle_disk_agent_failure(job_id, agent_id, reason)
+        end
+    end
+  end
+
+  defp handle_disk_agent_failure(job_id, _agent_id, :enoent) do
+    case fetch_job(job_id) do
+      {:ok, %{"status" => status}} when status in @terminal_statuses ->
+        _ = DiskCheckpoint.delete_job(job_id)
+        :ok
+
+      {:error, reason} when is_binary(reason) ->
+        if String.contains?(reason, "was not found") do
+          :ok
+        else
+          Logger.warning("failed to persist disk agent checkpoint for #{job_id}: :enoent")
+          :ok
+        end
+
+      _ ->
+        Logger.warning("failed to persist disk agent checkpoint for #{job_id}: :enoent")
+        :ok
+    end
+  end
+
+  defp handle_disk_agent_failure(job_id, agent_id, reason) do
+    Logger.warning(
+      "failed to persist disk agent checkpoint for #{job_id}/#{agent_id}: #{inspect(reason)}"
+    )
+
+    :ok
+  end
+
+  defp persist_disk_agents(job_id, agents) do
+    Enum.reduce_while(agents, :ok, fn agent, :ok ->
+      agent_id = Map.get(agent, "agent_id") || Map.get(agent, "node_id")
+
+      case DiskCheckpoint.persist_agent(job_id, agent_id, agent) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp cleanup_terminal_disk_checkpoint(job_id, job_map) do
+    if terminal_status?(Map.get(job_map, "status") || Map.get(job_map, :status)) do
+      case DiskCheckpoint.delete_job(job_id) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "failed to clean terminal disk checkpoint for #{job_id}: #{inspect(reason)}"
+          )
+
+          :ok
+      end
+    else
+      :ok
     end
   end
 

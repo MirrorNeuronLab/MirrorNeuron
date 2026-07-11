@@ -2,7 +2,7 @@ defmodule MirrorNeuron.RuntimeTest do
   use ExUnit.Case
 
   alias MirrorNeuron.Message
-  alias MirrorNeuron.Persistence.RedisStore
+  alias MirrorNeuron.Persistence.{DiskCheckpoint, RedisStore}
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.AgentWorker
   alias MirrorNeuron.ServiceRegistry
@@ -1376,6 +1376,66 @@ defmodule MirrorNeuron.RuntimeTest do
     assert Enum.count(events, &(&1["type"] == "counter_step_completed")) == 8
 
     RedisStore.delete_job(job_id)
+  end
+
+  test "startup scan restores a running workflow from disk when Redis state is lost" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "disk_reboot_resume_test",
+      "nodes" => [
+        %{
+          "node_id" => "counter",
+          "agent_type" => "module",
+          "role" => "root_coordinator",
+          "config" => %{"module" => DurableCounterAgent, "target" => 3}
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
+    cleanup_job_on_exit(job_id)
+    wait_until(fn -> running_status?(job_id) end)
+
+    send_counter_messages(job_id, 1..1)
+    wait_until(fn -> agent_current_count(job_id, "counter") == 1 end, 2_000)
+
+    runner = job_runner_pid(job_id)
+    :ok = Horde.DynamicSupervisor.terminate_child(MirrorNeuron.Runtime.JobSupervisor, runner)
+    wait_until(fn -> job_runner_pid(job_id, false) == nil end, 2_000)
+    wait_until(fn -> match?({:ok, nil}, RedisStore.get_lease("job:#{job_id}")) end, 2_000)
+
+    assert {:ok, %{"status" => "running"}} = DiskCheckpoint.load_job(job_id)
+    assert {:ok, [%{"agent_id" => "counter"}]} = DiskCheckpoint.load_agents(job_id)
+
+    assert {:ok, _deleted} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "DEL",
+               redis_key(["job", job_id]),
+               redis_key(["job", job_id, "summary"]),
+               redis_key(["job", job_id, "agents"]),
+               redis_key(["job", job_id, "agent", "counter"])
+             ])
+
+    assert {:ok, _removed} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SREM",
+               redis_key(["jobs"]),
+               job_id
+             ])
+
+    assert {:ok, result} = MirrorNeuron.recover_unfinished_jobs(reason: "test_disk_restore")
+    recovered = Enum.find(result.jobs, &(&1.job_id == job_id))
+    assert recovered.action in [:started, :already_running]
+
+    wait_until(fn -> agent_current_count(job_id, "counter") == 1 end, 3_000)
+    send_counter_messages(job_id, 2..3)
+
+    assert {:ok, completed} = MirrorNeuron.wait_for_job(job_id, 3_000)
+    assert completed["status"] == "completed"
+    assert get_in(completed, ["result", "output", "seen_ids"]) == [1, 2, 3]
+    wait_until(fn -> match?({:error, :enoent}, DiskCheckpoint.load_job(job_id)) end, 1_000)
   end
 
   test "graceful runtime shutdown keeps a running job recoverable on startup scan" do

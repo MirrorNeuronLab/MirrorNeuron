@@ -225,7 +225,7 @@ clear placement, and clear recovery behavior.
 | Workflow manifest validation | Available | Validates graph structure and supported runtime primitives. |
 | Message-driven execution | Available | Routes workflow messages between runtime nodes and agents. |
 | Built-in runtime primitives | Available | Includes `router`, `executor`, `aggregator`, `sensor`, and `module`. |
-| Durable job state | Available | Persists job metadata, events, agents, and terminal state through Redis. |
+| Durable job state | Available | Persists job metadata and agent state through Redis plus atomic disk checkpoints for host-restart recovery. |
 | Runtime monitoring | Available | Lists jobs, job details, cluster overview, metrics, and dead letters. |
 | Cluster coordination | Available | Uses Erlang distribution plus `libcluster` and Horde. |
 | Redis high-availability helpers | Available | Includes scripts and config for Redis Sentinel development workflows. |
@@ -434,6 +434,17 @@ The runtime persists both `requested_recovery_policy` and effective
 job policies are not rewritten when cluster health changes; reliability events
 are emitted instead.
 
+Active jobs are also mirrored to atomic JSON checkpoints under
+`MN_CHECKPOINT_ROOT` (by default, `MN_SHARED_STORAGE_ROOT/checkpoints`). At
+startup the local recovery scan restores missing or newer job and agent state
+from disk before evaluating unfinished jobs, so a safe `local_restart` workflow
+continues from its last persisted stage even if Redis state was lost during a
+host shutdown. Checkpoints use the Redis namespace to isolate environments.
+Successful resume replaces stale checkpoint files and prunes obsolete agent
+files. Completed, failed, cancelled, deleted, and retention-expired jobs remove
+their checkpoint directory. The current active checkpoint is intentionally
+kept after resume so another interruption remains recoverable.
+
 This is especially important for desktop environments, where machines sleep,
 restart, disconnect, run out of local resources, or appear and disappear from a
 private network more often than cloud workers do.
@@ -509,6 +520,7 @@ present. Production does not require any `.env` file.
 | `MN_DELIVERY_RETRY_ATTEMPTS` | Number of agent lookup retries before a delivery becomes a dead letter; defaults to 50. |
 | `MN_DELIVERY_RETRY_INTERVAL_MS` | Delay between delivery lookup retries; defaults to 50. |
 | `MN_RELIABILITY_STRATEGY` | Conservative runtime strategy resolver for new jobs. |
+| `MN_CHECKPOINT_ROOT` | Persistent atomic checkpoint root used to restore active workflows after a host restart; defaults to `MN_SHARED_STORAGE_ROOT/checkpoints`. |
 | `MN_NODE_RECONNECT_ATTEMPTS` | Runtime node reconnect attempts before jobs are paused for manual restart. |
 | `MN_NODE_EXECUTION_PROFILES` | Comma-separated execution profiles this runtime node may advertise after warmup. |
 | `MN_NODE_CAPABILITIES` | Comma-separated runtime capabilities such as `video-codec:h264` or `ffmpeg`. |

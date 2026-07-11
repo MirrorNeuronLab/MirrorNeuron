@@ -4,11 +4,12 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
 
   alias MirrorNeuron.Bundle.Archive
   alias MirrorNeuron.JobBundle
-  alias MirrorNeuron.Persistence.RedisStore
+  alias MirrorNeuron.Persistence.{DiskCheckpoint, RedisStore}
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.{EventBus, JobRunner, RecoverySafety}
 
   @active_statuses ["pending", "running", "paused"]
+  @terminal_statuses ["completed", "failed", "cancelled"]
   @default_startup_scan_delay_ms 500
   @default_scan_interval_ms 5_000
 
@@ -25,6 +26,8 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
   end
 
   def recover_unfinished_jobs(opts \\ []) do
+    restore_disk_checkpoints()
+
     if Keyword.get(opts, :repair_indexes?, true) do
       maybe_repair_recovery_indexes()
     end
@@ -48,6 +51,106 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
       |> Map.update!(:jobs, &Enum.reverse/1)
       |> then(&{:ok, &1})
     end
+  end
+
+  defp restore_disk_checkpoints do
+    case DiskCheckpoint.list_jobs() do
+      {:ok, %{checkpoints: checkpoints, errors: errors}} ->
+        Enum.each(errors, fn {path, reason} ->
+          Logger.warning("could not read disk checkpoint #{path}: #{inspect(reason)}")
+        end)
+
+        Enum.each(checkpoints, &restore_disk_checkpoint/1)
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("could not scan disk checkpoints: #{inspect(reason)}")
+        :ok
+    end
+  end
+
+  defp restore_disk_checkpoint(%{job: %{"job_id" => job_id} = disk_job, agents: agents}) do
+    cond do
+      disk_job["status"] in @terminal_statuses ->
+        _ = DiskCheckpoint.delete_job(job_id)
+
+      true ->
+        case RedisStore.fetch_job(job_id) do
+          {:ok, %{"status" => status}} when status in @terminal_statuses ->
+            _ = DiskCheckpoint.delete_job(job_id)
+
+          {:ok, redis_job} ->
+            maybe_restore_job(job_id, disk_job, redis_job)
+            restore_disk_agents(job_id, agents)
+
+          {:error, reason} ->
+            if not_found?(reason) do
+              maybe_restore_job(job_id, disk_job, nil)
+              restore_disk_agents(job_id, agents)
+            else
+              Logger.warning(
+                "could not compare disk checkpoint for #{job_id} with Redis: #{inspect(reason)}"
+              )
+            end
+        end
+    end
+  end
+
+  defp restore_disk_checkpoint(_checkpoint), do: :ok
+
+  defp maybe_restore_job(job_id, disk_job, nil) do
+    case RedisStore.persist_job(job_id, disk_job) do
+      {:ok, _job} -> :ok
+      {:error, reason} -> log_restore_failure(job_id, "job", reason)
+    end
+  end
+
+  defp maybe_restore_job(job_id, disk_job, redis_job) do
+    if newer?(disk_job["updated_at"], redis_job["updated_at"]) do
+      maybe_restore_job(job_id, disk_job, nil)
+    else
+      :ok
+    end
+  end
+
+  defp restore_disk_agents(job_id, agents) do
+    Enum.each(agents, fn agent ->
+      agent_id = agent["agent_id"] || agent["node_id"]
+
+      case RedisStore.fetch_agent(job_id, agent_id) do
+        {:ok, redis_agent} ->
+          if newer?(agent["last_heartbeat_at"], redis_agent["last_heartbeat_at"]) do
+            persist_restored_agent(job_id, agent_id, agent)
+          end
+
+        {:error, reason} ->
+          if not_found?(reason) do
+            persist_restored_agent(job_id, agent_id, agent)
+          else
+            log_restore_failure(job_id, "agent #{agent_id}", reason)
+          end
+      end
+    end)
+  end
+
+  defp persist_restored_agent(job_id, agent_id, agent) do
+    case RedisStore.persist_agent(job_id, agent_id, agent) do
+      {:ok, _agent} -> :ok
+      {:error, reason} -> log_restore_failure(job_id, "agent #{agent_id}", reason)
+    end
+  end
+
+  defp newer?(left, right) when is_binary(left) and is_binary(right), do: left > right
+  defp newer?(left, _right) when is_binary(left), do: true
+  defp newer?(_left, _right), do: false
+
+  defp not_found?(reason) when is_binary(reason), do: String.contains?(reason, "was not found")
+  defp not_found?(_reason), do: false
+
+  defp log_restore_failure(job_id, checkpoint, reason) do
+    Logger.warning(
+      "could not restore disk #{checkpoint} checkpoint for #{job_id}: #{inspect(reason)}"
+    )
   end
 
   defp fetch_and_recover_job(%{"job_id" => job_id}, opts) when is_binary(job_id) do

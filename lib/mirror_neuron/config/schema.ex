@@ -109,6 +109,7 @@ defmodule MirrorNeuron.Config.Schema do
       spec("MN_MAX_ARTIFACT_BYTES", :max_artifact_bytes, :integer, default: 1_048_576),
       spec("MN_MAX_FAN_OUT", :max_fan_out, :integer),
       spec("MN_TEMP_DIR", :temp_dir, :path, default: @default_temp_dir),
+      spec("MN_CHECKPOINT_ROOT", :checkpoint_root, :path, default: {:checkpoint_root}),
       spec("MN_BLOB_STORE_ROOT", :blob_store_root, :path, default: {:home, ".mn/blobs"}),
       spec("MN_JOB_ARTIFACT_ROOT", :job_artifact_root, :path, default: {:job_artifact_root}),
       spec("MN_SHARED_STORAGE_ROOT", :shared_storage_root, :path, default: {:home, ".mn/shared"}),
@@ -254,6 +255,7 @@ defmodule MirrorNeuron.Config.Schema do
   end
 
   defp default_value({:home, path}), do: Path.join(System.user_home!(), path) |> Path.expand()
+  defp default_value({:checkpoint_root}), do: Path.join(shared_storage_root(), "checkpoints")
   defp default_value(value), do: value
 
   defp redis_url_default do

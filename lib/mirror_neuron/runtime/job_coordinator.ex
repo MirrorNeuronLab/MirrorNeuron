@@ -98,6 +98,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
          {:ok, next_state} <- recover_missing_agents(state),
          :ok <- register_job_services(next_state) do
       persist_job(next_state)
+      refresh_disk_checkpoint(next_state)
 
       EventBus.publish(state.job_id, %{
         type: :job_recovered,
@@ -211,6 +212,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       {:ok, recovered_state} ->
         broadcast_agent_control(recovered_state, :resume)
         persist_job(recovered_state)
+        refresh_disk_checkpoint(recovered_state)
         EventBus.publish(state.job_id, %{type: :job_resumed, timestamp: Runtime.timestamp()})
         publish_workflow_events(recovered_state, workflow_events)
         schedule_health_check(recovered_state.health_check_interval_ms)
@@ -2608,6 +2610,18 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
       {:error, reason} ->
         Logger.warning("failed to persist job #{state.job_id}: #{inspect(reason)}")
+    end
+  end
+
+  defp refresh_disk_checkpoint(state) do
+    case RedisStore.refresh_disk_checkpoint(state.job_id) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "failed to refresh resumed disk checkpoint for #{state.job_id}: #{inspect(reason)}"
+        )
     end
   end
 

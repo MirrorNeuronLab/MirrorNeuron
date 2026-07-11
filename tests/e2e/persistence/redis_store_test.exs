@@ -4,7 +4,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
   alias MirrorNeuron.Bundle.{Archive, Fingerprint}
   alias MirrorNeuron.Artifacts.JobStore
   alias MirrorNeuron.JobBundle
-  alias MirrorNeuron.Persistence.RedisStore
+  alias MirrorNeuron.Persistence.{DiskCheckpoint, RedisStore}
   alias MirrorNeuron.Runtime.EventBus
   alias MirrorNeuron.ServiceRegistry
 
@@ -57,6 +57,41 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert {:ok, events} = RedisStore.read_events(job_id)
     assert Enum.map(events, & &1["seq"]) == [3, 4, 5]
 
+    RedisStore.delete_job(job_id)
+  end
+
+  test "terminal persistence removes disk checkpoints and late agent writes do not recreate them" do
+    job_id = "terminal-checkpoint-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _job} =
+             RedisStore.persist_job(job_id, %{
+               "job_id" => job_id,
+               "graph_id" => "terminal-checkpoint",
+               "status" => "running",
+               "updated_at" => MirrorNeuron.Runtime.timestamp()
+             })
+
+    assert {:ok, _agent} =
+             RedisStore.persist_agent(job_id, "worker", %{
+               "agent_id" => "worker",
+               "last_heartbeat_at" => MirrorNeuron.Runtime.timestamp()
+             })
+
+    assert {:ok, %{"status" => "running"}} = DiskCheckpoint.load_job(job_id)
+
+    assert {:ok, _job} =
+             RedisStore.persist_terminal_job(job_id, %{"status" => "cancelled"})
+
+    assert {:error, :enoent} = DiskCheckpoint.load_job(job_id)
+
+    assert {:ok, _agent} =
+             RedisStore.persist_agent(job_id, "worker", %{
+               "agent_id" => "worker",
+               "last_heartbeat_at" => MirrorNeuron.Runtime.timestamp()
+             })
+
+    assert {:error, :enoent} = DiskCheckpoint.load_job(job_id)
+    assert {:ok, []} = DiskCheckpoint.load_agents(job_id)
     RedisStore.delete_job(job_id)
   end
 
