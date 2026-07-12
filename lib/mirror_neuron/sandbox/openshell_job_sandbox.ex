@@ -5,6 +5,8 @@ defmodule MirrorNeuron.Sandbox.OpenShellJobSandbox do
 
   @registry MirrorNeuron.Sandbox.Registry
   @supervisor MirrorNeuron.Sandbox.JobSandboxSupervisor
+  @default_cleanup_call_timeout_ms 10_000
+  @default_ensure_call_timeout_ms 60_000
 
   def child_spec({job_id, config}) do
     %{
@@ -21,7 +23,7 @@ defmodule MirrorNeuron.Sandbox.OpenShellJobSandbox do
   def ensure(job_id, config) do
     if native_sandbox_prep_enabled?() do
       with {:ok, pid} <- ensure_process(job_id, config) do
-        GenServer.call(pid, {:ensure, config}, :infinity)
+        ensure_with_owner(pid, {:ensure, config})
       end
     else
       prepared_sandbox(job_id, config)
@@ -125,7 +127,7 @@ defmodule MirrorNeuron.Sandbox.OpenShellJobSandbox do
     monitor = Process.monitor(pid)
 
     try do
-      case GenServer.call(pid, :cleanup, :infinity) do
+      case GenServer.call(pid, :cleanup, cleanup_call_timeout_ms()) do
         :ok ->
           receive do
             {:DOWN, ^monitor, :process, ^pid, _reason} -> :ok
@@ -140,9 +142,63 @@ defmodule MirrorNeuron.Sandbox.OpenShellJobSandbox do
           error
       end
     catch
+      :exit, {:timeout, _call} ->
+        force_stop_sandbox_owner(pid, monitor)
+        {:error, :sandbox_owner_cleanup_timeout}
+
       :exit, reason ->
         Process.demonitor(monitor, [:flush])
         {:error, {:sandbox_owner_exit, reason}}
+    end
+  end
+
+  defp force_stop_sandbox_owner(pid, monitor) do
+    Process.exit(pid, :kill)
+
+    receive do
+      {:DOWN, ^monitor, :process, ^pid, _reason} -> :ok
+    after
+      1_000 -> Process.demonitor(monitor, [:flush])
+    end
+  end
+
+  defp ensure_with_owner(pid, message) do
+    monitor = Process.monitor(pid)
+
+    try do
+      result = GenServer.call(pid, message, ensure_call_timeout_ms())
+      Process.demonitor(monitor, [:flush])
+      result
+    catch
+      :exit, {:timeout, _call} ->
+        force_stop_sandbox_owner(pid, monitor)
+        {:error, :sandbox_owner_ensure_timeout}
+
+      :exit, reason ->
+        Process.demonitor(monitor, [:flush])
+        {:error, {:sandbox_owner_exit, reason}}
+    end
+  end
+
+  defp cleanup_call_timeout_ms do
+    case Application.get_env(
+           :mirror_neuron,
+           :sandbox_owner_cleanup_timeout_ms,
+           @default_cleanup_call_timeout_ms
+         ) do
+      timeout when is_integer(timeout) and timeout > 0 -> timeout
+      _invalid -> @default_cleanup_call_timeout_ms
+    end
+  end
+
+  defp ensure_call_timeout_ms do
+    case Application.get_env(
+           :mirror_neuron,
+           :sandbox_owner_ensure_timeout_ms,
+           @default_ensure_call_timeout_ms
+         ) do
+      timeout when is_integer(timeout) and timeout > 0 -> timeout
+      _invalid -> @default_ensure_call_timeout_ms
     end
   end
 
