@@ -96,12 +96,16 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
           processed_messages: recovered_processed_messages(recovery_snapshot),
           inflight_message: nil,
           heartbeat_interval_ms: heartbeat_interval_ms(),
+          heartbeat_timer_ref: nil,
+          heartbeat_token: nil,
+          drain_timer_ref: nil,
+          drain_token: nil,
           recovered_snapshot: recovery_snapshot,
           checkpoint_metadata: custom_checkpoint_metadata(recovery_snapshot),
           pressure_snapshot: nil
         }
 
-        schedule_heartbeat(state.heartbeat_interval_ms)
+        state = schedule_heartbeat(state)
         persist_snapshot(state)
         {:ok, state, {:continue, :recover}}
 
@@ -127,7 +131,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
 
   @impl true
   def handle_cast(:pause, state) do
-    next_state = %{state | paused?: true}
+    next_state = state |> cancel_drain_timer() |> Map.put(:paused?, true)
     persist_snapshot(next_state)
     {:noreply, next_state}
   end
@@ -162,21 +166,40 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   end
 
   @impl true
+  def handle_info({:heartbeat, token}, %{heartbeat_token: token} = state) do
+    state = clear_heartbeat_timer(state)
+    persist_snapshot(state)
+    {:noreply, schedule_heartbeat(state)}
+  end
+
+  def handle_info({:heartbeat, _stale_token}, state), do: {:noreply, state}
+
   def handle_info(:heartbeat, state) do
     persist_snapshot(state)
-    schedule_heartbeat(state.heartbeat_interval_ms)
     {:noreply, state}
   end
 
-  def handle_info(:drain_pending, state) do
-    {:noreply, drain_pending(state)}
+  def handle_info({:drain_pending, token}, %{drain_token: token} = state) do
+    {:noreply, state |> clear_drain_timer() |> drain_pending()}
   end
+
+  def handle_info({:drain_pending, _stale_token}, state), do: {:noreply, state}
+
+  def handle_info(:drain_pending, state),
+    do: {:noreply, state |> cancel_drain_timer() |> drain_pending()}
 
   def handle_info({:mirror_neuron_scheduled_message, message}, state) do
     handle_cast({:deliver, message}, state)
   end
 
-  defp drain_pending(%{paused?: true} = state), do: state
+  @impl true
+  def terminate(_reason, state) do
+    cancel_heartbeat_timer(state)
+    cancel_drain_timer(state)
+    :ok
+  end
+
+  defp drain_pending(%{paused?: true} = state), do: cancel_drain_timer(state)
 
   defp drain_pending(state) do
     drain_pending(state, pending_drain_batch_size())
@@ -185,11 +208,10 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   defp drain_pending(state, 0) do
     if :queue.is_empty(state.pending) do
       persist_snapshot(state)
+      cancel_drain_timer(state)
     else
-      Process.send_after(self(), :drain_pending, 0)
+      schedule_drain(state)
     end
-
-    state
   end
 
   defp drain_pending(state, remaining_count) do
@@ -206,9 +228,34 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
 
       {:empty, _queue} ->
         persist_snapshot(state)
-        state
+        cancel_drain_timer(state)
     end
   end
+
+  defp schedule_drain(state) do
+    state = cancel_drain_timer(state)
+    token = make_ref()
+    timer_ref = Process.send_after(self(), {:drain_pending, token}, 0)
+    %{state | drain_timer_ref: timer_ref, drain_token: token}
+  end
+
+  defp cancel_drain_timer(%{drain_timer_ref: ref, drain_token: token} = state)
+       when is_reference(ref) do
+    Process.cancel_timer(ref)
+
+    receive do
+      {:drain_pending, ^token} -> :ok
+    after
+      0 -> :ok
+    end
+
+    clear_drain_timer(state)
+  end
+
+  defp cancel_drain_timer(state), do: state
+
+  defp clear_drain_timer(state),
+    do: %{state | drain_timer_ref: nil, drain_token: nil}
 
   defp process_message(message, state) do
     state = %{state | inflight_message: message}
@@ -862,9 +909,33 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     |> max(1)
   end
 
-  defp schedule_heartbeat(interval_ms) do
-    Process.send_after(self(), :heartbeat, interval_ms)
+  defp schedule_heartbeat(%{heartbeat_interval_ms: interval_ms} = state)
+       when is_integer(interval_ms) and interval_ms > 0 do
+    state = cancel_heartbeat_timer(state)
+    token = make_ref()
+    timer_ref = Process.send_after(self(), {:heartbeat, token}, interval_ms)
+    %{state | heartbeat_timer_ref: timer_ref, heartbeat_token: token}
   end
+
+  defp schedule_heartbeat(state), do: cancel_heartbeat_timer(state)
+
+  defp cancel_heartbeat_timer(%{heartbeat_timer_ref: ref, heartbeat_token: token} = state)
+       when is_reference(ref) do
+    Process.cancel_timer(ref)
+
+    receive do
+      {:heartbeat, ^token} -> :ok
+    after
+      0 -> :ok
+    end
+
+    clear_heartbeat_timer(state)
+  end
+
+  defp cancel_heartbeat_timer(state), do: state
+
+  defp clear_heartbeat_timer(state),
+    do: %{state | heartbeat_timer_ref: nil, heartbeat_token: nil}
 
   defp pending_messages_for_snapshot(state) do
     state.pending

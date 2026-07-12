@@ -55,6 +55,8 @@ defmodule MirrorNeuron.Runtime.ReliabilityObserverTest do
     assert_receive {:event_published, "observer-cluster-job",
                     %{type: :job_reliability_degraded, mode: "single_node"}}
 
+    assert %{tick_timer_ref: nil, tick_token: nil} = :sys.get_state(observer)
+
     set_snapshot(multi_node_snapshot())
     send(observer, :tick)
 
@@ -64,6 +66,8 @@ defmodule MirrorNeuron.Runtime.ReliabilityObserverTest do
     assert_receive {:event_published, "observer-cluster-job",
                     %{type: :job_reliability_restored, mode: "multi_node"}}
 
+    assert %{tick_timer_ref: nil, tick_token: nil} = :sys.get_state(observer)
+
     set_snapshot(single_node_snapshot())
     send(observer, :tick)
 
@@ -72,6 +76,35 @@ defmodule MirrorNeuron.Runtime.ReliabilityObserverTest do
 
     assert_receive {:event_published, "observer-cluster-job",
                     %{type: :job_reliability_degraded, mode: "single_node"}}
+  end
+
+  test "scheduled ticks replace their timer and termination cancels the replacement" do
+    {:ok, state} =
+      ReliabilityObserver.init(
+        schedule_initial_tick: true,
+        interval_ms: 60_000,
+        snapshot: &snapshot/0,
+        redis_store: RedisStoreStub,
+        event_bus: EventBusStub
+      )
+
+    initial_token = state.tick_token
+    assert is_reference(state.tick_timer_ref)
+    assert_receive {:tick, ^initial_token}
+
+    stale_token = make_ref()
+    assert {:noreply, ^state} = ReliabilityObserver.handle_info({:tick, stale_token}, state)
+
+    assert {:noreply, next_state} =
+             ReliabilityObserver.handle_info({:tick, initial_token}, state)
+
+    assert is_reference(next_state.tick_timer_ref)
+    assert is_reference(next_state.tick_token)
+    refute next_state.tick_token == initial_token
+
+    replacement_ref = next_state.tick_timer_ref
+    assert :ok = ReliabilityObserver.terminate(:normal, next_state)
+    assert Process.read_timer(replacement_ref) == false
   end
 
   test "restored notice does not rewrite persisted job policy" do

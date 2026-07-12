@@ -129,6 +129,23 @@ defmodule MirrorNeuron.Cluster.NodeMonitorTest do
     assert :ok = Task.await(owner, 1_000)
   end
 
+  test "repeated nodedown notices replace the pending reconnect attempt" do
+    monitor = start_monitor(reconnect_backoff_ms: 60_000)
+
+    send(monitor, {:nodedown, Node.self()})
+    assert_receive {:node_state_marked, _node, "reconnecting", %{}}
+    first = :sys.get_state(monitor).reconnecting[Atom.to_string(Node.self())]
+
+    send(monitor, {:nodedown, Node.self()})
+    assert_receive {:node_state_marked, _node, "reconnecting", %{}}
+    second = :sys.get_state(monitor).reconnecting[Atom.to_string(Node.self())]
+
+    refute first.token == second.token
+    refute first.timer_ref == second.timer_ref
+    assert Process.read_timer(first.timer_ref) == false
+    assert is_integer(Process.read_timer(second.timer_ref))
+  end
+
   test "successful reconnect keeps jobs running and queued work waits for normal capacity" do
     manager =
       start_supervised!(

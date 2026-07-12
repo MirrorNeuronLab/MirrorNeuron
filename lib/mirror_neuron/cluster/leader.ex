@@ -28,31 +28,75 @@ defmodule MirrorNeuron.Cluster.Leader do
     state = %{
       is_leader: false,
       node_name: to_string(Node.self()),
-      sweep_ref: nil
+      campaign_ref: nil,
+      campaign_token: nil,
+      sweep_ref: nil,
+      sweep_token: nil,
+      node_sweep_timers: %{}
     }
 
-    unless MirrorNeuron.Grpc.NetworkOnly.enabled?() do
-      Process.send_after(self(), :campaign, 500)
-    end
+    state =
+      if MirrorNeuron.Grpc.NetworkOnly.enabled?(), do: state, else: schedule_campaign(state, 500)
 
     {:ok, state}
   end
 
   @impl true
+  def handle_info({:campaign, token}, %{campaign_token: token} = state) do
+    state = clear_campaign_timer(state)
+
+    if MirrorNeuron.Grpc.NetworkOnly.enabled?() do
+      {:noreply, state}
+    else
+      {:noreply, state |> run_campaign() |> schedule_campaign(@refresh_interval_ms)}
+    end
+  end
+
+  def handle_info({:campaign, _stale_token}, state), do: {:noreply, state}
+
   def handle_info(:campaign, state) do
     if MirrorNeuron.Grpc.NetworkOnly.enabled?() do
       {:noreply, state}
     else
-      campaign(state)
+      {:noreply, run_campaign(state)}
     end
   end
 
-  def handle_info(:sweep_orphaned_jobs, %{is_leader: true} = state) do
-    _ = sweep_orphaned_jobs()
-    {:noreply, schedule_sweep(state)}
+  def handle_info({:sweep_orphaned_jobs, token}, %{sweep_token: token} = state) do
+    state = clear_sweep_timer(state)
+
+    if state.is_leader do
+      _ = sweep_orphaned_jobs()
+      {:noreply, schedule_sweep(state)}
+    else
+      {:noreply, state}
+    end
   end
 
-  def handle_info(:sweep_orphaned_jobs, state), do: {:noreply, %{state | sweep_ref: nil}}
+  def handle_info({:sweep_orphaned_jobs, stale_token}, state) when is_reference(stale_token),
+    do: {:noreply, state}
+
+  def handle_info(:sweep_orphaned_jobs, %{is_leader: true} = state) do
+    _ = sweep_orphaned_jobs()
+    {:noreply, state}
+  end
+
+  def handle_info(:sweep_orphaned_jobs, state), do: {:noreply, state}
+
+  def handle_info(
+        {:sweep_orphaned_jobs, node_name, token},
+        %{node_sweep_timers: timers} = state
+      ) do
+    case Map.get(timers, node_name) do
+      {_ref, ^token} ->
+        state = clear_node_sweep_timer(state, node_name)
+        if state.is_leader, do: sweep_orphaned_jobs(node_name)
+        {:noreply, state}
+
+      _stale_or_missing ->
+        {:noreply, state}
+    end
+  end
 
   def handle_info({:sweep_orphaned_jobs, node_name}, %{is_leader: true} = state) do
     _ = sweep_orphaned_jobs(node_name)
@@ -73,14 +117,22 @@ defmodule MirrorNeuron.Cluster.Leader do
 
   @impl true
   def handle_cast({:node_down, node_name}, state) do
-    if state.is_leader do
-      Process.send_after(self(), {:sweep_orphaned_jobs, node_name}, @node_down_sweep_delay_ms)
-    end
-
+    state = if state.is_leader, do: schedule_node_sweep(state, node_name), else: state
     {:noreply, state}
   end
 
-  defp campaign(state) do
+  @impl true
+  def terminate(_reason, state) do
+    state = state |> cancel_campaign() |> cancel_sweep() |> cancel_node_sweeps()
+
+    if state.is_leader do
+      _ = RedisStore.release_lease("cluster:leader", state.node_name)
+    end
+
+    :ok
+  end
+
+  defp run_campaign(state) do
     current_node = to_string(Node.self())
 
     # If the node name changed (e.g. CLI fully initialized)
@@ -90,7 +142,9 @@ defmodule MirrorNeuron.Cluster.Leader do
           RedisStore.release_lease("cluster:leader", state.node_name)
         end
 
-        %{state | is_leader: false, node_name: current_node}
+        state
+        |> handle_lost_leadership()
+        |> Map.put(:node_name, current_node)
       else
         state
       end
@@ -120,8 +174,7 @@ defmodule MirrorNeuron.Cluster.Leader do
         end
       end
 
-    Process.send_after(self(), :campaign, @refresh_interval_ms)
-    {:noreply, new_state}
+    new_state
   end
 
   defp handle_became_leader(state) do
@@ -138,8 +191,10 @@ defmodule MirrorNeuron.Cluster.Leader do
       Logger.notice("Node #{state.node_name} lost cluster leadership")
     end
 
-    cancel_sweep(state)
-    %{state | is_leader: false, sweep_ref: nil}
+    state
+    |> cancel_sweep()
+    |> cancel_node_sweeps()
+    |> Map.put(:is_leader, false)
   end
 
   defp sweep_orphaned_jobs(owner_node \\ nil) do
@@ -205,14 +260,90 @@ defmodule MirrorNeuron.Cluster.Leader do
   end
 
   defp schedule_sweep(state) do
-    cancel_sweep(state)
-    %{state | sweep_ref: Process.send_after(self(), :sweep_orphaned_jobs, @sweep_interval_ms)}
+    state = cancel_sweep(state)
+    token = make_ref()
+    ref = Process.send_after(self(), {:sweep_orphaned_jobs, token}, @sweep_interval_ms)
+    %{state | sweep_ref: ref, sweep_token: token}
   end
 
-  defp cancel_sweep(%{sweep_ref: ref}) when is_reference(ref) do
+  defp cancel_sweep(%{sweep_ref: ref, sweep_token: token} = state) when is_reference(ref) do
     Process.cancel_timer(ref)
-    :ok
+
+    receive do
+      {:sweep_orphaned_jobs, ^token} -> :ok
+    after
+      0 -> :ok
+    end
+
+    clear_sweep_timer(state)
   end
 
-  defp cancel_sweep(_state), do: :ok
+  defp cancel_sweep(state), do: state
+
+  defp clear_sweep_timer(state), do: %{state | sweep_ref: nil, sweep_token: nil}
+
+  defp schedule_campaign(state, delay_ms) do
+    state = cancel_campaign(state)
+    token = make_ref()
+    ref = Process.send_after(self(), {:campaign, token}, max(delay_ms, 0))
+    %{state | campaign_ref: ref, campaign_token: token}
+  end
+
+  defp cancel_campaign(%{campaign_ref: ref, campaign_token: token} = state)
+       when is_reference(ref) do
+    Process.cancel_timer(ref)
+
+    receive do
+      {:campaign, ^token} -> :ok
+    after
+      0 -> :ok
+    end
+
+    clear_campaign_timer(state)
+  end
+
+  defp cancel_campaign(state), do: state
+
+  defp clear_campaign_timer(state),
+    do: %{state | campaign_ref: nil, campaign_token: nil}
+
+  defp schedule_node_sweep(state, node_name) do
+    state = cancel_node_sweep(state, node_name)
+    token = make_ref()
+
+    ref =
+      Process.send_after(
+        self(),
+        {:sweep_orphaned_jobs, node_name, token},
+        @node_down_sweep_delay_ms
+      )
+
+    put_in(state, [:node_sweep_timers, node_name], {ref, token})
+  end
+
+  defp cancel_node_sweep(%{node_sweep_timers: timers} = state, node_name) do
+    case Map.get(timers, node_name) do
+      {ref, token} ->
+        Process.cancel_timer(ref)
+
+        receive do
+          {:sweep_orphaned_jobs, ^node_name, ^token} -> :ok
+        after
+          0 -> :ok
+        end
+
+        clear_node_sweep_timer(state, node_name)
+
+      nil ->
+        state
+    end
+  end
+
+  defp clear_node_sweep_timer(state, node_name) do
+    update_in(state.node_sweep_timers, &Map.delete(&1, node_name))
+  end
+
+  defp cancel_node_sweeps(%{node_sweep_timers: timers} = state) do
+    Enum.reduce(Map.keys(timers), state, &cancel_node_sweep(&2, &1))
+  end
 end

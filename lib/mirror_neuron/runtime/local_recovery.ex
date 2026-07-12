@@ -14,7 +14,7 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
   @default_scan_interval_ms 5_000
 
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
   def scan(opts \\ []) do
@@ -210,33 +210,81 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
 
   @impl true
   def init(opts) do
-    if enabled?() do
-      Process.send_after(self(), :scan, Keyword.get(opts, :startup_delay_ms, startup_delay_ms()))
-    end
+    state = %{
+      scan_interval_ms: Keyword.get(opts, :scan_interval_ms, scan_interval_ms()),
+      repair_indexes_on_next_scan: true,
+      scan_timer_ref: nil,
+      scan_token: nil
+    }
 
-    {:ok,
-     %{
-       scan_interval_ms: Keyword.get(opts, :scan_interval_ms, scan_interval_ms()),
-       repair_indexes_on_next_scan: true
-     }}
+    state =
+      if enabled?() do
+        schedule_scan(state, Keyword.get(opts, :startup_delay_ms, startup_delay_ms()))
+      else
+        state
+      end
+
+    {:ok, state}
   end
 
   @impl true
-  def handle_info(:scan, state) do
+  def handle_info({:scan, token}, %{scan_token: token} = state) do
+    state = clear_scan_timer(state)
+    state = run_periodic_scan(state)
+    {:noreply, schedule_scan(state, state.scan_interval_ms)}
+  end
+
+  def handle_info({:scan, _stale_token}, state), do: {:noreply, state}
+
+  def handle_info(:scan, state), do: {:noreply, run_periodic_scan(state)}
+
+  @impl true
+  def terminate(_reason, state) do
+    cancel_scan_timer(state)
+    :ok
+  end
+
+  defp run_periodic_scan(state) do
     _ =
       recover_unfinished_jobs(
         reason: "startup_or_periodic_scan",
         repair_indexes?: state.repair_indexes_on_next_scan
       )
 
-    Process.send_after(self(), :scan, state.scan_interval_ms)
-    {:noreply, %{state | repair_indexes_on_next_scan: false}}
+    %{state | repair_indexes_on_next_scan: false}
   end
 
   @impl true
   def handle_call({:scan, opts}, _from, state) do
     {:reply, recover_unfinished_jobs(opts), state}
   end
+
+  defp schedule_scan(state, delay_ms) when is_integer(delay_ms) and delay_ms >= 0 do
+    state = cancel_scan_timer(state)
+    token = make_ref()
+    timer_ref = Process.send_after(self(), {:scan, token}, delay_ms)
+    %{state | scan_timer_ref: timer_ref, scan_token: token}
+  end
+
+  defp schedule_scan(state, _delay_ms), do: cancel_scan_timer(state)
+
+  defp cancel_scan_timer(%{scan_timer_ref: ref, scan_token: token} = state)
+       when is_reference(ref) do
+    Process.cancel_timer(ref)
+
+    receive do
+      {:scan, ^token} -> :ok
+    after
+      0 -> :ok
+    end
+
+    clear_scan_timer(state)
+  end
+
+  defp cancel_scan_timer(state), do: state
+
+  defp clear_scan_timer(state),
+    do: %{state | scan_timer_ref: nil, scan_token: nil}
 
   defp recover_job_map(%{"job_id" => job_id, "status" => status} = job, opts) do
     cond do

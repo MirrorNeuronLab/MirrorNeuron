@@ -3,6 +3,20 @@ defmodule MirrorNeuron.ServiceCheckTest do
 
   alias MirrorNeuron.ServiceCheck
 
+  defmodule HealthServer do
+    use GRPC.Server, service: Grpc.Health.V1.Health.Service
+
+    def check(_request, _stream) do
+      %Grpc.Health.V1.HealthCheckResponse{status: :SERVING}
+    end
+  end
+
+  defmodule HealthEndpoint do
+    use GRPC.Endpoint
+
+    run(HealthServer)
+  end
+
   test "http checks pass and redact sensitive query values" do
     port =
       start_http_server("HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok")
@@ -148,6 +162,8 @@ defmodule MirrorNeuron.ServiceCheckTest do
   end
 
   test "grpc checks report critical when the health endpoint is unavailable" do
+    started_at = System.monotonic_time(:millisecond)
+
     report =
       ServiceCheck.check_service(%{
         "id" => "svc-grpc",
@@ -157,8 +173,36 @@ defmodule MirrorNeuron.ServiceCheckTest do
         "checks" => [%{"name" => "grpc", "type" => "grpc", "timeout_ms" => 100}]
       })
 
+    elapsed_ms = System.monotonic_time(:millisecond) - started_at
     assert report["status"] == "critical"
     assert get_in(report, ["checks", Access.at(0), "type"]) == "grpc"
+    assert elapsed_ms < 1_000
+  end
+
+  test "grpc checks disconnect successful health channels" do
+    port = unused_port()
+
+    start_supervised!(
+      {GRPC.Server.Supervisor,
+       endpoint: HealthEndpoint, port: port, start_server: true, ip: {127, 0, 0, 1}}
+    )
+
+    links_before = process_links()
+
+    report =
+      ServiceCheck.check_service(%{
+        "id" => "svc-grpc-live",
+        "name" => "grpc-api",
+        "address" => "127.0.0.1",
+        "port" => port,
+        "checks" => [%{"name" => "grpc", "type" => "grpc", "timeout_ms" => 1_000}]
+      })
+
+    assert report["status"] == "passing"
+
+    assert_eventually(fn ->
+      process_links() == links_before
+    end)
   end
 
   defp start_http_server(response) do
@@ -222,5 +266,31 @@ defmodule MirrorNeuron.ServiceCheckTest do
     {:ok, {{127, 0, 0, 1}, port}} = :inet.sockname(socket)
     :gen_tcp.close(socket)
     port
+  end
+
+  defp process_links do
+    self()
+    |> Process.info(:links)
+    |> elem(1)
+    |> MapSet.new()
+  end
+
+  defp assert_eventually(fun, timeout_ms \\ 1_000) do
+    started_at = System.monotonic_time(:millisecond)
+    do_assert_eventually(fun, started_at, timeout_ms)
+  end
+
+  defp do_assert_eventually(fun, started_at, timeout_ms) do
+    cond do
+      fun.() ->
+        :ok
+
+      System.monotonic_time(:millisecond) - started_at > timeout_ms ->
+        flunk("condition was not met before timeout")
+
+      true ->
+        Process.sleep(10)
+        do_assert_eventually(fun, started_at, timeout_ms)
+    end
   end
 end

@@ -152,6 +152,18 @@ defmodule MirrorNeuron.BundleTest do
     assert record_after.fingerprint == current_fp
   end
 
+  test "manual Scanner ticks do not create another recurring loop" do
+    name = :"bundle-scanner-timer-test-#{System.unique_integer([:positive])}"
+    scanner = start_supervised!({Scanner, name: name, tick_ms: 60_000})
+    before = :sys.get_state(scanner)
+
+    send(scanner, :tick)
+    after_manual_tick = :sys.get_state(scanner)
+
+    assert after_manual_tick.tick_timer_ref == before.tick_timer_ref
+    assert after_manual_tick.tick_token == before.tick_token
+  end
+
   test "Archive stores oversized bundles in the local cache without building a Redis payload", %{
     dir: dir
   } do

@@ -962,17 +962,8 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
-  def delete_service_instance(instance_id) do
-    case fetch_service_instance(instance_id) do
-      {:ok, _service} ->
-        purge_service_instance(instance_id)
-
-      {:error, reason} ->
-        if missing_service_instance?(instance_id, reason) or corrupt_service_instance?(reason),
-          do: purge_service_instance(instance_id),
-          else: {:error, reason}
-    end
-  end
+  def delete_service_instance(instance_id),
+    do: delete_service_instance_if_matches(instance_id, [])
 
   def delete_service_instances(opts) when is_list(opts) do
     with {:ok, instance_ids} <- service_candidate_ids(opts) do
@@ -1574,8 +1565,8 @@ defmodule MirrorNeuron.Persistence.RedisStore do
         {:error, reason} ->
           cond do
             missing_schedule?(schedule_id, reason) ->
-              case delete_schedule(schedule_id) do
-                :ok -> {:cont, {:ok, schedules}}
+              case purge_missing_schedule(schedule_id) do
+                {:ok, _result} -> {:cont, {:ok, schedules}}
                 {:error, cleanup_reason} -> {:halt, {:error, cleanup_reason}}
               end
 
@@ -1988,12 +1979,16 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       script = """
       local encoded = redis.call("get", KEYS[1])
       local should_delete = true
+      local selector_count = tonumber(ARGV[2])
+      local service = nil
 
       if encoded then
-        local ok, service = pcall(cjson.decode, encoded)
+        local ok, decoded = pcall(cjson.decode, encoded)
 
-        if ok and type(service) == "table" then
-          for index = 2, #ARGV, 3 do
+        if ok and type(decoded) == "table" then
+          service = decoded
+
+          for index = 3, 2 + selector_count * 3, 3 do
             local value = service[ARGV[index]]
 
             if type(value) ~= "string" or value ~= ARGV[index + 1] then
@@ -2011,10 +2006,20 @@ defmodule MirrorNeuron.Persistence.RedisStore do
           redis.call("srem", KEYS[index], ARGV[1])
         end
 
+        if service then
+          for index = 3 + selector_count * 3, #ARGV, 2 do
+            local value = service[ARGV[index]]
+
+            if type(value) == "string" and value ~= "" then
+              redis.call("srem", ARGV[index + 1] .. value, ARGV[1])
+            end
+          end
+        end
+
         return 1
       end
 
-      for index = 2, #ARGV, 3 do
+      for index = 3, 2 + selector_count * 3, 3 do
         redis.call("srem", ARGV[index + 2], ARGV[1])
       end
 
@@ -2022,36 +2027,17 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       """
 
       keys = [key("service", "instance", instance_id), key("service", "instances") | index_keys]
-      args = [instance_id | service_selector_script_args(opts)]
+      selector_args = service_selector_script_args(opts)
+
+      args =
+        [instance_id, to_string(div(length(selector_args), 3))] ++
+          selector_args ++ service_index_prefix_script_args()
 
       case command(["EVAL", script, to_string(length(keys)) | keys ++ args]) do
-        {:ok, result} when result in [0, 1] -> maybe_wait_for_deleted_keys(1)
+        {:ok, result} when result in [0, 1] -> maybe_wait_for_deleted_keys(result)
         {:error, reason} -> {:error, format_reason(reason)}
         other -> {:error, format_reason(other)}
       end
-    end
-  end
-
-  defp purge_service_instance(instance_id) do
-    with {:ok, index_keys} <- service_secondary_index_keys() do
-      purge_service_instance(instance_id, index_keys)
-    end
-  end
-
-  defp purge_service_instance(instance_id, index_keys) do
-    commands =
-      [
-        ["DEL", key("service", "instance", instance_id)],
-        ["SREM", key("service", "instances"), instance_id]
-      ] ++ Enum.map(index_keys, &["SREM", &1, instance_id])
-
-    with {:ok, results} <- transaction(commands),
-         :ok <- expect_no_redis_errors(results),
-         :ok <- wait_for_replicas() do
-      :ok
-    else
-      {:error, reason} -> {:error, format_reason(reason)}
-      other -> {:error, format_reason(other)}
     end
   end
 
@@ -2111,13 +2097,13 @@ defmodule MirrorNeuron.Persistence.RedisStore do
          {:ok, existence} <- service_instance_existence(indexed_ids),
          :ok <- expect_no_redis_errors(existence),
          stale <- stale_service_instance_ids(indexed_ids, existence),
-         :ok <- purge_stale_service_instances(stale, secondary_keys) do
-      stale = Enum.sort(stale)
+         {:ok, removed} <- purge_stale_service_instances(stale, secondary_keys) do
+      removed = Enum.sort(removed)
 
       {:ok,
        %{
-         stale_service_instance_count: length(stale),
-         stale_service_instances: stale
+         stale_service_instance_count: length(removed),
+         stale_service_instances: removed
        }}
     else
       {:error, reason} -> {:error, format_reason(reason)}
@@ -2130,9 +2116,9 @@ defmodule MirrorNeuron.Persistence.RedisStore do
          {:ok, existence} <- schedule_existence(schedule_ids),
          :ok <- expect_no_redis_errors(existence),
          stale <- stale_schedule_ids(schedule_ids, existence),
-         :ok <- purge_stale_schedules(stale) do
-      stale = Enum.sort(stale)
-      {:ok, %{stale_schedule_count: length(stale), stale_schedules: stale}}
+         {:ok, removed} <- purge_stale_schedules(stale) do
+      removed = Enum.sort(removed)
+      {:ok, %{stale_schedule_count: length(removed), stale_schedules: removed}}
     else
       {:error, reason} -> {:error, format_reason(reason)}
       other -> {:error, format_reason(other)}
@@ -2169,12 +2155,55 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   defp purge_stale_schedules(schedule_ids) do
-    Enum.reduce_while(schedule_ids, :ok, fn schedule_id, :ok ->
-      case delete_schedule(schedule_id) do
-        :ok -> {:cont, :ok}
+    Enum.reduce_while(schedule_ids, {:ok, []}, fn schedule_id, {:ok, removed} ->
+      case purge_missing_schedule(schedule_id) do
+        {:ok, 1} -> {:cont, {:ok, [schedule_id | removed]}}
+        {:ok, 0} -> {:cont, {:ok, removed}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
+    |> case do
+      {:ok, removed} -> {:ok, Enum.reverse(removed)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp purge_missing_schedule(schedule_id) do
+    with {:ok, lease_keys} <- scan_keys(key("lease", "schedule:#{schedule_id}:*")) do
+      script = """
+      if redis.call("exists", KEYS[1]) ~= 0 then
+        return 0
+      end
+
+      redis.call("srem", KEYS[2], ARGV[1])
+      redis.call("zrem", KEYS[3], ARGV[1])
+
+      for index = 4, #KEYS do
+        redis.call("del", KEYS[index])
+      end
+
+      return 1
+      """
+
+      keys =
+        [
+          key("schedule", schedule_id),
+          key(@schedules_set),
+          key(@schedule_due_zset)
+          | lease_keys
+        ]
+
+      case command(["EVAL", script, to_string(length(keys)) | keys ++ [schedule_id]]) do
+        {:ok, result} when result in [0, 1] ->
+          with :ok <- maybe_wait_for_deleted_keys(result), do: {:ok, result}
+
+        {:error, reason} ->
+          {:error, format_reason(reason)}
+
+        other ->
+          {:error, format_reason(other)}
+      end
+    end
   end
 
   defp sweep_deployment_indexes do
@@ -2341,12 +2370,17 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   defp purge_stale_service_instances(instance_ids, index_keys) do
-    Enum.reduce_while(instance_ids, :ok, fn instance_id, :ok ->
-      case purge_service_instance(instance_id, index_keys) do
-        :ok -> {:cont, :ok}
+    Enum.reduce_while(instance_ids, {:ok, []}, fn instance_id, {:ok, removed} ->
+      case purge_missing_service_instance(instance_id, index_keys) do
+        {:ok, 1} -> {:cont, {:ok, [instance_id | removed]}}
+        {:ok, 0} -> {:cont, {:ok, removed}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
+    |> case do
+      {:ok, removed} -> {:ok, Enum.reverse(removed)}
+      {:error, _reason} = error -> error
+    end
   end
 
   defp service_index_script_args(service) do
@@ -2355,6 +2389,24 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       value = Map.get(service, field)
       value = if is_binary(value), do: value, else: ""
       [field, key("service", index, ""), value]
+    end)
+  end
+
+  defp service_selector_script_args(opts) do
+    Enum.flat_map(opts, fn {option, value} ->
+      case List.keyfind(@service_index_fields, option, 0) do
+        {_option, index} ->
+          [Atom.to_string(option), to_string(value), key("service", index, to_string(value))]
+
+        nil ->
+          []
+      end
+    end)
+  end
+
+  defp service_index_prefix_script_args do
+    Enum.flat_map(@service_index_fields, fn {option, index} ->
+      [Atom.to_string(option), key("service", index, "")]
     end)
   end
 
@@ -2462,16 +2514,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       {integer, ""} -> integer
       _ -> 0
     end
-  end
-
-  defp service_matches_opts?(service, opts) do
-    Enum.all?(opts, fn
-      {:job_id, value} -> Map.get(service, "job_id") == to_string(value)
-      {:agent_id, value} -> Map.get(service, "agent_id") == to_string(value)
-      {:node, value} -> Map.get(service, "node") == to_string(value)
-      {:name, value} -> Map.get(service, "name") == to_string(value)
-      _other -> true
-    end)
   end
 
   defp fetch_agents(_job_id, []), do: {:ok, []}
@@ -3162,14 +3204,8 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   defp missing_schedule?(schedule_id, reason),
     do: reason == "schedule #{schedule_id} was not found"
 
-  defp missing_service_instance?(instance_id, reason),
-    do: reason == "service instance #{instance_id} was not found"
-
   defp missing_recovery_eval?(eval_id, reason),
     do: reason == "recovery eval #{eval_id} was not found"
-
-  defp corrupt_service_instance?(:invalid_service_instance), do: true
-  defp corrupt_service_instance?(reason), do: corrupt_json?(reason)
 
   defp corrupt_node_state?(:invalid_node_state), do: true
   defp corrupt_node_state?(reason), do: corrupt_json?(reason)

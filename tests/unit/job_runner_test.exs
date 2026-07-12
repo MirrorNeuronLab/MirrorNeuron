@@ -73,16 +73,23 @@ defmodule MirrorNeuron.Runtime.JobRunnerTest do
   test "runner termination stops its coordinator even for a normal shutdown" do
     coordinator = spawn(fn -> Process.sleep(:infinity) end)
     monitor = Process.monitor(coordinator)
+    lease_timer_token = make_ref()
+
+    lease_timer_ref =
+      Process.send_after(self(), {:renew_lease, lease_timer_token}, 60_000)
 
     assert :ok =
              JobRunner.terminate(:normal, %{
                job_id: "terminate-#{System.unique_integer([:positive])}",
                coordinator: coordinator,
                node_name: to_string(Node.self()),
-               lease: %{"epoch" => 1}
+               lease: %{"epoch" => 1},
+               lease_timer_ref: lease_timer_ref,
+               lease_timer_token: lease_timer_token
              })
 
     assert_receive {:DOWN, ^monitor, :process, ^coordinator, :shutdown}
+    assert Process.read_timer(lease_timer_ref) == false
   end
 
   test "failed coordinator startup releases the acquired job lease" do

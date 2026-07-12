@@ -12,18 +12,40 @@ defmodule MirrorNeuron.Bundle.Scanner do
   @tick_ms 5_000
 
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
   @impl true
-  def init(_opts) do
-    schedule_tick()
+  def init(opts) do
     # bundle_id => last_checked_system_time
-    {:ok, %{last_checked: %{}}}
+    state = %{
+      last_checked: %{},
+      tick_ms: Keyword.get(opts, :tick_ms, @tick_ms),
+      tick_timer_ref: nil,
+      tick_token: nil
+    }
+
+    {:ok, schedule_tick(state)}
   end
 
   @impl true
-  def handle_info(:tick, state) do
+  def handle_info({:tick, token}, %{tick_token: token} = state) do
+    state = clear_tick_timer(state)
+    state = scan_bundles(state)
+    {:noreply, schedule_tick(state)}
+  end
+
+  def handle_info({:tick, _stale_token}, state), do: {:noreply, state}
+
+  def handle_info(:tick, state), do: {:noreply, scan_bundles(state)}
+
+  @impl true
+  def terminate(_reason, state) do
+    cancel_tick_timer(state)
+    :ok
+  end
+
+  defp scan_bundles(state) do
     bundles = Manager.list_bundles()
     now_ms = System.monotonic_time(:millisecond)
     bundle_ids = Enum.map(bundles, & &1.bundle_id)
@@ -57,11 +79,33 @@ defmodule MirrorNeuron.Bundle.Scanner do
         end
       end)
 
-    schedule_tick()
-    {:noreply, %{state | last_checked: new_last_checked}}
+    %{state | last_checked: new_last_checked}
   end
 
-  defp schedule_tick do
-    Process.send_after(self(), :tick, @tick_ms)
+  defp schedule_tick(%{tick_ms: tick_ms} = state) when is_integer(tick_ms) and tick_ms > 0 do
+    state = cancel_tick_timer(state)
+    token = make_ref()
+    timer_ref = Process.send_after(self(), {:tick, token}, tick_ms)
+    %{state | tick_timer_ref: timer_ref, tick_token: token}
   end
+
+  defp schedule_tick(state), do: cancel_tick_timer(state)
+
+  defp cancel_tick_timer(%{tick_timer_ref: ref, tick_token: token} = state)
+       when is_reference(ref) do
+    Process.cancel_timer(ref)
+
+    receive do
+      {:tick, ^token} -> :ok
+    after
+      0 -> :ok
+    end
+
+    clear_tick_timer(state)
+  end
+
+  defp cancel_tick_timer(state), do: state
+
+  defp clear_tick_timer(state),
+    do: %{state | tick_timer_ref: nil, tick_token: nil}
 end

@@ -77,20 +77,21 @@ defmodule MirrorNeuron.Runtime.JobRunner do
 
     with :ok <- persist_lease_owner(job_id, manifest, opts, lease),
          {:ok, pid} <- JobCoordinator.start_link({job_id, manifest, opts}) do
-      schedule_lease_renewal()
+      state = %{
+        job_id: job_id,
+        manifest: manifest,
+        bundle: Keyword.get(opts, :job_bundle),
+        bundle_ref: Keyword.get(opts, :bundle_ref),
+        opts: opts,
+        coordinator: pid,
+        node_name: node_name,
+        lease: lease,
+        lease_failures: 0,
+        lease_timer_ref: nil,
+        lease_timer_token: nil
+      }
 
-      {:ok,
-       %{
-         job_id: job_id,
-         manifest: manifest,
-         bundle: Keyword.get(opts, :job_bundle),
-         bundle_ref: Keyword.get(opts, :bundle_ref),
-         opts: opts,
-         coordinator: pid,
-         node_name: node_name,
-         lease: lease,
-         lease_failures: 0
-       }}
+      {:ok, schedule_lease_renewal(state)}
     else
       {:error, reason} ->
         release_job_lease(job_id, node_name, lease)
@@ -116,7 +117,26 @@ defmodule MirrorNeuron.Runtime.JobRunner do
   end
 
   @impl true
-  def handle_info(:renew_lease, state) do
+  def handle_info({:renew_lease, token}, %{lease_timer_token: token} = state) do
+    state = clear_lease_timer(state)
+    renew_lease(state, true)
+  end
+
+  def handle_info({:renew_lease, _stale_token}, state), do: {:noreply, state}
+
+  def handle_info(:renew_lease, state), do: renew_lease(state, false)
+
+  def handle_info({:EXIT, pid, reason}, %{coordinator: pid} = state) do
+    exit_action = classify_coordinator_exit(state, reason)
+
+    stop_reason = if exit_action == :restart, do: {:coordinator_exit, reason}, else: :normal
+
+    {:stop, stop_reason, state}
+  end
+
+  def handle_info(_message, state), do: {:noreply, state}
+
+  defp renew_lease(state, reschedule?) do
     lease_name = "job:#{state.job_id}"
 
     case RedisStore.renew_fenced_lease(
@@ -126,8 +146,8 @@ defmodule MirrorNeuron.Runtime.JobRunner do
            lease_duration_ms()
          ) do
       :ok ->
-        schedule_lease_renewal()
-        {:noreply, %{state | lease_failures: 0}}
+        state = %{state | lease_failures: 0}
+        {:noreply, maybe_schedule_lease_renewal(state, reschedule?)}
 
       {:error, :not_owner} ->
         Logger.warning("Lost lease for job #{state.job_id}. Shutting down.")
@@ -147,24 +167,15 @@ defmodule MirrorNeuron.Runtime.JobRunner do
             "failed to renew lease for job #{state.job_id}; retrying: #{inspect(reason)}"
           )
 
-          schedule_lease_renewal()
-          {:noreply, %{state | lease_failures: failures}}
+          state = %{state | lease_failures: failures}
+          {:noreply, maybe_schedule_lease_renewal(state, reschedule?)}
         end
     end
   end
 
-  def handle_info({:EXIT, pid, reason}, %{coordinator: pid} = state) do
-    exit_action = classify_coordinator_exit(state, reason)
-
-    stop_reason = if exit_action == :restart, do: {:coordinator_exit, reason}, else: :normal
-
-    {:stop, stop_reason, state}
-  end
-
-  def handle_info(_message, state), do: {:noreply, state}
-
   @impl true
   def terminate(_reason, state) do
+    cancel_lease_timer(state)
     stop_coordinator(state.coordinator)
     release_job_lease(state.job_id, state.node_name, state.lease)
     :ok
@@ -320,8 +331,37 @@ defmodule MirrorNeuron.Runtime.JobRunner do
     end
   end
 
-  defp schedule_lease_renewal do
-    Process.send_after(self(), :renew_lease, lease_renew_interval_ms())
+  defp maybe_schedule_lease_renewal(state, true), do: schedule_lease_renewal(state)
+  defp maybe_schedule_lease_renewal(state, false), do: state
+
+  defp schedule_lease_renewal(state) do
+    state = cancel_lease_timer(state)
+    token = make_ref()
+    timer_ref = Process.send_after(self(), {:renew_lease, token}, lease_renew_interval_ms())
+    %{state | lease_timer_ref: timer_ref, lease_timer_token: token}
+  end
+
+  defp cancel_lease_timer(state) do
+    ref = Map.get(state, :lease_timer_ref)
+    token = Map.get(state, :lease_timer_token)
+
+    if is_reference(ref) do
+      Process.cancel_timer(ref)
+
+      receive do
+        {:renew_lease, ^token} -> :ok
+      after
+        0 -> :ok
+      end
+    end
+
+    clear_lease_timer(state)
+  end
+
+  defp clear_lease_timer(state) do
+    state
+    |> Map.put(:lease_timer_ref, nil)
+    |> Map.put(:lease_timer_token, nil)
   end
 
   defp config_positive_integer(env_name, key, default) do

@@ -67,7 +67,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       policy_state: policy_state_from(existing_job),
       workflow_state: WorkflowLedger.new(manifest, runtime_topology.nodes, existing_job),
       pending_policy_timers: %{},
+      recovery_tasks: %{},
       health_check_timer_ref: nil,
+      health_check_token: nil,
       deployment_context: deployment_context_from(opts, existing_job),
       health_check_interval_ms:
         Application.get_env(
@@ -550,6 +552,17 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     end
   end
 
+  def handle_info({:policy_timer, key, token, message}, state) do
+    case Map.get(state.pending_policy_timers, key) do
+      %{token: ^token} ->
+        state = drop_policy_timer(state, key)
+        handle_info(message, state)
+
+      _stale_or_cancelled ->
+        {:noreply, state}
+    end
+  end
+
   def handle_info({:policy_restart, agent_id, reason}, state) do
     next_state = clear_policy_timer(state, {:restart, agent_id})
 
@@ -587,13 +600,56 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         clear_policy_timer(acc, {:reschedule, agent_id})
       end)
 
-    start_reschedule_task(next_state, affected_agent_ids, reason)
-    {:noreply, next_state}
+    {:noreply, start_reschedule_task(next_state, affected_agent_ids, reason)}
   end
+
+  def handle_info({ref, result}, %{recovery_tasks: tasks} = state)
+      when is_map_key(tasks, ref) do
+    Process.demonitor(ref, [:flush])
+    maybe_log_recovery_task_failure(state.job_id, result)
+    {:noreply, drop_recovery_task(state, ref)}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{recovery_tasks: tasks} = state)
+      when is_map_key(tasks, ref) do
+    if reason != :normal do
+      Logger.warning(
+        "recovery task for job #{state.job_id} exited unexpectedly: #{inspect(reason)}"
+      )
+    end
+
+    {:noreply, drop_recovery_task(state, ref)}
+  end
+
+  def handle_info({:health_check, token}, %{health_check_token: token, status: status} = state)
+      when status in ["running", "paused"] do
+    state |> clear_health_check_timer() |> run_health_check(true)
+  end
+
+  def handle_info({:health_check, token}, %{health_check_token: token} = state),
+    do: {:noreply, clear_health_check_timer(state)}
+
+  def handle_info({:health_check, _stale_token}, state), do: {:noreply, state}
 
   def handle_info(:health_check, %{status: status} = state)
       when status in ["running", "paused"] do
-    state = state |> clear_health_check_timer() |> refresh_pressure()
+    run_health_check(state, false)
+  end
+
+  def handle_info(:health_check, state), do: {:noreply, clear_health_check_timer(state)}
+
+  @impl true
+  def terminate(_reason, state) do
+    state
+    |> cancel_health_check_timer()
+    |> cancel_policy_timers()
+    |> cancel_recovery_tasks()
+
+    :ok
+  end
+
+  defp run_health_check(state, reschedule?) do
+    state = refresh_pressure(state)
 
     case schedule_missing_agents(state) do
       {:ok, next_state} ->
@@ -601,7 +657,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
           {:ok, reconciled_state} ->
             case continue_or_complete_workflow(reconciled_state) do
               {:noreply, continued_state} ->
-                {:noreply, schedule_health_check(continued_state)}
+                {:noreply, maybe_schedule_health_check(continued_state, reschedule?)}
 
               {:stop, _reason, _completed_state} = stop ->
                 stop
@@ -634,7 +690,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     end
   end
 
-  def handle_info(:health_check, state), do: {:noreply, clear_health_check_timer(state)}
+  defp maybe_schedule_health_check(state, true), do: schedule_health_check(state)
+  defp maybe_schedule_health_check(state, false), do: state
 
   defp restart_service_agent(state, agent_id, result) do
     EventBus.publish(state.job_id, %{
@@ -1242,7 +1299,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp start_reschedule_task(state, [], _reason), do: state
 
   defp start_reschedule_task(state, affected_agent_ids, reason) do
-    task = fn ->
+    work = fn ->
       MirrorNeuron.Cluster.Reconciler.reschedule_agents(
         state.job_id,
         affected_agent_ids,
@@ -1252,12 +1309,45 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       )
     end
 
-    case Process.whereis(MirrorNeuron.Runtime.RecoveryTaskSupervisor) do
-      nil -> Task.start(task)
-      _pid -> Task.Supervisor.start_child(MirrorNeuron.Runtime.RecoveryTaskSupervisor, task)
+    task = start_owned_recovery_task(work)
+    %{state | recovery_tasks: Map.put(state.recovery_tasks, task.ref, task)}
+  end
+
+  defp start_owned_recovery_task(work) do
+    task = fn ->
+      try do
+        work.()
+      rescue
+        exception -> {:recovery_task_crashed, {:error, exception, __STACKTRACE__}}
+      catch
+        kind, reason -> {:recovery_task_crashed, {kind, reason, __STACKTRACE__}}
+      end
     end
 
-    state
+    case Process.whereis(MirrorNeuron.Runtime.RecoveryTaskSupervisor) do
+      nil -> Task.async(task)
+      _pid -> Task.Supervisor.async(MirrorNeuron.Runtime.RecoveryTaskSupervisor, task)
+    end
+  end
+
+  defp maybe_log_recovery_task_failure(
+         job_id,
+         {:recovery_task_crashed, {kind, reason, stacktrace}}
+       ) do
+    Logger.warning(
+      "recovery task for job #{job_id} crashed: #{Exception.format(kind, reason, stacktrace)}"
+    )
+  end
+
+  defp maybe_log_recovery_task_failure(_job_id, _result), do: :ok
+
+  defp drop_recovery_task(state, ref) do
+    %{state | recovery_tasks: Map.delete(state.recovery_tasks, ref)}
+  end
+
+  defp cancel_recovery_tasks(state) do
+    Enum.each(state.recovery_tasks, fn {_ref, task} -> Task.shutdown(task, :brutal_kill) end)
+    %{state | recovery_tasks: %{}}
   end
 
   defp start_agents(state), do: start_agents(state, [])
@@ -1858,19 +1948,30 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   defp schedule_health_check(state) do
     state = cancel_health_check_timer(state)
-    ref = Process.send_after(self(), :health_check, state.health_check_interval_ms)
-    %{state | health_check_timer_ref: ref}
+    token = make_ref()
+    ref = Process.send_after(self(), {:health_check, token}, state.health_check_interval_ms)
+    %{state | health_check_timer_ref: ref, health_check_token: token}
   end
 
-  defp cancel_health_check_timer(%{health_check_timer_ref: ref} = state)
+  defp cancel_health_check_timer(
+         %{health_check_timer_ref: ref, health_check_token: token} = state
+       )
        when is_reference(ref) do
     Process.cancel_timer(ref)
+
+    receive do
+      {:health_check, ^token} -> :ok
+    after
+      0 -> :ok
+    end
+
     clear_health_check_timer(state)
   end
 
   defp cancel_health_check_timer(state), do: state
 
-  defp clear_health_check_timer(state), do: %{state | health_check_timer_ref: nil}
+  defp clear_health_check_timer(state),
+    do: %{state | health_check_timer_ref: nil, health_check_token: nil}
 
   defp build_runtime_topology(manifest, scheduler_plan) do
     job_type = scheduler_plan["job_type"]
@@ -2144,8 +2245,12 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   defp schedule_policy_timer(state, key, message, delay_ms) do
     state = clear_policy_timer(state, key)
-    ref = Process.send_after(self(), message, max(delay_ms, 0))
-    %{state | pending_policy_timers: Map.put(state.pending_policy_timers, key, ref)}
+    token = make_ref()
+    timer_message = {:policy_timer, key, token, message}
+    ref = Process.send_after(self(), timer_message, max(delay_ms, 0))
+
+    timer = %{ref: ref, token: token, message: timer_message}
+    %{state | pending_policy_timers: Map.put(state.pending_policy_timers, key, timer)}
   end
 
   defp clear_policy_timer(state, key) do
@@ -2153,15 +2258,25 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       {nil, _timers} ->
         state
 
-      {ref, timers} ->
+      {%{ref: ref, message: message}, timers} ->
         Process.cancel_timer(ref)
+
+        receive do
+          ^message -> :ok
+        after
+          0 -> :ok
+        end
+
         %{state | pending_policy_timers: timers}
     end
   end
 
+  defp drop_policy_timer(state, key) do
+    %{state | pending_policy_timers: Map.delete(state.pending_policy_timers, key)}
+  end
+
   defp cancel_policy_timers(state) do
-    Enum.each(state.pending_policy_timers, fn {_key, ref} -> Process.cancel_timer(ref) end)
-    %{state | pending_policy_timers: %{}}
+    Enum.reduce(Map.keys(state.pending_policy_timers), state, &clear_policy_timer(&2, &1))
   end
 
   defp cancel_policy_timers_for(state, agent_ids) do

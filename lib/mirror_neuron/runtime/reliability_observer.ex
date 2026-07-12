@@ -22,20 +22,37 @@ defmodule MirrorNeuron.Runtime.ReliabilityObserver do
       redis_store: Keyword.get(opts, :redis_store, RedisStore),
       event_bus: Keyword.get(opts, :event_bus, EventBus),
       last_mode: nil,
-      job_statuses: %{}
+      job_statuses: %{},
+      tick_timer_ref: nil,
+      tick_token: nil
     }
 
-    if Keyword.get(opts, :schedule_initial_tick, true), do: schedule_tick(0)
+    state =
+      if Keyword.get(opts, :schedule_initial_tick, true), do: schedule_tick(state, 0), else: state
+
     {:ok, state}
   end
 
   @impl true
-  def handle_info(:tick, state) do
+  def handle_info({:tick, token}, %{tick_token: token} = state) do
+    state = clear_tick_timer(state)
+    {:noreply, state |> run_tick() |> schedule_tick(state.interval_ms)}
+  end
+
+  def handle_info({:tick, _stale_token}, state), do: {:noreply, state}
+
+  def handle_info(:tick, state), do: {:noreply, run_tick(state)}
+
+  @impl true
+  def terminate(_reason, state) do
+    cancel_tick_timer(state)
+    :ok
+  end
+
+  defp run_tick(state) do
     snapshot = state.snapshot.()
     state = maybe_publish_mode_change(snapshot, state)
-    state = maybe_publish_job_changes(snapshot, state)
-    schedule_tick(state.interval_ms)
-    {:noreply, state}
+    maybe_publish_job_changes(snapshot, state)
   end
 
   defp maybe_publish_mode_change(snapshot, %{last_mode: mode} = state)
@@ -131,9 +148,30 @@ defmodule MirrorNeuron.Runtime.ReliabilityObserver do
   defp active_job?(%{"status" => status}), do: status in ["pending", "running", "paused"]
   defp active_job?(_job), do: false
 
-  defp schedule_tick(delay_ms) do
-    Process.send_after(self(), :tick, delay_ms)
+  defp schedule_tick(state, delay_ms) do
+    state = cancel_tick_timer(state)
+    token = make_ref()
+    timer_ref = Process.send_after(self(), {:tick, token}, max(delay_ms, 0))
+    %{state | tick_timer_ref: timer_ref, tick_token: token}
   end
+
+  defp cancel_tick_timer(%{tick_timer_ref: ref, tick_token: token} = state)
+       when is_reference(ref) do
+    Process.cancel_timer(ref)
+
+    receive do
+      {:tick, ^token} -> :ok
+    after
+      0 -> :ok
+    end
+
+    clear_tick_timer(state)
+  end
+
+  defp cancel_tick_timer(state), do: state
+
+  defp clear_tick_timer(state),
+    do: %{state | tick_timer_ref: nil, tick_token: nil}
 
   defp interval_ms do
     config_positive_integer(

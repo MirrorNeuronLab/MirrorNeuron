@@ -185,23 +185,52 @@ defmodule MirrorNeuron.ServiceCheck do
       target = "#{address}:#{port}"
       timeout = timeout_ms(check)
 
-      with {:ok, channel} <- GRPC.Stub.connect(target, timeout: timeout),
-           request <- %Grpc.Health.V1.HealthCheckRequest{
-             service: to_string(Map.get(check, "service") || "")
-           },
-           {:ok, response} <- Grpc.Health.V1.Health.Stub.check(channel, request, timeout: timeout) do
-        case response.status do
-          :SERVING -> {:ok, %{"target" => target, "serving_status" => "SERVING"}}
-          other -> {:error, "grpc health status #{inspect(other)}"}
-        end
-      else
-        {:error, %GRPC.RPCError{} = error} ->
-          {:error, "grpc health check failed for #{target}: #{Exception.message(error)}"}
+      connect_opts = [adapter_opts: [connect_timeout: timeout, retry: 0]]
+
+      case GRPC.Stub.connect(target, connect_opts) do
+        {:ok, channel} ->
+          try do
+            run_grpc_check(channel, check, target, timeout)
+          after
+            disconnect_grpc_channel(channel)
+          end
 
         {:error, reason} ->
-          {:error, "grpc health check failed for #{target}: #{inspect(reason)}"}
+          grpc_check_error(target, reason)
       end
     end
+  end
+
+  defp run_grpc_check(channel, check, target, timeout) do
+    request = %Grpc.Health.V1.HealthCheckRequest{
+      service: to_string(Map.get(check, "service") || "")
+    }
+
+    case Grpc.Health.V1.Health.Stub.check(channel, request, timeout: timeout) do
+      {:ok, %{status: :SERVING}} ->
+        {:ok, %{"target" => target, "serving_status" => "SERVING"}}
+
+      {:ok, response} ->
+        {:error, "grpc health status #{inspect(response.status)}"}
+
+      {:error, reason} ->
+        grpc_check_error(target, reason)
+    end
+  end
+
+  defp grpc_check_error(target, %GRPC.RPCError{} = error),
+    do: {:error, "grpc health check failed for #{target}: #{Exception.message(error)}"}
+
+  defp grpc_check_error(target, reason),
+    do: {:error, "grpc health check failed for #{target}: #{inspect(reason)}"}
+
+  defp disconnect_grpc_channel(channel) do
+    _ = GRPC.Stub.disconnect(channel)
+    :ok
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
   end
 
   defp check_url(check, service) do

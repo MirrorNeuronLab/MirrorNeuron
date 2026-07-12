@@ -38,21 +38,30 @@ defmodule MirrorNeuron.Runtime.HordeCluster do
 
     if enabled do
       :net_kernel.monitor_nodes(true)
-      send(self(), :refresh)
     end
 
-    {:ok,
-     %{
-       enabled: enabled,
-       refresh_ms: Keyword.get(opts, :refresh_ms, @refresh_ms),
-       refresh_timer_ref: nil
-     }}
+    state = %{
+      enabled: enabled,
+      refresh_ms: Keyword.get(opts, :refresh_ms, @refresh_ms),
+      refresh_timer_ref: nil,
+      refresh_token: nil
+    }
+
+    {:ok, if(enabled, do: schedule_refresh(state, 0), else: state)}
   end
 
   @impl true
+  def handle_info({:refresh, token}, %{enabled: true, refresh_token: token} = state) do
+    state = clear_refresh_timer(state)
+    refresh_members()
+    {:noreply, schedule_refresh(state)}
+  end
+
+  def handle_info({:refresh, _stale_token}, state), do: {:noreply, state}
+
   def handle_info(:refresh, %{enabled: true} = state) do
     refresh_members()
-    {:noreply, state |> clear_refresh_timer() |> schedule_refresh()}
+    {:noreply, state}
   end
 
   def handle_info(:refresh, state), do: {:noreply, state}
@@ -66,6 +75,12 @@ defmodule MirrorNeuron.Runtime.HordeCluster do
     do: {:noreply, state}
 
   def handle_info(_message, state), do: {:noreply, state}
+
+  @impl true
+  def terminate(_reason, state) do
+    cancel_refresh(state)
+    :ok
+  end
 
   defp refresh_members do
     configured = configured_nodes()
@@ -98,20 +113,30 @@ defmodule MirrorNeuron.Runtime.HordeCluster do
     end)
   end
 
-  defp schedule_refresh(state) do
+  defp schedule_refresh(state, delay_ms \\ nil) do
     state = cancel_refresh(state)
-    ref = Process.send_after(self(), :refresh, state.refresh_ms)
-    %{state | refresh_timer_ref: ref}
+    token = make_ref()
+    ref = Process.send_after(self(), {:refresh, token}, delay_ms || state.refresh_ms)
+    %{state | refresh_timer_ref: ref, refresh_token: token}
   end
 
-  defp cancel_refresh(%{refresh_timer_ref: ref} = state) when is_reference(ref) do
+  defp cancel_refresh(%{refresh_timer_ref: ref, refresh_token: token} = state)
+       when is_reference(ref) do
     Process.cancel_timer(ref)
+
+    receive do
+      {:refresh, ^token} -> :ok
+    after
+      0 -> :ok
+    end
+
     clear_refresh_timer(state)
   end
 
   defp cancel_refresh(state), do: state
 
-  defp clear_refresh_timer(state), do: %{state | refresh_timer_ref: nil}
+  defp clear_refresh_timer(state),
+    do: %{state | refresh_timer_ref: nil, refresh_token: nil}
 
   defp configured_nodes do
     "MN_CLUSTER_NODES"

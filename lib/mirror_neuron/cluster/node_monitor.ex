@@ -29,6 +29,7 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
       reconnecting: %{},
       disconnecting: %{},
       health_probe_timer_ref: nil,
+      health_probe_token: nil,
       health_misses: %{},
       connect: Keyword.get(opts, :connect, &Node.connect/1),
       list_nodes: Keyword.get(opts, :list_nodes, &Node.list/0),
@@ -112,11 +113,11 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
     {:noreply, begin_reconnect(node, "Node left cluster: #{node}", state)}
   end
 
-  def handle_info({:reconnect_node, node, attempt}, state) do
+  def handle_info({:reconnect_node, node, attempt, token}, state) do
     name = node_name(node)
 
     case Map.get(state.reconnecting, name) do
-      %{attempt: ^attempt} ->
+      %{attempt: ^attempt, token: ^token} ->
         reconnect_node(node, attempt, state)
 
       _stale_or_cancelled ->
@@ -124,11 +125,11 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
     end
   end
 
-  def handle_info({:disconnect_grace_expired, node, wait_until}, state) do
+  def handle_info({:disconnect_grace_expired, node, wait_until, token}, state) do
     name = node_name(node)
 
     case Map.get(state.disconnecting, name) do
-      %{wait_until: ^wait_until} ->
+      %{wait_until: ^wait_until, token: ^token} ->
         {:noreply, complete_disconnect(node, state)}
 
       _stale_or_cancelled ->
@@ -136,7 +137,9 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
     end
   end
 
-  def handle_info(:health_probe, state) do
+  def handle_info({:health_probe, token}, %{health_probe_token: token} = state) do
+    state = clear_health_probe_timer(state)
+
     state =
       state
       |> run_health_probes()
@@ -145,7 +148,19 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
     {:noreply, state}
   end
 
+  def handle_info({:health_probe, _stale_token}, state), do: {:noreply, state}
+
+  def handle_info(:health_probe, state), do: {:noreply, run_health_probes(state)}
+
   def handle_info(_msg, state), do: {:noreply, state}
+
+  @impl true
+  def terminate(_reason, state) do
+    state = cancel_health_probe(state)
+    Enum.each(state.reconnecting, fn {_name, entry} -> Process.cancel_timer(entry.timer_ref) end)
+    Enum.each(state.disconnecting, fn {_name, entry} -> Process.cancel_timer(entry.timer_ref) end)
+    :ok
+  end
 
   defp begin_reconnect(node, log_message, state) do
     Logger.notice(log_message)
@@ -262,11 +277,13 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
     name = node_name(node)
     state = cancel_reconnect(name, state)
     delay = reconnect_delay(attempt, state.reconnect_backoff_ms)
-    timer_ref = Process.send_after(self(), {:reconnect_node, node, attempt}, delay)
+    token = make_ref()
+    timer_ref = Process.send_after(self(), {:reconnect_node, node, attempt, token}, delay)
 
     put_in(state.reconnecting[name], %{
       node: node,
       attempt: attempt,
+      token: token,
       timer_ref: timer_ref
     })
   end
@@ -274,17 +291,19 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
   defp schedule_disconnect_grace(node, wait_until, state) do
     name = node_name(node)
     state = cancel_disconnect(state, name)
+    token = make_ref()
 
     timer_ref =
       Process.send_after(
         self(),
-        {:disconnect_grace_expired, node, wait_until},
+        {:disconnect_grace_expired, node, wait_until, token},
         state.disconnect_grace_ms
       )
 
     put_in(state.disconnecting[name], %{
       node: node,
       wait_until: wait_until,
+      token: token,
       timer_ref: timer_ref
     })
   end
@@ -318,18 +337,32 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
   defp schedule_health_probe(%{health_probe_interval_ms: interval_ms} = state)
        when interval_ms > 0 do
     state = cancel_health_probe(state)
-    timer_ref = Process.send_after(self(), :health_probe, interval_ms)
-    %{state | health_probe_timer_ref: timer_ref}
+    token = make_ref()
+    timer_ref = Process.send_after(self(), {:health_probe, token}, interval_ms)
+    %{state | health_probe_timer_ref: timer_ref, health_probe_token: token}
   end
 
   defp schedule_health_probe(state), do: state
 
-  defp cancel_health_probe(%{health_probe_timer_ref: nil} = state), do: state
-
-  defp cancel_health_probe(%{health_probe_timer_ref: timer_ref} = state) do
+  defp cancel_health_probe(
+         %{health_probe_timer_ref: timer_ref, health_probe_token: token} = state
+       )
+       when is_reference(timer_ref) do
     Process.cancel_timer(timer_ref)
-    %{state | health_probe_timer_ref: nil}
+
+    receive do
+      {:health_probe, ^token} -> :ok
+    after
+      0 -> :ok
+    end
+
+    clear_health_probe_timer(state)
   end
+
+  defp cancel_health_probe(state), do: state
+
+  defp clear_health_probe_timer(state),
+    do: %{state | health_probe_timer_ref: nil, health_probe_token: nil}
 
   defp reconnect_delay(attempt, initial_backoff_ms) do
     trunc(initial_backoff_ms * :math.pow(2, attempt - 1))
