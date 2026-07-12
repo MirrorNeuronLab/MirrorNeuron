@@ -354,6 +354,18 @@ defmodule MirrorNeuron.Execution.LeaseManager do
 
     cancel_queue_timeout(request)
 
+    state =
+      if request do
+        update_in(state, [:pools, request.pool, :waiting], fn queue ->
+          queue
+          |> :queue.to_list()
+          |> Enum.reject(&(&1 == lease_id))
+          |> :queue.from_list()
+        end)
+      else
+        state
+      end
+
     state
     |> Map.put(:waiting, Map.delete(state.waiting, lease_id))
     |> Map.put(:lease_monitors, Map.delete(state.lease_monitors, lease_id))

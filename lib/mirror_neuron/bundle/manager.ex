@@ -124,16 +124,26 @@ defmodule MirrorNeuron.Bundle.Manager do
 
   @impl true
   def handle_cast({:register_dir, path}, state) do
+    path = Path.expand(path)
     send(self(), {:scan_dir, path})
-    {:noreply, %{state | dirs: [path | state.dirs]}}
+    {:noreply, %{state | dirs: Enum.uniq([path | state.dirs])}}
   end
 
   @impl true
   def handle_info({:scan_dir, dir}, state) do
-    bundle_paths = LocalFilesystem.list_bundles(dir)
+    dir = Path.expand(dir)
+    bundle_paths = LocalFilesystem.list_bundles(dir) |> Enum.map(&Path.expand/1)
+    current_paths = MapSet.new(bundle_paths)
+
+    existing_bundles =
+      state.bundles
+      |> Enum.reject(fn {_bundle_id, record} ->
+        bundle_owned_by_dir?(record, dir) and not MapSet.member?(current_paths, record.path)
+      end)
+      |> Map.new()
 
     new_bundles =
-      Enum.reduce(bundle_paths, state.bundles, fn path, acc ->
+      Enum.reduce(bundle_paths, existing_bundles, fn path, acc ->
         case JobBundle.load(path) do
           {:ok, bundle} ->
             bundle_id = bundle.manifest.graph_id
@@ -177,7 +187,7 @@ defmodule MirrorNeuron.Bundle.Manager do
               last_reloaded: DateTime.utc_now() |> DateTime.to_iso8601()
             }
 
-            Map.put_new(acc, bundle_id, record)
+            put_bundle_record(acc, record, dir)
 
           {:error, err} ->
             Logger.warning("Failed to load bundle in dir #{path}: #{inspect(err)}")
@@ -187,4 +197,18 @@ defmodule MirrorNeuron.Bundle.Manager do
 
     {:noreply, %{state | bundles: new_bundles}}
   end
+
+  defp put_bundle_record(bundles, record, dir) do
+    case Map.get(bundles, record.bundle_id) do
+      %{path: existing_path} ->
+        if Path.dirname(existing_path) == dir,
+          do: Map.put(bundles, record.bundle_id, record),
+          else: bundles
+
+      nil ->
+        Map.put(bundles, record.bundle_id, record)
+    end
+  end
+
+  defp bundle_owned_by_dir?(record, dir), do: Path.dirname(record.path) == dir
 end

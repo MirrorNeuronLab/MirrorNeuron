@@ -32,8 +32,7 @@ defmodule MirrorNeuron.Sandbox.OpenShellJobSandbox do
     if native_sandbox_prep_enabled?() do
       case if(Process.whereis(@registry), do: Registry.lookup(@registry, job_id), else: []) do
         [{pid, _meta}] ->
-          GenServer.stop(pid, :normal, :infinity)
-          :ok
+          cleanup_process(pid)
 
         [] ->
           cleanup_sandbox_by_job_id(job_id, config)
@@ -51,7 +50,8 @@ defmodule MirrorNeuron.Sandbox.OpenShellJobSandbox do
        config: config,
        executable: sandbox_cli(config),
        sandbox_name: build_shared_sandbox_name(job_id, config),
-       ready?: false
+       ready?: false,
+       cleanup_required?: false
      }}
   end
 
@@ -61,6 +61,8 @@ defmodule MirrorNeuron.Sandbox.OpenShellJobSandbox do
 
     case ensure_sandbox(state) do
       {:ok, next_state} ->
+        next_state = %{next_state | cleanup_required?: true}
+
         {:reply,
          {:ok,
           %{
@@ -73,9 +75,21 @@ defmodule MirrorNeuron.Sandbox.OpenShellJobSandbox do
     end
   end
 
+  def handle_call(:cleanup, _from, state) do
+    case cleanup_active_sandbox(state) do
+      :ok ->
+        {:stop, :normal, :ok, %{state | ready?: false, cleanup_required?: false}}
+
+      {:error, _reason} = error ->
+        {:reply, error, state}
+    end
+  end
+
   @impl true
   def terminate(_reason, state) do
-    case delete_sandbox(state.executable, state.sandbox_name, allow_missing?: not state.ready?) do
+    case delete_sandbox(state.executable, state.sandbox_name,
+           allow_missing?: not state.cleanup_required?
+         ) do
       :ok ->
         :ok
 
@@ -107,6 +121,31 @@ defmodule MirrorNeuron.Sandbox.OpenShellJobSandbox do
     end
   end
 
+  defp cleanup_process(pid) do
+    monitor = Process.monitor(pid)
+
+    try do
+      case GenServer.call(pid, :cleanup, :infinity) do
+        :ok ->
+          receive do
+            {:DOWN, ^monitor, :process, ^pid, _reason} -> :ok
+          after
+            5_000 ->
+              Process.demonitor(monitor, [:flush])
+              {:error, :sandbox_owner_stop_timeout}
+          end
+
+        {:error, _reason} = error ->
+          Process.demonitor(monitor, [:flush])
+          error
+      end
+    catch
+      :exit, reason ->
+        Process.demonitor(monitor, [:flush])
+        {:error, {:sandbox_owner_exit, reason}}
+    end
+  end
+
   defp cleanup_sandbox_by_job_id(job_id, config) do
     exact_result =
       delete_sandbox(sandbox_cli(config), build_shared_sandbox_name(job_id, config),
@@ -115,6 +154,20 @@ defmodule MirrorNeuron.Sandbox.OpenShellJobSandbox do
 
     job_result = delete_local_docker_job_sandboxes(job_id, config)
 
+    combine_cleanup_results(exact_result, job_result)
+  end
+
+  defp cleanup_active_sandbox(state) do
+    exact_result =
+      delete_sandbox(state.executable, state.sandbox_name,
+        allow_missing?: not state.cleanup_required?
+      )
+
+    job_result = delete_local_docker_job_sandboxes(state.job_id, state.config)
+    combine_cleanup_results(exact_result, job_result)
+  end
+
+  defp combine_cleanup_results(exact_result, job_result) do
     case {exact_result, job_result} do
       {{:error, reason}, {:error, docker_reason}} ->
         {:error, %{"sandbox" => reason, "job_docker" => docker_reason}}

@@ -878,6 +878,101 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
     end
   end
 
+  test "failed shared-sandbox cleanup retains its owner and configuration for retry" do
+    Application.ensure_all_started(:mirror_neuron)
+
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "mirror_neuron_openshell_cleanup_retry_#{System.unique_integer([:positive])}"
+      )
+
+    sandboxes_dir = Path.join(tmp_dir, "sandboxes")
+    allow_delete = Path.join(tmp_dir, "allow-delete")
+    fake_cli = Path.join(tmp_dir, "fake-openshell")
+    fake_docker = Path.join(tmp_dir, "fake-docker")
+    job_id = "job-openshell-cleanup-retry"
+    previous_docker = System.get_env("MN_DOCKER_BIN")
+
+    File.mkdir_p!(sandboxes_dir)
+
+    File.write!(fake_cli, """
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command="$2"
+    name="$3"
+    case "$command" in
+      get)
+        test -d "#{sandboxes_dir}/$name"
+        ;;
+      create)
+        name=""
+        args=("$@")
+        i=2
+        while [ "$i" -lt "$#" ]; do
+          if [ "${args[$i]}" = "--name" ]; then
+            i=$((i + 1))
+            name="${args[$i]}"
+            break
+          fi
+          i=$((i + 1))
+        done
+        mkdir -p "#{sandboxes_dir}/$name"
+        ;;
+      delete)
+        if [ -f "#{allow_delete}" ]; then
+          rm -rf "#{sandboxes_dir}/$name"
+          exit 0
+        fi
+        echo "sandbox is busy" >&2
+        exit 9
+        ;;
+    esac
+    """)
+
+    File.write!(fake_docker, """
+    #!/usr/bin/env bash
+    if [ "$1" = "ps" ]; then
+      exit 0
+    fi
+    exit 0
+    """)
+
+    File.chmod!(fake_cli, 0o755)
+    File.chmod!(fake_docker, 0o755)
+    System.put_env("MN_DOCKER_BIN", fake_docker)
+
+    config = %{
+      "sandbox_cli" => fake_cli,
+      "shared_sandbox_prefix" => "custom-cleanup-prefix",
+      "no_auto_providers" => true,
+      "tty" => false
+    }
+
+    try do
+      assert {:ok, _sandbox} = OpenShellJobSandbox.ensure(job_id, config)
+      assert [{owner, _meta}] = Registry.lookup(MirrorNeuron.Sandbox.Registry, job_id)
+
+      assert {:error, _reason} = OpenShellJobSandbox.cleanup_job_local(job_id)
+      assert Process.alive?(owner)
+      assert :sys.get_state(owner).config["shared_sandbox_prefix"] == "custom-cleanup-prefix"
+      assert :sys.get_state(owner).cleanup_required? == true
+
+      File.touch!(allow_delete)
+      assert :ok = OpenShellJobSandbox.cleanup_job_local(job_id)
+      refute Process.alive?(owner)
+    after
+      File.touch!(allow_delete)
+      OpenShellJobSandbox.cleanup_job_local(job_id, config)
+
+      if is_nil(previous_docker),
+        do: System.delete_env("MN_DOCKER_BIN"),
+        else: System.put_env("MN_DOCKER_BIN", previous_docker)
+
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
   test "persistent shared workspaces survive multiple runs for the same agent" do
     Application.ensure_all_started(:mirror_neuron)
 

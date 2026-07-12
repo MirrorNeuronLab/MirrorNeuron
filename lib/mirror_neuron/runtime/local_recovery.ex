@@ -115,22 +115,39 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
 
   defp restore_disk_agents(job_id, agents) do
     Enum.each(agents, fn agent ->
-      agent_id = agent["agent_id"] || agent["node_id"]
+      case recovery_agent_id(agent) do
+        {:ok, agent_id} ->
+          restore_disk_agent(job_id, agent_id, agent)
 
-      case RedisStore.fetch_agent(job_id, agent_id) do
-        {:ok, redis_agent} ->
-          if newer?(agent["last_heartbeat_at"], redis_agent["last_heartbeat_at"]) do
-            persist_restored_agent(job_id, agent_id, agent)
-          end
-
-        {:error, reason} ->
-          if not_found?(reason) do
-            persist_restored_agent(job_id, agent_id, agent)
-          else
-            log_restore_failure(job_id, "agent #{agent_id}", reason)
-          end
+        :error ->
+          Logger.warning(
+            "ignoring disk agent checkpoint without an agent_id or node_id for #{job_id}"
+          )
       end
     end)
+  end
+
+  defp restore_disk_agent(job_id, agent_id, agent) do
+    case RedisStore.fetch_agent(job_id, agent_id) do
+      {:ok, redis_agent} ->
+        if newer?(agent["last_heartbeat_at"], redis_agent["last_heartbeat_at"]) do
+          persist_restored_agent(job_id, agent_id, agent)
+        end
+
+      {:error, reason} ->
+        if not_found?(reason) do
+          persist_restored_agent(job_id, agent_id, agent)
+        else
+          log_restore_failure(job_id, "agent #{agent_id}", reason)
+        end
+    end
+  end
+
+  defp recovery_agent_id(agent) do
+    case agent["agent_id"] || agent["node_id"] do
+      agent_id when is_binary(agent_id) and agent_id != "" -> {:ok, agent_id}
+      _agent_id -> :error
+    end
   end
 
   defp persist_restored_agent(job_id, agent_id, agent) do

@@ -5,8 +5,40 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
   alias MirrorNeuron.Artifacts.JobStore
   alias MirrorNeuron.JobBundle
   alias MirrorNeuron.Persistence.{DiskCheckpoint, RedisStore}
+  alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.EventBus
   alias MirrorNeuron.ServiceRegistry
+
+  defmodule CleanupNodeAdapterStub do
+    import Kernel, except: [self: 0]
+
+    def reset(test_pid) do
+      :persistent_term.put({__MODULE__, :test_pid}, test_pid)
+      :persistent_term.put({__MODULE__, :remote_result}, {:badrpc, :nodedown})
+    end
+
+    def self, do: :"cleanup-control@lab"
+    def list, do: []
+    def connect(_node), do: false
+    def disconnect(_node), do: true
+    def set_cookie(_node, _cookie), do: :ok
+
+    def put_remote_result(result) do
+      :persistent_term.put({__MODULE__, :remote_result}, result)
+    end
+
+    def rpc_call(node, module, function, args, timeout) do
+      if test_pid = :persistent_term.get({__MODULE__, :test_pid}, nil) do
+        send(test_pid, {:cleanup_rpc, node, module, function, args, timeout})
+      end
+
+      if node == self() do
+        :ok
+      else
+        :persistent_term.get({__MODULE__, :remote_result}, {:badrpc, :nodedown})
+      end
+    end
+  end
 
   setup do
     Application.ensure_all_started(:mirror_neuron)
@@ -20,6 +52,8 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     old_system_namespace = System.get_env("MN_REDIS_NAMESPACE")
     old_event_max_count = Application.get_env(:mirror_neuron, :event_max_count)
     old_terminal_ttl = Application.get_env(:mirror_neuron, :terminal_job_ttl_seconds)
+    old_agent_snapshot_ttl = Application.get_env(:mirror_neuron, :agent_snapshot_ttl_seconds)
+    old_bundle_archive_ttl = Application.get_env(:mirror_neuron, :bundle_archive_ttl_seconds)
     old_recovery_eval_ttl = Application.get_env(:mirror_neuron, :recovery_eval_ttl_seconds)
     old_system_recovery_eval_ttl = System.get_env("MN_RECOVERY_EVAL_TTL_SECONDS")
     old_wait_replicas = Application.get_env(:mirror_neuron, :redis_wait_replicas)
@@ -37,6 +71,8 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
       restore_env(:redis_namespace, old_namespace)
       restore_env(:event_max_count, old_event_max_count)
       restore_env(:terminal_job_ttl_seconds, old_terminal_ttl)
+      restore_env(:agent_snapshot_ttl_seconds, old_agent_snapshot_ttl)
+      restore_env(:bundle_archive_ttl_seconds, old_bundle_archive_ttl)
       restore_env(:recovery_eval_ttl_seconds, old_recovery_eval_ttl)
       restore_system_env("MN_RECOVERY_EVAL_TTL_SECONDS", old_system_recovery_eval_ttl)
       restore_env(:redis_wait_replicas, old_wait_replicas)
@@ -60,6 +96,46 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     RedisStore.delete_job(job_id)
   end
 
+  test "trigger events use the bounded list and retention removes legacy standalone keys", %{
+    namespace: namespace
+  } do
+    suspend_retention()
+    event_id = "trigger-event-#{System.unique_integer([:positive])}"
+    legacy_id = "legacy-trigger-event-#{System.unique_integer([:positive])}"
+
+    assert {:ok, event} =
+             RedisStore.append_trigger_event(event_id, %{
+               "event_type" => "test",
+               "payload" => %{"value" => 1}
+             })
+
+    assert event["event_id"] == event_id
+    assert {:ok, [listed]} = RedisStore.list_trigger_events(1)
+    assert listed["event_id"] == event_id
+
+    assert {:ok, nil} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "GET",
+               redis_key(namespace, ["trigger", "event", event_id])
+             ])
+
+    assert {:ok, "OK"} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SET",
+               redis_key(namespace, ["trigger", "event", legacy_id]),
+               Jason.encode!(event)
+             ])
+
+    assert {:ok, result} = RedisStore.sweep_retention()
+    assert result.stale_trigger_event_key_count == 1
+
+    assert {:ok, nil} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "GET",
+               redis_key(namespace, ["trigger", "event", legacy_id])
+             ])
+  end
+
   test "terminal persistence removes disk checkpoints and late agent writes do not recreate them" do
     job_id = "terminal-checkpoint-#{System.unique_integer([:positive])}"
 
@@ -68,6 +144,8 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
                "job_id" => job_id,
                "graph_id" => "terminal-checkpoint",
                "status" => "running",
+               "recovery_status" => "paused_for_review",
+               "recovery_requires_review" => true,
                "updated_at" => MirrorNeuron.Runtime.timestamp()
              })
 
@@ -92,6 +170,85 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
 
     assert {:error, :enoent} = DiskCheckpoint.load_job(job_id)
     assert {:ok, []} = DiskCheckpoint.load_agents(job_id)
+    RedisStore.delete_job(job_id)
+  end
+
+  test "concurrent late snapshots cannot recreate a terminal disk checkpoint" do
+    job_id = "terminal-checkpoint-race-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _job} =
+             RedisStore.persist_job(job_id, %{
+               "job_id" => job_id,
+               "graph_id" => "terminal-checkpoint-race",
+               "status" => "running",
+               "updated_at" => MirrorNeuron.Runtime.timestamp()
+             })
+
+    writers =
+      for writer <- 1..8 do
+        Task.async(fn ->
+          for sequence <- 1..8 do
+            assert {:ok, _agent} =
+                     RedisStore.persist_agent(job_id, "worker-#{writer}", %{
+                       "agent_id" => "worker-#{writer}",
+                       "sequence" => sequence,
+                       "last_heartbeat_at" => MirrorNeuron.Runtime.timestamp()
+                     })
+          end
+        end)
+      end
+
+    terminal =
+      Task.async(fn ->
+        RedisStore.persist_terminal_job(job_id, %{"status" => "cancelled"})
+      end)
+
+    Enum.each(writers, &Task.await(&1, 10_000))
+    assert {:ok, _job} = Task.await(terminal, 10_000)
+
+    assert {:ok, _agent} =
+             RedisStore.persist_agent(job_id, "late-worker", %{
+               "agent_id" => "late-worker",
+               "last_heartbeat_at" => MirrorNeuron.Runtime.timestamp()
+             })
+
+    assert {:error, :enoent} = DiskCheckpoint.load_job(job_id)
+    assert {:ok, []} = DiskCheckpoint.load_agents(job_id)
+    RedisStore.delete_job(job_id)
+  end
+
+  test "active job snapshots persist until the job becomes terminal", %{namespace: namespace} do
+    Application.put_env(:mirror_neuron, :agent_snapshot_ttl_seconds, 120)
+    job_id = "active-snapshot-retention-#{System.unique_integer([:positive])}"
+    agent_id = "worker"
+
+    assert {:ok, _job} =
+             RedisStore.persist_job(job_id, %{
+               "job_id" => job_id,
+               "graph_id" => "active_snapshot_retention",
+               "status" => "paused",
+               "updated_at" => MirrorNeuron.Runtime.timestamp()
+             })
+
+    assert {:ok, _agent} =
+             RedisStore.persist_agent(job_id, agent_id, %{
+               "agent_id" => agent_id,
+               "last_heartbeat_at" => MirrorNeuron.Runtime.timestamp()
+             })
+
+    agent_key = redis_key(namespace, ["job", job_id, "agent", agent_id])
+    agents_key = redis_key(namespace, ["job", job_id, "agents"])
+
+    assert {:ok, -1} = Redix.command(MirrorNeuron.Redis.Connection, ["TTL", agent_key])
+    assert {:ok, -1} = Redix.command(MirrorNeuron.Redis.Connection, ["TTL", agents_key])
+
+    assert {:ok, _job} = RedisStore.persist_terminal_job(job_id, %{"status" => "completed"})
+
+    assert {:ok, agent_ttl} = Redix.command(MirrorNeuron.Redis.Connection, ["TTL", agent_key])
+    assert {:ok, agents_ttl} = Redix.command(MirrorNeuron.Redis.Connection, ["TTL", agents_key])
+    assert agent_ttl in 1..120
+    assert agents_ttl > 0
+
     RedisStore.delete_job(job_id)
   end
 
@@ -124,6 +281,160 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert fetched_version["job_id"] == "job-1"
     assert {:ok, [listed_version]} = RedisStore.list_job_versions(deployment_key)
     assert listed_version["stable"] == true
+  end
+
+  test "deployment key reassignment removes the previous ownership indexes", %{
+    namespace: namespace
+  } do
+    deployment_id = "reindexed-deployment-#{System.unique_integer([:positive])}"
+    old_key = "deployment-old"
+    new_key = "deployment-new"
+
+    assert {:ok, _deployment} =
+             RedisStore.persist_deployment(deployment_id, %{
+               "deployment_key" => old_key,
+               "status" => "running"
+             })
+
+    assert {:ok, _deployment} =
+             RedisStore.persist_deployment(deployment_id, %{
+               "deployment_key" => new_key,
+               "status" => "successful"
+             })
+
+    assert {:error, _reason} = RedisStore.fetch_deployment_by_key(old_key)
+
+    assert {:ok, %{"deployment_id" => ^deployment_id}} =
+             RedisStore.fetch_deployment_by_key(new_key)
+
+    assert {:ok, nil} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "GET",
+               redis_key(namespace, ["deployment", "key", old_key, "current"])
+             ])
+
+    assert {:ok, 0} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SISMEMBER",
+               redis_key(namespace, ["deployment", "key", old_key, "deployments"]),
+               deployment_id
+             ])
+  end
+
+  test "concurrent deployment updates leave exactly one current owner", %{namespace: namespace} do
+    deployment_id = "concurrent-deployment-#{System.unique_integer([:positive])}"
+    deployment_keys = ["concurrent-a", "concurrent-b"]
+
+    for _round <- 1..10 do
+      results =
+        deployment_keys
+        |> Task.async_stream(
+          fn deployment_key ->
+            RedisStore.persist_deployment(deployment_id, %{
+              "deployment_key" => deployment_key,
+              "status" => "running"
+            })
+          end,
+          max_concurrency: 2,
+          ordered: false,
+          timeout: 5_000
+        )
+        |> Enum.to_list()
+
+      assert Enum.all?(results, &match?({:ok, {:ok, _deployment}}, &1))
+      assert {:ok, winner} = RedisStore.fetch_deployment(deployment_id)
+
+      ownership =
+        Enum.map(deployment_keys, fn deployment_key ->
+          {:ok, current} =
+            Redix.command(MirrorNeuron.Redis.Connection, [
+              "GET",
+              redis_key(namespace, ["deployment", "key", deployment_key, "current"])
+            ])
+
+          {:ok, membership} =
+            Redix.command(MirrorNeuron.Redis.Connection, [
+              "SISMEMBER",
+              redis_key(namespace, ["deployment", "key", deployment_key, "deployments"]),
+              deployment_id
+            ])
+
+          {deployment_key, current, membership}
+        end)
+
+      assert Enum.count(ownership, fn {_key, current, member} ->
+               current == deployment_id and member == 1
+             end) == 1
+
+      assert {winner["deployment_key"], deployment_id, 1} in ownership
+    end
+  end
+
+  test "retention compacts missing deployment metadata and preserves corrupt records", %{
+    namespace: namespace
+  } do
+    suspend_retention()
+    missing_id = "missing-deployment-#{System.unique_integer([:positive])}"
+    corrupt_id = "corrupt-deployment-#{System.unique_integer([:positive])}"
+    missing_key = "missing-deployment-key"
+    corrupt_key = "corrupt-deployment-key"
+
+    for {deployment_id, deployment_key} <- [
+          {missing_id, missing_key},
+          {corrupt_id, corrupt_key}
+        ] do
+      assert {:ok, _deployment} =
+               RedisStore.persist_deployment(deployment_id, %{
+                 "deployment_key" => deployment_key,
+                 "status" => "successful"
+               })
+
+      assert {:ok, _version} =
+               RedisStore.persist_job_version(deployment_key, "1", %{"job_id" => "job-1"})
+    end
+
+    assert {:ok, 2} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "DEL",
+               redis_key(namespace, ["deployment", missing_id]),
+               redis_key(namespace, ["deployment", "key", missing_key, "version", "1"])
+             ])
+
+    assert {:ok, ["OK", "OK"]} =
+             Redix.pipeline(MirrorNeuron.Redis.Connection, [
+               [
+                 "SET",
+                 redis_key(namespace, ["deployment", corrupt_id]),
+                 "not-json"
+               ],
+               [
+                 "SET",
+                 redis_key(namespace, ["deployment", "key", corrupt_key, "version", "1"]),
+                 "not-json"
+               ]
+             ])
+
+    assert {:ok, result} = RedisStore.sweep_retention()
+    assert result.stale_deployments == [missing_id]
+    assert result.stale_deployment_count == 1
+    assert result.stale_deployment_version_count == 1
+
+    assert_deployment_membership(namespace, missing_id, missing_key, 0, nil)
+    assert_deployment_membership(namespace, corrupt_id, corrupt_key, 1, corrupt_id)
+
+    assert {:ok, 0} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SISMEMBER",
+               redis_key(namespace, ["deployment", "key", missing_key, "versions"]),
+               "1"
+             ])
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SISMEMBER",
+               redis_key(namespace, ["deployment", "key", corrupt_key, "versions"]),
+               "1"
+             ])
   end
 
   test "service discovery hides deployment candidates until promoted" do
@@ -265,6 +576,152 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert :ok = ServiceRegistry.deregister_job(job_id)
   end
 
+  test "re-registering a service replaces its ownership indexes", %{namespace: namespace} do
+    instance_id = "reindexed-service-#{System.unique_integer([:positive])}"
+
+    original = %{
+      "id" => instance_id,
+      "name" => "ollama-old",
+      "job_id" => "job-old",
+      "agent_id" => "agent-old",
+      "node" => "node-old@lab"
+    }
+
+    replacement = %{
+      "id" => instance_id,
+      "name" => "ollama-new",
+      "job_id" => "job-new",
+      "agent_id" => "agent-new",
+      "node" => "node-new@lab"
+    }
+
+    assert {:ok, _service} = ServiceRegistry.register(original)
+    assert {:ok, _service} = ServiceRegistry.register(replacement)
+
+    for {index, old_value, new_value} <- [
+          {"name", "ollama-old", "ollama-new"},
+          {"job", "job-old", "job-new"},
+          {"agent", "agent-old", "agent-new"},
+          {"node", "node-old@lab", "node-new@lab"}
+        ] do
+      assert {:ok, 0} =
+               Redix.command(MirrorNeuron.Redis.Connection, [
+                 "SISMEMBER",
+                 redis_key(namespace, ["service", index, old_value]),
+                 instance_id
+               ])
+
+      assert {:ok, 1} =
+               Redix.command(MirrorNeuron.Redis.Connection, [
+                 "SISMEMBER",
+                 redis_key(namespace, ["service", index, new_value]),
+                 instance_id
+               ])
+    end
+
+    assert :ok = ServiceRegistry.deregister_job("job-old")
+    assert {:ok, %{"job_id" => "job-new"}} = RedisStore.fetch_service_instance(instance_id)
+    assert :ok = ServiceRegistry.deregister_job("job-new")
+    assert {:error, _reason} = RedisStore.fetch_service_instance(instance_id)
+  end
+
+  test "concurrent service registration cannot leave stale ownership", %{namespace: namespace} do
+    instance_id = "concurrent-service-#{System.unique_integer([:positive])}"
+
+    services =
+      for suffix <- ["a", "b"] do
+        %{
+          "id" => instance_id,
+          "name" => "ollama-#{suffix}",
+          "job_id" => "job-#{suffix}",
+          "agent_id" => "agent-#{suffix}",
+          "node" => "node-#{suffix}@lab"
+        }
+      end
+
+    for _round <- 1..10 do
+      results =
+        services
+        |> Task.async_stream(&ServiceRegistry.register/1,
+          max_concurrency: 2,
+          ordered: false,
+          timeout: 5_000
+        )
+        |> Enum.to_list()
+
+      assert Enum.all?(results, &match?({:ok, {:ok, _service}}, &1))
+      assert {:ok, winner} = RedisStore.fetch_service_instance(instance_id)
+
+      ownership =
+        Enum.map(services, fn service ->
+          {:ok, membership} =
+            Redix.command(MirrorNeuron.Redis.Connection, [
+              "SISMEMBER",
+              redis_key(namespace, ["service", "job", service["job_id"]]),
+              instance_id
+            ])
+
+          {service["job_id"], membership}
+        end)
+
+      assert Enum.sum(Enum.map(ownership, &elem(&1, 1))) == 1
+      assert {winner["job_id"], 1} in ownership
+    end
+
+    assert :ok = ServiceRegistry.deregister_service(instance_id)
+  end
+
+  test "owner cleanup reclaims corrupt service records and every index", %{namespace: namespace} do
+    job_id = "corrupt-service-job-#{System.unique_integer([:positive])}"
+    instance_id = "#{job_id}:worker:ollama"
+
+    service = %{
+      "id" => instance_id,
+      "name" => "ollama",
+      "job_id" => job_id,
+      "agent_id" => "worker",
+      "node" => "gpu@lab"
+    }
+
+    assert {:ok, _service} = ServiceRegistry.register(service)
+
+    assert {:ok, "OK"} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SET",
+               redis_key(namespace, ["service", "instance", instance_id]),
+               "not-json"
+             ])
+
+    assert :ok = ServiceRegistry.deregister_job(job_id)
+    assert_service_instance_reclaimed(namespace, instance_id, service)
+  end
+
+  test "retention compacts indexes for missing service records", %{namespace: namespace} do
+    job_id = "missing-service-job-#{System.unique_integer([:positive])}"
+    instance_id = "#{job_id}:worker:ollama"
+
+    service = %{
+      "id" => instance_id,
+      "name" => "ollama",
+      "job_id" => job_id,
+      "agent_id" => "worker",
+      "node" => "gpu@lab"
+    }
+
+    assert {:ok, _service} = ServiceRegistry.register(service)
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "DEL",
+               redis_key(namespace, ["service", "instance", instance_id])
+             ])
+
+    assert {:ok, result} = RedisStore.sweep_retention()
+    assert result.stale_service_instances == [instance_id]
+    assert result.stale_service_instance_count == 1
+    assert_service_instance_reclaimed(namespace, instance_id, service)
+  end
+
   test "retention sweep deletes expired terminal jobs and stale job ids" do
     job_id = "terminal-retention-#{System.unique_integer([:positive])}"
     old_job_root = System.get_env("MN_JOB_ARTIFACT_ROOT")
@@ -297,6 +754,174 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     refute File.exists?(job_path)
   end
 
+  test "retention preserves terminal state when resource cleanup fails" do
+    job_id = "deferred-terminal-retention-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _job} =
+             RedisStore.persist_terminal_job(job_id, %{"status" => "completed"}, %{
+               "graph_id" => "deferred_retention",
+               "job_name" => "deferred retention"
+             })
+
+    assert {:ok, result} =
+             RedisStore.sweep_retention(
+               terminal_job_ttl_seconds: 0,
+               cleanup_job: fn ^job_id -> {:error, :resource_busy} end
+             )
+
+    refute job_id in result.deleted_jobs
+    assert {:ok, %{"status" => "completed"}} = RedisStore.fetch_job(job_id)
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "retention does not clean jobs whose persisted state is unreadable", %{
+    namespace: namespace
+  } do
+    job_id = "unreadable-retention-job-#{System.unique_integer([:positive])}"
+    parent = self()
+
+    assert {:ok, "OK"} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SET",
+               redis_key(namespace, ["job", job_id]),
+               "not-json"
+             ])
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SADD",
+               redis_key(namespace, ["jobs"]),
+               job_id
+             ])
+
+    assert {:ok, result} =
+             RedisStore.sweep_retention(
+               terminal_job_ttl_seconds: 0,
+               cleanup_job: fn cleanup_job_id, _job ->
+                 send(parent, {:cleanup_called, cleanup_job_id})
+                 :ok
+               end
+             )
+
+    refute_receive {:cleanup_called, ^job_id}
+    refute job_id in result.stale_job_ids
+
+    assert {:ok, "not-json"} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "GET",
+               redis_key(namespace, ["job", job_id])
+             ])
+  end
+
+  test "job deletion preserves its retry ledger when filesystem cleanup fails" do
+    job_id = "failed-resource-cleanup-#{System.unique_integer([:positive])}"
+    old_shared_root = System.get_env("MN_RUNTIME_SHARED_STORAGE_ROOT")
+    old_artifact_root = System.get_env("MN_JOB_ARTIFACT_ROOT")
+
+    test_root =
+      Path.join(System.tmp_dir!(), "mn_failed_cleanup_#{System.unique_integer([:positive])}")
+
+    shared_root = Path.join(test_root, "shared")
+    artifact_root = Path.join(test_root, "artifacts")
+    outside_submission = Path.join(test_root, "outside-submission")
+
+    File.mkdir_p!(shared_root)
+    File.mkdir_p!(outside_submission)
+    System.put_env("MN_RUNTIME_SHARED_STORAGE_ROOT", shared_root)
+    System.put_env("MN_JOB_ARTIFACT_ROOT", artifact_root)
+
+    on_exit(fn ->
+      case RedisStore.fetch_job(job_id) do
+        {:ok, job} ->
+          _ = RedisStore.persist_job(job_id, Map.put(job, "manifest", %{}))
+          _ = RedisStore.delete_job(job_id)
+
+        _other ->
+          :ok
+      end
+
+      restore_system_env("MN_RUNTIME_SHARED_STORAGE_ROOT", old_shared_root)
+      restore_system_env("MN_JOB_ARTIFACT_ROOT", old_artifact_root)
+      File.rm_rf(test_root)
+    end)
+
+    assert {:ok, artifact_path} = JobStore.ensure_job_dir(job_id)
+    File.write!(Path.join(artifact_path, "result.txt"), "retain until cleanup succeeds")
+
+    assert {:ok, _job} =
+             RedisStore.persist_terminal_job(job_id, %{
+               "status" => "completed",
+               "manifest" => %{
+                 "metadata" => %{
+                   "mn_storage" => %{"submission_path" => outside_submission}
+                 }
+               }
+             })
+
+    assert {:error, reason} = RedisStore.delete_job(job_id)
+    assert reason =~ "outside shared storage root"
+    assert {:ok, %{"status" => "completed"}} = RedisStore.fetch_job(job_id)
+    assert File.exists?(Path.join(artifact_path, "result.txt"))
+
+    assert {:ok, job} = RedisStore.fetch_job(job_id)
+    assert {:ok, _job} = RedisStore.persist_job(job_id, Map.put(job, "manifest", %{}))
+    assert :ok = RedisStore.delete_job(job_id)
+    assert {:error, _reason} = RedisStore.fetch_job(job_id)
+    refute File.exists?(artifact_path)
+  end
+
+  test "retention retries sandbox cleanup on disconnected persisted placement nodes" do
+    job_id = "disconnected-sandbox-retention-#{System.unique_integer([:positive])}"
+    remote_node = :"cleanup-worker@lab"
+    old_adapter = Application.get_env(:mirror_neuron, :cluster_node_adapter)
+
+    assert {:ok, job} =
+             RedisStore.persist_terminal_job(job_id, %{
+               "status" => "completed",
+               "scheduler" => %{
+                 "placements" => [%{"agent_id" => "worker", "node" => to_string(remote_node)}]
+               }
+             })
+
+    CleanupNodeAdapterStub.reset(self())
+    Application.put_env(:mirror_neuron, :cluster_node_adapter, CleanupNodeAdapterStub)
+
+    on_exit(fn ->
+      restore_env(:cluster_node_adapter, old_adapter)
+      RedisStore.delete_job(job_id)
+    end)
+
+    assert {:error, failures} = Runtime.cleanup_job_sandboxes(job_id, job)
+    assert Enum.map(failures, & &1.node) == [to_string(remote_node), to_string(remote_node)]
+
+    assert_receive {:cleanup_rpc, ^remote_node, MirrorNeuron.Sandbox.OpenShellJobSandbox,
+                    :cleanup_job_local, [^job_id], 15_000}
+
+    assert_receive {:cleanup_rpc, ^remote_node, MirrorNeuron.Sandbox.DockerJobSandbox,
+                    :cleanup_job_local, [^job_id], 15_000}
+
+    assert {:ok, deferred} =
+             RedisStore.sweep_retention(
+               terminal_job_ttl_seconds: 0,
+               cleanup_job: &Runtime.cleanup_job_sandboxes/2
+             )
+
+    refute job_id in deferred.deleted_jobs
+    assert {:ok, %{"status" => "completed"}} = RedisStore.fetch_job(job_id)
+
+    CleanupNodeAdapterStub.put_remote_result(:ok)
+
+    assert {:ok, reclaimed} =
+             RedisStore.sweep_retention(
+               terminal_job_ttl_seconds: 0,
+               cleanup_job: &Runtime.cleanup_job_sandboxes/2
+             )
+
+    assert job_id in reclaimed.deleted_jobs
+    assert {:error, _reason} = RedisStore.fetch_job(job_id)
+  end
+
   test "register_blob_ref persists shared filesystem locations without urls" do
     sha256 = String.duplicate("d", 64)
     path = Path.join(binary_part(sha256, 0, 2), sha256)
@@ -321,6 +946,170 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
 
     assert {:ok, fetched} = RedisStore.fetch_blob_ref(sha256)
     assert [%{"storage" => "shared_fs", "path" => ^path}] = fetched["locations"]
+  end
+
+  test "blob listing and retention compact expired metadata indexes", %{namespace: namespace} do
+    active_sha = String.duplicate("a", 64)
+    listed_stale_sha = String.duplicate("b", 64)
+    swept_stale_sha = String.duplicate("c", 64)
+
+    assert {:ok, _blob} =
+             RedisStore.register_blob_ref(%{
+               "sha256" => active_sha,
+               "locations" => [%{"storage" => "shared_fs", "path" => "aa/#{active_sha}"}]
+             })
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SADD",
+               redis_key(namespace, ["blobs"]),
+               listed_stale_sha
+             ])
+
+    assert {:ok, [%{"sha256" => ^active_sha}]} = RedisStore.list_blob_refs()
+
+    assert {:ok, 0} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SISMEMBER",
+               redis_key(namespace, ["blobs"]),
+               listed_stale_sha
+             ])
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SADD",
+               redis_key(namespace, ["blobs"]),
+               swept_stale_sha
+             ])
+
+    assert {:ok, result} = RedisStore.sweep_retention()
+    assert result.stale_blob_refs == [swept_stale_sha]
+    assert result.stale_blob_ref_count == 1
+
+    assert {:ok, 0} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SISMEMBER",
+               redis_key(namespace, ["blobs"]),
+               swept_stale_sha
+             ])
+  end
+
+  test "retention rebuilds blob metadata still referenced by a persisted job", %{
+    namespace: namespace
+  } do
+    job_id = "blob-retention-job-#{System.unique_integer([:positive])}"
+    sha256 = String.duplicate("d", 64)
+
+    ref = %{
+      "type" => "blob_ref",
+      "sha256" => sha256,
+      "payload_path" => "inputs/document.txt",
+      "locations" => [%{"storage" => "shared_fs", "path" => "dd/#{sha256}"}]
+    }
+
+    assert {:ok, _blob} = RedisStore.register_blob_ref(ref)
+
+    assert {:ok, _job} =
+             RedisStore.persist_job(job_id, %{
+               "job_id" => job_id,
+               "status" => "running",
+               "recovery_status" => "paused_for_review",
+               "recovery_requires_review" => true,
+               "manifest" => %{"metadata" => %{"blob_refs" => [ref]}},
+               "updated_at" => MirrorNeuron.Runtime.timestamp()
+             })
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "DEL",
+               redis_key(namespace, ["blob", sha256])
+             ])
+
+    assert {:error, _reason} = RedisStore.fetch_blob_ref(sha256)
+    assert {:ok, _result} = RedisStore.sweep_retention()
+    assert {:ok, %{"sha256" => ^sha256}} = RedisStore.fetch_blob_ref(sha256)
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "durable records discover and refresh every referenced bundle archive", %{
+    namespace: namespace
+  } do
+    Application.put_env(:mirror_neuron, :bundle_archive_ttl_seconds, 120)
+
+    job_id = "bundle-ref-job-#{System.unique_integer([:positive])}"
+    schedule_id = "bundle-ref-schedule-#{System.unique_integer([:positive])}"
+    deployment_key = "bundle-ref-deployment-#{System.unique_integer([:positive])}"
+    job_fingerprint = String.duplicate("a", 64)
+    schedule_fingerprint = String.duplicate("b", 64)
+    version_fingerprint = String.duplicate("c", 64)
+    fingerprints = [job_fingerprint, schedule_fingerprint, version_fingerprint]
+
+    on_exit(fn ->
+      RedisStore.delete_job(job_id)
+      RedisStore.delete_schedule(schedule_id)
+    end)
+
+    for fingerprint <- fingerprints do
+      assert {:ok, _archive} =
+               RedisStore.persist_bundle_archive(fingerprint, %{
+                 "graph_id" => "bundle-reference-test",
+                 "files" => []
+               })
+    end
+
+    assert {:ok, _job} =
+             RedisStore.persist_job(job_id, %{
+               "job_id" => job_id,
+               "status" => "running",
+               "manifest_ref" => %{"bundle_fingerprint" => job_fingerprint},
+               "updated_at" => MirrorNeuron.Runtime.timestamp()
+             })
+
+    assert {:ok, _schedule} =
+             RedisStore.persist_schedule(schedule_id, %{
+               "kind" => "event",
+               "status" => "active",
+               "enabled" => true,
+               "bundle_ref" => %{"bundle_fingerprint" => schedule_fingerprint}
+             })
+
+    assert {:ok, _version} =
+             RedisStore.persist_job_version(deployment_key, "1", %{
+               "manifest_ref" => %{"bundle_fingerprint" => version_fingerprint}
+             })
+
+    assert {:ok, ^fingerprints} = RedisStore.referenced_bundle_fingerprints()
+
+    for fingerprint <- fingerprints do
+      archive_key = redis_key(namespace, ["bundle", fingerprint])
+      assert {:ok, 1} = Redix.command(MirrorNeuron.Redis.Connection, ["EXPIRE", archive_key, "1"])
+      assert :ok = RedisStore.refresh_bundle_archive(fingerprint)
+      assert {:ok, ttl} = Redix.command(MirrorNeuron.Redis.Connection, ["TTL", archive_key])
+      assert ttl == -1
+    end
+
+    assert :ok = RedisStore.delete_job(job_id)
+    assert :ok = RedisStore.delete_schedule(schedule_id)
+
+    assert {:ok, 2} =
+             RedisStore.expire_unreferenced_bundle_archives([version_fingerprint])
+
+    for fingerprint <- [job_fingerprint, schedule_fingerprint] do
+      assert {:ok, ttl} =
+               Redix.command(MirrorNeuron.Redis.Connection, [
+                 "TTL",
+                 redis_key(namespace, ["bundle", fingerprint])
+               ])
+
+      assert ttl in 100..120
+    end
+
+    assert {:ok, -1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "TTL",
+               redis_key(namespace, ["bundle", version_fingerprint])
+             ])
   end
 
   test "recovery evals can be listed by active status" do
@@ -503,6 +1292,48 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
                  eval_id
                ])
     end
+  end
+
+  test "retention preserves unreadable recovery evals for explicit repair", %{
+    namespace: namespace
+  } do
+    eval_id = "unreadable-eval-#{System.unique_integer([:positive])}"
+    recovery = Process.whereis(MirrorNeuron.Runtime.LocalRecovery)
+
+    if recovery, do: :sys.suspend(recovery)
+
+    on_exit(fn ->
+      if recovery && Process.alive?(recovery), do: :sys.resume(recovery)
+    end)
+
+    assert {:ok, "OK"} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SET",
+               redis_key(namespace, ["recovery", "eval", eval_id]),
+               "not-json"
+             ])
+
+    for key_parts <- [
+          ["recovery", "evals"],
+          ["recovery", "evals", "status", "complete"]
+        ] do
+      assert {:ok, 1} =
+               Redix.command(MirrorNeuron.Redis.Connection, [
+                 "SADD",
+                 redis_key(namespace, key_parts),
+                 eval_id
+               ])
+    end
+
+    assert {:ok, result} = RedisStore.sweep_retention()
+    refute eval_id in result.stale_recovery_evals
+    refute eval_id in result.deleted_recovery_evals
+
+    assert {:ok, "not-json"} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "GET",
+               redis_key(namespace, ["recovery", "eval", eval_id])
+             ])
   end
 
   test "repair_recovery_indexes makes orphaned checkpoints discoverable and removes stale index entries",
@@ -801,6 +1632,196 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert :ok = RedisStore.release_fenced_lease(lease_name, "node-a", lease["epoch"])
   end
 
+  test "fenced schedule writes reject an expired state owner and deletion reclaims leases", %{
+    namespace: namespace
+  } do
+    schedule_id = "fenced-schedule-#{System.unique_integer([:positive])}"
+    lease_name = "schedule:#{schedule_id}:state"
+    dispatch_lease_name = "schedule:#{schedule_id}:dispatch-token"
+
+    assert {:ok, _schedule} =
+             RedisStore.persist_schedule(schedule_id, %{
+               "kind" => "event",
+               "status" => "active",
+               "enabled" => true,
+               "marker" => "initial"
+             })
+
+    assert {:ok, first_lease} = RedisStore.acquire_fenced_lease(lease_name, "owner-a", 20)
+    Process.sleep(30)
+    assert {:ok, second_lease} = RedisStore.acquire_fenced_lease(lease_name, "owner-b", 1_000)
+
+    assert {:ok, dispatch_lease} =
+             RedisStore.acquire_fenced_lease(dispatch_lease_name, "dispatcher", 1_000)
+
+    assert :ok =
+             RedisStore.release_fenced_lease(
+               dispatch_lease_name,
+               "dispatcher",
+               dispatch_lease["epoch"]
+             )
+
+    assert {:error, :not_owner} =
+             RedisStore.persist_schedule_fenced(
+               schedule_id,
+               %{"marker" => "stale"},
+               lease_name,
+               "owner-a",
+               first_lease["epoch"]
+             )
+
+    assert {:ok, _schedule} =
+             RedisStore.persist_schedule_fenced(
+               schedule_id,
+               %{"marker" => "current"},
+               lease_name,
+               "owner-b",
+               second_lease["epoch"]
+             )
+
+    assert {:ok, %{"marker" => "current"}} = RedisStore.fetch_schedule(schedule_id)
+
+    assert {:error, :not_owner} =
+             RedisStore.delete_schedule_fenced(
+               schedule_id,
+               lease_name,
+               "owner-a",
+               first_lease["epoch"]
+             )
+
+    assert :ok =
+             RedisStore.delete_schedule_fenced(
+               schedule_id,
+               lease_name,
+               "owner-b",
+               second_lease["epoch"]
+             )
+
+    assert {:error, :not_owner} =
+             RedisStore.release_fenced_lease(lease_name, "owner-b", second_lease["epoch"])
+
+    assert {:ok, []} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "KEYS",
+               redis_key(namespace, ["lease", "schedule:#{schedule_id}:*"])
+             ])
+  end
+
+  test "retention reclaims missing schedule indexes and leases but preserves corrupt records", %{
+    namespace: namespace
+  } do
+    suspend_retention()
+    missing_id = "missing-schedule-#{System.unique_integer([:positive])}"
+    corrupt_id = "corrupt-schedule-#{System.unique_integer([:positive])}"
+
+    schedule = %{
+      "kind" => "delayed",
+      "status" => "active",
+      "enabled" => true,
+      "next_run_at" => "2030-01-01T00:00:00Z"
+    }
+
+    assert {:ok, _schedule} = RedisStore.persist_schedule(missing_id, schedule)
+    assert {:ok, _schedule} = RedisStore.persist_schedule(corrupt_id, schedule)
+
+    assert {:ok, _lease} =
+             RedisStore.acquire_fenced_lease("schedule:#{missing_id}:state", "owner", 5_000)
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "DEL",
+               redis_key(namespace, ["schedule", missing_id])
+             ])
+
+    assert {:ok, "OK"} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SET",
+               redis_key(namespace, ["schedule", corrupt_id]),
+               "not-json"
+             ])
+
+    assert {:ok, result} = RedisStore.sweep_retention()
+    assert result.stale_schedules == [missing_id]
+    assert result.stale_schedule_count == 1
+
+    assert {:ok, 0} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SISMEMBER",
+               redis_key(namespace, ["schedules"]),
+               missing_id
+             ])
+
+    assert {:ok, nil} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "ZSCORE",
+               redis_key(namespace, ["schedule", "due"]),
+               missing_id
+             ])
+
+    assert {:ok, []} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "KEYS",
+               redis_key(namespace, ["lease", "schedule:#{missing_id}:*"])
+             ])
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SISMEMBER",
+               redis_key(namespace, ["schedules"]),
+               corrupt_id
+             ])
+
+    assert {:ok, score} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "ZSCORE",
+               redis_key(namespace, ["schedule", "due"]),
+               corrupt_id
+             ])
+
+    assert is_binary(score)
+  end
+
+  test "job deletion reclaims fenced lease epochs", %{namespace: namespace} do
+    job_id = "lease-cleanup-job-#{System.unique_integer([:positive])}"
+    lease_name = "job:#{job_id}"
+
+    assert {:ok, lease} = RedisStore.acquire_fenced_lease(lease_name, "runtime", 1_000)
+    assert :ok = RedisStore.release_fenced_lease(lease_name, "runtime", lease["epoch"])
+
+    assert {:ok, [_epoch_key]} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "KEYS",
+               redis_key(namespace, ["lease", "job:#{job_id}*"])
+             ])
+
+    assert :ok = RedisStore.delete_job(job_id)
+
+    assert {:ok, []} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "KEYS",
+               redis_key(namespace, ["lease", "job:#{job_id}*"])
+             ])
+  end
+
+  test "ephemeral fenced lease release removes its epoch", %{namespace: namespace} do
+    lease_name = "ephemeral-#{System.unique_integer([:positive])}"
+
+    assert {:ok, lease} = RedisStore.acquire_fenced_lease(lease_name, "dispatcher", 1_000)
+
+    assert :ok =
+             RedisStore.release_ephemeral_fenced_lease(
+               lease_name,
+               "dispatcher",
+               lease["epoch"]
+             )
+
+    assert {:ok, []} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "KEYS",
+               redis_key(namespace, ["lease", "#{lease_name}*"])
+             ])
+  end
+
   test "durable write acknowledgement reports timeout when not enough replicas are available" do
     required_replicas = 99
     Application.put_env(:mirror_neuron, :redis_wait_replicas, required_replicas)
@@ -847,6 +1868,45 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
 
     assert {:ok, states} = RedisStore.list_node_states()
     assert Enum.any?(states, &(&1["node"] == "node-a@test"))
+  end
+
+  test "node state listing compacts missing indexes but preserves unreadable state", %{
+    namespace: namespace
+  } do
+    missing_node = "missing-node@test"
+    corrupt_node = "corrupt-node@test"
+
+    assert {:ok, 2} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SADD",
+               redis_key(namespace, ["nodes"]),
+               missing_node,
+               corrupt_node
+             ])
+
+    assert {:ok, "OK"} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SET",
+               redis_key(namespace, ["node", corrupt_node, "state"]),
+               "not-json"
+             ])
+
+    assert {:ok, states} = RedisStore.list_node_states()
+    refute Enum.any?(states, &(&1["node"] in [missing_node, corrupt_node]))
+
+    assert {:ok, 0} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SISMEMBER",
+               redis_key(namespace, ["nodes"]),
+               missing_node
+             ])
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SISMEMBER",
+               redis_key(namespace, ["nodes"]),
+               corrupt_node
+             ])
   end
 
   test "recovery evals can be persisted, listed, and updated" do
@@ -932,6 +1992,73 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
   defp restore_system_env(key, nil), do: System.delete_env(key)
   defp restore_system_env(key, value), do: System.put_env(key, value)
   defp redis_key(namespace, parts), do: Enum.join([namespace | parts], ":")
+
+  defp suspend_retention do
+    case Process.whereis(MirrorNeuron.Persistence.Retention) do
+      retention when is_pid(retention) ->
+        :sys.suspend(retention)
+
+        on_exit(fn ->
+          if Process.alive?(retention), do: :sys.resume(retention)
+        end)
+
+      nil ->
+        :ok
+    end
+  end
+
+  defp assert_service_instance_reclaimed(namespace, instance_id, service) do
+    keys = [
+      redis_key(namespace, ["service", "instances"]),
+      redis_key(namespace, ["service", "name", service["name"]]),
+      redis_key(namespace, ["service", "job", service["job_id"]]),
+      redis_key(namespace, ["service", "agent", service["agent_id"]]),
+      redis_key(namespace, ["service", "node", service["node"]])
+    ]
+
+    assert {:ok, nil} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "GET",
+               redis_key(namespace, ["service", "instance", instance_id])
+             ])
+
+    for index_key <- keys do
+      assert {:ok, 0} =
+               Redix.command(MirrorNeuron.Redis.Connection, [
+                 "SISMEMBER",
+                 index_key,
+                 instance_id
+               ])
+    end
+  end
+
+  defp assert_deployment_membership(
+         namespace,
+         deployment_id,
+         deployment_key,
+         expected_membership,
+         expected_current
+       ) do
+    assert {:ok, ^expected_membership} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SISMEMBER",
+               redis_key(namespace, ["deployments"]),
+               deployment_id
+             ])
+
+    assert {:ok, ^expected_membership} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SISMEMBER",
+               redis_key(namespace, ["deployment", "key", deployment_key, "deployments"]),
+               deployment_id
+             ])
+
+    assert {:ok, ^expected_current} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "GET",
+               redis_key(namespace, ["deployment", "key", deployment_key, "current"])
+             ])
+  end
 
   defp cleanup_namespace(namespace) do
     case Redix.command(MirrorNeuron.Redis.Connection, ["KEYS", "#{namespace}:*"]) do

@@ -109,6 +109,35 @@ defmodule MirrorNeuron.Runtime.ReliabilityObserverTest do
     assert get_in(persisted, ["reliability", "degraded"]) == true
   end
 
+  test "forgets reliability state after jobs become terminal" do
+    job = cluster_recovery_job("observer-terminal-job")
+    RedisStoreStub.put_jobs([job])
+
+    {:ok, observer} =
+      ReliabilityObserver.start_link(
+        name: unique_name(),
+        schedule_initial_tick: false,
+        interval_ms: 60_000,
+        snapshot: &snapshot/0,
+        redis_store: RedisStoreStub,
+        event_bus: EventBusStub
+      )
+
+    set_snapshot(single_node_snapshot())
+    send(observer, :tick)
+
+    assert_receive {:event_published, "observer-terminal-job", %{type: :job_reliability_degraded}}
+
+    assert :sys.get_state(observer).job_statuses == %{
+             "observer-terminal-job" => :degraded
+           }
+
+    RedisStoreStub.put_jobs([Map.put(job, "status", "completed")])
+    send(observer, :tick)
+
+    assert :sys.get_state(observer).job_statuses == %{}
+  end
+
   defp cluster_recovery_job(job_id) do
     manifest = manifest_map()
 

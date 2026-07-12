@@ -377,6 +377,102 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     assert Enum.any?(calls, &(Enum.take(&1, 2) == ["rm", "-f"]))
   end
 
+  test "cleanup discovers orphaned shared containers by job labels", %{tmp_dir: tmp_dir} do
+    fake_docker = Path.join(tmp_dir, "fake-docker-orphan-cleanup")
+    args_log = Path.join(tmp_dir, "orphan-cleanup-args.log")
+    orphan_id = String.duplicate("a", 64)
+
+    File.write!(fake_docker, """
+    #!/usr/bin/env bash
+    printf '%s\n' "$@" >> #{args_log}
+    printf -- '---\n' >> #{args_log}
+    if [ "$1" = "ps" ]; then
+      echo "#{orphan_id}"
+      exit 0
+    fi
+    if [ "$1" = "rm" ] && [ "$2" = "-f" ] && [ "$3" = "#{orphan_id}" ]; then
+      exit 0
+    fi
+    if [ "$1" = "rm" ] && [ "$2" = "-f" ]; then
+      echo "No such container" >&2
+      exit 1
+    fi
+    exit 0
+    """)
+
+    File.chmod!(fake_docker, 0o755)
+
+    assert :ok =
+             DockerJobSandbox.cleanup_job_local(
+               "job-orphan-cleanup",
+               %{
+                 "docker_bin" => fake_docker,
+                 "docker_shared_container_prefix" => "new-prefix"
+               }
+             )
+
+    calls = docker_calls(args_log)
+
+    assert Enum.any?(calls, fn call ->
+             List.first(call) == "ps" and
+               "label=mirror-neuron.kind=docker_worker" in call and
+               "label=mirror-neuron.job_id=job-orphan-cleanup" in call
+           end)
+
+    assert Enum.any?(calls, &(&1 == ["rm", "-f", orphan_id]))
+  end
+
+  test "failed shared-container cleanup retains its owner for retry", %{tmp_dir: tmp_dir} do
+    fake_docker = Path.join(tmp_dir, "fake-docker-cleanup-retry")
+    allow_remove = Path.join(tmp_dir, "allow-remove")
+    job_id = "job-cleanup-retry"
+
+    File.write!(fake_docker, """
+    #!/usr/bin/env bash
+    if [ "$1" = "inspect" ]; then
+      echo "No such container" >&2
+      exit 1
+    fi
+    if [ "$1" = "run" ]; then
+      echo "container-id"
+      exit 0
+    fi
+    if [ "$1" = "ps" ]; then
+      exit 0
+    fi
+    if [ "$1" = "rm" ] && [ "$2" = "-f" ]; then
+      if [ -f "#{allow_remove}" ]; then
+        exit 0
+      fi
+      echo "container is busy" >&2
+      exit 9
+    fi
+    exit 0
+    """)
+
+    File.chmod!(fake_docker, 0o755)
+    config = %{"docker_bin" => fake_docker}
+
+    on_exit(fn ->
+      File.touch!(allow_remove)
+      DockerJobSandbox.cleanup_job_local(job_id, config)
+    end)
+
+    assert {:ok, _sandbox} =
+             DockerJobSandbox.ensure(job_id, "example/worker:latest", config)
+
+    assert [{owner, _meta}] =
+             Registry.lookup(MirrorNeuron.Sandbox.Registry, {:docker_worker, job_id})
+
+    assert {:error, _reason} = DockerJobSandbox.cleanup_job_local(job_id, config)
+    assert Process.alive?(owner)
+    assert :sys.get_state(owner).cleanup_required? == true
+
+    File.touch!(allow_remove)
+    assert :ok = DockerJobSandbox.cleanup_job_local(job_id, config)
+    refute Process.alive?(owner)
+  end
+
   test "emits compact lifecycle events when docker worker image build fails", %{tmp_dir: tmp_dir} do
     fake_docker = Path.join(tmp_dir, "fake-docker-build-fails")
     payloads_dir = Path.join(tmp_dir, "payloads")

@@ -30,8 +30,14 @@ defmodule MirrorNeuron.Persistence.RedisForwardingTest do
     def rpc_call(node, module, function, args, timeout) do
       send(Process.whereis(@test_pid_name), {:rpc_call, node, module, function, args, timeout})
 
-      :persistent_term.get({__MODULE__, :rpc_results}, %{})
-      |> Map.get({node, module, function, args}, {:badrpc, :unexpected_call})
+      result =
+        :persistent_term.get({__MODULE__, :rpc_results}, %{})
+        |> Map.get({node, module, function, args}, {:badrpc, :unexpected_call})
+
+      case result do
+        {:raise, message} -> raise message
+        result -> result
+      end
     end
   end
 
@@ -190,6 +196,23 @@ defmodule MirrorNeuron.Persistence.RedisForwardingTest do
 
     assert_receive {:rpc_call, ^primary, MirrorNeuron.Grpc.NetworkOnly, :enabled?, [], 1_000}
     assert_receive {:rpc_call, ^primary, RedisStore, :redis_command_from_peer, [^command], 5_000}
+  end
+
+  test "adapter exceptions during primary discovery fall back to local Redis" do
+    primary = :primary@lab
+    ClusterNodeAdapterStub.put_list([primary])
+
+    ClusterNodeAdapterStub.put_rpc_result(
+      primary,
+      MirrorNeuron.Grpc.NetworkOnly,
+      :enabled?,
+      [],
+      {:raise, "adapter unavailable"}
+    )
+
+    assert {:error, reason} = RedisStore.fetch_job("missing-after-adapter-error")
+    assert reason =~ "was not found"
+    assert_receive {:rpc_call, ^primary, MirrorNeuron.Grpc.NetworkOnly, :enabled?, [], 1_000}
   end
 
   defp restore_env(key, nil), do: Application.delete_env(:mirror_neuron, key)

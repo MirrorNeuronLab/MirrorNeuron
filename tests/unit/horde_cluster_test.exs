@@ -1,5 +1,5 @@
 defmodule MirrorNeuron.Runtime.HordeClusterTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias MirrorNeuron.Runtime.HordeCluster
 
@@ -44,5 +44,23 @@ defmodule MirrorNeuron.Runtime.HordeClusterTest do
              {MyHorde, :node_a},
              {MyHorde, :node_b}
            ]
+  end
+
+  test "refreshes periodically and coalesces node events into one timer" do
+    state = %{enabled: true, refresh_ms: 10_000, refresh_timer_ref: nil}
+
+    assert {:noreply, refreshed} = HordeCluster.handle_info(:refresh, state)
+    first_ref = refreshed.refresh_timer_ref
+    assert is_integer(Process.read_timer(first_ref))
+
+    assert {:noreply, coalesced} =
+             HordeCluster.handle_info({:nodeup, :"runtime@127.0.0.2"}, refreshed)
+
+    second_ref = coalesced.refresh_timer_ref
+    refute second_ref == first_ref
+    assert Process.read_timer(first_ref) == false
+    assert is_integer(Process.read_timer(second_ref))
+
+    Process.cancel_timer(second_ref)
   end
 end

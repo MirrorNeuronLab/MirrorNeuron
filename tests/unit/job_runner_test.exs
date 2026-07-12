@@ -1,6 +1,8 @@
 defmodule MirrorNeuron.Runtime.JobRunnerTest do
   use ExUnit.Case, async: false
 
+  alias MirrorNeuron.JobBundle
+  alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime.JobRunner
 
   setup do
@@ -66,6 +68,50 @@ defmodule MirrorNeuron.Runtime.JobRunnerTest do
 
     assert JobRunner.lease_duration_ms() == 60_000
     assert JobRunner.lease_renew_interval_ms() == 10_000
+  end
+
+  test "runner termination stops its coordinator even for a normal shutdown" do
+    coordinator = spawn(fn -> Process.sleep(:infinity) end)
+    monitor = Process.monitor(coordinator)
+
+    assert :ok =
+             JobRunner.terminate(:normal, %{
+               job_id: "terminate-#{System.unique_integer([:positive])}",
+               coordinator: coordinator,
+               node_name: to_string(Node.self()),
+               lease: %{"epoch" => 1}
+             })
+
+    assert_receive {:DOWN, ^monitor, :process, ^coordinator, :shutdown}
+  end
+
+  test "failed coordinator startup releases the acquired job lease" do
+    job_id = "runner-start-failure-#{System.unique_integer([:positive])}"
+
+    on_exit(fn ->
+      Horde.Registry.unregister(MirrorNeuron.DistributedRegistry, {:job, job_id})
+      RedisStore.delete_job(job_id)
+    end)
+
+    assert {:ok, _registration} =
+             Horde.Registry.register(MirrorNeuron.DistributedRegistry, {:job, job_id}, nil)
+
+    assert {:ok, bundle} =
+             JobBundle.load(%{
+               "manifest_version" => "1.0",
+               "graph_id" => "runner_start_failure",
+               "entrypoints" => ["root"],
+               "flow" => %{
+                 "nodes" => [%{"node_id" => "root", "agent_type" => "router"}],
+                 "edges" => []
+               }
+             })
+
+    assert {:stop, {:already_started, _pid}} = JobRunner.init({job_id, bundle.manifest, []})
+    assert {:ok, nil} = RedisStore.get_lease("job:#{job_id}")
+
+    assert {:ok, %{"lease" => nil, "lease_epoch" => nil, "lease_owner" => nil}} =
+             RedisStore.fetch_job(job_id)
   end
 
   defp restore_system_env(key, nil), do: System.delete_env(key)

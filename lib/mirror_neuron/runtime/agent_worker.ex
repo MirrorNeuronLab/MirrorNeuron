@@ -903,7 +903,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
 
   defp decode_local_state(encoded) when is_binary(encoded) do
     with {:ok, binary} <- Base.decode64(encoded) do
-      {:ok, :erlang.binary_to_term(binary)}
+      {:ok, :erlang.binary_to_term(binary, [:safe])}
     else
       _ -> :error
     end

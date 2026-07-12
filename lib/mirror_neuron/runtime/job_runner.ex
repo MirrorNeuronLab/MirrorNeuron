@@ -60,9 +60,22 @@ defmodule MirrorNeuron.Runtime.JobRunner do
     node_name = to_string(Node.self())
     opts = put_bundle_ref(opts, manifest)
 
-    with {:ok, lease} <- acquire_job_lease(lease_name, node_name),
-         opts <- Keyword.put(opts, :job_lease, lease),
-         :ok <- persist_lease_owner(job_id, manifest, opts, lease),
+    case acquire_job_lease(lease_name, node_name) do
+      {:ok, lease} ->
+        start_coordinator_with_lease(job_id, manifest, opts, node_name, lease)
+
+      {:error, {:locked, _owner}} ->
+        {:stop, :normal}
+
+      {:error, reason} ->
+        fail_runner_start(job_id, manifest, opts, nil, reason)
+    end
+  end
+
+  defp start_coordinator_with_lease(job_id, manifest, opts, node_name, lease) do
+    opts = Keyword.put(opts, :job_lease, lease)
+
+    with :ok <- persist_lease_owner(job_id, manifest, opts, lease),
          {:ok, pid} <- JobCoordinator.start_link({job_id, manifest, opts}) do
       schedule_lease_renewal()
 
@@ -79,24 +92,27 @@ defmodule MirrorNeuron.Runtime.JobRunner do
          lease_failures: 0
        }}
     else
-      {:error, {:locked, _owner}} ->
-        {:stop, :normal}
-
       {:error, reason} ->
-        Logger.warning("failed to start job coordinator for #{job_id}: #{inspect(reason)}")
-
-        persist_runner_failure(
-          job_id,
-          manifest,
-          Keyword.get(opts, :job_bundle),
-          Keyword.get(opts, :bundle_ref),
-          nil,
-          opts,
-          reason
-        )
-
-        {:stop, reason}
+        release_job_lease(job_id, node_name, lease)
+        fail_runner_start(job_id, manifest, opts, lease, reason, clear_lease?: true)
     end
+  end
+
+  defp fail_runner_start(job_id, manifest, opts, lease, reason, failure_opts \\ []) do
+    Logger.warning("failed to start job coordinator for #{job_id}: #{inspect(reason)}")
+
+    persist_runner_failure(
+      job_id,
+      manifest,
+      Keyword.get(opts, :job_bundle),
+      Keyword.get(opts, :bundle_ref),
+      lease,
+      opts,
+      reason,
+      failure_opts
+    )
+
+    {:stop, reason}
   end
 
   @impl true
@@ -149,9 +165,48 @@ defmodule MirrorNeuron.Runtime.JobRunner do
 
   @impl true
   def terminate(_reason, state) do
-    lease_name = "job:#{state.job_id}"
-    _ = RedisStore.release_fenced_lease(lease_name, state.node_name, state.lease["epoch"])
+    stop_coordinator(state.coordinator)
+    release_job_lease(state.job_id, state.node_name, state.lease)
     :ok
+  end
+
+  defp stop_coordinator(pid) when is_pid(pid) do
+    monitor = Process.monitor(pid)
+
+    if Process.alive?(pid) do
+      Process.exit(pid, :shutdown)
+    end
+
+    receive do
+      {:DOWN, ^monitor, :process, ^pid, _reason} -> :ok
+    after
+      5_000 ->
+        Process.exit(pid, :kill)
+
+        receive do
+          {:DOWN, ^monitor, :process, ^pid, _reason} -> :ok
+        after
+          1_000 -> Process.demonitor(monitor, [:flush])
+        end
+    end
+
+    :ok
+  end
+
+  defp stop_coordinator(_pid), do: :ok
+
+  defp release_job_lease(job_id, node_name, lease) do
+    case RedisStore.release_fenced_lease("job:#{job_id}", node_name, lease["epoch"]) do
+      :ok ->
+        :ok
+
+      {:error, :not_owner} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("failed to release lease for job #{job_id}: #{inspect(reason)}")
+        :ok
+    end
   end
 
   defp classify_coordinator_exit(state, reason) do
@@ -292,7 +347,16 @@ defmodule MirrorNeuron.Runtime.JobRunner do
     end
   end
 
-  defp persist_runner_failure(job_id, manifest, bundle, manifest_ref, lease, opts, reason) do
+  defp persist_runner_failure(
+         job_id,
+         manifest,
+         bundle,
+         manifest_ref,
+         lease,
+         opts,
+         reason,
+         failure_opts \\ []
+       ) do
     reliability = reliability_from(manifest, opts)
 
     error =
@@ -324,15 +388,17 @@ defmodule MirrorNeuron.Runtime.JobRunner do
       |> Map.merge(policy_fields(manifest, reliability, scheduler_plan(manifest, opts)))
       |> maybe_put_lease(lease)
 
-    updates = %{
-      "status" => "failed",
-      "result" => %{
-        "agent_id" => "job_runner",
-        "error" => error,
-        "reason" => ErrorEnvelope.desc(error),
-        "status_reason" => ErrorEnvelope.desc(error)
+    updates =
+      %{
+        "status" => "failed",
+        "result" => %{
+          "agent_id" => "job_runner",
+          "error" => error,
+          "reason" => ErrorEnvelope.desc(error),
+          "status_reason" => ErrorEnvelope.desc(error)
+        }
       }
-    }
+      |> maybe_clear_lease(Keyword.get(failure_opts, :clear_lease?, false))
 
     case RedisStore.persist_terminal_job(job_id, updates, defaults) do
       {:ok, _job} ->
@@ -344,6 +410,12 @@ defmodule MirrorNeuron.Runtime.JobRunner do
         )
     end
   end
+
+  defp maybe_clear_lease(updates, true) do
+    Map.merge(updates, %{"lease" => nil, "lease_epoch" => nil, "lease_owner" => nil})
+  end
+
+  defp maybe_clear_lease(updates, false), do: updates
 
   defp job_defaults(manifest, manifest_ref, lease, opts) do
     reliability = reliability_from(manifest, opts)

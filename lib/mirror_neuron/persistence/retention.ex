@@ -2,7 +2,9 @@ defmodule MirrorNeuron.Persistence.Retention do
   use GenServer
   require Logger
 
+  alias MirrorNeuron.Bundle.Archive
   alias MirrorNeuron.Persistence.RedisStore
+  alias MirrorNeuron.Runtime
 
   @default_interval_ms 60_000
 
@@ -27,7 +29,9 @@ defmodule MirrorNeuron.Persistence.Retention do
 
   @impl true
   def handle_info(:sweep, state) do
-    case RedisStore.sweep_retention() do
+    result = RedisStore.sweep_retention(cleanup_job: &Runtime.cleanup_job_sandboxes/2)
+
+    case result do
       {:ok, %{deleted_count: deleted_count, stale_count: stale_count}}
       when deleted_count > 0 or stale_count > 0 ->
         Logger.debug(
@@ -41,8 +45,23 @@ defmodule MirrorNeuron.Persistence.Retention do
         Logger.warning("retention sweep failed: #{inspect(reason)}")
     end
 
+    if match?({:ok, _result}, result), do: sweep_bundle_retention()
+
     schedule_sweep(state)
     {:noreply, state}
+  end
+
+  defp sweep_bundle_retention do
+    case Archive.sweep_retention() do
+      {:ok, %{reclaimed_bundle_cache_count: count}} when count > 0 ->
+        Logger.debug("retention sweep reclaimed #{count} bundle cache entries")
+
+      {:ok, _result} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("bundle retention sweep deferred: #{inspect(reason)}")
+    end
   end
 
   defp schedule_sweep(%{interval_ms: interval_ms})

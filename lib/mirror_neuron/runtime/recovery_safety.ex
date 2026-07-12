@@ -45,21 +45,51 @@ defmodule MirrorNeuron.Runtime.RecoverySafety do
   end
 
   defp corrupt_checkpoint?(agents) do
-    Enum.any?(agents, fn agent ->
-      recovery_state = get_in(agent, ["metadata", "recovery_state"])
-      processed_messages = Map.get(agent, "processed_messages", 0)
-
-      cond do
-        is_binary(recovery_state) -> decode_checkpoint(recovery_state) == :error
-        processed_messages > 0 -> true
-        true -> false
-      end
-    end)
+    Enum.any?(agents, &corrupt_checkpoint_entry?/1)
   end
+
+  defp corrupt_checkpoint_entry?(agent) when is_map(agent) do
+    metadata = Map.get(agent, "metadata", %{})
+    processed_messages = Map.get(agent, "processed_messages", 0)
+    mailbox_depth = Map.get(agent, "mailbox_depth", 0)
+    pending_messages = Map.get(agent, "pending_messages", [])
+    agent_id = agent["agent_id"] || agent["node_id"]
+
+    cond do
+      not is_binary(agent_id) or agent_id == "" ->
+        true
+
+      not is_map(metadata) ->
+        true
+
+      not is_integer(processed_messages) or processed_messages < 0 ->
+        true
+
+      not is_integer(mailbox_depth) or mailbox_depth < 0 ->
+        true
+
+      not is_list(pending_messages) ->
+        true
+
+      is_binary(metadata["recovery_state"]) ->
+        decode_checkpoint(metadata["recovery_state"]) == :error
+
+      not is_nil(metadata["recovery_state"]) ->
+        true
+
+      processed_messages > 0 ->
+        true
+
+      true ->
+        false
+    end
+  end
+
+  defp corrupt_checkpoint_entry?(_agent), do: true
 
   defp decode_checkpoint(encoded) do
     with {:ok, binary} <- Base.decode64(encoded) do
-      _ = :erlang.binary_to_term(binary)
+      _ = :erlang.binary_to_term(binary, [:safe])
       :ok
     else
       _ -> :error

@@ -3,6 +3,7 @@ defmodule MirrorNeuron.BundleTest do
 
   alias MirrorNeuron.Bundle.{Archive, Fingerprint, Manager, Scanner}
   alias MirrorNeuron.JobBundle
+  alias MirrorNeuron.Persistence.RedisStore
 
   setup do
     Application.ensure_all_started(:mirror_neuron)
@@ -56,6 +57,29 @@ defmodule MirrorNeuron.BundleTest do
     assert record.path == Path.join(dir, "test_bundle_1")
     assert record.bundle_id == "test_bundle_1"
     assert record.bundle_struct.manifest.reload.mode == "manual"
+  end
+
+  test "Manager rescans registered directories without retaining removed bundles", %{dir: dir} do
+    bundle_dir = create_bundle(dir, "removed_bundle")
+
+    Manager.register_dir(dir)
+    Manager.register_dir(dir)
+    Process.sleep(50)
+
+    assert {:ok, _record} = Manager.get_bundle("removed_bundle")
+
+    manager_state = :sys.get_state(Manager)
+    assert Enum.count(manager_state.dirs, &(&1 == Path.expand(dir))) == 1
+
+    File.rm_rf!(bundle_dir)
+    Manager.register_dir(dir)
+    Process.sleep(50)
+
+    assert :error = Manager.get_bundle("removed_bundle")
+
+    send(Scanner, :tick)
+    Process.sleep(50)
+    refute Map.has_key?(:sys.get_state(Scanner).last_checked, "removed_bundle")
   end
 
   test "Manual reload detects no change", %{dir: dir} do
@@ -212,6 +236,120 @@ defmodule MirrorNeuron.BundleTest do
     assert File.exists?(Path.join([cache_path, "payloads", "dummy.txt"]))
   end
 
+  test "Archive retention rebuilds referenced archives and reclaims only stale unreferenced cache",
+       %{dir: dir} do
+    old_cache_dir = System.get_env("MN_BUNDLE_CACHE_DIR")
+    old_namespace = Application.get_env(:mirror_neuron, :redis_namespace)
+    old_system_namespace = System.get_env("MN_REDIS_NAMESPACE")
+    cache_dir = Path.join(dir, "retention_cache")
+    namespace = "bundle_retention_test_#{System.unique_integer([:positive])}"
+    job_id = "bundle-retention-job-#{System.unique_integer([:positive])}"
+    schedule_id = "bundle-retention-schedule-#{System.unique_integer([:positive])}"
+
+    System.put_env("MN_BUNDLE_CACHE_DIR", cache_dir)
+    System.put_env("MN_REDIS_NAMESPACE", namespace)
+    Application.put_env(:mirror_neuron, :redis_namespace, namespace)
+
+    on_exit(fn ->
+      RedisStore.delete_job(job_id)
+      RedisStore.delete_schedule(schedule_id)
+      cleanup_namespace(namespace)
+      restore_system_env("MN_BUNDLE_CACHE_DIR", old_cache_dir)
+      restore_system_env("MN_REDIS_NAMESPACE", old_system_namespace)
+      restore_env(:redis_namespace, old_namespace)
+    end)
+
+    referenced_dir = create_bundle(dir, "referenced_cache_bundle")
+    unreferenced_dir = create_bundle(dir, "unreferenced_cache_bundle")
+
+    assert {:ok, referenced_bundle} = JobBundle.load(referenced_dir)
+    assert {:ok, unreferenced_bundle} = JobBundle.load(unreferenced_dir)
+    assert {:ok, referenced_archive} = Archive.store(referenced_bundle)
+    assert {:ok, unreferenced_archive} = Archive.store(unreferenced_bundle)
+
+    assert {:ok, _job} =
+             RedisStore.persist_job(job_id, %{
+               "job_id" => job_id,
+               "status" => "running",
+               "manifest_ref" => %{
+                 "bundle_fingerprint" => referenced_archive.fingerprint,
+                 "bundle_storage" => referenced_archive.storage
+               },
+               "updated_at" => MirrorNeuron.Runtime.timestamp()
+             })
+
+    referenced_cache = Archive.cache_path(referenced_archive.fingerprint)
+    unreferenced_cache = Archive.cache_path(unreferenced_archive.fingerprint)
+    assert File.dir?(referenced_cache)
+    assert File.dir?(unreferenced_cache)
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "DEL",
+               Enum.join([namespace, "bundle", referenced_archive.fingerprint], ":")
+             ])
+
+    assert {:ok, result} =
+             Archive.sweep_retention(
+               ttl_seconds: 1,
+               now_seconds: System.system_time(:second) + 2
+             )
+
+    assert result.referenced_bundle_count == 1
+    assert result.rebuilt_bundle_archives == 1
+    assert result.reclaimed_bundle_caches == [unreferenced_archive.fingerprint]
+    assert File.dir?(referenced_cache)
+    refute File.exists?(unreferenced_cache)
+    assert {:ok, _archive} = RedisStore.fetch_bundle_archive(referenced_archive.fingerprint)
+
+    guarded_dir = create_bundle(dir, "guarded_unreferenced_cache_bundle")
+    assert {:ok, guarded_bundle} = JobBundle.load(guarded_dir)
+    assert {:ok, guarded_archive} = Archive.store(guarded_bundle)
+    guarded_cache = Archive.cache_path(guarded_archive.fingerprint)
+
+    assert {:ok, _schedule} =
+             RedisStore.persist_schedule(schedule_id, %{
+               "kind" => "event",
+               "status" => "active",
+               "enabled" => true,
+               "bundle_ref" => %{"bundle_fingerprint" => referenced_archive.fingerprint}
+             })
+
+    assert {:ok, "OK"} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SET",
+               Enum.join([namespace, "schedule", schedule_id], ":"),
+               "not-json"
+             ])
+
+    assert {:error, reason} =
+             Archive.sweep_retention(
+               ttl_seconds: 1,
+               now_seconds: System.system_time(:second) + 2
+             )
+
+    assert reason =~ "unreadable_bundle_reference_record"
+    assert File.dir?(guarded_cache)
+
+    assert {:ok, _schedule} =
+             RedisStore.persist_schedule(schedule_id, %{
+               "kind" => "event",
+               "status" => "active",
+               "enabled" => true,
+               "bundle_ref" => %{"bundle_fingerprint" => referenced_archive.fingerprint}
+             })
+  end
+
+  defp restore_env(key, nil), do: Application.delete_env(:mirror_neuron, key)
+  defp restore_env(key, value), do: Application.put_env(:mirror_neuron, key, value)
   defp restore_system_env(key, nil), do: System.delete_env(key)
   defp restore_system_env(key, value), do: System.put_env(key, value)
+
+  defp cleanup_namespace(namespace) do
+    case Redix.command(MirrorNeuron.Redis.Connection, ["KEYS", "#{namespace}:*"]) do
+      {:ok, []} -> :ok
+      {:ok, keys} -> Redix.command(MirrorNeuron.Redis.Connection, ["DEL" | keys])
+      _ -> :ok
+    end
+  end
 end

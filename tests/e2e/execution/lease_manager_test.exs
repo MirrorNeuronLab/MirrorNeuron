@@ -113,6 +113,44 @@ defmodule MirrorNeuron.Execution.LeaseManagerTest do
     assert {:ok, _second} = Task.await(waiting_task, 1_000)
   end
 
+  test "timed out requests behind a live waiter do not consume queue capacity" do
+    manager =
+      start_supervised!(
+        {LeaseManager,
+         name: unique_name(),
+         capacities: %{"default" => 1},
+         queue_timeout_ms: 1_000,
+         max_queue_length: 2}
+      )
+
+    assert {:ok, first} = LeaseManager.acquire(manager, "default", 1, %{agent_id: "active"})
+
+    live_waiter =
+      Task.async(fn ->
+        LeaseManager.acquire(manager, "default", 1, %{agent_id: "live-waiter"},
+          queue_timeout_ms: 1_000
+        )
+      end)
+
+    Process.sleep(20)
+
+    assert {:error, {:retry_later, %{"reason" => "executor_pool_queue_timeout"}}} =
+             LeaseManager.acquire(manager, "default", 1, %{agent_id: "timed-out"},
+               queue_timeout_ms: 30
+             )
+
+    assert %{"default" => %{"queued" => 1}} = stringify_stats(LeaseManager.stats(manager))
+
+    assert {:error, {:retry_later, %{"reason" => "executor_pool_queue_timeout"}}} =
+             LeaseManager.acquire(manager, "default", 1, %{agent_id: "accepted-after-timeout"},
+               queue_timeout_ms: 30
+             )
+
+    LeaseManager.release(manager, first["lease_id"])
+    assert {:ok, second} = Task.await(live_waiter, 1_000)
+    LeaseManager.release(manager, second["lease_id"])
+  end
+
   test "restores executor capacity when a disconnected node cannot release its lease" do
     manager =
       start_supervised!({LeaseManager, name: unique_name(), capacities: %{"default" => 1}})

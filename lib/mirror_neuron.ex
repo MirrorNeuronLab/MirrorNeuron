@@ -4,7 +4,6 @@ defmodule MirrorNeuron do
   alias MirrorNeuron.Monitor
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
-  alias MirrorNeuron.Sandbox.{DockerJobSandbox, OpenShellJobSandbox}
 
   def validate_manifest(input) do
     with {:ok, bundle} <- JobBundle.load(input) do
@@ -420,9 +419,7 @@ defmodule MirrorNeuron do
   end
 
   defp cleanup_job_sandboxes(job_id) do
-    _ = OpenShellJobSandbox.cleanup_job_local(job_id)
-    _ = DockerJobSandbox.cleanup_job_local(job_id)
-    :ok
+    Runtime.cleanup_job_sandboxes(job_id)
   end
 
   def cleanup_jobs(opts \\ []) do

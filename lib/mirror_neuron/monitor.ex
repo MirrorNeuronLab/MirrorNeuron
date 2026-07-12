@@ -147,11 +147,12 @@ defmodule MirrorNeuron.Monitor do
           job["status"] in ["running", "pending", "scheduled", "validated", "paused"]
         end)
 
-      Enum.each(to_delete, fn job ->
-        RedisStore.delete_job(job["job_id"])
-      end)
+      deleted_count =
+        Enum.count(to_delete, fn job ->
+          RedisStore.delete_job(job["job_id"]) == :ok
+        end)
 
-      {:ok, length(to_delete)}
+      {:ok, deleted_count}
     end
   end
 

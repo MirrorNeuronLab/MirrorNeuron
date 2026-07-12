@@ -36,8 +36,7 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
     if native_sandbox_prep_enabled?() do
       case if(Process.whereis(@registry), do: Registry.lookup(@registry, key(job_id)), else: []) do
         [{pid, _meta}] ->
-          GenServer.stop(pid, :normal, :infinity)
-          :ok
+          cleanup_process(pid)
 
         [] ->
           cleanup_container_by_job_id(job_id, config)
@@ -56,7 +55,8 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
        config: config,
        opts: opts,
        container_name: build_container_name(job_id, config),
-       ready?: false
+       ready?: false,
+       cleanup_required?: false
      }}
   end
 
@@ -74,6 +74,8 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
 
         case ensure_container(state) do
           {:ok, next_state} ->
+            next_state = %{next_state | cleanup_required?: true}
+
             {:reply,
              {:ok,
               %{
@@ -88,9 +90,21 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
     end
   end
 
+  def handle_call(:cleanup, _from, state) do
+    case cleanup_container_by_job_id(state.job_id, state.config) do
+      :ok ->
+        {:stop, :normal, :ok, %{state | ready?: false, cleanup_required?: false}}
+
+      {:error, _reason} = error ->
+        {:reply, error, state}
+    end
+  end
+
   @impl true
   def terminate(_reason, state) do
-    case remove_container(state.container_name, state.config, allow_missing?: true) do
+    case remove_container(state.container_name, state.config,
+           allow_missing?: not state.cleanup_required?
+         ) do
       :ok ->
         :ok
 
@@ -117,6 +131,31 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
           {:error, {:already_started, pid}} -> {:ok, pid}
           {:error, reason} -> {:error, reason}
         end
+    end
+  end
+
+  defp cleanup_process(pid) do
+    monitor = Process.monitor(pid)
+
+    try do
+      case GenServer.call(pid, :cleanup, :infinity) do
+        :ok ->
+          receive do
+            {:DOWN, ^monitor, :process, ^pid, _reason} -> :ok
+          after
+            5_000 ->
+              Process.demonitor(monitor, [:flush])
+              {:error, :sandbox_owner_stop_timeout}
+          end
+
+        {:error, _reason} = error ->
+          Process.demonitor(monitor, [:flush])
+          error
+      end
+    catch
+      :exit, reason ->
+        Process.demonitor(monitor, [:flush])
+        {:error, {:sandbox_owner_exit, reason}}
     end
   end
 
@@ -172,13 +211,70 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
 
   defp cleanup_container_by_job_id(job_id, config) do
     container_name = build_container_name(job_id, config)
+    exact_result = remove_container(container_name, config, allow_missing?: true)
+    labeled_result = remove_labeled_job_containers(job_id, config)
 
-    case remove_container(container_name, config, allow_missing?: true) do
-      :ok ->
+    case {exact_result, labeled_result} do
+      {:ok, result} when result in [:missing, :removed] ->
         :ok
 
-      {:error, reason} ->
+      {{:error, _exact_reason}, :removed} ->
+        :ok
+
+      {{:error, reason}, :missing} ->
         {:error, %{"docker_worker" => reason}}
+
+      {:ok, {:error, reason}} ->
+        {:error, %{"docker_worker_discovery" => reason}}
+
+      {{:error, exact_reason}, {:error, discovery_reason}} ->
+        {:error,
+         %{
+           "docker_worker" => exact_reason,
+           "docker_worker_discovery" => discovery_reason
+         }}
+    end
+  end
+
+  defp remove_labeled_job_containers(job_id, config) do
+    case docker_cmd(
+           [
+             "ps",
+             "-aq",
+             "--filter",
+             "label=mirror-neuron.kind=docker_worker",
+             "--filter",
+             "label=mirror-neuron.job_id=#{job_id}"
+           ],
+           config
+         ) do
+      {:ok, output} ->
+        case docker_container_ids(output) do
+          {:ok, []} ->
+            :missing
+
+          {:ok, ids} ->
+            case docker_cmd(["rm", "-f" | ids], config) do
+              {:ok, _output} -> :removed
+              {:error, reason} -> {:error, reason}
+            end
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp docker_container_ids(output) do
+    ids = String.split(output, "\n", trim: true)
+
+    if Enum.all?(ids, &Regex.match?(~r/^[a-fA-F0-9]{12,64}$/, &1)) do
+      {:ok, Enum.uniq(ids)}
+    else
+      {:error, %{"error" => "docker returned invalid container ids", "output" => output}}
     end
   end
 

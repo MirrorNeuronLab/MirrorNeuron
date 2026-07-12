@@ -20,42 +20,38 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
   def submit_job(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("SubmitJob")
 
-    bundle_id = "bundle_#{System.unique_integer([:positive])}"
-    tmp_dir = Path.join(System.tmp_dir!(), bundle_id)
-    File.mkdir_p!(tmp_dir)
+    result =
+      Support.with_request_bundle(request.manifest_json, request.payloads, fn tmp_dir ->
+        case MirrorNeuron.run_manifest(tmp_dir, await: false) do
+          {:ok, job_id} ->
+            %SubmitJobResponse{job_id: job_id, status: "pending", version: @interface_version}
 
-    File.write!(Path.join(tmp_dir, "manifest.json"), request.manifest_json)
+          {:ok, job_id, _job} ->
+            %SubmitJobResponse{job_id: job_id, status: "pending", version: @interface_version}
 
-    payloads_dir = Path.join(tmp_dir, "payloads")
-    File.mkdir_p!(payloads_dir)
+          {:error, "resource_overloaded:" <> _ = reason} ->
+            raise GRPC.RPCError, status: GRPC.Status.resource_exhausted(), message: reason
 
-    with :ok <- Support.write_payloads(payloads_dir, request.payloads),
-         result <- MirrorNeuron.run_manifest(tmp_dir, await: false) do
-      case result do
-        {:ok, job_id} ->
-          %SubmitJobResponse{job_id: job_id, status: "pending", version: @interface_version}
+          {:error, "requirements_not_met:" <> _ = reason} ->
+            raise GRPC.RPCError, status: GRPC.Status.failed_precondition(), message: reason
 
-        {:ok, job_id, _job} ->
-          %SubmitJobResponse{job_id: job_id, status: "pending", version: @interface_version}
+          {:error, "service_requirements_not_met:" <> _ = reason} ->
+            raise GRPC.RPCError, status: GRPC.Status.failed_precondition(), message: reason
 
-        {:error, "resource_overloaded:" <> _ = reason} ->
-          raise GRPC.RPCError, status: GRPC.Status.resource_exhausted(), message: reason
+          {:error, "input_validation_failed:" <> _ = reason} ->
+            raise GRPC.RPCError, status: GRPC.Status.invalid_argument(), message: reason
 
-        {:error, "requirements_not_met:" <> _ = reason} ->
-          raise GRPC.RPCError, status: GRPC.Status.failed_precondition(), message: reason
+          {:error, reason} ->
+            raise GRPC.RPCError, status: :invalid_argument, message: inspect(reason)
+        end
+      end)
 
-        {:error, "service_requirements_not_met:" <> _ = reason} ->
-          raise GRPC.RPCError, status: GRPC.Status.failed_precondition(), message: reason
+    case result do
+      %SubmitJobResponse{} = response ->
+        response
 
-        {:error, "input_validation_failed:" <> _ = reason} ->
-          raise GRPC.RPCError, status: GRPC.Status.invalid_argument(), message: reason
-
-        {:error, reason} ->
-          raise GRPC.RPCError, status: :invalid_argument, message: inspect(reason)
-      end
-    else
       {:error, reason} ->
-        raise GRPC.RPCError, status: :invalid_argument, message: reason
+        raise GRPC.RPCError, status: :invalid_argument, message: inspect(reason)
     end
   end
 

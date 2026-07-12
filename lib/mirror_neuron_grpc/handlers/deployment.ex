@@ -9,18 +9,22 @@ defmodule MirrorNeuron.Grpc.Handlers.Deployment do
   def deploy_job(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("DeployJob")
 
-    with {:ok, tmp_dir} <- Support.request_bundle_dir(request.manifest_json, request.payloads),
-         {:ok, result} <-
-           MirrorNeuron.deploy_manifest(tmp_dir,
-             deployment_key: Support.blank_to_nil(request.deployment_key),
-             update_policy: Support.decode_json_map(request.update_policy_json),
-             wait: request.wait
-           ) do
-      %DeploymentResponse{
-        result_json: Support.versioned_json(result),
-        version: @interface_version
-      }
-    else
+    result =
+      Support.with_request_bundle(request.manifest_json, request.payloads, fn tmp_dir ->
+        MirrorNeuron.deploy_manifest(tmp_dir,
+          deployment_key: Support.blank_to_nil(request.deployment_key),
+          update_policy: Support.decode_json_map(request.update_policy_json),
+          wait: request.wait
+        )
+      end)
+
+    case result do
+      {:ok, deployment} ->
+        %DeploymentResponse{
+          result_json: Support.versioned_json(deployment),
+          version: @interface_version
+        }
+
       {:error, reason} ->
         raise GRPC.RPCError, status: :invalid_argument, message: inspect(reason)
     end
@@ -29,17 +33,21 @@ defmodule MirrorNeuron.Grpc.Handlers.Deployment do
   def update_deployment(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("UpdateDeployment")
 
-    with {:ok, tmp_dir} <- Support.request_bundle_dir(request.manifest_json, request.payloads),
-         {:ok, result} <-
-           MirrorNeuron.update_deployment(request.deployment_key, tmp_dir,
-             update_policy: Support.decode_json_map(request.update_policy_json),
-             wait: request.wait
-           ) do
-      %DeploymentResponse{
-        result_json: Support.versioned_json(result),
-        version: @interface_version
-      }
-    else
+    result =
+      Support.with_request_bundle(request.manifest_json, request.payloads, fn tmp_dir ->
+        MirrorNeuron.update_deployment(request.deployment_key, tmp_dir,
+          update_policy: Support.decode_json_map(request.update_policy_json),
+          wait: request.wait
+        )
+      end)
+
+    case result do
+      {:ok, deployment} ->
+        %DeploymentResponse{
+          result_json: Support.versioned_json(deployment),
+          version: @interface_version
+        }
+
       {:error, reason} ->
         raise GRPC.RPCError, status: :invalid_argument, message: inspect(reason)
     end

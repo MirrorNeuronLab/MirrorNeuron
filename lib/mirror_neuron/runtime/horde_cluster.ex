@@ -34,24 +34,36 @@ defmodule MirrorNeuron.Runtime.HordeCluster do
 
   @impl true
   def init(opts) do
-    if distributed?() do
+    enabled = distributed?()
+
+    if enabled do
       :net_kernel.monitor_nodes(true)
       send(self(), :refresh)
     end
 
-    {:ok, %{refresh_ms: Keyword.get(opts, :refresh_ms, @refresh_ms)}}
+    {:ok,
+     %{
+       enabled: enabled,
+       refresh_ms: Keyword.get(opts, :refresh_ms, @refresh_ms),
+       refresh_timer_ref: nil
+     }}
   end
 
   @impl true
-  def handle_info(:refresh, state) do
+  def handle_info(:refresh, %{enabled: true} = state) do
     refresh_members()
-    {:noreply, state}
+    {:noreply, state |> clear_refresh_timer() |> schedule_refresh()}
   end
 
-  def handle_info({event, _node}, state) when event in [:nodeup, :nodedown] do
-    Process.send_after(self(), :refresh, state.refresh_ms)
-    {:noreply, state}
+  def handle_info(:refresh, state), do: {:noreply, state}
+
+  def handle_info({event, _node}, %{enabled: true} = state)
+      when event in [:nodeup, :nodedown] do
+    {:noreply, schedule_refresh(state)}
   end
+
+  def handle_info({event, _node}, state) when event in [:nodeup, :nodedown],
+    do: {:noreply, state}
 
   def handle_info(_message, state), do: {:noreply, state}
 
@@ -85,6 +97,21 @@ defmodule MirrorNeuron.Runtime.HordeCluster do
       if node != Node.self(), do: Node.connect(node)
     end)
   end
+
+  defp schedule_refresh(state) do
+    state = cancel_refresh(state)
+    ref = Process.send_after(self(), :refresh, state.refresh_ms)
+    %{state | refresh_timer_ref: ref}
+  end
+
+  defp cancel_refresh(%{refresh_timer_ref: ref} = state) when is_reference(ref) do
+    Process.cancel_timer(ref)
+    clear_refresh_timer(state)
+  end
+
+  defp cancel_refresh(state), do: state
+
+  defp clear_refresh_timer(state), do: %{state | refresh_timer_ref: nil}
 
   defp configured_nodes do
     "MN_CLUSTER_NODES"

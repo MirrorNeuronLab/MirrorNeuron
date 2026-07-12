@@ -5,9 +5,35 @@ defmodule MirrorNeuron.Persistence.DiskCheckpoint do
 
   alias MirrorNeuron.Artifacts.SharedStorage
   alias MirrorNeuron.Config
+  alias MirrorNeuron.Persistence.CheckpointLock
 
   @job_file "job.json"
   @agents_dir "agents"
+
+  def with_job_lock(job_id, operation) when is_function(operation, 0) do
+    with_encoded_job_lock(encoded_segment(job_id), operation)
+  end
+
+  defp with_encoded_job_lock(encoded_job_id, operation) do
+    resource = {__MODULE__, root(), encoded_job_id}
+    process_key = {__MODULE__, :held_job_lock, resource}
+
+    if Process.get(process_key) do
+      operation.()
+    else
+      CheckpointLock.with_lock(resource, fn ->
+        :global.trans({resource, self()}, fn ->
+          Process.put(process_key, true)
+
+          try do
+            operation.()
+          after
+            Process.delete(process_key)
+          end
+        end)
+      end)
+    end
+  end
 
   def root do
     base_root =
@@ -19,6 +45,10 @@ defmodule MirrorNeuron.Persistence.DiskCheckpoint do
   end
 
   def persist_job(job_id, job) when is_map(job) do
+    with_job_lock(job_id, fn -> do_persist_job(job_id, job) end)
+  end
+
+  defp do_persist_job(job_id, job) do
     with {:ok, job_dir} <- ensure_job_dir(job_id),
          {:ok, encoded} <- Jason.encode(job),
          :ok <- atomic_write(Path.join(job_dir, @job_file), encoded) do
@@ -27,6 +57,10 @@ defmodule MirrorNeuron.Persistence.DiskCheckpoint do
   end
 
   def persist_agent(job_id, agent_id, snapshot) when is_map(snapshot) do
+    with_job_lock(job_id, fn -> do_persist_agent(job_id, agent_id, snapshot) end)
+  end
+
+  defp do_persist_agent(job_id, agent_id, snapshot) do
     with {:ok, job_dir} <- ensure_job_dir(job_id),
          :ok <- File.mkdir_p(Path.join(job_dir, @agents_dir)),
          {:ok, encoded} <- Jason.encode(snapshot),
@@ -40,6 +74,10 @@ defmodule MirrorNeuron.Persistence.DiskCheckpoint do
   end
 
   def load_job(job_id) do
+    with_job_lock(job_id, fn -> do_load_job(job_id) end)
+  end
+
+  defp do_load_job(job_id) do
     with {:ok, job_dir} <- job_dir(job_id),
          {:ok, encoded} <- File.read(Path.join(job_dir, @job_file)),
          {:ok, job} when is_map(job) <- Jason.decode(encoded) do
@@ -51,6 +89,10 @@ defmodule MirrorNeuron.Persistence.DiskCheckpoint do
   end
 
   def load_agents(job_id) do
+    with_job_lock(job_id, fn -> do_load_agents(job_id) end)
+  end
+
+  defp do_load_agents(job_id) do
     with {:ok, job_dir} <- job_dir(job_id) do
       load_agents_path(job_dir)
     end
@@ -64,10 +106,19 @@ defmodule MirrorNeuron.Persistence.DiskCheckpoint do
         |> Enum.filter(&File.dir?/1)
         |> Enum.sort()
         |> Enum.reduce(%{checkpoints: [], errors: []}, fn path, acc ->
-          case load_checkpoint_path(path) do
-            {:ok, checkpoint} -> Map.update!(acc, :checkpoints, &[checkpoint | &1])
-            {:error, reason} -> Map.update!(acc, :errors, &[{path, reason} | &1])
-          end
+          with_encoded_job_lock(Path.basename(path), fn ->
+            case load_checkpoint_path(path) do
+              {:ok, checkpoint} ->
+                Map.update!(acc, :checkpoints, &[checkpoint | &1])
+
+              {:error, reason} ->
+                if File.exists?(path) do
+                  Map.update!(acc, :errors, &[{path, reason} | &1])
+                else
+                  acc
+                end
+            end
+          end)
         end)
         |> then(fn result ->
           {:ok,
@@ -86,6 +137,10 @@ defmodule MirrorNeuron.Persistence.DiskCheckpoint do
   end
 
   def prune_agents(job_id, active_agent_ids) do
+    with_job_lock(job_id, fn -> do_prune_agents(job_id, active_agent_ids) end)
+  end
+
+  defp do_prune_agents(job_id, active_agent_ids) do
     with {:ok, job_dir} <- job_dir(job_id) do
       expected =
         active_agent_ids
@@ -105,6 +160,10 @@ defmodule MirrorNeuron.Persistence.DiskCheckpoint do
   end
 
   def delete_job(job_id) do
+    with_job_lock(job_id, fn -> do_delete_job(job_id) end)
+  end
+
+  defp do_delete_job(job_id) do
     with {:ok, path} <- job_dir(job_id) do
       case File.rm_rf(path) do
         {:ok, _files} -> sync_directory(Path.dirname(path))

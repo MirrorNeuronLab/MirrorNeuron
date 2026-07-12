@@ -57,9 +57,13 @@ defmodule MirrorNeuron.Runtime.ReliabilityObserver do
   defp maybe_publish_job_changes(snapshot, state) do
     case list_job_summaries(state.redis_store) do
       {:ok, jobs} ->
-        jobs
-        |> Enum.filter(&active_job?/1)
-        |> Enum.reduce(state, fn job, acc -> maybe_publish_job_change(job, snapshot, acc) end)
+        active_jobs = Enum.filter(jobs, &active_job?/1)
+        active_job_ids = Enum.map(active_jobs, & &1["job_id"])
+        state = %{state | job_statuses: Map.take(state.job_statuses, active_job_ids)}
+
+        Enum.reduce(active_jobs, state, fn job, acc ->
+          maybe_publish_job_change(job, snapshot, acc)
+        end)
 
       {:error, _reason} ->
         state

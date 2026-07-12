@@ -26,9 +26,11 @@ defmodule MirrorNeuron.Bundle.Scanner do
   def handle_info(:tick, state) do
     bundles = Manager.list_bundles()
     now_ms = System.monotonic_time(:millisecond)
+    bundle_ids = Enum.map(bundles, & &1.bundle_id)
+    last_checked = Map.take(state.last_checked, bundle_ids)
 
     new_last_checked =
-      Enum.reduce(bundles, state.last_checked, fn record, acc ->
+      Enum.reduce(bundles, last_checked, fn record, acc ->
         manifest = record.bundle_struct.manifest
         mode = manifest.reload.mode
         interval_ms = manifest.reload.interval_seconds * 1000

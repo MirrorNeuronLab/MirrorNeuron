@@ -7,7 +7,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Artifacts.SharedStorage
   alias MirrorNeuron.Runtime
-  alias MirrorNeuron.{ServiceRegistry, ServiceSpec}
+  alias MirrorNeuron.{JobBundle, ServiceRegistry, ServiceSpec}
   alias MirrorNeuron.Scheduler
 
   alias MirrorNeuron.Runtime.{
@@ -19,8 +19,6 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     Naming,
     WorkflowLedger
   }
-
-  alias MirrorNeuron.Sandbox.{DockerJobSandbox, OpenShellJobSandbox}
 
   @default_health_check_interval_ms 2_000
 
@@ -69,6 +67,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       policy_state: policy_state_from(existing_job),
       workflow_state: WorkflowLedger.new(manifest, runtime_topology.nodes, existing_job),
       pending_policy_timers: %{},
+      health_check_timer_ref: nil,
       deployment_context: deployment_context_from(opts, existing_job),
       health_check_interval_ms:
         Application.get_env(
@@ -107,8 +106,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       })
 
       publish_workflow_events(next_state, [])
-      schedule_health_check(next_state.health_check_interval_ms)
-      {:noreply, next_state}
+      {:noreply, schedule_health_check(next_state)}
     else
       {:error, reason} ->
         failed_state =
@@ -151,8 +149,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       persist_job(next_state)
       EventBus.publish(state.job_id, %{type: :job_running, timestamp: Runtime.timestamp()})
       publish_workflow_events(next_state, workflow_events)
-      schedule_health_check(next_state.health_check_interval_ms)
-      {:noreply, next_state}
+      {:noreply, schedule_health_check(next_state)}
     else
       {:error, {:execution_profile_unavailable, profile, agent_id}, failed_state} ->
         paused_state =
@@ -215,8 +212,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         refresh_disk_checkpoint(recovered_state)
         EventBus.publish(state.job_id, %{type: :job_resumed, timestamp: Runtime.timestamp()})
         publish_workflow_events(recovered_state, workflow_events)
-        schedule_health_check(recovered_state.health_check_interval_ms)
-        {:reply, {:ok, "resumed"}, recovered_state}
+        {:reply, {:ok, "resumed"}, schedule_health_check(recovered_state)}
 
       {:error, reason, failed_state} ->
         {:reply, {:error, reason}, failed_state}
@@ -597,7 +593,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   def handle_info(:health_check, %{status: status} = state)
       when status in ["running", "paused"] do
-    state = refresh_pressure(state)
+    state = state |> clear_health_check_timer() |> refresh_pressure()
 
     case schedule_missing_agents(state) do
       {:ok, next_state} ->
@@ -605,8 +601,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
           {:ok, reconciled_state} ->
             case continue_or_complete_workflow(reconciled_state) do
               {:noreply, continued_state} ->
-                schedule_health_check(continued_state.health_check_interval_ms)
-                {:noreply, continued_state}
+                {:noreply, schedule_health_check(continued_state)}
 
               {:stop, _reason, _completed_state} = stop ->
                 stop
@@ -639,7 +634,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     end
   end
 
-  def handle_info(:health_check, state), do: {:noreply, state}
+  def handle_info(:health_check, state), do: {:noreply, clear_health_check_timer(state)}
 
   defp restart_service_agent(state, agent_id, result) do
     EventBus.publish(state.job_id, %{
@@ -1861,9 +1856,21 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       :missing
   end
 
-  defp schedule_health_check(interval_ms) do
-    Process.send_after(self(), :health_check, interval_ms)
+  defp schedule_health_check(state) do
+    state = cancel_health_check_timer(state)
+    ref = Process.send_after(self(), :health_check, state.health_check_interval_ms)
+    %{state | health_check_timer_ref: ref}
   end
+
+  defp cancel_health_check_timer(%{health_check_timer_ref: ref} = state)
+       when is_reference(ref) do
+    Process.cancel_timer(ref)
+    clear_health_check_timer(state)
+  end
+
+  defp cancel_health_check_timer(state), do: state
+
+  defp clear_health_check_timer(state), do: %{state | health_check_timer_ref: nil}
 
   defp build_runtime_topology(manifest, scheduler_plan) do
     job_type = scheduler_plan["job_type"]
@@ -2698,35 +2705,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp publish_workflow_events(_state, _events), do: :ok
 
   defp cleanup_sandboxes(state) do
-    [Node.self() | Node.list()]
-    |> Enum.uniq()
-    |> Enum.each(fn node ->
-      cleanup_sandbox_on_node(node, OpenShellJobSandbox, state.job_id, "OpenShell")
-      cleanup_sandbox_on_node(node, DockerJobSandbox, state.job_id, "DockerWorker")
-    end)
-  end
-
-  defp cleanup_sandbox_on_node(node, module, job_id, label) do
-    case safe_cleanup_sandbox_on_node(node, module, job_id) do
-      :ok ->
-        :ok
-
-      {:badrpc, reason} ->
-        Logger.warning(
-          "failed to clean up #{label} sandbox for #{job_id} on #{node}: #{inspect(reason)}"
-        )
-
-      _other ->
-        :ok
-    end
-  end
-
-  defp safe_cleanup_sandbox_on_node(node, module, job_id) do
-    :rpc.call(node, module, :cleanup_job_local, [job_id], 15_000)
-  rescue
-    exception -> {:badrpc, {exception.__struct__, Exception.message(exception)}}
-  catch
-    kind, reason -> {:badrpc, {kind, reason}}
+    _ = Runtime.cleanup_job_sandboxes(state.job_id)
+    :ok
   end
 
   defp existing_recovery_fields(job_id) do
@@ -2800,7 +2780,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp runtime_bundle_root(state), do: runtime_bundle_paths(state).bundle_root
 
   defp runtime_bundle_paths(state) do
-    case shared_bundle_cache_path(manifest_ref(state)) do
+    case bundle_cache_path(manifest_ref(state)) do
       nil ->
         %{
           bundle_root: state.bundle && state.bundle.root_path,
@@ -2817,16 +2797,20 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     end
   end
 
-  defp shared_bundle_cache_path(manifest_ref) when is_map(manifest_ref) do
+  defp bundle_cache_path(manifest_ref) when is_map(manifest_ref) do
     storage = Map.get(manifest_ref, "bundle_storage") || Map.get(manifest_ref, :bundle_storage)
     cache_path = Map.get(manifest_ref, "cache_path") || Map.get(manifest_ref, :cache_path)
 
-    if storage in ["shared_fs", "shared_fs_cas"] and is_binary(cache_path) and cache_path != "" do
-      cache_path
+    if storage in ["redis", "local_cache", "shared_fs", "shared_fs_cas"] and
+         is_binary(cache_path) and cache_path != "" do
+      case JobBundle.load_filesystem_path(cache_path) do
+        {:ok, _bundle} -> cache_path
+        {:error, _reason} -> nil
+      end
     end
   end
 
-  defp shared_bundle_cache_path(_manifest_ref), do: nil
+  defp bundle_cache_path(_manifest_ref), do: nil
 
   defp scheduler_plan(state) do
     scheduler_plan_from(state.manifest, state.opts)

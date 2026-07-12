@@ -901,6 +901,59 @@ defmodule MirrorNeuron.RuntimeTest do
     RedisStore.delete_job(job_id)
   end
 
+  test "single node jobs use Redis-backed cache after the source bundle is removed" do
+    old_cache_dir = System.get_env("MN_BUNDLE_CACHE_DIR")
+
+    root =
+      Path.join(System.tmp_dir!(), "mn-redis-cache-runtime-#{System.unique_integer([:positive])}")
+
+    cache_dir = Path.join(root, "cache")
+    bundle_dir = Path.join(root, "request-bundle")
+    System.put_env("MN_BUNDLE_CACHE_DIR", cache_dir)
+
+    on_exit(fn ->
+      restore_system_env("MN_BUNDLE_CACHE_DIR", old_cache_dir)
+      File.rm_rf!(root)
+    end)
+
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "redis_bundle_context_runtime_test",
+      "entrypoints" => ["worker"],
+      "initial_inputs" => %{"worker" => [%{"start" => true}]},
+      "nodes" => [
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "role" => "root_coordinator",
+          "config" => %{
+            "runner_module" => BundlePathEchoRunner,
+            "output_message_type" => nil
+          }
+        }
+      ],
+      "edges" => []
+    }
+
+    File.mkdir_p!(Path.join(bundle_dir, "payloads"))
+    File.write!(Path.join(bundle_dir, "manifest.json"), Jason.encode!(flow_manifest(manifest)))
+
+    assert {:ok, job_id} = MirrorNeuron.run_manifest(bundle_dir, await: false)
+    File.rm_rf!(bundle_dir)
+    assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 3_000)
+
+    output = bundle_echo_output(job)
+    assert job["status"] == "completed"
+    assert get_in(job, ["manifest_ref", "bundle_storage"]) == "redis"
+    assert String.starts_with?(output["bundle_root"], cache_dir <> "/")
+    assert output["bundle_exists"] == true
+    assert output["manifest_exists"] == true
+    assert output["payloads_exists"] == true
+    refute File.exists?(bundle_dir)
+
+    RedisStore.delete_job(job_id)
+  end
+
   test "omitted recovery policy persists auto request with local effective policy on a single node" do
     manifest = %{
       "manifest_version" => "1.0",
@@ -1099,6 +1152,37 @@ defmodule MirrorNeuron.RuntimeTest do
     assert {:ok, "resumed"} = MirrorNeuron.resume(job_id)
     assert {:ok, %{"status" => "running"}} = MirrorNeuron.inspect_job(job_id)
     assert_runtime_workflow_manifest(job_id)
+
+    cleanup_runtime_job(job_id)
+  end
+
+  test "pause and resume retain exactly one coordinator health timer" do
+    Application.put_env(:mirror_neuron, :job_health_check_interval_ms, 10_000)
+    manifest = pause_resume_dag_manifest("pause_resume_health_timer_test")
+
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
+    cleanup_job_on_exit(job_id)
+    wait_until(fn -> running_status?(job_id) end)
+
+    coordinator = job_coordinator_pid(job_id)
+    first_ref = :sys.get_state(coordinator).health_check_timer_ref
+    assert is_integer(Process.read_timer(first_ref))
+
+    assert {:ok, "paused"} = MirrorNeuron.pause(job_id)
+    assert {:ok, "resumed"} = MirrorNeuron.resume(job_id)
+
+    second_ref = :sys.get_state(coordinator).health_check_timer_ref
+    refute second_ref == first_ref
+    assert Process.read_timer(first_ref) == false
+    assert is_integer(Process.read_timer(second_ref))
+
+    assert {:ok, "paused"} = MirrorNeuron.pause(job_id)
+    assert {:ok, "resumed"} = MirrorNeuron.resume(job_id)
+
+    third_ref = :sys.get_state(coordinator).health_check_timer_ref
+    refute third_ref == second_ref
+    assert Process.read_timer(second_ref) == false
+    assert is_integer(Process.read_timer(third_ref))
 
     cleanup_runtime_job(job_id)
   end
@@ -2234,6 +2318,59 @@ defmodule MirrorNeuron.RuntimeTest do
     assert job["job_type"] == "service"
 
     assert {:ok, "cancelled"} = MirrorNeuron.cancel(job_id)
+    RedisStore.delete_job(job_id)
+  end
+
+  test "cleanup all cancels live jobs before deleting their persisted state" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "safe_live_cleanup_test",
+      "type" => "service",
+      "entrypoints" => ["worker"],
+      "nodes" => [
+        %{
+          "node_id" => "worker",
+          "agent_type" => "router",
+          "role" => "root_coordinator"
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
+    wait_until(fn -> running_status?(job_id) end, 2_000)
+    assert job_runner_pid(job_id, false) != nil
+
+    assert {:ok, result} = Runtime.cleanup_jobs(all: true)
+    assert job_id in result.deleted_jobs
+
+    wait_until(fn -> job_runner_pid(job_id, false) == nil end, 2_000)
+    assert Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:job, job_id}) == []
+
+    assert Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:agent, job_id, "worker"}) ==
+             []
+
+    assert {:error, _reason} = RedisStore.fetch_job(job_id)
+  end
+
+  test "cleanup all preserves active state when the runtime cannot be stopped" do
+    job_id = "unsafe-live-cleanup-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _job} =
+             RedisStore.persist_job(job_id, %{
+               "job_id" => job_id,
+               "graph_id" => "unsafe_live_cleanup",
+               "job_name" => "unsafe live cleanup",
+               "status" => "running",
+               "submitted_at" => Runtime.timestamp(),
+               "updated_at" => Runtime.timestamp()
+             })
+
+    assert {:ok, result} = Runtime.cleanup_jobs(all: true)
+    refute job_id in result.deleted_jobs
+    assert {:ok, %{"status" => "running"}} = RedisStore.fetch_job(job_id)
+
     RedisStore.delete_job(job_id)
   end
 

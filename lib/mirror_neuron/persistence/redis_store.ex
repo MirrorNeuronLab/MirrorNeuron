@@ -1,5 +1,5 @@
 defmodule MirrorNeuron.Persistence.RedisStore do
-  alias MirrorNeuron.Artifacts.{JobStore, SharedStorage}
+  alias MirrorNeuron.Artifacts.{BlobRef, JobStore, SharedStorage}
   alias MirrorNeuron.Cluster.NodeAdapter
   alias MirrorNeuron.Config
   alias MirrorNeuron.JobId
@@ -22,6 +22,12 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   @default_recovery_eval_ttl_seconds 24 * 60 * 60
   @recovery_eval_statuses ["pending", "running", "blocked", "complete", "failed"]
   @terminal_recovery_eval_statuses ["complete", "failed"]
+  @service_index_fields [
+    {:name, "name"},
+    {:job_id, "job"},
+    {:node, "node"},
+    {:agent_id, "agent"}
+  ]
   @recovery_eval_fields [
     "eval_id",
     "job_id",
@@ -108,12 +114,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   def persist_schedule(schedule_id, schedule_map) do
-    schedule =
-      schedule_map
-      |> stringify_map()
-      |> Map.put("schedule_id", schedule_id)
-      |> Map.put_new("created_at", timestamp())
-      |> Map.put("updated_at", timestamp())
+    schedule = prepare_schedule(schedule_id, schedule_map)
 
     commands =
       [
@@ -132,22 +133,72 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
+  def persist_schedule_fenced(schedule_id, schedule_map, lease_name, owner_id, epoch) do
+    schedule = prepare_schedule(schedule_id, schedule_map)
+    due_score = schedule_due_score(schedule)
+
+    script = """
+    if redis.call("get", KEYS[1]) ~= ARGV[1] then
+      return 0
+    end
+
+    redis.call("set", KEYS[2], ARGV[2])
+    redis.call("sadd", KEYS[3], ARGV[3])
+    redis.call("zrem", KEYS[4], ARGV[3])
+
+    if ARGV[4] ~= "" then
+      redis.call("zadd", KEYS[4], ARGV[4], ARGV[3])
+    end
+
+    return 1
+    """
+
+    args = [
+      "EVAL",
+      script,
+      "4",
+      key("lease", lease_name),
+      key("schedule", schedule_id),
+      key(@schedules_set),
+      key(@schedule_due_zset),
+      fenced_lease_value(owner_id, epoch),
+      Jason.encode!(schedule),
+      schedule_id,
+      due_score
+    ]
+
+    case command(args) do
+      {:ok, 1} ->
+        with :ok <- wait_for_replicas(), do: {:ok, schedule}
+
+      {:ok, 0} ->
+        {:error, :not_owner}
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
+    end
+  end
+
   def fetch_schedule(schedule_id) do
     case command(["GET", key("schedule", schedule_id)]) do
-      {:ok, nil} -> {:error, "schedule #{schedule_id} was not found"}
-      {:ok, contents} -> Jason.decode(contents)
-      {:error, reason} -> {:error, format_reason(reason)}
+      {:ok, nil} ->
+        {:error, "schedule #{schedule_id} was not found"}
+
+      {:ok, contents} ->
+        case Jason.decode(contents) do
+          {:ok, schedule} when is_map(schedule) -> {:ok, schedule}
+          {:ok, _invalid} -> {:error, :invalid_schedule}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
     end
   end
 
   def list_schedules do
     with {:ok, schedule_ids} <- command(["SMEMBERS", key(@schedules_set)]) do
-      schedule_ids
-      |> Enum.sort()
-      |> Enum.map(&fetch_schedule/1)
-      |> Enum.filter(&match?({:ok, _}, &1))
-      |> Enum.map(fn {:ok, schedule} -> schedule end)
-      |> then(&{:ok, &1})
+      fetch_indexed_schedules(schedule_ids)
     else
       {:error, reason} -> {:error, format_reason(reason)}
     end
@@ -158,29 +209,63 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
     with {:ok, schedule_ids} <-
            command(["ZRANGEBYSCORE", key(@schedule_due_zset), "-inf", to_string(score)]) do
-      schedule_ids
-      |> Enum.sort()
-      |> Enum.map(&fetch_schedule/1)
-      |> Enum.filter(&match?({:ok, _}, &1))
-      |> Enum.map(fn {:ok, schedule} -> schedule end)
-      |> then(&{:ok, &1})
+      fetch_indexed_schedules(schedule_ids)
     else
       {:error, reason} -> {:error, format_reason(reason)}
     end
   end
 
   def delete_schedule(schedule_id) do
-    with {:ok, _results} <-
+    with {:ok, results} <-
            transaction([
              ["DEL", key("schedule", schedule_id)],
              ["SREM", key(@schedules_set), schedule_id],
              ["ZREM", key(@schedule_due_zset), schedule_id]
            ]),
+         :ok <- expect_no_redis_errors(results),
+         :ok <- delete_schedule_lease_metadata(schedule_id),
          :ok <- wait_for_replicas() do
       :ok
     else
       {:error, reason} -> {:error, format_reason(reason)}
       other -> {:error, format_reason(other)}
+    end
+  end
+
+  def delete_schedule_fenced(schedule_id, lease_name, owner_id, epoch) do
+    script = """
+    if redis.call("get", KEYS[1]) ~= ARGV[1] then
+      return 0
+    end
+
+    redis.call("del", KEYS[2])
+    redis.call("srem", KEYS[3], ARGV[2])
+    redis.call("zrem", KEYS[4], ARGV[2])
+    redis.call("del", KEYS[1])
+    redis.call("del", KEYS[5])
+    return 1
+    """
+
+    case command([
+           "EVAL",
+           script,
+           "5",
+           key("lease", lease_name),
+           key("schedule", schedule_id),
+           key(@schedules_set),
+           key(@schedule_due_zset),
+           key("lease", lease_name, "epoch"),
+           fenced_lease_value(owner_id, epoch),
+           schedule_id
+         ]) do
+      {:ok, 1} ->
+        with :ok <- delete_schedule_lease_metadata(schedule_id), do: wait_for_replicas()
+
+      {:ok, 0} ->
+        {:error, :not_owner}
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
     end
   end
 
@@ -195,7 +280,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
     with {:ok, _results} <-
            transaction([
-             ["SET", key("trigger", "event", event_id), encoded],
              ["LPUSH", key(@trigger_events_list), encoded],
              ["LTRIM", key(@trigger_events_list), "0", "999"]
            ]),
@@ -226,35 +310,113 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
     deployment_key = Map.get(deployment, "deployment_key")
 
-    commands =
-      [
-        ["SET", key("deployment", deployment_id), Jason.encode!(deployment)],
-        ["SADD", key(@deployments_set), deployment_id]
-      ] ++ deployment_index_commands(deployment_key, deployment_id)
+    script = """
+    local existing = redis.call("get", KEYS[1])
 
-    with {:ok, results} <- transaction(commands),
-         :ok <- expect_first_result(results, fn value -> value == "OK" end),
-         :ok <- wait_for_replicas() do
-      {:ok, deployment}
-    else
-      {:error, reason} -> {:error, format_reason(reason)}
-      other -> {:error, format_reason(other)}
+    if existing then
+      local ok, decoded = pcall(cjson.decode, existing)
+
+      if not ok or type(decoded) ~= "table" or tostring(decoded["deployment_id"]) ~= ARGV[1] then
+        return redis.error_reply("invalid existing deployment " .. ARGV[1])
+      end
+
+      local old_key = decoded["deployment_key"]
+
+      if type(old_key) == "string" and old_key ~= "" and old_key ~= ARGV[3] then
+        local old_current = ARGV[4] .. old_key .. ":current"
+
+        if redis.call("get", old_current) == ARGV[1] then
+          redis.call("del", old_current)
+        end
+
+        redis.call("srem", ARGV[4] .. old_key .. ":deployments", ARGV[1])
+      end
+    end
+
+    redis.call("set", KEYS[1], ARGV[2])
+    redis.call("sadd", KEYS[2], ARGV[1])
+
+    if ARGV[3] ~= "" then
+      redis.call("set", ARGV[4] .. ARGV[3] .. ":current", ARGV[1])
+      redis.call("sadd", ARGV[4] .. ARGV[3] .. ":deployments", ARGV[1])
+    end
+
+    return 1
+    """
+
+    args = [
+      "EVAL",
+      script,
+      "2",
+      key("deployment", deployment_id),
+      key(@deployments_set),
+      deployment_id,
+      Jason.encode!(deployment),
+      if(is_binary(deployment_key), do: deployment_key, else: ""),
+      key("deployment", "key", "")
+    ]
+
+    case command(args) do
+      {:ok, 1} ->
+        with :ok <- wait_for_replicas(), do: {:ok, deployment}
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
+
+      other ->
+        {:error, format_reason(other)}
     end
   end
 
   def fetch_deployment(deployment_id) do
     case command(["GET", key("deployment", deployment_id)]) do
-      {:ok, nil} -> {:error, "deployment #{deployment_id} was not found"}
-      {:ok, contents} -> Jason.decode(contents)
-      {:error, reason} -> {:error, format_reason(reason)}
+      {:ok, nil} ->
+        {:error, "deployment #{deployment_id} was not found"}
+
+      {:ok, contents} ->
+        case Jason.decode(contents) do
+          {:ok, %{"deployment_id" => ^deployment_id} = deployment} -> {:ok, deployment}
+          {:ok, deployment} when is_map(deployment) -> {:error, :invalid_deployment}
+          {:ok, _invalid} -> {:error, :invalid_deployment}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
     end
   end
 
   def fetch_deployment_by_key(deployment_key) do
-    case command(["GET", key("deployment", "key", deployment_key, "current")]) do
-      {:ok, nil} -> {:error, "deployment #{deployment_key} was not found"}
-      {:ok, deployment_id} -> fetch_deployment(deployment_id)
-      {:error, reason} -> {:error, format_reason(reason)}
+    current_key = key("deployment", "key", deployment_key, "current")
+
+    case command(["GET", current_key]) do
+      {:ok, nil} ->
+        {:error, "deployment #{deployment_key} was not found"}
+
+      {:ok, deployment_id} ->
+        case fetch_deployment(deployment_id) do
+          {:ok, %{"deployment_key" => ^deployment_key} = deployment} ->
+            {:ok, deployment}
+
+          {:ok, _mismatched} ->
+            case remove_stale_deployment_pointer(current_key, deployment_key, deployment_id) do
+              :ok -> {:error, "deployment #{deployment_key} was not found"}
+              {:error, reason} -> {:error, reason}
+            end
+
+          {:error, reason} ->
+            if missing_deployment?(deployment_id, reason) do
+              case purge_missing_deployment(deployment_id) do
+                :ok -> {:error, "deployment #{deployment_key} was not found"}
+                {:error, cleanup_reason} -> {:error, cleanup_reason}
+              end
+            else
+              {:error, reason}
+            end
+        end
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
     end
   end
 
@@ -263,25 +425,16 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       {:ok, deployment} ->
         {:ok, deployment}
 
-      {:error, _reason} ->
-        fetch_deployment_by_key(id_or_key)
+      {:error, reason} ->
+        if missing_deployment?(id_or_key, reason),
+          do: fetch_deployment_by_key(id_or_key),
+          else: {:error, reason}
     end
   end
 
   def list_deployments do
     with {:ok, deployment_ids} <- command(["SMEMBERS", key(@deployments_set)]) do
-      deployments =
-        deployment_ids
-        |> Enum.sort()
-        |> Enum.map(fn deployment_id ->
-          case fetch_deployment(deployment_id) do
-            {:ok, deployment} -> deployment
-            {:error, _reason} -> nil
-          end
-        end)
-        |> Enum.reject(&is_nil/1)
-
-      {:ok, deployments}
+      fetch_indexed_deployments(deployment_ids)
     else
       {:error, reason} -> {:error, format_reason(reason)}
     end
@@ -321,27 +474,33 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     version_id = to_string(version)
 
     case command(["GET", key("deployment", "key", deployment_key, "version", version_id)]) do
-      {:ok, nil} -> {:error, "deployment #{deployment_key} version #{version_id} was not found"}
-      {:ok, contents} -> Jason.decode(contents)
-      {:error, reason} -> {:error, format_reason(reason)}
+      {:ok, nil} ->
+        {:error, "deployment #{deployment_key} version #{version_id} was not found"}
+
+      {:ok, contents} ->
+        case Jason.decode(contents) do
+          {:ok, %{"deployment_key" => ^deployment_key, "version" => ^version_id} = record} ->
+            {:ok, record}
+
+          {:ok, record} when is_map(record) ->
+            {:error, :invalid_deployment_version}
+
+          {:ok, _invalid} ->
+            {:error, :invalid_deployment_version}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
     end
   end
 
   def list_job_versions(deployment_key) do
     with {:ok, versions} <-
            command(["SMEMBERS", key("deployment", "key", deployment_key, "versions")]) do
-      records =
-        versions
-        |> Enum.sort_by(&version_sort_value/1)
-        |> Enum.map(fn version ->
-          case fetch_job_version(deployment_key, version) do
-            {:ok, record} -> record
-            {:error, _reason} -> nil
-          end
-        end)
-        |> Enum.reject(&is_nil/1)
-
-      {:ok, records}
+      fetch_indexed_deployment_versions(deployment_key, versions)
     else
       {:error, reason} -> {:error, format_reason(reason)}
     end
@@ -393,11 +552,12 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
     with :ok <- validate_agent_lease_epoch(job_id, snapshot),
          :ok <- persist_disk_agent(job_id, agent_id, snapshot),
+         retention_commands <- agent_snapshot_retention_commands(job_id, agent_id),
          {:ok, results} <-
            transaction([
              ["SET", key("job", job_id, "agent", agent_id), encoded],
              ["SADD", key("job", job_id, "agents"), agent_id]
-             | expire_agent_snapshot_commands(job_id, agent_id)
+             | retention_commands
            ]),
          :ok <- expect_persist_agent_results(results),
          :ok <- wait_for_replicas() do
@@ -433,36 +593,61 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   def delete_job(job_id) do
-    job_map =
-      case fetch_job(job_id) do
-        {:ok, job} when is_map(job) -> job
-        _ -> nil
-      end
+    DiskCheckpoint.with_job_lock(job_id, fn -> do_delete_job(job_id) end)
+  end
 
-    _ = delete_service_instances(job_id: job_id)
-    _ = SharedStorage.cleanup_job(job_id, job_map)
-    _ = JobStore.cleanup_job(job_id)
-    _ = DiskCheckpoint.delete_job(job_id)
+  defp do_delete_job(job_id) do
+    with {:ok, job_map} <- job_for_cleanup(job_id),
+         :ok <- delete_service_instances(job_id: job_id),
+         :ok <- SharedStorage.cleanup_job(job_id, job_map),
+         :ok <- JobStore.cleanup_job(job_id),
+         :ok <- DiskCheckpoint.delete_job(job_id),
+         {:ok, agent_ids} <- command(["SMEMBERS", key("job", job_id, "agents")]),
+         :ok <- delete_job_redis_keys(job_id, agent_ids) do
+      :ok
+    end
+  end
 
-    with {:ok, agent_ids} <- command(["SMEMBERS", key("job", job_id, "agents")]) do
-      keys =
-        [
-          key("job", job_id),
-          key("job", job_id, "summary"),
-          key("job", job_id, "events"),
-          key("job", job_id, "agents")
-        ] ++ Enum.map(agent_ids, &key("job", job_id, "agent", &1))
+  defp job_for_cleanup(job_id) do
+    case fetch_job(job_id) do
+      {:ok, job} when is_map(job) ->
+        {:ok, job}
 
-      _ = command(["DEL" | keys])
-      _ = command(["SREM", key(@jobs_set), job_id])
-      _ = wait_for_replicas()
+      {:error, reason} ->
+        if reason == "job #{job_id} was not found", do: {:ok, nil}, else: {:error, reason}
+    end
+  end
+
+  defp delete_job_redis_keys(job_id, agent_ids) do
+    keys =
+      [
+        key("job", job_id),
+        key("job", job_id, "summary"),
+        key("job", job_id, "events"),
+        key("job", job_id, "agents"),
+        key("lease", "job:#{job_id}"),
+        key("lease", "job:#{job_id}", "epoch")
+      ] ++ Enum.map(agent_ids, &key("job", job_id, "agent", &1))
+
+    with {:ok, results} <-
+           transaction([
+             ["DEL" | keys],
+             ["SREM", key(@jobs_set), job_id]
+           ]),
+         :ok <- expect_no_redis_errors(results),
+         :ok <- wait_for_replicas() do
       :ok
     else
-      {:error, _reason} -> :ok
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
     end
   end
 
   def refresh_disk_checkpoint(job_id) do
+    DiskCheckpoint.with_job_lock(job_id, fn -> do_refresh_disk_checkpoint(job_id) end)
+  end
+
+  defp do_refresh_disk_checkpoint(job_id) do
     with {:ok, job} <- fetch_job(job_id),
          {:ok, agents} <- list_agents(job_id),
          :ok <- DiskCheckpoint.persist_job(job_id, job),
@@ -478,25 +663,75 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   def sweep_retention(opts \\ []) do
     ttl_seconds = Keyword.get(opts, :terminal_job_ttl_seconds, terminal_job_ttl_seconds())
+    cleanup_job = Keyword.get(opts, :cleanup_job, fn _job_id -> :ok end)
 
     with {:ok, job_ids} <- list_job_ids(),
-         {:ok, eval_result} <- sweep_recovery_eval_retention() do
+         {:ok, eval_result} <- sweep_recovery_eval_retention(),
+         {:ok, blob_result} <- sweep_blob_ref_index(),
+         {:ok, service_result} <- sweep_service_instance_index(),
+         {:ok, schedule_result} <- sweep_schedule_index(),
+         {:ok, trigger_result} <- sweep_legacy_trigger_event_keys(),
+         {:ok, deployment_result} <- sweep_deployment_indexes() do
       result =
         Enum.reduce(job_ids, %{deleted_jobs: [], stale_job_ids: []}, fn job_id, acc ->
           case fetch_job(job_id) do
             {:ok, job} ->
+              refresh_job_blob_refs(job)
+
               if terminal_job_expired?(job, ttl_seconds) do
-                delete_job(job_id)
-                Map.update!(acc, :deleted_jobs, &[job_id | &1])
+                case run_retention_cleanup(cleanup_job, job_id, job) do
+                  :ok ->
+                    case delete_job(job_id) do
+                      :ok ->
+                        Map.update!(acc, :deleted_jobs, &[job_id | &1])
+
+                      {:error, reason} ->
+                        Logger.warning(
+                          "retention deletion deferred for #{job_id}: #{inspect(reason)}"
+                        )
+
+                        acc
+                    end
+
+                  {:error, reason} ->
+                    Logger.warning("retention cleanup deferred for #{job_id}: #{inspect(reason)}")
+
+                    acc
+                end
               else
                 acc
               end
 
-            {:error, _reason} ->
-              _ = command(["SREM", key(@jobs_set), job_id])
-              _ = JobStore.cleanup_job(job_id)
-              _ = DiskCheckpoint.delete_job(job_id)
-              Map.update!(acc, :stale_job_ids, &[job_id | &1])
+            {:error, reason} ->
+              if missing_job?(job_id, reason) do
+                case run_retention_cleanup(cleanup_job, job_id, nil) do
+                  :ok ->
+                    case delete_job(job_id) do
+                      :ok ->
+                        Map.update!(acc, :stale_job_ids, &[job_id | &1])
+
+                      {:error, delete_reason} ->
+                        Logger.warning(
+                          "stale job deletion deferred for #{job_id}: #{inspect(delete_reason)}"
+                        )
+
+                        acc
+                    end
+
+                  {:error, cleanup_reason} ->
+                    Logger.warning(
+                      "stale job cleanup deferred for #{job_id}: #{inspect(cleanup_reason)}"
+                    )
+
+                    acc
+                end
+              else
+                Logger.warning(
+                  "retention could not classify job #{job_id}; cleanup deferred: #{inspect(reason)}"
+                )
+
+                acc
+              end
           end
         end)
 
@@ -512,9 +747,57 @@ defmodule MirrorNeuron.Persistence.RedisStore do
          deleted_recovery_eval_count: Map.get(eval_result, :deleted_recovery_eval_count, 0),
          stale_recovery_eval_count: Map.get(eval_result, :stale_recovery_eval_count, 0),
          deleted_recovery_evals: Map.get(eval_result, :deleted_recovery_evals, []),
-         stale_recovery_evals: Map.get(eval_result, :stale_recovery_evals, [])
+         stale_recovery_evals: Map.get(eval_result, :stale_recovery_evals, []),
+         stale_blob_ref_count: Map.get(blob_result, :stale_blob_ref_count, 0),
+         stale_blob_refs: Map.get(blob_result, :stale_blob_refs, []),
+         stale_service_instance_count: Map.get(service_result, :stale_service_instance_count, 0),
+         stale_service_instances: Map.get(service_result, :stale_service_instances, []),
+         stale_schedule_count: Map.get(schedule_result, :stale_schedule_count, 0),
+         stale_schedules: Map.get(schedule_result, :stale_schedules, []),
+         stale_trigger_event_key_count:
+           Map.get(trigger_result, :stale_trigger_event_key_count, 0),
+         stale_deployment_count: Map.get(deployment_result, :stale_deployment_count, 0),
+         stale_deployments: Map.get(deployment_result, :stale_deployments, []),
+         stale_deployment_version_count:
+           Map.get(deployment_result, :stale_deployment_version_count, 0)
        }}
     end
+  end
+
+  defp run_retention_cleanup(cleanup_job, job_id, job) do
+    result =
+      cond do
+        is_function(cleanup_job, 2) -> cleanup_job.(job_id, job)
+        is_function(cleanup_job, 1) -> cleanup_job.(job_id)
+      end
+
+    case result do
+      :ok -> :ok
+      {:error, _reason} = error -> error
+      other -> {:error, {:unexpected_cleanup_result, other}}
+    end
+  rescue
+    exception -> {:error, {exception.__struct__, Exception.message(exception)}}
+  catch
+    kind, reason -> {:error, {kind, reason}}
+  end
+
+  defp refresh_job_blob_refs(job) do
+    job
+    |> BlobRef.collect()
+    |> Enum.each(fn ref ->
+      case register_blob_ref(ref) do
+        {:ok, _blob} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "failed to refresh blob metadata #{ref["sha256"]} for job #{job["job_id"]}: #{inspect(reason)}"
+          )
+      end
+    end)
+
+    :ok
   end
 
   def acquire_lease(lease_name, owner_id, ttl_ms) do
@@ -599,27 +882,76 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       |> Map.put_new("created_at", timestamp())
       |> Map.put("updated_at", timestamp())
 
-    commands =
-      [
-        ["SET", key("service", "instance", instance_id), Jason.encode!(service)],
-        ["SADD", key("service", "instances"), instance_id]
-      ] ++ service_index_commands("SADD", service, instance_id)
+    script = """
+    local existing = redis.call("get", KEYS[1])
 
-    with {:ok, results} <- transaction(commands),
-         :ok <- expect_first_result(results, fn value -> value == "OK" end),
-         :ok <- wait_for_replicas() do
-      {:ok, service}
-    else
-      {:error, reason} -> {:error, format_reason(reason)}
-      other -> {:error, format_reason(other)}
+    if existing then
+      local ok, decoded = pcall(cjson.decode, existing)
+
+      if not ok or type(decoded) ~= "table" or tostring(decoded["id"]) ~= ARGV[1] then
+        return redis.error_reply("invalid existing service instance " .. ARGV[1])
+      end
+
+      for index = 3, #ARGV, 3 do
+        local old_value = decoded[ARGV[index]]
+
+        if type(old_value) == "string" and old_value ~= "" then
+          redis.call("srem", ARGV[index + 1] .. old_value, ARGV[1])
+        end
+      end
+    end
+
+    redis.call("set", KEYS[1], ARGV[2])
+    redis.call("sadd", KEYS[2], ARGV[1])
+
+    for index = 3, #ARGV, 3 do
+      local new_value = ARGV[index + 2]
+
+      if new_value ~= "" then
+        redis.call("sadd", ARGV[index + 1] .. new_value, ARGV[1])
+      end
+    end
+
+    return 1
+    """
+
+    args =
+      [
+        "EVAL",
+        script,
+        "2",
+        key("service", "instance", instance_id),
+        key("service", "instances"),
+        instance_id,
+        Jason.encode!(service)
+      ] ++ service_index_script_args(service)
+
+    case command(args) do
+      {:ok, 1} ->
+        with :ok <- wait_for_replicas(), do: {:ok, service}
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
+
+      other ->
+        {:error, format_reason(other)}
     end
   end
 
   def fetch_service_instance(instance_id) do
     case command(["GET", key("service", "instance", instance_id)]) do
-      {:ok, nil} -> {:error, "service instance #{instance_id} was not found"}
-      {:ok, encoded} -> Jason.decode(encoded)
-      {:error, reason} -> {:error, format_reason(reason)}
+      {:ok, nil} ->
+        {:error, "service instance #{instance_id} was not found"}
+
+      {:ok, encoded} ->
+        case Jason.decode(encoded) do
+          {:ok, service} when is_map(service) -> {:ok, service}
+          {:ok, _invalid} -> {:error, :invalid_service_instance}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
     end
   end
 
@@ -632,31 +964,23 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   def delete_service_instance(instance_id) do
     case fetch_service_instance(instance_id) do
-      {:ok, service} ->
-        commands =
-          [
-            ["DEL", key("service", "instance", instance_id)],
-            ["SREM", key("service", "instances"), instance_id]
-          ] ++ service_index_commands("SREM", service, instance_id)
+      {:ok, _service} ->
+        purge_service_instance(instance_id)
 
-        _ = transaction(commands)
-        _ = wait_for_replicas()
-        :ok
-
-      {:error, _reason} ->
-        :ok
+      {:error, reason} ->
+        if missing_service_instance?(instance_id, reason) or corrupt_service_instance?(reason),
+          do: purge_service_instance(instance_id),
+          else: {:error, reason}
     end
   end
 
   def delete_service_instances(opts) when is_list(opts) do
-    with {:ok, services} <- list_service_instances() do
-      services
-      |> Enum.filter(&service_matches_opts?(&1, opts))
-      |> Enum.each(fn service -> delete_service_instance(service["id"]) end)
-
-      :ok
+    with {:ok, instance_ids} <- service_candidate_ids(opts) do
+      Enum.reduce_while(instance_ids, :ok, fn instance_id, :ok ->
+        continue_service_cleanup(delete_service_instance_if_matches(instance_id, opts))
+      end)
     else
-      {:error, _reason} -> :ok
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -705,6 +1029,31 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
+  def release_ephemeral_fenced_lease(lease_name, owner_id, epoch) do
+    script = """
+    if redis.call("get", KEYS[1]) == ARGV[1] then
+      redis.call("del", KEYS[1])
+      redis.call("del", KEYS[2])
+      return 1
+    else
+      return 0
+    end
+    """
+
+    case command([
+           "EVAL",
+           script,
+           "2",
+           key("lease", lease_name),
+           key("lease", lease_name, "epoch"),
+           fenced_lease_value(owner_id, epoch)
+         ]) do
+      {:ok, 1} -> :ok
+      {:ok, 0} -> {:error, :not_owner}
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
   def persist_bundle_archive(fingerprint, archive) do
     archive = Map.put(archive, "fingerprint", fingerprint)
 
@@ -720,6 +1069,74 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       {:ok, nil} -> {:error, "bundle archive #{fingerprint} was not found"}
       {:ok, encoded} -> Jason.decode(encoded)
       {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  def refresh_bundle_archive(fingerprint) when is_binary(fingerprint) and fingerprint != "" do
+    redis_key = key("bundle", fingerprint)
+
+    script = """
+    if redis.call("exists", KEYS[1]) == 0 then
+      return 0
+    end
+
+    redis.call("persist", KEYS[1])
+    return 1
+    """
+
+    case command(["EVAL", script, "1", redis_key]) do
+      {:ok, 1} -> wait_for_replicas()
+      {:ok, 0} -> {:error, :not_found}
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  def refresh_bundle_archive(_fingerprint), do: {:error, :invalid_fingerprint}
+
+  def expire_unreferenced_bundle_archives(referenced_fingerprints) do
+    referenced = MapSet.new(referenced_fingerprints)
+    ttl_seconds = bundle_archive_ttl_seconds()
+
+    if is_integer(ttl_seconds) and ttl_seconds > 0 do
+      with {:ok, archive_keys} <- scan_keys(key("bundle", "*")),
+           archive_refs <-
+             archive_keys
+             |> Enum.flat_map(&bundle_archive_ref_from_key/1)
+             |> Enum.reject(fn {fingerprint, _redis_key} ->
+               MapSet.member?(referenced, fingerprint)
+             end),
+           {:ok, transitioned} <- expire_persistent_bundle_archives(archive_refs, ttl_seconds),
+           :ok <- maybe_wait_for_deleted_keys(transitioned) do
+        {:ok, transitioned}
+      else
+        {:error, reason} -> {:error, format_reason(reason)}
+        other -> {:error, format_reason(other)}
+      end
+    else
+      {:ok, 0}
+    end
+  end
+
+  def referenced_bundle_fingerprints do
+    with {:ok, redis_job_keys} <- scan_keys(key("job", "*")),
+         job_ids <- redis_job_keys |> Enum.flat_map(&root_job_id_from_key/1) |> Enum.uniq(),
+         {:ok, schedule_ids} <- raw_schedule_index_ids(),
+         {:ok, version_keys} <-
+           scan_keys(key("deployment", "key", "*", "version", "*")),
+         reference_keys <-
+           Enum.map(job_ids, &key("job", &1)) ++
+             Enum.map(schedule_ids, &key("schedule", &1)) ++ version_keys,
+         {:ok, records} <- fetch_bundle_reference_records(reference_keys) do
+      fingerprints =
+        records
+        |> Enum.flat_map(&bundle_fingerprints/1)
+        |> Enum.uniq()
+        |> Enum.sort()
+
+      {:ok, fingerprints}
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
     end
   end
 
@@ -751,7 +1168,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   def list_blob_refs do
-    with {:ok, sha_values} <- command(["SMEMBERS", key("blobs")]) do
+    with {:ok, %{active_blob_refs: sha_values}} <- sweep_blob_ref_index() do
       refs =
         sha_values
         |> Enum.sort()
@@ -769,6 +1186,50 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
+  defp sweep_blob_ref_index do
+    with {:ok, sha_values} <- command(["SMEMBERS", key("blobs")]),
+         {:ok, existence} <- blob_ref_existence(sha_values),
+         :ok <- expect_no_redis_errors(existence),
+         {active, stale} <- partition_blob_refs(sha_values, existence),
+         :ok <- remove_stale_blob_ref_indexes(stale) do
+      stale = Enum.sort(stale)
+
+      {:ok,
+       %{
+         active_blob_refs: Enum.sort(active),
+         stale_blob_ref_count: length(stale),
+         stale_blob_refs: stale
+       }}
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
+    end
+  end
+
+  defp blob_ref_existence([]), do: {:ok, []}
+
+  defp blob_ref_existence(sha_values) do
+    pipeline(Enum.map(sha_values, &["EXISTS", key("blob", &1)]))
+  end
+
+  defp partition_blob_refs(sha_values, existence) do
+    sha_values
+    |> Enum.zip(existence)
+    |> Enum.reduce({[], []}, fn
+      {sha256, 1}, {active, stale} -> {[sha256 | active], stale}
+      {sha256, 0}, {active, stale} -> {active, [sha256 | stale]}
+    end)
+  end
+
+  defp remove_stale_blob_ref_indexes([]), do: :ok
+
+  defp remove_stale_blob_ref_indexes(stale) do
+    case command(["SREM", key("blobs") | stale]) do
+      {:ok, _removed} -> :ok
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
   def persist_node_state(node_name, attrs) do
     state =
       attrs
@@ -776,35 +1237,44 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       |> Map.put("node", node_name)
       |> Map.put("updated_at", timestamp())
 
-    with {:ok, "OK"} <- command(["SET", key("node", node_name, "state"), Jason.encode!(state)]),
-         {:ok, _count} <- command(["SADD", key("nodes"), node_name]),
+    with {:ok, results} <-
+           transaction([
+             ["SET", key("node", node_name, "state"), Jason.encode!(state)],
+             ["SADD", key("nodes"), node_name]
+           ]),
+         :ok <- expect_no_redis_errors(results),
          :ok <- wait_for_replicas() do
       {:ok, state}
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
     end
   end
 
   def fetch_node_state(node_name) do
     case command(["GET", key("node", node_name, "state")]) do
-      {:ok, nil} -> {:error, "node #{node_name} state was not found"}
-      {:ok, encoded} -> Jason.decode(encoded)
-      {:error, reason} -> {:error, format_reason(reason)}
+      {:ok, nil} ->
+        {:error, "node #{node_name} state was not found"}
+
+      {:ok, encoded} ->
+        case Jason.decode(encoded) do
+          {:ok, state} when is_map(state) -> {:ok, state}
+          {:ok, _invalid} -> {:error, :invalid_node_state}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
     end
   end
 
   def list_node_states do
     case command(["SMEMBERS", key("nodes")]) do
       {:ok, node_names} ->
-        states =
-          node_names
-          |> Enum.map(fn node_name ->
-            case fetch_node_state(node_name) do
-              {:ok, state} -> state
-              {:error, _reason} -> nil
-            end
-          end)
-          |> Enum.reject(&is_nil/1)
-
-        {:ok, states}
+        node_names
+        |> Enum.sort()
+        |> Enum.reduce_while({:ok, [], false}, &collect_node_state/2)
+        |> finish_node_state_listing()
 
       {:error, reason} ->
         {:error, format_reason(reason)}
@@ -1093,23 +1563,799 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     Map.get(map, name, Map.get(map, String.to_atom(name), default))
   end
 
+  defp fetch_indexed_schedules(schedule_ids) do
+    schedule_ids
+    |> Enum.sort()
+    |> Enum.reduce_while({:ok, []}, fn schedule_id, {:ok, schedules} ->
+      case fetch_schedule(schedule_id) do
+        {:ok, schedule} ->
+          {:cont, {:ok, [schedule | schedules]}}
+
+        {:error, reason} ->
+          cond do
+            missing_schedule?(schedule_id, reason) ->
+              case delete_schedule(schedule_id) do
+                :ok -> {:cont, {:ok, schedules}}
+                {:error, cleanup_reason} -> {:halt, {:error, cleanup_reason}}
+              end
+
+            corrupt_schedule?(reason) ->
+              Logger.debug("ignoring unreadable schedule #{schedule_id}: #{inspect(reason)}")
+              {:cont, {:ok, schedules}}
+
+            true ->
+              {:halt, {:error, format_reason(reason)}}
+          end
+      end
+    end)
+    |> case do
+      {:ok, schedules} -> {:ok, Enum.reverse(schedules)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp fetch_indexed_deployments(deployment_ids) do
+    deployment_ids
+    |> Enum.sort()
+    |> Enum.reduce_while({:ok, []}, fn deployment_id, {:ok, deployments} ->
+      case fetch_deployment(deployment_id) do
+        {:ok, deployment} ->
+          {:cont, {:ok, [deployment | deployments]}}
+
+        {:error, reason} ->
+          cond do
+            missing_deployment?(deployment_id, reason) ->
+              case purge_missing_deployment(deployment_id) do
+                :ok -> {:cont, {:ok, deployments}}
+                {:error, cleanup_reason} -> {:halt, {:error, cleanup_reason}}
+              end
+
+            corrupt_deployment?(reason) ->
+              Logger.debug("ignoring unreadable deployment #{deployment_id}: #{inspect(reason)}")
+              {:cont, {:ok, deployments}}
+
+            true ->
+              {:halt, {:error, format_reason(reason)}}
+          end
+      end
+    end)
+    |> case do
+      {:ok, deployments} -> {:ok, Enum.reverse(deployments)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp fetch_indexed_deployment_versions(deployment_key, versions) do
+    versions
+    |> Enum.sort_by(&version_sort_value/1)
+    |> Enum.reduce_while({:ok, []}, fn version, {:ok, records} ->
+      case fetch_job_version(deployment_key, version) do
+        {:ok, record} ->
+          {:cont, {:ok, [record | records]}}
+
+        {:error, reason} ->
+          cond do
+            missing_deployment_version?(deployment_key, version, reason) ->
+              case remove_missing_deployment_version(deployment_key, version) do
+                :ok -> {:cont, {:ok, records}}
+                {:error, cleanup_reason} -> {:halt, {:error, cleanup_reason}}
+              end
+
+            corrupt_deployment_version?(reason) ->
+              Logger.debug(
+                "ignoring unreadable deployment #{deployment_key} version #{version}: #{inspect(reason)}"
+              )
+
+              {:cont, {:ok, records}}
+
+            true ->
+              {:halt, {:error, format_reason(reason)}}
+          end
+      end
+    end)
+    |> case do
+      {:ok, records} -> {:ok, Enum.reverse(records)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp remove_stale_deployment_pointer(current_key, deployment_key, deployment_id) do
+    script = """
+    if redis.call("get", KEYS[2]) ~= ARGV[1] then
+      return 0
+    end
+
+    local existing = redis.call("get", KEYS[1])
+
+    if existing then
+      local ok, decoded = pcall(cjson.decode, existing)
+
+      if ok and type(decoded) == "table" and decoded["deployment_key"] == ARGV[2] then
+        return 0
+      end
+    end
+
+    redis.call("del", KEYS[2])
+    redis.call("srem", KEYS[3], ARGV[1])
+    return 1
+    """
+
+    deployments_key = key("deployment", "key", deployment_key, "deployments")
+
+    case command([
+           "EVAL",
+           script,
+           "3",
+           key("deployment", deployment_id),
+           current_key,
+           deployments_key,
+           deployment_id,
+           deployment_key
+         ]) do
+      {:ok, _removed} -> :ok
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  defp purge_missing_deployment(deployment_id) do
+    with {:ok, current_keys} <- scan_keys(key("deployment", "key", "*", "current")),
+         {:ok, deployment_set_keys} <-
+           scan_keys(key("deployment", "key", "*", "deployments")),
+         {:ok, _result} <-
+           purge_missing_deployment(deployment_id, current_keys, deployment_set_keys) do
+      :ok
+    end
+  end
+
+  defp purge_missing_deployment(deployment_id, current_keys, deployment_set_keys) do
+    script = """
+    if redis.call("exists", KEYS[1]) ~= 0 then
+      return 0
+    end
+
+    redis.call("srem", KEYS[2], ARGV[1])
+    local current_count = tonumber(ARGV[2])
+
+    for index = 3, 2 + current_count do
+      if redis.call("get", KEYS[index]) == ARGV[1] then
+        redis.call("del", KEYS[index])
+      end
+    end
+
+    for index = 3 + current_count, #KEYS do
+      redis.call("srem", KEYS[index], ARGV[1])
+    end
+
+    return 1
+    """
+
+    keys =
+      [key("deployment", deployment_id), key(@deployments_set)] ++
+        current_keys ++ deployment_set_keys
+
+    case command([
+           "EVAL",
+           script,
+           to_string(length(keys))
+           | keys ++ [deployment_id, to_string(length(current_keys))]
+         ]) do
+      {:ok, result} when result in [0, 1] ->
+        with :ok <- maybe_wait_for_deleted_keys(result), do: {:ok, result}
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
+
+      other ->
+        {:error, format_reason(other)}
+    end
+  end
+
+  defp remove_missing_deployment_version(deployment_key, version) do
+    version = to_string(version)
+    version_key = key("deployment", "key", deployment_key, "version", version)
+    versions_key = key("deployment", "key", deployment_key, "versions")
+
+    case remove_missing_deployment_version(version_key, versions_key, version) do
+      {:ok, _result} -> :ok
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp remove_missing_deployment_version(version_key, versions_key, version) do
+    script = """
+    if redis.call("exists", KEYS[1]) == 0 then
+      redis.call("srem", KEYS[2], ARGV[1])
+      return 1
+    end
+
+    return 0
+    """
+
+    case command([
+           "EVAL",
+           script,
+           "2",
+           version_key,
+           versions_key,
+           version
+         ]) do
+      {:ok, result} when result in [0, 1] ->
+        with :ok <- maybe_wait_for_deleted_keys(result), do: {:ok, result}
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
+
+      other ->
+        {:error, format_reason(other)}
+    end
+  end
+
+  defp fetch_bundle_reference_records([]), do: {:ok, []}
+
+  defp fetch_bundle_reference_records(redis_keys) do
+    redis_keys
+    |> Enum.uniq()
+    |> Enum.chunk_every(500)
+    |> Enum.reduce_while({:ok, []}, fn chunk, {:ok, records} ->
+      case fetch_bundle_reference_chunk(chunk) do
+        {:ok, chunk_records} -> {:cont, {:ok, [chunk_records | records]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, chunks} -> {:ok, chunks |> Enum.reverse() |> List.flatten()}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp fetch_bundle_reference_chunk(redis_keys) do
+    case command(["MGET" | redis_keys]) do
+      {:ok, encoded_records} ->
+        redis_keys
+        |> Enum.zip(encoded_records)
+        |> Enum.reduce_while({:ok, []}, fn
+          {_redis_key, nil}, {:ok, records} ->
+            {:cont, {:ok, records}}
+
+          {redis_key, encoded}, {:ok, records} ->
+            case Jason.decode(encoded) do
+              {:ok, record} when is_map(record) ->
+                {:cont, {:ok, [record | records]}}
+
+              {:ok, _invalid} ->
+                {:halt, {:error, {:invalid_bundle_reference_record, redis_key}}}
+
+              {:error, reason} ->
+                {:halt, {:error, {:unreadable_bundle_reference_record, redis_key, reason}}}
+            end
+        end)
+        |> reverse_record_result()
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp reverse_record_result({:ok, records}), do: {:ok, Enum.reverse(records)}
+  defp reverse_record_result({:error, _reason} = error), do: error
+
+  defp bundle_fingerprints(record) do
+    [
+      get_in(record, ["manifest_ref", "bundle_fingerprint"]),
+      get_in(record, ["bundle_ref", "bundle_fingerprint"]),
+      Map.get(record, "bundle_fingerprint")
+    ]
+    |> Enum.filter(&(is_binary(&1) and &1 != ""))
+  end
+
+  defp expire_persistent_bundle_archives(archive_refs, ttl_seconds) do
+    Enum.reduce_while(archive_refs, {:ok, 0}, fn {_fingerprint, redis_key}, {:ok, count} ->
+      case command(["TTL", redis_key]) do
+        {:ok, -1} ->
+          case command(["EXPIRE", redis_key, to_string(ttl_seconds)]) do
+            {:ok, 1} -> {:cont, {:ok, count + 1}}
+            {:ok, 0} -> {:cont, {:ok, count}}
+            {:error, reason} -> {:halt, {:error, reason}}
+            other -> {:halt, {:error, other}}
+          end
+
+        {:ok, ttl} when is_integer(ttl) ->
+          {:cont, {:ok, count}}
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+
+        other ->
+          {:halt, {:error, other}}
+      end
+    end)
+  end
+
+  defp collect_node_state(node_name, {:ok, states, removed_stale?}) do
+    case fetch_node_state(node_name) do
+      {:ok, state} ->
+        {:cont, {:ok, [state | states], removed_stale?}}
+
+      {:error, reason} ->
+        cond do
+          missing_node_state?(node_name, reason) ->
+            case command(["SREM", key("nodes"), node_name]) do
+              {:ok, removed} when is_integer(removed) ->
+                {:cont, {:ok, states, removed_stale? or removed > 0}}
+
+              {:error, cleanup_reason} ->
+                {:halt, {:error, format_reason(cleanup_reason)}}
+
+              other ->
+                {:halt, {:error, format_reason(other)}}
+            end
+
+          corrupt_node_state?(reason) ->
+            Logger.debug("ignoring unreadable node state #{node_name}: #{inspect(reason)}")
+            {:cont, {:ok, states, removed_stale?}}
+
+          true ->
+            {:halt, {:error, format_reason(reason)}}
+        end
+    end
+  end
+
+  defp finish_node_state_listing({:ok, states, false}), do: {:ok, Enum.reverse(states)}
+
+  defp finish_node_state_listing({:ok, states, true}) do
+    with :ok <- wait_for_replicas(), do: {:ok, Enum.reverse(states)}
+  end
+
+  defp finish_node_state_listing({:error, _reason} = error), do: error
+
   defp fetch_service_instances([]), do: {:ok, []}
 
   defp fetch_service_instances(instance_ids) do
     keys = Enum.map(instance_ids, &key("service", "instance", &1))
 
     case command(["MGET" | keys]) do
-      {:ok, encoded_services} -> {:ok, decode_json_items(encoded_services)}
-      {:error, reason} -> {:error, format_reason(reason)}
+      {:ok, encoded_services} ->
+        instance_ids
+        |> Enum.zip(encoded_services)
+        |> Enum.reduce_while({:ok, []}, fn
+          {instance_id, nil}, {:ok, services} ->
+            case purge_missing_service_instance(instance_id) do
+              {:ok, _result} -> {:cont, {:ok, services}}
+              {:error, reason} -> {:halt, {:error, reason}}
+            end
+
+          {instance_id, encoded}, {:ok, services} ->
+            case Jason.decode(encoded) do
+              {:ok, service} when is_map(service) ->
+                {:cont, {:ok, [service | services]}}
+
+              {:error, reason} ->
+                Logger.debug(
+                  "ignoring unreadable service instance #{instance_id}: #{inspect(reason)}"
+                )
+
+                {:cont, {:ok, services}}
+
+              {:ok, _invalid} ->
+                Logger.debug("ignoring invalid service instance #{instance_id}")
+                {:cont, {:ok, services}}
+            end
+        end)
+        |> case do
+          {:ok, services} -> {:ok, Enum.reverse(services)}
+          {:error, _reason} = error -> error
+        end
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
     end
   end
 
-  defp service_index_commands(operation, service, instance_id) do
-    []
-    |> maybe_service_index(operation, service, instance_id, "name", ["service", "name"])
-    |> maybe_service_index(operation, service, instance_id, "job_id", ["service", "job"])
-    |> maybe_service_index(operation, service, instance_id, "node", ["service", "node"])
-    |> maybe_service_index(operation, service, instance_id, "agent_id", ["service", "agent"])
+  defp service_candidate_ids(opts) do
+    selector_keys = service_selector_index_keys(opts)
+
+    cond do
+      opts == [] ->
+        command(["SMEMBERS", key("service", "instances")])
+
+      selector_keys == [] ->
+        {:error, :invalid_service_filter}
+
+      length(selector_keys) == 1 ->
+        command(["SMEMBERS", hd(selector_keys)])
+
+      true ->
+        command(["SINTER" | selector_keys])
+    end
+  end
+
+  defp service_selector_index_keys(opts) do
+    opts
+    |> Enum.flat_map(fn {option, value} ->
+      case List.keyfind(@service_index_fields, option, 0) do
+        {_option, index} -> [key("service", index, to_string(value))]
+        nil -> []
+      end
+    end)
+    |> Enum.uniq()
+  end
+
+  defp continue_service_cleanup(:ok), do: {:cont, :ok}
+  defp continue_service_cleanup({:error, reason}), do: {:halt, {:error, reason}}
+
+  defp delete_service_instance_if_matches(instance_id, opts) do
+    with {:ok, index_keys} <- service_secondary_index_keys() do
+      script = """
+      local encoded = redis.call("get", KEYS[1])
+      local should_delete = true
+
+      if encoded then
+        local ok, service = pcall(cjson.decode, encoded)
+
+        if ok and type(service) == "table" then
+          for index = 2, #ARGV, 3 do
+            local value = service[ARGV[index]]
+
+            if type(value) ~= "string" or value ~= ARGV[index + 1] then
+              should_delete = false
+            end
+          end
+        end
+      end
+
+      if should_delete then
+        redis.call("del", KEYS[1])
+        redis.call("srem", KEYS[2], ARGV[1])
+
+        for index = 3, #KEYS do
+          redis.call("srem", KEYS[index], ARGV[1])
+        end
+
+        return 1
+      end
+
+      for index = 2, #ARGV, 3 do
+        redis.call("srem", ARGV[index + 2], ARGV[1])
+      end
+
+      return 0
+      """
+
+      keys = [key("service", "instance", instance_id), key("service", "instances") | index_keys]
+      args = [instance_id | service_selector_script_args(opts)]
+
+      case command(["EVAL", script, to_string(length(keys)) | keys ++ args]) do
+        {:ok, result} when result in [0, 1] -> maybe_wait_for_deleted_keys(1)
+        {:error, reason} -> {:error, format_reason(reason)}
+        other -> {:error, format_reason(other)}
+      end
+    end
+  end
+
+  defp purge_service_instance(instance_id) do
+    with {:ok, index_keys} <- service_secondary_index_keys() do
+      purge_service_instance(instance_id, index_keys)
+    end
+  end
+
+  defp purge_service_instance(instance_id, index_keys) do
+    commands =
+      [
+        ["DEL", key("service", "instance", instance_id)],
+        ["SREM", key("service", "instances"), instance_id]
+      ] ++ Enum.map(index_keys, &["SREM", &1, instance_id])
+
+    with {:ok, results} <- transaction(commands),
+         :ok <- expect_no_redis_errors(results),
+         :ok <- wait_for_replicas() do
+      :ok
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
+    end
+  end
+
+  defp purge_missing_service_instance(instance_id) do
+    with {:ok, index_keys} <- service_secondary_index_keys() do
+      purge_missing_service_instance(instance_id, index_keys)
+    end
+  end
+
+  defp purge_missing_service_instance(instance_id, index_keys) do
+    script = """
+    if redis.call("exists", KEYS[1]) ~= 0 then
+      return 0
+    end
+
+    redis.call("srem", KEYS[2], ARGV[1])
+
+    for index = 3, #KEYS do
+      redis.call("srem", KEYS[index], ARGV[1])
+    end
+
+    return 1
+    """
+
+    keys = [key("service", "instance", instance_id), key("service", "instances") | index_keys]
+
+    case command(["EVAL", script, to_string(length(keys)) | keys ++ [instance_id]]) do
+      {:ok, result} when result in [0, 1] ->
+        with :ok <- maybe_wait_for_deleted_keys(result), do: {:ok, result}
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
+
+      other ->
+        {:error, format_reason(other)}
+    end
+  end
+
+  defp service_secondary_index_keys do
+    @service_index_fields
+    |> Enum.reduce_while({:ok, []}, fn {_option, index}, {:ok, keys} ->
+      case scan_keys(key("service", index, "*")) do
+        {:ok, found} -> {:cont, {:ok, found ++ keys}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, keys} -> {:ok, Enum.uniq(keys)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp sweep_service_instance_index do
+    with {:ok, secondary_keys} <- service_secondary_index_keys(),
+         index_keys <- [key("service", "instances") | secondary_keys],
+         {:ok, indexed_ids} <- service_index_ids(index_keys),
+         {:ok, existence} <- service_instance_existence(indexed_ids),
+         :ok <- expect_no_redis_errors(existence),
+         stale <- stale_service_instance_ids(indexed_ids, existence),
+         :ok <- purge_stale_service_instances(stale, secondary_keys) do
+      stale = Enum.sort(stale)
+
+      {:ok,
+       %{
+         stale_service_instance_count: length(stale),
+         stale_service_instances: stale
+       }}
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
+    end
+  end
+
+  defp sweep_schedule_index do
+    with {:ok, schedule_ids} <- raw_schedule_index_ids(),
+         {:ok, existence} <- schedule_existence(schedule_ids),
+         :ok <- expect_no_redis_errors(existence),
+         stale <- stale_schedule_ids(schedule_ids, existence),
+         :ok <- purge_stale_schedules(stale) do
+      stale = Enum.sort(stale)
+      {:ok, %{stale_schedule_count: length(stale), stale_schedules: stale}}
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
+    end
+  end
+
+  defp raw_schedule_index_ids do
+    with {:ok, index_results} <-
+           pipeline([
+             ["SMEMBERS", key(@schedules_set)],
+             ["ZRANGE", key(@schedule_due_zset), "0", "-1"]
+           ]),
+         :ok <- expect_no_redis_errors(index_results) do
+      {:ok, index_results |> Enum.flat_map(& &1) |> Enum.uniq() |> Enum.sort()}
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
+    end
+  end
+
+  defp schedule_existence([]), do: {:ok, []}
+
+  defp schedule_existence(schedule_ids) do
+    pipeline(Enum.map(schedule_ids, &["EXISTS", key("schedule", &1)]))
+  end
+
+  defp stale_schedule_ids(schedule_ids, existence) do
+    schedule_ids
+    |> Enum.zip(existence)
+    |> Enum.flat_map(fn
+      {schedule_id, 0} -> [schedule_id]
+      {_schedule_id, 1} -> []
+    end)
+  end
+
+  defp purge_stale_schedules(schedule_ids) do
+    Enum.reduce_while(schedule_ids, :ok, fn schedule_id, :ok ->
+      case delete_schedule(schedule_id) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp sweep_deployment_indexes do
+    with {:ok, current_keys} <- scan_keys(key("deployment", "key", "*", "current")),
+         {:ok, deployment_set_keys} <-
+           scan_keys(key("deployment", "key", "*", "deployments")),
+         {:ok, deployment_ids} <-
+           deployment_index_ids(current_keys, deployment_set_keys),
+         {:ok, existence} <- deployment_existence(deployment_ids),
+         :ok <- expect_no_redis_errors(existence),
+         stale_ids <- stale_deployment_ids(deployment_ids, existence),
+         {:ok, removed_ids} <-
+           purge_stale_deployments(stale_ids, current_keys, deployment_set_keys),
+         {:ok, version_set_keys} <-
+           scan_keys(key("deployment", "key", "*", "versions")),
+         {:ok, removed_versions} <- sweep_missing_deployment_versions(version_set_keys) do
+      removed_ids = Enum.sort(removed_ids)
+
+      {:ok,
+       %{
+         stale_deployment_count: length(removed_ids),
+         stale_deployments: removed_ids,
+         stale_deployment_version_count: removed_versions
+       }}
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
+    end
+  end
+
+  defp deployment_index_ids(current_keys, deployment_set_keys) do
+    set_keys = [key(@deployments_set) | deployment_set_keys]
+
+    with {:ok, set_results} <- pipeline(Enum.map(set_keys, &["SMEMBERS", &1])),
+         :ok <- expect_no_redis_errors(set_results),
+         {:ok, current_ids} <- deployment_current_ids(current_keys) do
+      ids = set_results |> Enum.flat_map(& &1) |> Kernel.++(current_ids)
+      {:ok, ids |> Enum.reject(&is_nil/1) |> Enum.uniq() |> Enum.sort()}
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
+    end
+  end
+
+  defp deployment_current_ids([]), do: {:ok, []}
+
+  defp deployment_current_ids(current_keys) do
+    case command(["MGET" | current_keys]) do
+      {:ok, deployment_ids} -> {:ok, Enum.reject(deployment_ids, &is_nil/1)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp deployment_existence([]), do: {:ok, []}
+
+  defp deployment_existence(deployment_ids) do
+    pipeline(Enum.map(deployment_ids, &["EXISTS", key("deployment", &1)]))
+  end
+
+  defp stale_deployment_ids(deployment_ids, existence) do
+    deployment_ids
+    |> Enum.zip(existence)
+    |> Enum.flat_map(fn
+      {deployment_id, 0} -> [deployment_id]
+      {_deployment_id, 1} -> []
+    end)
+  end
+
+  defp purge_stale_deployments(deployment_ids, current_keys, deployment_set_keys) do
+    Enum.reduce_while(deployment_ids, {:ok, []}, fn deployment_id, {:ok, removed} ->
+      case purge_missing_deployment(deployment_id, current_keys, deployment_set_keys) do
+        {:ok, 1} -> {:cont, {:ok, [deployment_id | removed]}}
+        {:ok, 0} -> {:cont, {:ok, removed}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, removed} -> {:ok, Enum.reverse(removed)}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp sweep_missing_deployment_versions(version_set_keys) do
+    Enum.reduce_while(version_set_keys, {:ok, 0}, fn versions_key, {:ok, removed} ->
+      case command(["SMEMBERS", versions_key]) do
+        {:ok, versions} ->
+          case sweep_missing_deployment_versions(versions_key, versions) do
+            {:ok, count} -> {:cont, {:ok, removed + count}}
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp sweep_missing_deployment_versions(versions_key, versions) do
+    Enum.reduce_while(versions, {:ok, 0}, fn version, {:ok, removed} ->
+      version_key =
+        String.replace_suffix(versions_key, ":versions", ":version:#{version}")
+
+      case command(["EXISTS", version_key]) do
+        {:ok, 1} ->
+          {:cont, {:ok, removed}}
+
+        {:ok, 0} ->
+          case remove_missing_deployment_version(version_key, versions_key, version) do
+            {:ok, result} -> {:cont, {:ok, removed + result}}
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+
+        other ->
+          {:halt, {:error, other}}
+      end
+    end)
+  end
+
+  defp sweep_legacy_trigger_event_keys do
+    with {:ok, keys} <- scan_keys(key("trigger", "event", "*")),
+         {:ok, deleted} <- delete_redis_keys(keys),
+         :ok <- maybe_wait_for_deleted_keys(deleted) do
+      {:ok, %{stale_trigger_event_key_count: deleted}}
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
+    end
+  end
+
+  defp delete_redis_keys([]), do: {:ok, 0}
+  defp delete_redis_keys(keys), do: command(["DEL" | keys])
+
+  defp maybe_wait_for_deleted_keys(0), do: :ok
+  defp maybe_wait_for_deleted_keys(_deleted), do: wait_for_replicas()
+
+  defp service_index_ids(index_keys) do
+    case pipeline(Enum.map(index_keys, &["SMEMBERS", &1])) do
+      {:ok, results} ->
+        with :ok <- expect_no_redis_errors(results) do
+          {:ok, results |> Enum.flat_map(& &1) |> Enum.uniq() |> Enum.sort()}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp service_instance_existence([]), do: {:ok, []}
+
+  defp service_instance_existence(instance_ids) do
+    pipeline(Enum.map(instance_ids, &["EXISTS", key("service", "instance", &1)]))
+  end
+
+  defp stale_service_instance_ids(instance_ids, existence) do
+    instance_ids
+    |> Enum.zip(existence)
+    |> Enum.flat_map(fn
+      {instance_id, 0} -> [instance_id]
+      {_instance_id, 1} -> []
+    end)
+  end
+
+  defp purge_stale_service_instances(instance_ids, index_keys) do
+    Enum.reduce_while(instance_ids, :ok, fn instance_id, :ok ->
+      case purge_service_instance(instance_id, index_keys) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp service_index_script_args(service) do
+    Enum.flat_map(@service_index_fields, fn {option, index} ->
+      field = Atom.to_string(option)
+      value = Map.get(service, field)
+      value = if is_binary(value), do: value, else: ""
+      [field, key("service", index, ""), value]
+    end)
   end
 
   defp existing_blob_ref(sha256) do
@@ -1172,6 +2418,36 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   defp schedule_due_commands(_schedule), do: []
 
+  defp schedule_due_score(%{"enabled" => true, "status" => status, "next_run_at" => next_run_at})
+       when status in ["active", "running"] and is_binary(next_run_at),
+       do: to_string(schedule_score(next_run_at))
+
+  defp schedule_due_score(_schedule), do: ""
+
+  defp delete_schedule_lease_metadata(schedule_id) do
+    case scan_keys(key("lease", "schedule:#{schedule_id}:*")) do
+      {:ok, []} ->
+        :ok
+
+      {:ok, keys} ->
+        case command(["DEL" | keys]) do
+          {:ok, _deleted} -> :ok
+          {:error, reason} -> {:error, format_reason(reason)}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp prepare_schedule(schedule_id, schedule_map) do
+    schedule_map
+    |> stringify_map()
+    |> Map.put("schedule_id", schedule_id)
+    |> Map.put_new("created_at", timestamp())
+    |> Map.put("updated_at", timestamp())
+  end
+
   defp schedule_score(iso_datetime) when is_binary(iso_datetime) do
     case DateTime.from_iso8601(iso_datetime) do
       {:ok, datetime, _offset} -> DateTime.to_unix(datetime, :millisecond)
@@ -1181,35 +2457,12 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   defp schedule_score(_value), do: 0
 
-  defp deployment_index_commands(nil, _deployment_id), do: []
-  defp deployment_index_commands("", _deployment_id), do: []
-
-  defp deployment_index_commands(deployment_key, deployment_id) do
-    [
-      ["SET", key("deployment", "key", deployment_key, "current"), deployment_id],
-      ["SADD", key("deployment", "key", deployment_key, "deployments"), deployment_id]
-    ]
-  end
-
   defp version_sort_value(version) do
     case Integer.parse(to_string(version)) do
       {integer, ""} -> integer
       _ -> 0
     end
   end
-
-  defp maybe_service_index(commands, operation, service, instance_id, field, key_parts) do
-    case Map.get(service, field) do
-      value when is_binary(value) and value != "" ->
-        [service_index_command(operation, key_parts, value, instance_id) | commands]
-
-      _ ->
-        commands
-    end
-  end
-
-  defp service_index_command(operation, ["service", index], value, instance_id),
-    do: [operation, key("service", index, value), instance_id]
 
   defp service_matches_opts?(service, opts) do
     Enum.all?(opts, fn
@@ -1296,7 +2549,8 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
     repaired_jobs =
       root_job_ids
-      |> Enum.filter(&(valid_job_key?(&1) and not MapSet.member?(indexed_job_set, &1)))
+      |> Enum.filter(&(json_key_status(key("job", &1)) == :valid))
+      |> Enum.reject(&MapSet.member?(indexed_job_set, &1))
       |> Enum.count(fn job_id ->
         case command(["SADD", key(@jobs_set), job_id]) do
           {:ok, count} when is_integer(count) -> count > 0
@@ -1306,7 +2560,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
     removed_stale_jobs =
       indexed_job_ids
-      |> Enum.reject(&valid_job_key?/1)
+      |> Enum.filter(&(json_key_status(key("job", &1)) in [:missing, :corrupt]))
       |> Enum.count(fn job_id ->
         case command(["SREM", key(@jobs_set), job_id]) do
           {:ok, count} when is_integer(count) -> count > 0
@@ -1332,7 +2586,9 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
     repaired_agents =
       agent_refs
-      |> Enum.filter(fn {job_id, agent_id} -> valid_agent_key?(job_id, agent_id) end)
+      |> Enum.filter(fn {job_id, agent_id} ->
+        json_key_status(key("job", job_id, "agent", agent_id)) == :valid
+      end)
       |> Enum.count(fn {job_id, agent_id} ->
         case command(["SISMEMBER", key("job", job_id, "agents"), agent_id]) do
           {:ok, 1} ->
@@ -1357,7 +2613,9 @@ defmodule MirrorNeuron.Persistence.RedisStore do
           _ -> []
         end
       end)
-      |> Enum.reject(fn {job_id, agent_id} -> valid_agent_key?(job_id, agent_id) end)
+      |> Enum.filter(fn {job_id, agent_id} ->
+        json_key_status(key("job", job_id, "agent", agent_id)) in [:missing, :corrupt]
+      end)
       |> Enum.count(fn {job_id, agent_id} ->
         case command(["SREM", key("job", job_id, "agents"), agent_id]) do
           {:ok, count} when is_integer(count) -> count > 0
@@ -1384,9 +2642,13 @@ defmodule MirrorNeuron.Persistence.RedisStore do
                     acc
                   end
 
-                _ ->
-                  if remove_stale_recovery_eval_index(eval_id) do
-                    Map.update!(acc, :removed_stale_recovery_evals, &(&1 + 1))
+                {:error, reason} ->
+                  if missing_recovery_eval?(eval_id, reason) or corrupt_json?(reason) do
+                    if remove_stale_recovery_eval_index(eval_id) do
+                      Map.update!(acc, :removed_stale_recovery_evals, &(&1 + 1))
+                    else
+                      acc
+                    end
                   else
                     acc
                   end
@@ -1434,9 +2696,17 @@ defmodule MirrorNeuron.Persistence.RedisStore do
                     acc
                   end
 
-                _ ->
-                  _ = remove_stale_recovery_eval_index(eval_id)
-                  Map.update!(acc, :stale_recovery_evals, &[eval_id | &1])
+                {:error, reason} ->
+                  if missing_recovery_eval?(eval_id, reason) do
+                    _ = remove_stale_recovery_eval_index(eval_id)
+                    Map.update!(acc, :stale_recovery_evals, &[eval_id | &1])
+                  else
+                    Logger.warning(
+                      "retention could not classify recovery eval #{eval_id}; cleanup deferred: #{inspect(reason)}"
+                    )
+
+                    acc
+                  end
               end
             end
           )
@@ -1492,35 +2762,32 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
-  defp valid_job_key?(job_id) do
-    case command(["GET", key("job", job_id)]) do
+  defp json_key_status(redis_key) do
+    case command(["GET", redis_key]) do
       {:ok, encoded} when is_binary(encoded) ->
         case Jason.decode(encoded) do
-          {:ok, job} when is_map(job) -> true
-          _ -> false
+          {:ok, value} when is_map(value) -> :valid
+          _ -> :corrupt
         end
 
-      _ ->
-        false
-    end
-  end
+      {:ok, nil} ->
+        :missing
 
-  defp valid_agent_key?(job_id, agent_id) do
-    case command(["GET", key("job", job_id, "agent", agent_id)]) do
-      {:ok, encoded} when is_binary(encoded) ->
-        case Jason.decode(encoded) do
-          {:ok, agent} when is_map(agent) -> true
-          _ -> false
-        end
-
-      _ ->
-        false
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
   defp root_job_id_from_key(redis_key) do
     case namespaced_key_parts(redis_key) do
       ["job", job_id] -> [job_id]
+      _ -> []
+    end
+  end
+
+  defp bundle_archive_ref_from_key(redis_key) do
+    case namespaced_key_parts(redis_key) do
+      ["bundle", fingerprint] -> [{fingerprint, redis_key}]
       _ -> []
     end
   end
@@ -1583,20 +2850,22 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   defp persist_disk_agent(job_id, agent_id, snapshot) do
-    case fetch_job(job_id) do
-      {:ok, %{"status" => status}} when status in @terminal_statuses ->
-        _ = DiskCheckpoint.delete_job(job_id)
-        :ok
+    DiskCheckpoint.with_job_lock(job_id, fn ->
+      case fetch_job(job_id) do
+        {:ok, %{"status" => status}} when status in @terminal_statuses ->
+          _ = DiskCheckpoint.delete_job(job_id)
+          :ok
 
-      _ ->
-        case DiskCheckpoint.persist_agent(job_id, agent_id, snapshot) do
-          :ok ->
-            :ok
+        _ ->
+          case DiskCheckpoint.persist_agent(job_id, agent_id, snapshot) do
+            :ok ->
+              :ok
 
-          {:error, reason} ->
-            handle_disk_agent_failure(job_id, agent_id, reason)
-        end
-    end
+            {:error, reason} ->
+              handle_disk_agent_failure(job_id, agent_id, reason)
+          end
+      end
+    end)
   end
 
   defp handle_disk_agent_failure(job_id, _agent_id, :enoent) do
@@ -1788,6 +3057,23 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       maybe_expire_key_command(key("job", job_id, "agents"), ttl_seconds)
   end
 
+  defp agent_snapshot_retention_commands(job_id, agent_id) do
+    case fetch_job(job_id) do
+      {:ok, job} ->
+        if terminal_status?(Map.get(job, "status")) do
+          expire_agent_snapshot_commands(job_id, agent_id)
+        else
+          [
+            ["PERSIST", key("job", job_id, "agent", agent_id)],
+            ["PERSIST", key("job", job_id, "agents")]
+          ]
+        end
+
+      {:error, _reason} ->
+        expire_agent_snapshot_commands(job_id, agent_id)
+    end
+  end
+
   defp maybe_expire_key_command(_redis_key, ttl_seconds)
        when not is_integer(ttl_seconds) or ttl_seconds <= 0,
        do: []
@@ -1861,6 +3147,44 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   defp terminal_job_expired?(job, ttl_seconds) do
     terminal_status?(Map.get(job, "status")) and job_age_seconds(job) >= ttl_seconds
   end
+
+  defp missing_job?(job_id, reason), do: reason == "job #{job_id} was not found"
+
+  defp missing_deployment?(deployment_id, reason),
+    do: reason == "deployment #{deployment_id} was not found"
+
+  defp missing_deployment_version?(deployment_key, version, reason),
+    do: reason == "deployment #{deployment_key} version #{version} was not found"
+
+  defp missing_node_state?(node_name, reason),
+    do: reason == "node #{node_name} state was not found"
+
+  defp missing_schedule?(schedule_id, reason),
+    do: reason == "schedule #{schedule_id} was not found"
+
+  defp missing_service_instance?(instance_id, reason),
+    do: reason == "service instance #{instance_id} was not found"
+
+  defp missing_recovery_eval?(eval_id, reason),
+    do: reason == "recovery eval #{eval_id} was not found"
+
+  defp corrupt_service_instance?(:invalid_service_instance), do: true
+  defp corrupt_service_instance?(reason), do: corrupt_json?(reason)
+
+  defp corrupt_node_state?(:invalid_node_state), do: true
+  defp corrupt_node_state?(reason), do: corrupt_json?(reason)
+
+  defp corrupt_deployment?(:invalid_deployment), do: true
+  defp corrupt_deployment?(reason), do: corrupt_json?(reason)
+
+  defp corrupt_deployment_version?(:invalid_deployment_version), do: true
+  defp corrupt_deployment_version?(reason), do: corrupt_json?(reason)
+
+  defp corrupt_schedule?(:invalid_schedule), do: true
+  defp corrupt_schedule?(reason), do: corrupt_json?(reason)
+
+  defp corrupt_json?(%Jason.DecodeError{}), do: true
+  defp corrupt_json?(_reason), do: false
 
   defp terminal_status?(status), do: status in @terminal_statuses
 
@@ -1987,7 +3311,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   defp maybe_forward_command(args) do
     case forwarding_primary_node() do
       {:ok, node} ->
-        case NodeAdapter.rpc_call(node, __MODULE__, :redis_command_from_peer, [args], 5_000) do
+        case safe_node_rpc_call(node, __MODULE__, :redis_command_from_peer, [args], 5_000) do
           {:badrpc, _reason} -> :local
           result -> {:forwarded, result}
         end
@@ -2003,7 +3327,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
         fallback
 
       node ->
-        case NodeAdapter.rpc_call(node, __MODULE__, function, args, 5_000) do
+        case safe_node_rpc_call(node, __MODULE__, function, args, 5_000) do
           {:badrpc, _reason} -> fallback
           result -> result
         end
@@ -2029,7 +3353,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   defp primary_redis_node do
     Enum.find(NodeAdapter.list(), fn node ->
-      case NodeAdapter.rpc_call(node, MirrorNeuron.Grpc.NetworkOnly, :enabled?, [], 1_000) do
+      case safe_node_rpc_call(node, MirrorNeuron.Grpc.NetworkOnly, :enabled?, [], 1_000) do
         false -> true
         _ -> false
       end
@@ -2124,7 +3448,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   defp maybe_forward_pipeline(commands) do
     case forwarding_primary_node() do
       {:ok, node} ->
-        case NodeAdapter.rpc_call(node, __MODULE__, :redis_pipeline_from_peer, [commands], 5_000) do
+        case safe_node_rpc_call(node, __MODULE__, :redis_pipeline_from_peer, [commands], 5_000) do
           {:badrpc, _reason} -> :local
           result -> {:forwarded, result}
         end
@@ -2145,6 +3469,14 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
     :exit, reason ->
       {:error, {:redix_exit, reason}}
+  end
+
+  defp safe_node_rpc_call(node, module, function, args, timeout) do
+    NodeAdapter.rpc_call(node, module, function, args, timeout)
+  rescue
+    exception -> {:badrpc, {exception.__struct__, Exception.message(exception)}}
+  catch
+    kind, reason -> {:badrpc, {kind, reason}}
   end
 
   defp parse_transaction_results(["OK" | queued_and_exec]) do

@@ -10,11 +10,20 @@ defmodule MirrorNeuron.Bundle.Archive do
   alias MirrorNeuron.Persistence.RedisStore
 
   @default_max_bytes 50 * 1024 * 1024
+  @default_cache_ttl_seconds 7 * 24 * 60 * 60
+  @fingerprint_pattern ~r/\A[0-9a-f]{64}\z/
 
   def store(%JobBundle{root_path: root_path} = bundle) when is_binary(root_path) do
     case Fingerprint.compute(root_path) do
       {:ok, fingerprint} ->
-        store_with_fingerprint(bundle, fingerprint)
+        case store_with_fingerprint(bundle, fingerprint) do
+          {:ok, _archive_ref} = result ->
+            _ = touch_cache(fingerprint)
+            result
+
+          {:error, _reason} = error ->
+            error
+        end
 
       {:error, reason} ->
         Logger.warning("failed to archive bundle for cluster recovery: #{inspect(reason)}")
@@ -25,24 +34,129 @@ defmodule MirrorNeuron.Bundle.Archive do
   def store(_bundle), do: {:error, :bundle_has_no_root_path}
 
   def load(fingerprint) when is_binary(fingerprint) and fingerprint != "" do
-    cache_path = cache_path(fingerprint)
-
-    case JobBundle.load(cache_path) do
-      {:ok, bundle} ->
-        {:ok, bundle}
-
-      {:error, _cache_reason} ->
-        with {:ok, archive} <- RedisStore.fetch_bundle_archive(fingerprint),
-             :ok <- restore_to_cache(fingerprint, archive),
-             {:ok, bundle} <- JobBundle.load(cache_path) do
-          {:ok, bundle}
-        end
+    if valid_fingerprint?(fingerprint) do
+      load_valid_fingerprint(fingerprint)
+    else
+      {:error, :invalid_bundle_fingerprint}
     end
   end
 
   def load(_fingerprint), do: {:error, :missing_bundle_fingerprint}
 
+  defp load_valid_fingerprint(fingerprint) do
+    path = cache_path(fingerprint)
+
+    case JobBundle.load(path) do
+      {:ok, bundle} ->
+        _ = touch_cache(fingerprint)
+        {:ok, bundle}
+
+      {:error, _cache_reason} ->
+        with {:ok, archive} <- RedisStore.fetch_bundle_archive(fingerprint),
+             :ok <- restore_to_cache(fingerprint, archive),
+             {:ok, bundle} <- JobBundle.load(path),
+             :ok <- touch_cache(fingerprint) do
+          {:ok, bundle}
+        end
+    end
+  end
+
   def cache_path(fingerprint), do: Path.join(cache_root(), fingerprint)
+
+  def sweep_retention(opts \\ []) do
+    with {:ok, fingerprints} <- RedisStore.referenced_bundle_fingerprints(),
+         {:ok, retained} <- retain_referenced_archives(fingerprints),
+         {:ok, expiring_count} <-
+           RedisStore.expire_unreferenced_bundle_archives(fingerprints),
+         {:ok, reclaimed} <- reclaim_unreferenced_cache(fingerprints, opts) do
+      {:ok,
+       retained
+       |> Map.merge(reclaimed)
+       |> Map.put(:expiring_bundle_archive_count, expiring_count)
+       |> Map.put(:referenced_bundle_count, length(fingerprints))}
+    end
+  end
+
+  defp retain_referenced_archives(fingerprints) do
+    Enum.reduce_while(
+      fingerprints,
+      {:ok, %{refreshed_bundle_archives: 0, rebuilt_bundle_archives: 0}},
+      fn fingerprint, {:ok, result} ->
+        case RedisStore.refresh_bundle_archive(fingerprint) do
+          :ok ->
+            {:cont, {:ok, Map.update!(result, :refreshed_bundle_archives, &(&1 + 1))}}
+
+          {:error, :not_found} ->
+            case rebuild_referenced_archive(fingerprint) do
+              :ok ->
+                {:cont, {:ok, Map.update!(result, :rebuilt_bundle_archives, &(&1 + 1))}}
+
+              {:error, reason} ->
+                {:halt, {:error, {:missing_referenced_bundle, fingerprint, reason}}}
+            end
+
+          {:error, reason} ->
+            {:halt, {:error, {:bundle_archive_refresh_failed, fingerprint, reason}}}
+        end
+      end
+    )
+  end
+
+  defp rebuild_referenced_archive(fingerprint) do
+    with true <- valid_fingerprint?(fingerprint),
+         {:ok, bundle} <- JobBundle.load(cache_path(fingerprint)),
+         {:ok, %{fingerprint: ^fingerprint} = archive_ref} <- store(bundle) do
+      case RedisStore.refresh_bundle_archive(fingerprint) do
+        :ok -> :ok
+        {:error, :not_found} when archive_ref.storage != "redis" -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      false -> {:error, :invalid_bundle_fingerprint}
+      {:ok, %{fingerprint: other}} -> {:error, {:fingerprint_mismatch, other}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp reclaim_unreferenced_cache(fingerprints, opts) do
+    ttl_seconds = Keyword.get(opts, :ttl_seconds, cache_ttl_seconds())
+    now_seconds = Keyword.get(opts, :now_seconds, System.system_time(:second))
+    referenced = MapSet.new(fingerprints)
+
+    case File.ls(cache_root()) do
+      {:ok, entries} ->
+        candidates =
+          entries
+          |> Enum.filter(&valid_fingerprint?/1)
+          |> Enum.reject(&MapSet.member?(referenced, &1))
+          |> Enum.filter(&stale_cache?(&1, ttl_seconds, now_seconds))
+
+        with {:ok, reclaimed} <-
+               Enum.reduce_while(candidates, {:ok, []}, fn fingerprint, {:ok, acc} ->
+                 case delete_cache(fingerprint) do
+                   :ok -> {:cont, {:ok, [fingerprint | acc]}}
+                   {:error, reason} -> {:halt, {:error, {fingerprint, reason}}}
+                 end
+               end) do
+          reclaimed = Enum.sort(reclaimed)
+
+          {:ok,
+           %{
+             reclaimed_bundle_cache_count: length(reclaimed),
+             reclaimed_bundle_caches: reclaimed
+           }}
+        else
+          {:error, {fingerprint, reason}} ->
+            {:error, {:bundle_cache_delete_failed, fingerprint, reason}}
+        end
+
+      {:error, :enoent} ->
+        {:ok, %{reclaimed_bundle_cache_count: 0, reclaimed_bundle_caches: []}}
+
+      {:error, reason} ->
+        {:error, {:bundle_cache_scan_failed, reason}}
+    end
+  end
 
   defp store_with_fingerprint(%JobBundle{} = bundle, fingerprint) do
     case maybe_store_shared_cache(bundle, fingerprint) do
@@ -268,6 +382,65 @@ defmodule MirrorNeuron.Bundle.Archive do
     end
   end
 
+  defp touch_cache(fingerprint) do
+    marker = access_marker(fingerprint)
+
+    with :ok <- File.mkdir_p(Path.dirname(marker)),
+         :ok <- File.touch(marker) do
+      :ok
+    end
+  end
+
+  defp stale_cache?(_fingerprint, ttl_seconds, _now_seconds)
+       when not is_integer(ttl_seconds) or ttl_seconds <= 0,
+       do: false
+
+  defp stale_cache?(fingerprint, ttl_seconds, now_seconds) do
+    path = cache_path(fingerprint)
+
+    if File.dir?(path) do
+      case cache_last_used_at(fingerprint) do
+        {:ok, last_used_at} -> now_seconds - last_used_at >= ttl_seconds
+        {:error, _reason} -> false
+      end
+    else
+      false
+    end
+  end
+
+  defp cache_last_used_at(fingerprint) do
+    case File.stat(access_marker(fingerprint), time: :posix) do
+      {:ok, stat} -> {:ok, stat.mtime}
+      {:error, :enoent} -> cache_directory_mtime(fingerprint)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp cache_directory_mtime(fingerprint) do
+    case File.stat(cache_path(fingerprint), time: :posix) do
+      {:ok, stat} -> {:ok, stat.mtime}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp delete_cache(fingerprint) do
+    case File.rm_rf(cache_path(fingerprint)) do
+      {:ok, _removed} ->
+        _ = File.rm(access_marker(fingerprint))
+        :ok
+
+      {:error, reason, _path} ->
+        {:error, reason}
+    end
+  end
+
+  defp access_marker(fingerprint), do: Path.join([cache_root(), ".access", fingerprint])
+
+  defp valid_fingerprint?(fingerprint) when is_binary(fingerprint),
+    do: Regex.match?(@fingerprint_pattern, fingerprint)
+
+  defp valid_fingerprint?(_fingerprint), do: false
+
   defp cache_root do
     MirrorNeuron.Config.optional_string("MN_BUNDLE_CACHE_DIR", :bundle_cache_dir) ||
       Path.join(SharedStorage.root(), "bundle_cache")
@@ -289,5 +462,14 @@ defmodule MirrorNeuron.Bundle.Archive do
     MirrorNeuron.Config.integer("MN_BUNDLE_ARCHIVE_MAX_BYTES", :bundle_archive_max_bytes)
   rescue
     _ -> @default_max_bytes
+  end
+
+  defp cache_ttl_seconds do
+    MirrorNeuron.Config.integer(
+      "MN_BUNDLE_ARCHIVE_TTL_SECONDS",
+      :bundle_archive_ttl_seconds
+    )
+  rescue
+    _ -> @default_cache_ttl_seconds
   end
 end

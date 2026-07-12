@@ -91,8 +91,8 @@ defmodule MirrorNeuron.Cluster.Manager do
   end
 
   defp local_hardware_info do
-    MirrorNeuron.Cluster.Hardware.info()
-    |> Map.put("native_sdk_grpc", native_sdk_grpc_node_info())
+    hardware = MirrorNeuron.Cluster.Hardware.info()
+    Map.put(hardware, "native_sdk_grpc", native_sdk_grpc_node_info(hardware))
   end
 
   defp runtime_connected_nodes(self_node) do
@@ -143,10 +143,10 @@ defmodule MirrorNeuron.Cluster.Manager do
       Map.get(state, :native_sdk_grpc) ||
       Map.get(hardware, "native_sdk_grpc") ||
       Map.get(hardware, :native_sdk_grpc) ||
-      if(node == NodeAdapter.self(), do: native_sdk_grpc_node_info(), else: nil)
+      if(node == NodeAdapter.self(), do: native_sdk_grpc_node_info(hardware), else: nil)
   end
 
-  defp native_sdk_grpc_node_info do
+  defp native_sdk_grpc_node_info(hardware) do
     host =
       System.get_env("MN_NATIVE_SDK_GRPC_ADVERTISE_HOST") ||
         System.get_env("MN_NETWORK_ADVERTISE_HOST") ||
@@ -155,12 +155,17 @@ defmodule MirrorNeuron.Cluster.Manager do
     port = native_sdk_grpc_port()
     target = if host in [nil, ""], do: "", else: "#{host}:#{port}"
 
+    advertised =
+      Map.get(hardware, "native_sdk_grpc") || Map.get(hardware, :native_sdk_grpc) || %{}
+
     %{
       "enabled" => host not in [nil, ""] and port not in [nil, ""],
       "host" => host || "",
       "port" => port,
       "target" => target,
-      "bind_host" => System.get_env("MN_NATIVE_SDK_GRPC_HOST") || ""
+      "bind_host" => System.get_env("MN_NATIVE_SDK_GRPC_HOST") || "",
+      "capabilities" =>
+        Map.get(advertised, "capabilities") || Map.get(advertised, :capabilities) || []
     }
   end
 

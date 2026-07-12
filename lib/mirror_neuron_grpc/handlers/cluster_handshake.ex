@@ -169,7 +169,7 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
         MirrorNeuron.Config.string("MN_RUNTIME_SHARED_STORAGE_ROOT", :runtime_shared_storage_root),
       "syncthing" => syncthing_node_info(),
       "redis_ha" => redis_ha_node_info(),
-      "native_sdk_grpc" => native_sdk_grpc_node_info(),
+      "native_sdk_grpc" => native_sdk_grpc_node_info(hardware),
       "display_name" => map_value(platform, "display_name"),
       "hostname" => map_value(platform, "hostname"),
       "cpu_cores" => map_value(cpu, "logical_processors"),
@@ -304,7 +304,7 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
     end
   end
 
-  defp native_sdk_grpc_node_info do
+  defp native_sdk_grpc_node_info(hardware) do
     host =
       System.get_env("MN_NATIVE_SDK_GRPC_ADVERTISE_HOST") ||
         MirrorNeuron.Config.optional_string("MN_NETWORK_ADVERTISE_HOST", :network_advertise_host) ||
@@ -313,12 +313,15 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
     port = native_sdk_grpc_port()
     target = if host in [nil, ""], do: "", else: "#{host}:#{port}"
 
+    advertised = map_value(hardware, "native_sdk_grpc") || %{}
+
     %{
       "enabled" => host not in [nil, ""] and port not in [nil, ""],
       "host" => host || "",
       "port" => port,
       "target" => target,
-      "bind_host" => System.get_env("MN_NATIVE_SDK_GRPC_HOST") || ""
+      "bind_host" => System.get_env("MN_NATIVE_SDK_GRPC_HOST") || "",
+      "capabilities" => map_value(advertised, "capabilities") || []
     }
   end
 

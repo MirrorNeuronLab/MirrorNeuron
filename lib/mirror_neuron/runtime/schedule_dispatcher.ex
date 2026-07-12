@@ -13,6 +13,9 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
   alias MirrorNeuron.Runtime.SchedulePolicy
 
   @lease_ttl_ms 30_000
+  @state_lease_ttl_ms 30_000
+  @state_lease_wait_ms 35_000
+  @state_lease_retry_ms 10
   @terminal_statuses ["completed", "failed", "cancelled"]
 
   def create_schedule(input, schedule_attrs \\ %{}, opts \\ []) do
@@ -38,26 +41,27 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
   end
 
   def update_schedule(schedule_id, attrs, opts \\ []) do
-    with {:ok, existing} <- RedisStore.fetch_schedule(schedule_id),
-         {:ok, normalized} <-
-           existing
-           |> Map.merge(stringify(attrs || %{}))
-           |> SchedulePolicy.normalize(Map.get(existing, "manifest", %{}), opts) do
-      normalized
-      |> Map.merge(
-        Map.take(existing, [
-          "schedule_id",
-          "manifest",
-          "bundle_ref",
-          "source",
-          "dispatches",
-          "active_job_ids",
-          "counters",
-          "created_at"
-        ])
-      )
-      |> then(&RedisStore.persist_schedule(schedule_id, &1))
-    end
+    mutate_schedule(schedule_id, fn existing ->
+      with {:ok, normalized} <-
+             existing
+             |> Map.merge(stringify(attrs || %{}))
+             |> SchedulePolicy.normalize(Map.get(existing, "manifest", %{}), opts) do
+        {:ok,
+         Map.merge(
+           normalized,
+           Map.take(existing, [
+             "schedule_id",
+             "manifest",
+             "bundle_ref",
+             "source",
+             "dispatches",
+             "active_job_ids",
+             "counters",
+             "created_at"
+           ])
+         )}
+      end
+    end)
   end
 
   def pause_schedule(schedule_id, opts \\ []) do
@@ -65,18 +69,19 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
   end
 
   def resume_schedule(schedule_id, opts \\ []) do
-    with {:ok, schedule} <- RedisStore.fetch_schedule(schedule_id),
-         {:ok, normalized} <-
-           SchedulePolicy.normalize(
-             Map.put(schedule, "enabled", true),
-             Map.get(schedule, "manifest", %{}),
-             opts
-           ) do
-      RedisStore.persist_schedule(schedule_id, Map.merge(schedule, normalized))
-    end
+    mutate_schedule(schedule_id, fn schedule ->
+      with {:ok, normalized} <-
+             SchedulePolicy.normalize(
+               Map.put(schedule, "enabled", true),
+               Map.get(schedule, "manifest", %{}),
+               opts
+             ) do
+        {:ok, Map.merge(schedule, normalized)}
+      end
+    end)
   end
 
-  def delete_schedule(schedule_id, _opts \\ []), do: RedisStore.delete_schedule(schedule_id)
+  def delete_schedule(schedule_id, _opts \\ []), do: delete_schedule_locked(schedule_id)
 
   def get_schedule(schedule_id), do: RedisStore.fetch_schedule(schedule_id)
 
@@ -159,16 +164,14 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     reason = Keyword.get(opts, :reason, "")
     now = Runtime.timestamp()
 
-    with {:ok, schedule} <- RedisStore.fetch_schedule(schedule_id) do
-      schedule
-      |> Map.merge(%{
+    mutate_schedule(schedule_id, fn schedule ->
+      Map.merge(schedule, %{
         "status" => status,
         "enabled" => enabled,
         "last_status_reason" => reason,
         "updated_at" => now
       })
-      |> then(&RedisStore.persist_schedule(schedule_id, &1))
-    end
+    end)
   end
 
   defp process_due_schedule(schedule, now) do
@@ -235,9 +238,21 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     case RedisStore.acquire_fenced_lease(lease_name, owner, @lease_ttl_ms) do
       {:ok, lease} ->
         try do
-          dispatch_child(schedule, instance, lease)
+          case with_schedule_state_lock(schedule["schedule_id"], fn lock ->
+                 with {:ok, current_schedule} <-
+                        RedisStore.fetch_schedule(schedule["schedule_id"]) do
+                   dispatch_child(current_schedule, instance, lease, lock)
+                 end
+               end) do
+            {:error, reason} ->
+              Logger.warning("schedule state lease failed: #{inspect(reason)}")
+              %{checked: 1, dispatched: 0, skipped: 0, failed: 1, missed: 0, blocked: 0}
+
+            result ->
+              result
+          end
         after
-          _ = RedisStore.release_fenced_lease(lease_name, owner, lease["epoch"])
+          _ = RedisStore.release_ephemeral_fenced_lease(lease_name, owner, lease["epoch"])
         end
 
       {:error, {:locked, _lease}} ->
@@ -249,7 +264,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     end
   end
 
-  defp dispatch_child(schedule, instance, lease) do
+  defp dispatch_child(schedule, instance, lease, state_lock) do
     dispatch_id = generate_dispatch_id()
     metadata = schedule_dispatch_metadata(schedule, instance, dispatch_id, lease)
 
@@ -259,11 +274,19 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
              dispatch_manifest(bundle_or_manifest),
              dispatch_opts(bundle_or_manifest)
            ) do
-      update_after_dispatch(schedule, dispatch_id, job_id, instance, metadata)
+      log_schedule_update_failure(
+        schedule["schedule_id"],
+        update_after_dispatch(schedule, dispatch_id, job_id, instance, metadata, state_lock)
+      )
+
       %{checked: 1, dispatched: 1, skipped: 0, failed: 0, missed: 0, blocked: 0}
     else
       {:error, reason} ->
-        update_after_dispatch_failure(schedule, dispatch_id, instance, reason)
+        log_schedule_update_failure(
+          schedule["schedule_id"],
+          update_after_dispatch_failure(schedule, dispatch_id, instance, reason, state_lock)
+        )
+
         %{checked: 1, dispatched: 0, skipped: 0, failed: 1, missed: 0, blocked: 0}
     end
   end
@@ -316,10 +339,9 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     |> Map.new()
   end
 
-  defp update_after_dispatch(schedule, dispatch_id, job_id, instance, metadata) do
+  defp update_after_dispatch(schedule, dispatch_id, job_id, instance, metadata, state_lock) do
     now = Runtime.timestamp()
     window_end_at = window_end_at(schedule, now)
-    current = current_schedule(schedule)
 
     dispatch =
       %{
@@ -335,17 +357,18 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)
       |> Map.new()
 
-    current
-    |> prepend_dispatch(dispatch)
-    |> Map.update("active_job_ids", [job_id], &Enum.uniq([job_id | &1]))
-    |> increment_counter("dispatched")
-    |> maybe_complete_one_shot()
-    |> then(&RedisStore.persist_schedule(schedule["schedule_id"], &1))
+    mutate_schedule_with_lock(schedule["schedule_id"], state_lock, fn current ->
+      current
+      |> prune_inactive_job_ids()
+      |> prepend_dispatch(dispatch)
+      |> Map.update("active_job_ids", [job_id], &Enum.uniq([job_id | &1]))
+      |> increment_counter("dispatched")
+      |> maybe_complete_one_shot()
+    end)
   end
 
-  defp update_after_dispatch_failure(schedule, dispatch_id, instance, reason) do
+  defp update_after_dispatch_failure(schedule, dispatch_id, instance, reason, state_lock) do
     now = Runtime.timestamp()
-    current = current_schedule(schedule)
 
     error =
       ErrorEnvelope.normalize(reason,
@@ -364,22 +387,22 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
       "submitted_at" => now
     }
 
-    current
-    |> prepend_dispatch(dispatch)
-    |> increment_counter("failed")
-    |> then(&RedisStore.persist_schedule(schedule["schedule_id"], &1))
+    mutate_schedule_with_lock(schedule["schedule_id"], state_lock, fn current ->
+      current
+      |> prune_inactive_job_ids()
+      |> prepend_dispatch(dispatch)
+      |> increment_counter("failed")
+    end)
   end
 
   defp advance_schedule(result, schedule, now) do
     if result.dispatched > 0 and schedule["kind"] == "periodic" do
       next_run_at = SchedulePolicy.next_run_at(schedule, DateTime.add(now, 60, :second))
-      current = current_schedule(schedule)
 
-      _ =
-        RedisStore.persist_schedule(
-          schedule["schedule_id"],
-          Map.put(current, "next_run_at", next_run_at)
-        )
+      log_schedule_update_failure(
+        schedule["schedule_id"],
+        mutate_schedule(schedule["schedule_id"], &Map.put(&1, "next_run_at", next_run_at))
+      )
     end
 
     result
@@ -388,22 +411,28 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
   defp mark_missed(schedule, now) do
     next_run_at = SchedulePolicy.next_run_at(schedule, now)
 
-    _ =
-      schedule
-      |> Map.put("next_run_at", next_run_at)
-      |> Map.put("last_missed_at", DateTime.to_iso8601(now))
-      |> increment_counter("missed")
-      |> then(&RedisStore.persist_schedule(schedule["schedule_id"], &1))
+    log_schedule_update_failure(
+      schedule["schedule_id"],
+      mutate_schedule(schedule["schedule_id"], fn current ->
+        current
+        |> Map.put("next_run_at", next_run_at)
+        |> Map.put("last_missed_at", DateTime.to_iso8601(now))
+        |> increment_counter("missed")
+      end)
+    )
 
     %{checked: 1, dispatched: 0, skipped: 0, failed: 0, missed: 1, blocked: 0}
   end
 
   defp mark_blocked(schedule, reason) do
-    _ =
-      schedule
-      |> Map.put("last_blocked_reason", reason)
-      |> Map.put("updated_at", Runtime.timestamp())
-      |> then(&RedisStore.persist_schedule(schedule["schedule_id"], &1))
+    log_schedule_update_failure(
+      schedule["schedule_id"],
+      mutate_schedule(schedule["schedule_id"], fn current ->
+        current
+        |> Map.put("last_blocked_reason", reason)
+        |> Map.put("updated_at", Runtime.timestamp())
+      end)
+    )
 
     %{checked: 1, dispatched: 0, skipped: 0, failed: 0, missed: 0, blocked: 1}
   end
@@ -414,14 +443,17 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
       |> DateTime.add(Map.get(schedule, "retry_interval_ms", 30_000), :millisecond)
       |> DateTime.to_iso8601()
 
-    _ =
-      schedule
-      |> Map.put("next_run_at", next_run_at)
-      |> Map.put("last_blocked_reason", reason || "resources unavailable")
-      |> Map.put("resource_availability", availability)
-      |> Map.put("updated_at", Runtime.timestamp())
-      |> increment_counter("blocked")
-      |> then(&RedisStore.persist_schedule(schedule["schedule_id"], &1))
+    log_schedule_update_failure(
+      schedule["schedule_id"],
+      mutate_schedule(schedule["schedule_id"], fn current ->
+        current
+        |> Map.put("next_run_at", next_run_at)
+        |> Map.put("last_blocked_reason", reason || "resources unavailable")
+        |> Map.put("resource_availability", availability)
+        |> Map.put("updated_at", Runtime.timestamp())
+        |> increment_counter("blocked")
+      end)
+    )
 
     %{checked: 1, dispatched: 0, skipped: 0, failed: 0, missed: 0, blocked: 1}
   end
@@ -451,22 +483,25 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     job_id = dispatch["job_id"]
     _ = if is_binary(job_id), do: MirrorNeuron.cancel(job_id), else: :ok
 
-    updated_dispatches =
-      Enum.map(schedule["dispatches"] || [], fn item ->
-        if item["dispatch_id"] == dispatch["dispatch_id"] do
-          item
-          |> Map.put("status", "window_closed")
-          |> Map.put("closed_at", Runtime.timestamp())
-        else
-          item
-        end
-      end)
+    log_schedule_update_failure(
+      schedule["schedule_id"],
+      mutate_schedule(schedule["schedule_id"], fn current ->
+        updated_dispatches =
+          Enum.map(current["dispatches"] || [], fn item ->
+            if item["dispatch_id"] == dispatch["dispatch_id"] do
+              item
+              |> Map.put("status", "window_closed")
+              |> Map.put("closed_at", Runtime.timestamp())
+            else
+              item
+            end
+          end)
 
-    _ =
-      schedule
-      |> Map.put("dispatches", updated_dispatches)
-      |> Map.update("active_job_ids", [], &List.delete(&1, job_id))
-      |> then(&RedisStore.persist_schedule(schedule["schedule_id"], &1))
+        current
+        |> Map.put("dispatches", updated_dispatches)
+        |> Map.update("active_job_ids", [], &List.delete(&1, job_id))
+      end)
+    )
 
     %{checked: 1, dispatched: 0, skipped: 0, failed: 0, missed: 0, blocked: 0, windows_closed: 1}
   end
@@ -542,12 +577,128 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
   defp reason_to_string(reason) when is_binary(reason), do: reason
   defp reason_to_string(reason), do: inspect(reason)
 
-  defp current_schedule(schedule) do
-    case RedisStore.fetch_schedule(schedule["schedule_id"]) do
-      {:ok, current} -> current
-      _ -> schedule
+  defp mutate_schedule(schedule_id, update) do
+    with_schedule_state_lock(schedule_id, fn lock ->
+      mutate_schedule_with_lock(schedule_id, lock, update)
+    end)
+  end
+
+  defp mutate_schedule_with_lock(schedule_id, lock, update) do
+    with {:ok, current} <- RedisStore.fetch_schedule(schedule_id),
+         {:ok, next_schedule} <- apply_schedule_update(update, current) do
+      RedisStore.persist_schedule_fenced(
+        schedule_id,
+        next_schedule,
+        lock.lease_name,
+        lock.owner,
+        lock.lease["epoch"]
+      )
     end
   end
+
+  defp apply_schedule_update(update, current) do
+    case update.(current) do
+      {:ok, next_schedule} when is_map(next_schedule) -> {:ok, next_schedule}
+      {:error, _reason} = error -> error
+      next_schedule when is_map(next_schedule) -> {:ok, next_schedule}
+      other -> {:error, {:invalid_schedule_update, other}}
+    end
+  end
+
+  defp delete_schedule_locked(schedule_id) do
+    with_schedule_state_lock(schedule_id, fn lock ->
+      RedisStore.delete_schedule_fenced(
+        schedule_id,
+        lock.lease_name,
+        lock.owner,
+        lock.lease["epoch"]
+      )
+    end)
+  end
+
+  defp with_schedule_state_lock(schedule_id, operation) do
+    deadline = System.monotonic_time(:millisecond) + @state_lease_wait_ms
+    with_schedule_state_lock(schedule_id, operation, deadline)
+  end
+
+  defp with_schedule_state_lock(schedule_id, operation, deadline) do
+    case acquire_schedule_state_lock(schedule_id, deadline) do
+      {:ok, lock} ->
+        result =
+          try do
+            operation.(lock)
+          after
+            _ =
+              RedisStore.release_fenced_lease(
+                lock.lease_name,
+                lock.owner,
+                lock.lease["epoch"]
+              )
+          end
+
+        if result == {:error, :not_owner} and before_deadline?(deadline) do
+          with_schedule_state_lock(schedule_id, operation, deadline)
+        else
+          result
+        end
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp acquire_schedule_state_lock(schedule_id, deadline) do
+    lease_name = "schedule:#{schedule_id}:state"
+    owner = "#{Node.self()}:#{System.unique_integer([:positive, :monotonic])}"
+    acquire_schedule_state_lock(schedule_id, lease_name, owner, deadline)
+  end
+
+  defp acquire_schedule_state_lock(schedule_id, lease_name, owner, deadline) do
+    case RedisStore.acquire_fenced_lease(lease_name, owner, @state_lease_ttl_ms) do
+      {:ok, lease} ->
+        {:ok, %{lease_name: lease_name, owner: owner, lease: lease}}
+
+      {:error, {:locked, _lease}} ->
+        if before_deadline?(deadline) do
+          Process.sleep(@state_lease_retry_ms)
+          acquire_schedule_state_lock(schedule_id, lease_name, owner, deadline)
+        else
+          {:error, {:schedule_state_lock_timeout, schedule_id}}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp before_deadline?(deadline), do: System.monotonic_time(:millisecond) < deadline
+
+  defp log_schedule_update_failure(_schedule_id, {:ok, _schedule}), do: :ok
+  defp log_schedule_update_failure(_schedule_id, :ok), do: :ok
+
+  defp log_schedule_update_failure(schedule_id, {:error, reason}) do
+    Logger.error("failed to update schedule #{schedule_id}: #{inspect(reason)}")
+    :ok
+  end
+
+  defp prune_inactive_job_ids(schedule) do
+    active_job_ids =
+      schedule
+      |> Map.get("active_job_ids", [])
+      |> Enum.filter(&active_job_id?/1)
+
+    Map.put(schedule, "active_job_ids", active_job_ids)
+  end
+
+  defp active_job_id?(job_id) when is_binary(job_id) do
+    case RedisStore.fetch_job(job_id) do
+      {:ok, %{"status" => status}} -> status not in @terminal_statuses
+      {:error, reason} when is_binary(reason) -> not String.contains?(reason, "was not found")
+      {:error, _reason} -> true
+    end
+  end
+
+  defp active_job_id?(_job_id), do: false
 
   defp increment_counter(schedule, key) do
     counters = Map.get(schedule, "counters", %{})

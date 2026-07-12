@@ -2,9 +2,11 @@ defmodule MirrorNeuron.Runtime do
   require Logger
 
   alias MirrorNeuron.Bundle.Archive
+  alias MirrorNeuron.Cluster.NodeAdapter
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.ContextEnginePreflight
   alias MirrorNeuron.JobId
+  alias MirrorNeuron.SafeAccess
   alias MirrorNeuron.Scheduler
   alias MirrorNeuron.Sandbox.{DockerJobSandbox, OpenShellJobSandbox}
 
@@ -243,33 +245,161 @@ defmodule MirrorNeuron.Runtime do
 
     case MirrorNeuron.Persistence.RedisStore.list_jobs() do
       {:ok, jobs} ->
-        deleted =
+        result =
           jobs
           |> Enum.filter(fn job ->
             force_all or job["status"] in ["completed", "failed", "cancelled"]
           end)
-          |> Enum.map(& &1["job_id"])
-          |> Enum.map(fn job_id ->
-            cleanup_job_sandboxes(job_id)
-            MirrorNeuron.Persistence.RedisStore.delete_job(job_id)
-            job_id
+          |> Enum.reduce(%{deleted_jobs: [], failed_jobs: []}, fn job, acc ->
+            case prepare_job_cleanup(job, force_all) do
+              :ok ->
+                job_id = job["job_id"]
+
+                case cleanup_job_sandboxes(job_id, job) do
+                  :ok ->
+                    case MirrorNeuron.Persistence.RedisStore.delete_job(job_id) do
+                      :ok ->
+                        Map.update!(acc, :deleted_jobs, &[job_id | &1])
+
+                      {:error, reason} ->
+                        failure = %{"job_id" => job_id, "reason" => error_message(reason)}
+                        Map.update!(acc, :failed_jobs, &[failure | &1])
+                    end
+
+                  {:error, reason} ->
+                    failure = %{"job_id" => job_id, "reason" => error_message(reason)}
+                    Map.update!(acc, :failed_jobs, &[failure | &1])
+                end
+
+              {:error, reason} ->
+                failure = %{"job_id" => job["job_id"], "reason" => error_message(reason)}
+                Map.update!(acc, :failed_jobs, &[failure | &1])
+            end
           end)
 
-        {:ok, %{deleted_count: length(deleted), deleted_jobs: deleted}}
+        deleted_jobs = Enum.reverse(result.deleted_jobs)
+        failed_jobs = Enum.reverse(result.failed_jobs)
+
+        Enum.each(failed_jobs, fn failure ->
+          Logger.warning("failed to safely clean job #{failure["job_id"]}: #{failure["reason"]}")
+        end)
+
+        {:ok, %{deleted_count: length(deleted_jobs), deleted_jobs: deleted_jobs}}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
+  defp prepare_job_cleanup(%{"status" => status}, _force_all)
+       when status in ["completed", "failed", "cancelled"],
+       do: :ok
+
+  defp prepare_job_cleanup(%{"job_id" => job_id}, true) do
+    case cancel_job(job_id) do
+      {:ok, _status} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp prepare_job_cleanup(_job, _force_all), do: {:error, :job_is_not_terminal}
+
   def send_message(job_id, agent_id, message) when is_map(message) do
     call_job(job_id, {:send_message, agent_id, message})
   end
 
-  defp cleanup_job_sandboxes(job_id) do
-    _ = OpenShellJobSandbox.cleanup_job_local(job_id)
-    _ = DockerJobSandbox.cleanup_job_local(job_id)
-    :ok
+  @doc false
+  def cleanup_job_sandboxes(job_id) do
+    case RedisStore.fetch_job(job_id) do
+      {:ok, job} -> cleanup_job_sandboxes(job_id, job)
+      {:error, reason} -> cleanup_job_sandboxes_without_job(job_id, reason)
+    end
+  end
+
+  @doc false
+  def cleanup_job_sandboxes(job_id, job) when is_map(job) or is_nil(job) do
+    with {:ok, agents} <- RedisStore.list_agents(job_id) do
+      failures =
+        job
+        |> sandbox_cleanup_nodes(agents)
+        |> Enum.flat_map(fn node ->
+          [
+            cleanup_sandbox_on_node(node, OpenShellJobSandbox, job_id, "OpenShell"),
+            cleanup_sandbox_on_node(node, DockerJobSandbox, job_id, "DockerWorker")
+          ]
+          |> Enum.reject(&(&1 == :ok))
+        end)
+
+      if failures == [], do: :ok, else: {:error, failures}
+    else
+      {:error, reason} -> {:error, {:agent_metadata_unavailable, reason}}
+    end
+  end
+
+  defp cleanup_job_sandboxes_without_job(job_id, reason) do
+    if is_binary(reason) and String.contains?(reason, "was not found") do
+      cleanup_job_sandboxes(job_id, nil)
+    else
+      {:error, {:job_metadata_unavailable, reason}}
+    end
+  end
+
+  defp sandbox_cleanup_nodes(job, agents) do
+    connected_nodes = [NodeAdapter.self() | NodeAdapter.list()]
+
+    placement_nodes =
+      job
+      |> detail("scheduler")
+      |> detail("placements")
+      |> case do
+        placements when is_list(placements) -> Enum.map(placements, &detail(&1, "node"))
+        _other -> []
+      end
+
+    assigned_nodes = Enum.map(agents, &detail(&1, "assigned_node"))
+
+    (connected_nodes ++ placement_nodes ++ assigned_nodes)
+    |> Enum.reduce([], fn value, nodes ->
+      case cleanup_node(value) do
+        {:ok, node} -> [node | nodes]
+        :error -> nodes
+      end
+    end)
+    |> Enum.uniq()
+    |> Enum.reverse()
+  end
+
+  defp cleanup_node(node) when is_atom(node), do: {:ok, node}
+
+  defp cleanup_node(node) when is_binary(node) do
+    case SafeAccess.node_name_to_atom(node) do
+      {:ok, atom} -> {:ok, atom}
+      {:error, _reason} -> :error
+    end
+  end
+
+  defp cleanup_node(_node), do: :error
+
+  defp cleanup_sandbox_on_node(node, module, job_id, label) do
+    case safe_cleanup_sandbox_on_node(node, module, job_id) do
+      :ok ->
+        :ok
+
+      reason ->
+        Logger.warning(
+          "failed to clean up #{label} sandbox for #{job_id} on #{node}: #{inspect(reason)}"
+        )
+
+        %{node: to_string(node), sandbox: label, reason: reason}
+    end
+  end
+
+  defp safe_cleanup_sandbox_on_node(node, module, job_id) do
+    NodeAdapter.rpc_call(node, module, :cleanup_job_local, [job_id], 15_000)
+  rescue
+    exception -> {:badrpc, {exception.__struct__, Exception.message(exception)}}
+  catch
+    kind, reason -> {:badrpc, {kind, reason}}
   end
 
   def deploy_agents(job_id, agent_ids, manifest, scheduler_plan, deployment_context) do

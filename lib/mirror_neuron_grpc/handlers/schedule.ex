@@ -9,13 +9,17 @@ defmodule MirrorNeuron.Grpc.Handlers.Schedule do
   def create_schedule(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("CreateSchedule")
 
-    with {:ok, tmp_dir} <- Support.request_bundle_dir(request.manifest_json, request.payloads),
-         {:ok, schedule} <-
-           MirrorNeuron.create_schedule(tmp_dir, Support.decode_json_map(request.schedule_json),
-             source: Support.decode_json_map(request.source_json)
-           ) do
-      schedule_response(schedule)
-    else
+    result =
+      Support.with_request_bundle(request.manifest_json, request.payloads, fn tmp_dir ->
+        MirrorNeuron.create_schedule(
+          tmp_dir,
+          Support.decode_json_map(request.schedule_json),
+          source: Support.decode_json_map(request.source_json)
+        )
+      end)
+
+    case result do
+      {:ok, schedule} -> schedule_response(schedule)
       {:error, reason} -> raise GRPC.RPCError, status: :invalid_argument, message: inspect(reason)
     end
   end

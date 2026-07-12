@@ -1,6 +1,9 @@
 defmodule MirrorNeuron.Grpc.Handlers.Support do
   @moduledoc false
 
+  alias MirrorNeuron.Bundle.{Archive, Fingerprint}
+  alias MirrorNeuron.JobBundle
+
   @interface_version 1
 
   def interface_version, do: @interface_version
@@ -11,9 +14,12 @@ defmodule MirrorNeuron.Grpc.Handlers.Support do
     Enum.reduce_while(payloads, :ok, fn {path, content}, :ok ->
       case MirrorNeuron.Grpc.Validation.safe_payload_path(payloads_dir, path) do
         {:ok, full_path} ->
-          File.mkdir_p!(Path.dirname(full_path))
-          File.write!(full_path, content)
-          {:cont, :ok}
+          with :ok <- File.mkdir_p(Path.dirname(full_path)),
+               :ok <- File.write(full_path, content) do
+            {:cont, :ok}
+          else
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
 
         {:error, reason} ->
           {:halt, {:error, reason}}
@@ -21,16 +27,41 @@ defmodule MirrorNeuron.Grpc.Handlers.Support do
     end)
   end
 
-  def request_bundle_dir(manifest_json, payloads) do
+  def request_bundle_dir(manifest_json, payloads, opts \\ []) do
     bundle_id = "bundle_#{System.unique_integer([:positive])}"
-    tmp_dir = Path.join(System.tmp_dir!(), bundle_id)
+    tmp_dir = Path.join(Keyword.get(opts, :tmp_root, System.tmp_dir!()), bundle_id)
     payloads_dir = Path.join(tmp_dir, "payloads")
 
-    File.mkdir_p!(payloads_dir)
-    File.write!(Path.join(tmp_dir, "manifest.json"), manifest_json)
+    try do
+      result =
+        with :ok <- File.mkdir_p(payloads_dir),
+             :ok <- File.write(Path.join(tmp_dir, "manifest.json"), manifest_json),
+             :ok <- write_payloads(payloads_dir, payloads) do
+          {:ok, tmp_dir}
+        end
 
-    with :ok <- write_payloads(payloads_dir, payloads) do
-      {:ok, tmp_dir}
+      case result do
+        {:ok, ^tmp_dir} = success ->
+          success
+
+        {:error, _reason} = error ->
+          _ = File.rm_rf(tmp_dir)
+          error
+      end
+    rescue
+      exception ->
+        _ = File.rm_rf(tmp_dir)
+        {:error, Exception.message(exception)}
+    end
+  end
+
+  def with_request_bundle(manifest_json, payloads, callback) when is_function(callback, 1) do
+    with {:ok, tmp_dir} <- request_bundle_dir(manifest_json, payloads) do
+      try do
+        callback.(tmp_dir)
+      after
+        cleanup_archived_request_bundle(tmp_dir)
+      end
     end
   end
 
@@ -82,6 +113,16 @@ defmodule MirrorNeuron.Grpc.Handlers.Support do
   end
 
   def valid_admin_token?(_configured_token, _request_token), do: false
+
+  defp cleanup_archived_request_bundle(tmp_dir) do
+    with {:ok, fingerprint} <- Fingerprint.compute(tmp_dir),
+         {:ok, _bundle} <- fingerprint |> Archive.cache_path() |> JobBundle.load() do
+      _ = File.rm_rf(tmp_dir)
+      :ok
+    else
+      _ -> :ok
+    end
+  end
 
   defp runtime_error_status({:job_not_running, _job_id}), do: GRPC.Status.not_found()
   defp runtime_error_status({:agent_not_running, _details}), do: GRPC.Status.not_found()

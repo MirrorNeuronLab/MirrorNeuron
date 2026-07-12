@@ -33,6 +33,7 @@ defmodule MirrorNeuron.Application do
       [
         {Registry, keys: :duplicate, name: MirrorNeuron.Runtime.EventRegistry},
         {Cluster.Supervisor, [topologies, [name: MirrorNeuron.ClusterSupervisor]]},
+        MirrorNeuron.Persistence.CheckpointLock,
         MirrorNeuron.Redis,
         MirrorNeuron.Persistence.Retention
       ] ++ grpc_child_specs()
