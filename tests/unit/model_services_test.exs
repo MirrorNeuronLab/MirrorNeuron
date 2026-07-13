@@ -126,6 +126,89 @@ defmodule MirrorNeuron.ModelServicesTest do
     assert message =~ "send PrepareRuntimeModel gRPC to the target node runtime"
   end
 
+  test "DockerWorker preparation and cleanup forward to the node-local SDK gRPC service" do
+    previous = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
+
+    previous_prepare_client =
+      Application.get_env(:mirror_neuron, :native_sdk_grpc_prepare_docker_worker_client)
+
+    previous_cleanup_client =
+      Application.get_env(:mirror_neuron, :native_sdk_grpc_cleanup_docker_worker_client)
+
+    System.put_env("MN_NATIVE_SDK_GRPC_TARGET", "127.0.0.1:55052")
+    parent = self()
+
+    prepare_request = %Mirrorneuron.Cluster.V1.PrepareDockerWorkerRequest{
+      manifest_json: "{\"nodes\":[]}",
+      payloads: %{"Dockerfile" => "FROM scratch"},
+      submission_id: "submission-1",
+      node_name: "mirror_neuron@spark",
+      version: 1
+    }
+
+    cleanup_request = %Mirrorneuron.Cluster.V1.CleanupDockerWorkerRequest{
+      submission_id: "submission-1",
+      job_id: "job-1",
+      version: 1
+    }
+
+    try do
+      Application.put_env(
+        :mirror_neuron,
+        :native_sdk_grpc_prepare_docker_worker_client,
+        fn target, request, timeout ->
+          send(parent, {:docker_prepare_forwarded, target, request, timeout})
+
+          {:ok,
+           %Mirrorneuron.Cluster.V1.PrepareDockerWorkerResponse{
+             result_json: "{\"prepared\":true}",
+             version: 1
+           }}
+        end
+      )
+
+      Application.put_env(
+        :mirror_neuron,
+        :native_sdk_grpc_cleanup_docker_worker_client,
+        fn target, request, timeout ->
+          send(parent, {:docker_cleanup_forwarded, target, request, timeout})
+
+          {:ok,
+           %Mirrorneuron.Cluster.V1.CleanupDockerWorkerResponse{
+             result_json: "{\"removed\":1}",
+             version: 1
+           }}
+        end
+      )
+
+      assert {:ok, %Mirrorneuron.Cluster.V1.PrepareDockerWorkerResponse{result_json: result}} =
+               ModelServices.prepare_docker_worker(prepare_request, 1234)
+
+      assert result == "{\"prepared\":true}"
+      assert_receive {:docker_prepare_forwarded, "127.0.0.1:55052", ^prepare_request, 1234}
+
+      assert {:ok,
+              %Mirrorneuron.Cluster.V1.CleanupDockerWorkerResponse{result_json: cleanup_result}} =
+               ModelServices.cleanup_docker_worker(cleanup_request, 4321)
+
+      assert cleanup_result == "{\"removed\":1}"
+      assert_receive {:docker_cleanup_forwarded, "127.0.0.1:55052", ^cleanup_request, 4321}
+    after
+      restore_env("MN_NATIVE_SDK_GRPC_TARGET", previous)
+      restore_app_env(:native_sdk_grpc_prepare_docker_worker_client, previous_prepare_client)
+      restore_app_env(:native_sdk_grpc_cleanup_docker_worker_client, previous_cleanup_client)
+    end
+  end
+
+  test "DockerWorker preparation refuses requests sent to the wrong node" do
+    request = %Mirrorneuron.Cluster.V1.PrepareDockerWorkerRequest{}
+
+    assert {:error, message} =
+             ModelServices.prepare_docker_worker_on_node("mirror_neuron@remote", request)
+
+    assert message =~ "send PrepareDockerWorker gRPC to the target node native SDK service"
+  end
+
   test "LiteLLM gateway sync forwards to node-local SDK gRPC service" do
     previous = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
     previous_client = Application.get_env(:mirror_neuron, :native_sdk_grpc_sync_client)

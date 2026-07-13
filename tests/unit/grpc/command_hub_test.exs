@@ -18,6 +18,8 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
     CancelNodeDrainResponse,
     CheckServicesRequest,
     CheckServicesResponse,
+    CleanupDockerWorkerRequest,
+    CleanupDockerWorkerResponse,
     DrainNodeRequest,
     DrainNodeResponse,
     GetNodeDrainStatusRequest,
@@ -30,6 +32,8 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
     ListServicesResponse,
     NetworkHandshakeRequest,
     NetworkHandshakeResponse,
+    PrepareDockerWorkerRequest,
+    PrepareDockerWorkerResponse,
     ReconcileNodeRequest,
     ReconcileNodeResponse,
     RemoveNodeRequest,
@@ -253,6 +257,20 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
           version: 1
         })
 
+    def prepare_docker_worker(request, stream),
+      do:
+        reply(:prepare_docker_worker, request, stream, %PrepareDockerWorkerResponse{
+          result_json: "{\"prepared\":true}",
+          version: 1
+        })
+
+    def cleanup_docker_worker(request, stream),
+      do:
+        reply(:cleanup_docker_worker, request, stream, %CleanupDockerWorkerResponse{
+          result_json: "{\"removed\":1}",
+          version: 1
+        })
+
     def add_node(request, stream),
       do:
         reply(:add_node, request, stream, %AddNodeResponse{
@@ -439,6 +457,20 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
            }
 
     assert CommandPolicy.policies(:cluster, :PrepareRuntimeModel) == %{
+             network_only_denied: false,
+             operator_auth_required: false,
+             admin_auth_required: false,
+             network_join_auth_required: false
+           }
+
+    assert CommandPolicy.policies(:cluster, :PrepareDockerWorker) == %{
+             network_only_denied: false,
+             operator_auth_required: false,
+             admin_auth_required: false,
+             network_join_auth_required: false
+           }
+
+    assert CommandPolicy.policies(:cluster, :CleanupDockerWorker) == %{
              network_only_denied: false,
              operator_auth_required: false,
              admin_auth_required: false,
@@ -812,6 +844,22 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
         function: :prepare_runtime_model,
         request: %SetResourceRequest{},
         response: SetResourceResponse
+      },
+      %{
+        service: :cluster,
+        command: :PrepareDockerWorker,
+        server: ClusterServer,
+        function: :prepare_docker_worker,
+        request: %PrepareDockerWorkerRequest{},
+        response: PrepareDockerWorkerResponse
+      },
+      %{
+        service: :cluster,
+        command: :CleanupDockerWorker,
+        server: ClusterServer,
+        function: :cleanup_docker_worker,
+        request: %CleanupDockerWorkerRequest{},
+        response: CleanupDockerWorkerResponse
       },
       %{
         service: :cluster,

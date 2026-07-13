@@ -245,7 +245,9 @@ defmodule MirrorNeuron.Grpc.CommandHub do
                      {:cluster, :SyncLiteLLMGateway} => MirrorNeuron.Grpc.Handlers.RuntimeModel,
                      {:cluster, :RemoveLiteLLMGatewayRoute} =>
                        MirrorNeuron.Grpc.Handlers.RuntimeModel,
-                     {:cluster, :PrepareRuntimeModel} => MirrorNeuron.Grpc.Handlers.RuntimeModel
+                     {:cluster, :PrepareRuntimeModel} => MirrorNeuron.Grpc.Handlers.RuntimeModel,
+                     {:cluster, :PrepareDockerWorker} => MirrorNeuron.Grpc.Handlers.DockerWorker,
+                     {:cluster, :CleanupDockerWorker} => MirrorNeuron.Grpc.Handlers.DockerWorker
                    })
                    |> Map.merge(
                      Map.new(

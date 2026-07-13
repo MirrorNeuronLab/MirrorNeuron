@@ -106,6 +106,78 @@ defmodule Mirrorneuron.Cluster.V1.SetResourceResponse do
   field(:version, 2, type: :uint32)
 end
 
+defmodule Mirrorneuron.Cluster.V1.PrepareDockerWorkerRequest.PayloadsEntry do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.PrepareDockerWorkerRequest.PayloadsEntry",
+    map: true,
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:key, 1, type: :string)
+  field(:value, 2, type: :bytes)
+end
+
+defmodule Mirrorneuron.Cluster.V1.PrepareDockerWorkerRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.PrepareDockerWorkerRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:manifest_json, 1, type: :string, json_name: "manifestJson")
+
+  field(:payloads, 2,
+    repeated: true,
+    type: Mirrorneuron.Cluster.V1.PrepareDockerWorkerRequest.PayloadsEntry,
+    map: true
+  )
+
+  field(:submission_id, 3, type: :string, json_name: "submissionId")
+  field(:node_name, 4, type: :string, json_name: "nodeName")
+  field(:version, 5, type: :uint32)
+end
+
+defmodule Mirrorneuron.Cluster.V1.PrepareDockerWorkerResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.PrepareDockerWorkerResponse",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:result_json, 1, type: :string, json_name: "resultJson")
+  field(:version, 2, type: :uint32)
+end
+
+defmodule Mirrorneuron.Cluster.V1.CleanupDockerWorkerRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.CleanupDockerWorkerRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:submission_id, 1, type: :string, json_name: "submissionId")
+  field(:job_id, 2, type: :string, json_name: "jobId")
+  field(:all_services, 3, type: :bool, json_name: "allServices")
+  field(:version, 4, type: :uint32)
+end
+
+defmodule Mirrorneuron.Cluster.V1.CleanupDockerWorkerResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.CleanupDockerWorkerResponse",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:result_json, 1, type: :string, json_name: "resultJson")
+  field(:version, 2, type: :uint32)
+end
+
 defmodule Mirrorneuron.Cluster.V1.AddNodeRequest do
   @moduledoc false
 
@@ -464,6 +536,18 @@ defmodule Mirrorneuron.Cluster.V1.ClusterService.Service do
     :PrepareRuntimeModel,
     Mirrorneuron.Cluster.V1.SetResourceRequest,
     Mirrorneuron.Cluster.V1.SetResourceResponse
+  )
+
+  rpc(
+    :PrepareDockerWorker,
+    Mirrorneuron.Cluster.V1.PrepareDockerWorkerRequest,
+    Mirrorneuron.Cluster.V1.PrepareDockerWorkerResponse
+  )
+
+  rpc(
+    :CleanupDockerWorker,
+    Mirrorneuron.Cluster.V1.CleanupDockerWorkerRequest,
+    Mirrorneuron.Cluster.V1.CleanupDockerWorkerResponse
   )
 end
 

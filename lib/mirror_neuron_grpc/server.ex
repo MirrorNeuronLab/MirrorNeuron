@@ -48,6 +48,8 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
         sync_lite_llm_gateway: :SyncLiteLLMGateway,
         remove_lite_llm_gateway_route: :RemoveLiteLLMGatewayRoute,
         prepare_runtime_model: :PrepareRuntimeModel,
+        prepare_docker_worker: :PrepareDockerWorker,
+        cleanup_docker_worker: :CleanupDockerWorker,
         add_node: :AddNode,
         remove_node: :RemoveNode,
         reconcile_node: :ReconcileNode,

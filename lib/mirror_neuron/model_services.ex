@@ -3,6 +3,8 @@ defmodule MirrorNeuron.ModelServices do
 
   alias MirrorNeuron.ServiceRegistry
   alias Mirrorneuron.Cluster.V1.ClusterService
+  alias Mirrorneuron.Cluster.V1.CleanupDockerWorkerRequest
+  alias Mirrorneuron.Cluster.V1.PrepareDockerWorkerRequest
   alias Mirrorneuron.Cluster.V1.SetResourceRequest
 
   @interface_version 1
@@ -112,6 +114,30 @@ defmodule MirrorNeuron.ModelServices do
     )
   end
 
+  @doc false
+  def prepare_docker_worker_on_node(node_name, request, timeout \\ 1_800_000) do
+    native_request_on_node(
+      node_name,
+      request,
+      timeout,
+      &prepare_docker_worker/2,
+      "DockerWorker preparation request",
+      "PrepareDockerWorker gRPC"
+    )
+  end
+
+  @doc false
+  def cleanup_docker_worker_on_node(node_name, request, timeout \\ 120_000) do
+    native_request_on_node(
+      node_name,
+      request,
+      timeout,
+      &cleanup_docker_worker/2,
+      "DockerWorker cleanup request",
+      "CleanupDockerWorker gRPC"
+    )
+  end
+
   defp native_command_on_node(node_name, attrs, timeout, local_fun, description, command_hint) do
     target_node = normalize_node_name(node_name)
     self_node = to_string(Node.self())
@@ -123,6 +149,20 @@ defmodule MirrorNeuron.ModelServices do
       true ->
         {:error,
          "#{description} for #{target_node} reached #{self_node}; send #{command_hint} to the target node runtime so its local mn-python-sdk can prepare native resources"}
+    end
+  end
+
+  defp native_request_on_node(node_name, request, timeout, local_fun, description, command_hint) do
+    target_node = normalize_node_name(node_name)
+    self_node = to_string(Node.self())
+
+    cond do
+      target_node in [nil, "", self_node] ->
+        local_fun.(request, timeout)
+
+      true ->
+        {:error,
+         "#{description} for #{target_node} reached #{self_node}; send #{command_hint} to the target node native SDK service"}
     end
   end
 
@@ -144,6 +184,28 @@ defmodule MirrorNeuron.ModelServices do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  @doc false
+  def prepare_docker_worker(%PrepareDockerWorkerRequest{} = request, timeout \\ 1_800_000) do
+    native_sdk_proto_command(
+      request,
+      timeout,
+      :native_sdk_grpc_prepare_docker_worker_client,
+      &__MODULE__.grpc_prepare_docker_worker/3,
+      "native SDK DockerWorker preparation"
+    )
+  end
+
+  @doc false
+  def cleanup_docker_worker(%CleanupDockerWorkerRequest{} = request, timeout \\ 120_000) do
+    native_sdk_proto_command(
+      request,
+      timeout,
+      :native_sdk_grpc_cleanup_docker_worker_client,
+      &__MODULE__.grpc_cleanup_docker_worker/3,
+      "native SDK DockerWorker cleanup"
+    )
   end
 
   @doc false
@@ -195,6 +257,39 @@ defmodule MirrorNeuron.ModelServices do
 
       {:error, reason} ->
         {:error, "native SDK gRPC prepare failed for #{target}: #{inspect(reason)}"}
+    end
+  end
+
+  @doc false
+  def grpc_prepare_docker_worker(target, request, timeout) do
+    with {:ok, channel} <- GRPC.Stub.connect(target, timeout: timeout),
+         {:ok, response} <-
+           ClusterService.Stub.prepare_docker_worker(channel, request, timeout: timeout) do
+      {:ok, response}
+    else
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error,
+         "native SDK gRPC DockerWorker preparation failed for #{target}: #{Exception.message(error)}"}
+
+      {:error, reason} ->
+        {:error,
+         "native SDK gRPC DockerWorker preparation failed for #{target}: #{inspect(reason)}"}
+    end
+  end
+
+  @doc false
+  def grpc_cleanup_docker_worker(target, request, timeout) do
+    with {:ok, channel} <- GRPC.Stub.connect(target, timeout: timeout),
+         {:ok, response} <-
+           ClusterService.Stub.cleanup_docker_worker(channel, request, timeout: timeout) do
+      {:ok, response}
+    else
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error,
+         "native SDK gRPC DockerWorker cleanup failed for #{target}: #{Exception.message(error)}"}
+
+      {:error, reason} ->
+        {:error, "native SDK gRPC DockerWorker cleanup failed for #{target}: #{inspect(reason)}"}
     end
   end
 
@@ -318,6 +413,16 @@ defmodule MirrorNeuron.ModelServices do
     end
   end
 
+  defp native_sdk_proto_command(request, timeout, client_env, default_client, label) do
+    with {:ok, target} <- native_sdk_grpc_target(),
+         {:ok, response} <-
+           native_sdk_proto_request(target, request, timeout, client_env, default_client) do
+      {:ok, response}
+    else
+      {:error, reason} -> {:error, "#{label} failed: #{reason}"}
+    end
+  end
+
   defp native_sdk_request(target, attrs, timeout, client_env, default_client) do
     request = %SetResourceRequest{
       resource_json: Jason.encode!(attrs),
@@ -331,6 +436,11 @@ defmodule MirrorNeuron.ModelServices do
         default_client
       )
 
+    client.(target, request, native_sdk_timeout(timeout))
+  end
+
+  defp native_sdk_proto_request(target, request, timeout, client_env, default_client) do
+    client = Application.get_env(:mirror_neuron, client_env, default_client)
     client.(target, request, native_sdk_timeout(timeout))
   end
 
