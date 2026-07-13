@@ -6,7 +6,9 @@ defmodule MirrorNeuron.Sandbox.OpenShellJobSandbox do
   @registry MirrorNeuron.Sandbox.Registry
   @supervisor MirrorNeuron.Sandbox.JobSandboxSupervisor
   @default_cleanup_call_timeout_ms 10_000
-  @default_ensure_call_timeout_ms 60_000
+  # First-use custom sandbox image builds can take several minutes, especially
+  # on Linux hosts that have not populated the OpenShell build cache yet.
+  @default_ensure_call_timeout_ms 300_000
 
   def child_spec({job_id, config}) do
     %{
