@@ -19,6 +19,8 @@ service ClusterService {
   rpc SyncLiteLLMGateway (SetResourceRequest) returns (SetResourceResponse);
   rpc RemoveLiteLLMGatewayRoute (SetResourceRequest) returns (SetResourceResponse);
   rpc PrepareRuntimeModel (SetResourceRequest) returns (SetResourceResponse);
+  rpc PrepareDockerWorker (PrepareDockerWorkerRequest) returns (PrepareDockerWorkerResponse);
+  rpc CleanupDockerWorker (CleanupDockerWorkerRequest) returns (CleanupDockerWorkerResponse);
 }
 
 message NetworkHandshakeRequest {
@@ -70,6 +72,34 @@ message SetResourceRequest {
 
 message SetResourceResponse {
   string resource_json = 1;
+  uint32 version = 2;
+}
+
+// These operations run in the node-local native SDK service.  The payload map
+// lets that service materialize a Docker build context without relying on a
+// submitting host's filesystem.
+message PrepareDockerWorkerRequest {
+  string manifest_json = 1;
+  map<string, bytes> payloads = 2;
+  string submission_id = 3;
+  string node_name = 4;
+  uint32 version = 5;
+}
+
+message PrepareDockerWorkerResponse {
+  string result_json = 1;
+  uint32 version = 2;
+}
+
+message CleanupDockerWorkerRequest {
+  string submission_id = 1;
+  string job_id = 2;
+  bool all_services = 3;
+  uint32 version = 4;
+}
+
+message CleanupDockerWorkerResponse {
+  string result_json = 1;
   uint32 version = 2;
 }
 
