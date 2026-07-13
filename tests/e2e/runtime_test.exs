@@ -279,6 +279,48 @@ defmodule MirrorNeuron.RuntimeTest do
     end
   end
 
+  defmodule HibernateRetryCounter do
+    @key __MODULE__
+
+    def init do
+      :persistent_term.put(@key, :atomics.new(1, []))
+      :atomics.put(:persistent_term.get(@key), 1, 0)
+      :ok
+    end
+
+    def next_invocation do
+      @key
+      |> :persistent_term.get()
+      |> :atomics.add_get(1, 1)
+    end
+  end
+
+  defmodule HibernateRetryRunner do
+    def run(payload, _config, opts) do
+      case HibernateRetryCounter.next_invocation() do
+        1 ->
+          {:error, %{"error" => "resource temporarily unavailable after wake"}}
+
+        invocation ->
+          {:ok,
+           %{
+             "sandbox_name" => "hibernate-retry",
+             "exit_code" => 0,
+             "stdout" =>
+               Jason.encode!(%{
+                 "complete_run" => %{
+                   "invocation" => invocation,
+                   "message_id" => opts |> Keyword.fetch!(:message) |> MirrorNeuron.Message.id(),
+                   "payload" => payload
+                 }
+               }),
+             "stderr" => "",
+             "logs" => ""
+           }}
+      end
+    end
+  end
+
   defmodule ProfiledCompleteRunner do
     def run(_payload, config, _opts) do
       {:ok,
@@ -1903,6 +1945,93 @@ defmodule MirrorNeuron.RuntimeTest do
     assert {:ok, events} = MirrorNeuron.events(job_id)
     assert Enum.any?(events, &(&1["type"] == "local_recovery_auto_resumed"))
     assert Enum.any?(events, &(&1["type"] == "sandbox_job_completed"))
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "lease loss restores a failed safe message and its pending restart" do
+    :ok = HibernateRetryCounter.init()
+
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "hibernate_retry_recovery_test",
+      "entrypoints" => ["worker"],
+      "initial_inputs" => %{"worker" => [%{"value" => 42}]},
+      "nodes" => [
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "role" => "root_coordinator",
+          "config" => %{
+            "runner_module" => HibernateRetryRunner,
+            "safe_to_retry" => true,
+            "max_attempts" => 1,
+            "output_message_type" => nil
+          }
+        }
+      ],
+      "edges" => [],
+      "policies" => %{
+        "recovery_mode" => "local_restart",
+        "restart" => %{
+          "attempts" => 3,
+          "interval_ms" => 60_000,
+          "delay_ms" => 2_000,
+          "delay_function" => "constant",
+          "max_delay_ms" => 2_000,
+          "mode" => "fail"
+        }
+      }
+    }
+
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
+
+    wait_until(
+      fn ->
+        with {:ok, agent} <- RedisStore.fetch_agent(job_id, "worker"),
+             {:ok, job} <- RedisStore.fetch_job(job_id) do
+          is_map(agent["inflight_message"]) and
+            get_in(job, ["policy_state", "agents", "worker", "next_action"]) == "restart"
+        else
+          _ -> false
+        end
+      end,
+      3_000
+    )
+
+    assert {:ok, failed_agent} = RedisStore.fetch_agent(job_id, "worker")
+    failed_message_id = Message.id(failed_agent["inflight_message"])
+    assert is_binary(failed_message_id)
+
+    assert {:ok, job_before_recovery} = RedisStore.fetch_job(job_id)
+    first_epoch = job_before_recovery["lease_epoch"]
+    first_owner = job_before_recovery["lease_owner"]
+
+    assert :ok = RedisStore.release_fenced_lease("job:#{job_id}", first_owner, first_epoch)
+
+    [{runner_pid, _meta}] =
+      Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:job_runner, job_id})
+
+    send(runner_pid, :renew_lease)
+
+    wait_until(fn -> not Process.alive?(runner_pid) end, 3_000)
+
+    assert {:ok, recovery} = MirrorNeuron.recover_unfinished_jobs(reason: "hibernate_test")
+
+    assert Enum.any?(
+             recovery.jobs,
+             &(&1.job_id == job_id and &1.action in [:started, :already_running])
+           )
+
+    assert {:ok, completed} = MirrorNeuron.wait_for_job(job_id, 6_000)
+    assert completed["status"] == "completed"
+    assert get_in(completed, ["result", "output", "invocation"]) == 2
+    assert get_in(completed, ["result", "output", "message_id"]) == failed_message_id
+    assert completed["lease_epoch"] > first_epoch
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+    assert Enum.any?(events, &(&1["type"] == "job_lease_lost"))
+    assert Enum.any?(events, &(&1["type"] == "agent_policy_action_restored"))
 
     RedisStore.delete_job(job_id)
   end

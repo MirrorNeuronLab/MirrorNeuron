@@ -8,6 +8,10 @@ defmodule MirrorNeuron.Runtime.RecoverySafety do
       corrupt_checkpoint?(scoped_agents) ->
         {:blocked, "one or more agent checkpoints are corrupt; manual inspection is required"}
 
+      stranded_failed_checkpoint?(job, scoped_agents) ->
+        {:blocked,
+         "one or more failed agent checkpoints have no replayable message or pending recovery action"}
+
       Keyword.get(opts, :force_paused, false) ->
         {:manual,
          Keyword.get(opts, :force_paused_reason, "job recovery was requested in paused state")}
@@ -47,6 +51,35 @@ defmodule MirrorNeuron.Runtime.RecoverySafety do
   defp corrupt_checkpoint?(agents) do
     Enum.any?(agents, &corrupt_checkpoint_entry?/1)
   end
+
+  defp stranded_failed_checkpoint?(job, agents) do
+    Enum.any?(agents, &stranded_failed_checkpoint_entry?(job, &1))
+  end
+
+  defp stranded_failed_checkpoint_entry?(job, agent) when is_map(agent) do
+    agent_id = agent["agent_id"] || agent["node_id"]
+    current_state = Map.get(agent, "current_state", %{})
+    pending_messages = Map.get(agent, "pending_messages", [])
+    last_error = if is_map(current_state), do: Map.get(current_state, "last_error")
+    next_action = policy_next_action(job, agent_id)
+
+    Map.get(agent, "agent_type") == "executor" and is_binary(agent_id) and agent_id != "" and
+      is_binary(last_error) and last_error != "" and
+      is_nil(Map.get(agent, "inflight_message")) and pending_messages == [] and
+      Map.get(agent, "mailbox_depth", 0) == 0 and is_nil(next_action)
+  end
+
+  defp stranded_failed_checkpoint_entry?(_job, _agent), do: false
+
+  defp policy_next_action(%{"policy_state" => %{"agents" => agents}}, agent_id)
+       when is_map(agents) do
+    case Map.get(agents, agent_id) do
+      agent_state when is_map(agent_state) -> Map.get(agent_state, "next_action")
+      _ -> nil
+    end
+  end
+
+  defp policy_next_action(_job, _agent_id), do: nil
 
   defp corrupt_checkpoint_entry?(agent) when is_map(agent) do
     metadata = Map.get(agent, "metadata", %{})

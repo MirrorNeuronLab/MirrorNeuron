@@ -96,7 +96,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     terminate_agent_workers(state)
 
     with :ok <- wait_for_agents_stopped(state, 5_000),
-         {:ok, next_state} <- recover_missing_agents(state),
+         {:ok, recovery_state} <- restore_policy_timers(state),
+         {:ok, next_state} <- recover_missing_agents(recovery_state),
          :ok <- register_job_services(next_state) do
       persist_job(next_state)
       refresh_disk_checkpoint(next_state)
@@ -110,6 +111,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       publish_workflow_events(next_state, [])
       {:noreply, schedule_health_check(next_state)}
     else
+      {:paused_for_review, paused_state} ->
+        {:noreply, paused_state}
+
       {:error, reason} ->
         failed_state =
           finalize_job(
@@ -1636,6 +1640,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         agent_completed?(acc_state, agent_id) ->
           {:cont, {:ok, acc_state}}
 
+        pending_policy_action?(acc_state, agent_id) ->
+          {:cont, {:ok, acc_state}}
+
         agent_ready?(acc_state, agent_id) ->
           {:cont, {:ok, acc_state}}
 
@@ -2241,6 +2248,124 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp pending_policy_action?(state, agent_id) do
     agent_state = get_in(state.policy_state, ["agents", agent_id]) || %{}
     not is_nil(Map.get(agent_state, "next_action"))
+  end
+
+  defp restore_policy_timers(%{policy_state: %{"agents" => agents}} = state)
+       when is_map(agents) do
+    agents
+    |> Enum.sort_by(fn {agent_id, _agent_state} -> agent_id end)
+    |> Enum.reduce_while({:ok, state}, fn {agent_id, agent_state}, {:ok, acc_state} ->
+      action = if is_map(agent_state), do: Map.get(agent_state, "next_action"), else: :invalid
+
+      cond do
+        agent_id not in acc_state.agent_ids or agent_completed?(acc_state, agent_id) ->
+          {:cont, {:ok, acc_state}}
+
+        is_nil(action) ->
+          {:cont, {:ok, acc_state}}
+
+        action in ["restart", "reschedule"] ->
+          case restore_policy_timer(acc_state, agent_id, action, agent_state) do
+            {:ok, next_state} ->
+              {:cont, {:ok, next_state}}
+
+            {:error, reason} ->
+              paused_state = pause_for_policy_review(acc_state, agent_id, reason)
+
+              EventBus.publish(acc_state.job_id, %{
+                type: :job_recovery_blocked,
+                agent_id: agent_id,
+                reason: reason,
+                timestamp: Runtime.timestamp()
+              })
+
+              {:halt, {:paused_for_review, paused_state}}
+          end
+
+        true ->
+          reason =
+            "persisted recovery action for agent #{agent_id} is invalid: #{inspect(action)}"
+
+          paused_state = pause_for_policy_review(acc_state, agent_id, reason)
+
+          EventBus.publish(acc_state.job_id, %{
+            type: :job_recovery_blocked,
+            agent_id: agent_id,
+            reason: reason,
+            timestamp: Runtime.timestamp()
+          })
+
+          {:halt, {:paused_for_review, paused_state}}
+      end
+    end)
+  end
+
+  defp restore_policy_timers(state) do
+    agent_id = List.first(state.agent_ids) || "job_coordinator"
+    reason = "persisted recovery policy state is invalid"
+    paused_state = pause_for_policy_review(state, agent_id, reason)
+
+    EventBus.publish(state.job_id, %{
+      type: :job_recovery_blocked,
+      agent_id: agent_id,
+      reason: reason,
+      timestamp: Runtime.timestamp()
+    })
+
+    {:paused_for_review, paused_state}
+  end
+
+  defp restore_policy_timer(state, agent_id, action, agent_state) do
+    with {:ok, delay_ms} <- policy_timer_delay_ms(Map.get(agent_state, "next_eligible_at")) do
+      reason =
+        Map.get(agent_state, "last_reason") ||
+          "restored persisted #{action} action after runtime recovery"
+
+      next_state =
+        case action do
+          "restart" ->
+            schedule_policy_timer(
+              state,
+              {:restart, agent_id},
+              {:policy_restart, agent_id, reason},
+              delay_ms
+            )
+
+          "reschedule" ->
+            schedule_policy_timer(
+              state,
+              {:reschedule, agent_id},
+              {:policy_reschedule, [agent_id], reason},
+              delay_ms
+            )
+        end
+
+      EventBus.publish(state.job_id, %{
+        type: :agent_policy_action_restored,
+        agent_id: agent_id,
+        action: action,
+        reason: reason,
+        delay_ms: delay_ms,
+        next_eligible_at: Map.get(agent_state, "next_eligible_at"),
+        timestamp: Runtime.timestamp()
+      })
+
+      {:ok, next_state}
+    end
+  end
+
+  defp policy_timer_delay_ms(next_eligible_at) when is_binary(next_eligible_at) do
+    case DateTime.from_iso8601(next_eligible_at) do
+      {:ok, eligible_at, _offset} ->
+        {:ok, max(DateTime.diff(eligible_at, DateTime.utc_now(), :millisecond), 0)}
+
+      {:error, _reason} ->
+        {:error, "persisted recovery deadline is invalid: #{inspect(next_eligible_at)}"}
+    end
+  end
+
+  defp policy_timer_delay_ms(next_eligible_at) do
+    {:error, "persisted recovery deadline is missing: #{inspect(next_eligible_at)}"}
   end
 
   defp schedule_policy_timer(state, key, message, delay_ms) do

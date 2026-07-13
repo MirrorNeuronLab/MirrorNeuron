@@ -449,6 +449,14 @@ This is especially important for desktop environments, where machines sleep,
 restart, disconnect, run out of local resources, or appear and disappear from a
 private network more often than cloud workers do.
 
+If a machine sleeps long enough for a Redis-backed job lease to expire, the
+runtime treats wake-up as an ownership transition. It shuts down the stale
+runner, reacquires the job with a newer lease epoch, restores persisted restart
+or reschedule deadlines using their remaining wall-clock delay, and replays an
+in-flight message only when the agent is explicitly safe to retry. Unsafe work
+or a legacy failed checkpoint with no replayable message is paused for operator
+review instead of remaining indefinitely `running`.
+
 ---
 
 ## Execution profiles

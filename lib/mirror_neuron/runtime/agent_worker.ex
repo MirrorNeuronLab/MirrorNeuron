@@ -308,7 +308,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
         next_state
 
       {:error, reason, new_local_state} ->
-        failed_state = %{state | local_state: new_local_state, inflight_message: nil}
+        failed_state = %{state | local_state: new_local_state}
         persist_snapshot(failed_state)
         send(state.coordinator, {:agent_failed, state.node.node_id, reason})
         failed_state

@@ -151,6 +151,14 @@ defmodule MirrorNeuron.Runtime.JobRunner do
 
       {:error, :not_owner} ->
         Logger.warning("Lost lease for job #{state.job_id}. Shutting down.")
+
+        EventBus.publish(state.job_id, %{
+          type: :job_lease_lost,
+          lease_epoch: state.lease["epoch"],
+          lease_owner: state.node_name,
+          timestamp: Runtime.timestamp()
+        })
+
         {:stop, :normal, state}
 
       {:error, reason} ->
