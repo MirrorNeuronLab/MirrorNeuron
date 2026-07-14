@@ -3,32 +3,31 @@ defmodule MirrorNeuron.Runtime.AgentWorkerTimerTest do
 
   alias MirrorNeuron.Runtime.AgentWorker
 
-  test "manual pending drains replace queued drain work instead of duplicating it" do
+  test "a matching delivery poll clears its timer while the agent is paused" do
     token = make_ref()
-    timer_ref = Process.send_after(self(), {:drain_pending, token}, 60_000)
+    timer_ref = make_ref()
 
     state = %{
       paused?: true,
-      drain_timer_ref: timer_ref,
-      drain_token: token
+      delivery_timer_ref: timer_ref,
+      delivery_token: token
     }
 
-    assert {:noreply, next_state} = AgentWorker.handle_info(:drain_pending, state)
-    assert next_state.drain_timer_ref == nil
-    assert next_state.drain_token == nil
-    assert Process.read_timer(timer_ref) == false
+    assert {:noreply, next_state} = AgentWorker.handle_info({:delivery_poll, token}, state)
+    assert next_state.delivery_timer_ref == nil
+    assert next_state.delivery_token == nil
   end
 
-  test "stale pending drain messages cannot consume current work" do
+  test "a stale delivery poll cannot replace the current timer" do
     token = make_ref()
 
     state = %{
       paused?: false,
-      drain_timer_ref: make_ref(),
-      drain_token: token
+      delivery_timer_ref: make_ref(),
+      delivery_token: token
     }
 
     assert {:noreply, ^state} =
-             AgentWorker.handle_info({:drain_pending, make_ref()}, state)
+             AgentWorker.handle_info({:delivery_poll, make_ref()}, state)
   end
 end

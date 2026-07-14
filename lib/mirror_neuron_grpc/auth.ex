@@ -3,7 +3,7 @@ defmodule MirrorNeuron.Grpc.Auth do
 
   @token_headers ["authorization"]
 
-  def authorize_operator!(stream) do
+  def authorize_identity!(stream) do
     expected_token = MirrorNeuron.Grpc.Tokens.auth_token()
 
     if authorized?(stream, expected_token) do
@@ -11,7 +11,7 @@ defmodule MirrorNeuron.Grpc.Auth do
     else
       raise GRPC.RPCError,
         status: GRPC.Status.unauthenticated(),
-        message: "gRPC auth token is required for this RPC"
+        message: "gRPC client identity is required for this RPC"
     end
   end
 

@@ -457,6 +457,17 @@ in-flight message only when the agent is explicitly safe to retry. Unsafe work
 or a legacy failed checkpoint with no replayable message is paused for operator
 review instead of remaining indefinitely `running`.
 
+Every agent-to-agent message, including messages whose agents happen to run on
+the same node, follows one acknowledged Redis Streams path. Enqueue is
+idempotent by `message_id`; an agent claims a delivery lease, renews it while
+working, and ACKs only after its state and emitted messages are durable. Missing
+ACKs are reclaimed with bounded retries and then dead-lettered. BEAM/Horde
+signals are wake-ups only, so a dropped cross-node signal cannot lose the
+message. Streams, receipts, counters, and indexes all carry TTLs; ACK deletes
+the stream entry, explicit job deletion removes delivery keys immediately, and
+terminal jobs shorten remaining delivery retention to one hour. Delivery is
+at-least-once, so handlers and external side effects must remain idempotent.
+
 ---
 
 ## Execution profiles
@@ -516,8 +527,7 @@ present. Production does not require any `.env` file.
 | `MN_RECOVERY_EVAL_TTL_SECONDS` | Retention for terminal recovery eval diagnostics; defaults to 86400. |
 | `MN_CORE_HOST` | Host/IP used by the gRPC listener; defaults to loopback-style local binding. |
 | `MN_GRPC_PORT` | gRPC service port. |
-| `MN_GRPC_AUTH_TOKEN` | Bearer token for protected gRPC calls such as pause, resume, and resource updates. |
-| `MN_GRPC_ADMIN_TOKEN` | Required token for destructive administrative calls such as `ClearJobs`. |
+| `MN_GRPC_AUTH_TOKEN` | Single client-identity token for protected gRPC calls, including destructive operations. There are no operator/admin scopes. |
 | `MN_NODE_NAME` | Erlang node name used by release and cluster scripts. |
 | `MN_CLUSTER_NODES` | Comma-separated Erlang node names for cluster discovery. |
 | `MN_COOKIE` | Erlang distribution cookie; use a strong non-default value for distributed nodes. |
@@ -525,8 +535,16 @@ present. Production does not require any `.env` file.
 | `MN_JOB_LEASE_RENEW_INTERVAL_MS` | Job lease renewal cadence; defaults to 10000. |
 | `MN_JOB_CALL_TIMEOUT_MS` | Timeout for runtime job control calls such as pause, resume, pressure, and external message submit; defaults to 15000. |
 | `MN_CANCEL_JOB_CALL_TIMEOUT_MS` | Timeout for cancel before forcing durable cancellation of active orphaned jobs; defaults to 5000. |
-| `MN_DELIVERY_RETRY_ATTEMPTS` | Number of agent lookup retries before a delivery becomes a dead letter; defaults to 50. |
-| `MN_DELIVERY_RETRY_INTERVAL_MS` | Delay between delivery lookup retries; defaults to 50. |
+| `MN_MESSAGE_DEFAULT_TTL_SECONDS` | Default lifetime for an agent message; defaults to 86400. |
+| `MN_MESSAGE_MAX_TTL_SECONDS` | Maximum accepted agent-message lifetime; defaults to 604800. |
+| `MN_MESSAGE_ACK_RECEIPT_TTL_SECONDS` | Retention for ACK and dead-letter receipts; defaults to 3600. |
+| `MN_MESSAGE_STREAM_TTL_SECONDS` | Maximum retention for Redis delivery streams, counters, and indexes; defaults to 604800. |
+| `MN_MESSAGE_MAX_PENDING_PER_AGENT` | Durable pending-message cap per agent; defaults to 10000. |
+| `MN_MESSAGE_MAX_PENDING_PER_JOB` | Durable pending-message cap per job; defaults to 100000. |
+| `MN_MESSAGE_ACK_TIMEOUT_MS` | Delivery lease duration before an unacknowledged message can be reclaimed; defaults to 30000. |
+| `MN_MESSAGE_LEASE_RENEW_MS` | Lease-renew cadence while an agent handles a message; defaults to 10000. |
+| `MN_MESSAGE_DELIVERY_MAX_ATTEMPTS` | Processing attempts before dead-lettering; defaults to 10. |
+| `MN_MESSAGE_DELIVERY_POLL_MS` | Redis delivery polling interval when no wake-up signal arrives; defaults to 1000. |
 | `MN_RELIABILITY_STRATEGY` | Conservative runtime strategy resolver for new jobs. |
 | `MN_CHECKPOINT_ROOT` | Persistent atomic checkpoint root used to restore active workflows after a host restart; defaults to `MN_SHARED_STORAGE_ROOT/checkpoints`. |
 | `MN_NODE_RECONNECT_ATTEMPTS` | Runtime node reconnect attempts before jobs are paused for manual restart. |
@@ -562,8 +580,7 @@ export MN_API_HOST=0.0.0.0
 export MN_API_PORT=8080
 export MN_CORE_HOST=0.0.0.0
 export MN_GRPC_PORT=50051
-export MN_GRPC_AUTH_TOKEN=<operator-token>
-export MN_GRPC_ADMIN_TOKEN=<admin-token>
+export MN_GRPC_AUTH_TOKEN=<client-identity-token>
 mn-api ...
 ```
 
@@ -593,9 +610,9 @@ MirrorNeuron Core includes protobuf definitions and generated Elixir modules for
 Generated modules live under `lib/mirror_neuron_grpc/`. The gRPC listener binds
 to `MN_CORE_HOST` and listens on `MN_GRPC_PORT`.
 
-`JobService.ClearJobs` is a destructive administrative RPC. It is denied unless
-the server has `MN_GRPC_ADMIN_TOKEN` set and the request includes the same value
-in `admin_token`.
+Protected RPCs use one client identity from the `authorization` metadata header.
+`JobService.ClearJobs` uses the same identity as every other protected call;
+there are no operator/admin token scopes or credentials embedded in requests.
 
 `ClusterService.NetworkHandshake` is used by cluster join flows to verify the
 join token and keep network-facing nodes scoped to cluster/resource inspection

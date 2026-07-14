@@ -113,9 +113,8 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     end
   end
 
-  def pause_job(request, stream) do
+  def pause_job(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("PauseJob")
-    MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
 
     job_id = request.job_id
 
@@ -131,9 +130,8 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     end
   end
 
-  def resume_job(request, stream) do
+  def resume_job(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("ResumeJob")
-    MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
 
     job_id = request.job_id
 
@@ -149,9 +147,8 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     end
   end
 
-  def export_job_backup(request, stream) do
+  def export_job_backup(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("ExportJobBackup")
-    MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
 
     case MirrorNeuron.export_job_backup(request.job_id) do
       {:ok, backup, bundle_files} ->
@@ -166,9 +163,8 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     end
   end
 
-  def restore_job_backup(request, stream) do
+  def restore_job_backup(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("RestoreJobBackup")
-    MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
 
     with {:ok, backup} <- Jason.decode(request.backup_json),
          {:ok, result} <-
@@ -191,9 +187,8 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     end
   end
 
-  def clear_jobs(request, _stream) do
+  def clear_jobs(_request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("ClearJobs")
-    authorize_clear_jobs!(request)
 
     case MirrorNeuron.Monitor.clear_jobs() do
       {:ok, count} ->
@@ -202,18 +197,5 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
       {:error, reason} ->
         raise GRPC.RPCError, status: GRPC.Status.internal(), message: reason
     end
-  end
-
-  defp authorize_clear_jobs!(request) do
-    configured_token = MirrorNeuron.Grpc.Tokens.admin_token()
-    request_token = Map.get(request, :admin_token, "")
-
-    unless Support.valid_admin_token?(configured_token, request_token) do
-      raise GRPC.RPCError,
-        status: GRPC.Status.permission_denied(),
-        message: "ClearJobs requires MN_GRPC_ADMIN_TOKEN"
-    end
-
-    :ok
   end
 end

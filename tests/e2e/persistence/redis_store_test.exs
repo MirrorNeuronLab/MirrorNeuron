@@ -4,8 +4,10 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
   alias MirrorNeuron.Bundle.{Archive, Fingerprint}
   alias MirrorNeuron.Artifacts.JobStore
   alias MirrorNeuron.JobBundle
+  alias MirrorNeuron.Message
   alias MirrorNeuron.Persistence.{DiskCheckpoint, RedisStore}
   alias MirrorNeuron.Runtime
+  alias MirrorNeuron.Runtime.Delivery
   alias MirrorNeuron.Runtime.EventBus
   alias MirrorNeuron.ServiceRegistry
 
@@ -94,6 +96,130 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert Enum.map(events, & &1["seq"]) == [3, 4, 5]
 
     RedisStore.delete_job(job_id)
+  end
+
+  test "durable delivery records are idempotent, acknowledged, deleted, and expiring", %{
+    namespace: namespace
+  } do
+    job_id = "delivery-#{System.unique_integer([:positive])}"
+    agent_id = "worker"
+    message_id = "message-#{System.unique_integer([:positive])}"
+    consumer = Delivery.consumer_id(job_id, agent_id)
+
+    message =
+      Message.new(job_id, "source", agent_id, "work", %{"value" => 1}, message_id: message_id)
+
+    assert {:ok, %{status: :queued}} = Delivery.enqueue(job_id, agent_id, message)
+    assert {:ok, %{status: :duplicate}} = Delivery.enqueue(job_id, agent_id, message)
+
+    conflicting = put_in(message, ["body", "value"], 2)
+
+    assert {:error, {:message_id_conflict, ^message_id, "queued"}} =
+             Delivery.enqueue(job_id, agent_id, conflicting)
+
+    assert {:ok, [delivery]} = Delivery.read(job_id, agent_id, consumer)
+    assert delivery.message_id == message_id
+    assert delivery.attempt == 1
+    assert get_in(delivery.message, ["body", "value"]) == 1
+
+    assert :ok = Delivery.ack(job_id, agent_id, consumer, delivery)
+    assert {:ok, receipt} = RedisStore.fetch_delivery_receipt(job_id, agent_id, message_id)
+    assert receipt["status"] == "acked"
+    assert receipt["attempts"] == 1
+
+    stream_key = redis_key(namespace, ["job", job_id, "agent", agent_id, "deliveries"])
+    receipt_key = redis_key(namespace, ["job", job_id, "delivery", agent_id, message_id])
+    index_key = redis_key(namespace, ["job", job_id, "delivery_keys"])
+
+    assert {:ok, 0} = Redix.command(MirrorNeuron.Redis.Connection, ["XLEN", stream_key])
+    assert {:ok, 3} = Redix.command(MirrorNeuron.Redis.Connection, ["SCARD", index_key])
+    assert {:ok, ttl} = Redix.command(MirrorNeuron.Redis.Connection, ["TTL", receipt_key])
+    assert ttl in 1..Delivery.ack_receipt_ttl_seconds()
+  end
+
+  test "queued delivery records and indexes always have ttl", %{namespace: namespace} do
+    job_id = "delivery-ttl-#{System.unique_integer([:positive])}"
+    agent_id = "worker"
+    message_id = "message-#{System.unique_integer([:positive])}"
+
+    message =
+      Message.new(job_id, "source", agent_id, "work", %{},
+        message_id: message_id,
+        ttl_ms: 5_000
+      )
+
+    assert {:ok, %{status: :queued}} = Delivery.enqueue(job_id, agent_id, message)
+
+    keys = [
+      redis_key(namespace, ["job", job_id, "agent", agent_id, "deliveries"]),
+      redis_key(namespace, ["job", job_id, "delivery", agent_id, message_id]),
+      redis_key(namespace, ["job", job_id, "delivery_count", agent_id]),
+      redis_key(namespace, ["job", job_id, "delivery_count"]),
+      redis_key(namespace, ["job", job_id, "delivery_keys"])
+    ]
+
+    for key <- keys do
+      assert {:ok, ttl} = Redix.command(MirrorNeuron.Redis.Connection, ["TTL", key])
+      assert ttl > 0
+    end
+
+    assert :ok = RedisStore.delete_job(job_id)
+
+    for key <- keys do
+      assert {:ok, 0} = Redix.command(MirrorNeuron.Redis.Connection, ["EXISTS", key])
+    end
+  end
+
+  test "delivery backpressure is bounded and capacity returns after ack" do
+    old_agent_limit = Application.get_env(:mirror_neuron, :message_max_pending_per_agent)
+    old_job_limit = Application.get_env(:mirror_neuron, :message_max_pending_per_job)
+    Application.put_env(:mirror_neuron, :message_max_pending_per_agent, 1)
+    Application.put_env(:mirror_neuron, :message_max_pending_per_job, 2)
+
+    on_exit(fn ->
+      restore_env(:message_max_pending_per_agent, old_agent_limit)
+      restore_env(:message_max_pending_per_job, old_job_limit)
+    end)
+
+    job_id = "delivery-cap-#{System.unique_integer([:positive])}"
+    agent_id = "worker"
+    consumer = Delivery.consumer_id(job_id, agent_id)
+    first = Message.new(job_id, "source", agent_id, "work", %{}, message_id: "first")
+    second = Message.new(job_id, "source", agent_id, "work", %{}, message_id: "second")
+
+    assert {:ok, %{status: :queued}} = Delivery.enqueue(job_id, agent_id, first)
+    assert {:ok, %{status: :duplicate}} = Delivery.enqueue(job_id, agent_id, first)
+
+    assert {:error, {:delivery_backpressure, :agent, 1}} =
+             Delivery.enqueue(job_id, agent_id, second)
+
+    assert {:ok, [delivery]} = Delivery.read(job_id, agent_id, consumer)
+    assert :ok = Delivery.ack(job_id, agent_id, consumer, delivery)
+    assert {:ok, %{status: :queued}} = Delivery.enqueue(job_id, agent_id, second)
+  end
+
+  test "expired deliveries are dead-lettered and removed from the stream" do
+    job_id = "delivery-expired-#{System.unique_integer([:positive])}"
+    agent_id = "worker"
+    message_id = "expired"
+    consumer = Delivery.consumer_id(job_id, agent_id)
+
+    message =
+      Message.new(job_id, "source", agent_id, "work", %{},
+        message_id: message_id,
+        ttl_ms: 1
+      )
+
+    assert {:ok, %{status: :queued}} = Delivery.enqueue(job_id, agent_id, message)
+    Process.sleep(5)
+
+    assert {:ok, [%{discard_reason: :expired} = delivery]} =
+             Delivery.read(job_id, agent_id, consumer)
+
+    assert :ok = Delivery.dead_letter(job_id, agent_id, delivery, :expired)
+    assert {:ok, receipt} = RedisStore.fetch_delivery_receipt(job_id, agent_id, message_id)
+    assert receipt["status"] == "dead_letter"
+    assert {:ok, 0} = RedisStore.delivery_pending_count(job_id, agent_id)
   end
 
   test "trigger events use the bounded list and retention removes legacy standalone keys", %{

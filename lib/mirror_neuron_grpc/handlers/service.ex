@@ -11,9 +11,8 @@ defmodule MirrorNeuron.Grpc.Handlers.Service do
     ResolveServiceResponse
   }
 
-  def list_services(request, stream) do
+  def list_services(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("ListServices")
-    MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
 
     opts = query_opts(request.query_json)
 
@@ -29,9 +28,8 @@ defmodule MirrorNeuron.Grpc.Handlers.Service do
     end
   end
 
-  def resolve_service(request, stream) do
+  def resolve_service(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("ResolveService")
-    MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
 
     opts = query_opts(request.query_json)
 
@@ -47,9 +45,8 @@ defmodule MirrorNeuron.Grpc.Handlers.Service do
     end
   end
 
-  def check_services(request, stream) do
+  def check_services(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("CheckServices")
-    MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
 
     with {:ok, services} <- decode_json(request.services_json, []) do
       case MirrorNeuron.check_services(services) do

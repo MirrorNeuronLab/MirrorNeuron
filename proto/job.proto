@@ -123,7 +123,7 @@ message RestoreJobBackupResponse {
 }
 
 message ClearJobsRequest {
-  string admin_token = 1;
+  reserved 1;
   uint32 version = 2;
 }
 

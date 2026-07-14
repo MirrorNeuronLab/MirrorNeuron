@@ -308,17 +308,6 @@ defmodule MirrorNeuron.Config do
          ) do
         raise ArgumentError, "MN_GRPC_AUTH_TOKEN is required when MN_ENV=prod"
       end
-
-      if blank?(
-           secret(
-             "MN_GRPC_ADMIN_TOKEN",
-             :grpc_admin_token,
-             "MN_GRPC_ADMIN_TOKEN_FILE",
-             :grpc_admin_token_file
-           )
-         ) do
-        raise ArgumentError, "MN_GRPC_ADMIN_TOKEN is required when MN_ENV=prod"
-      end
     end
   end
 
@@ -346,14 +335,36 @@ defmodule MirrorNeuron.Config do
   end
 
   defp validate_runtime_efficiency! do
-    optional_positive_int!("MN_AGENT_PENDING_DRAIN_BATCH_SIZE")
     optional_positive_int!("MN_AGENT_SNAPSHOT_PENDING_LIMIT")
     optional_positive_int!("MN_LEASE_QUEUE_TIMEOUT_MS")
     optional_nonnegative_int!("MN_LEASE_MAX_QUEUE_LENGTH")
     optional_positive_int!("MN_JOB_CALL_TIMEOUT_MS")
     optional_positive_int!("MN_CANCEL_JOB_CALL_TIMEOUT_MS")
-    optional_nonnegative_int!("MN_DELIVERY_RETRY_ATTEMPTS")
-    optional_nonnegative_int!("MN_DELIVERY_RETRY_INTERVAL_MS")
+    optional_positive_int!("MN_MESSAGE_DEFAULT_TTL_SECONDS")
+    optional_positive_int!("MN_MESSAGE_MAX_TTL_SECONDS")
+    optional_positive_int!("MN_MESSAGE_ACK_RECEIPT_TTL_SECONDS")
+    optional_positive_int!("MN_MESSAGE_STREAM_TTL_SECONDS")
+    optional_positive_int!("MN_MESSAGE_MAX_PENDING_PER_AGENT")
+    optional_positive_int!("MN_MESSAGE_MAX_PENDING_PER_JOB")
+    optional_positive_int!("MN_MESSAGE_ACK_TIMEOUT_MS")
+    optional_positive_int!("MN_MESSAGE_LEASE_RENEW_MS")
+    optional_positive_int!("MN_MESSAGE_DELIVERY_MAX_ATTEMPTS")
+    optional_positive_int!("MN_MESSAGE_DELIVERY_POLL_MS")
+
+    default_ttl = integer("MN_MESSAGE_DEFAULT_TTL_SECONDS", :message_default_ttl_seconds)
+    max_ttl = integer("MN_MESSAGE_MAX_TTL_SECONDS", :message_max_ttl_seconds)
+
+    if default_ttl > max_ttl do
+      raise ArgumentError,
+            "MN_MESSAGE_DEFAULT_TTL_SECONDS must not exceed MN_MESSAGE_MAX_TTL_SECONDS"
+    end
+
+    ack_timeout = integer("MN_MESSAGE_ACK_TIMEOUT_MS", :message_ack_timeout_ms)
+    lease_renew = integer("MN_MESSAGE_LEASE_RENEW_MS", :message_lease_renew_ms)
+
+    if lease_renew >= ack_timeout do
+      raise ArgumentError, "MN_MESSAGE_LEASE_RENEW_MS must be less than MN_MESSAGE_ACK_TIMEOUT_MS"
+    end
   end
 
   defp validate_reliability! do

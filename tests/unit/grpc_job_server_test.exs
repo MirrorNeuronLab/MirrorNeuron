@@ -25,10 +25,8 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     SubmitJobRequest
   }
 
-  @admin_token_env "MN_GRPC_ADMIN_TOKEN"
-  @admin_token_file_env "MN_GRPC_ADMIN_TOKEN_FILE"
-  @operator_token_env "MN_GRPC_AUTH_TOKEN"
-  @operator_token_file_env "MN_GRPC_AUTH_TOKEN_FILE"
+  @identity_token_env "MN_GRPC_AUTH_TOKEN"
+  @identity_token_file_env "MN_GRPC_AUTH_TOKEN_FILE"
   @test_pid_name :grpc_job_server_test_pid
 
   defmodule NodeStateStoreStub do
@@ -162,10 +160,8 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     if Process.whereis(@test_pid_name), do: Process.unregister(@test_pid_name)
     Process.register(self(), @test_pid_name)
 
-    old_token = System.get_env(@admin_token_env)
-    old_token_file = System.get_env(@admin_token_file_env)
-    old_operator_token = System.get_env(@operator_token_env)
-    old_operator_token_file = System.get_env(@operator_token_file_env)
+    old_identity_token = System.get_env(@identity_token_env)
+    old_identity_token_file = System.get_env(@identity_token_file_env)
     old_network_only = System.get_env("MN_NETWORK_ONLY")
     old_network_token = System.get_env("MN_NETWORK_JOIN_TOKEN")
     old_mn_home = System.get_env("MN_HOME")
@@ -208,10 +204,8 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     System.put_env("MN_REDIS_RECONNECT_ATTEMPTS", "0")
     System.put_env("MN_HOME", mn_home)
 
-    System.delete_env(@admin_token_env)
-    System.delete_env(@admin_token_file_env)
-    System.delete_env(@operator_token_env)
-    System.delete_env(@operator_token_file_env)
+    System.delete_env(@identity_token_env)
+    System.delete_env(@identity_token_file_env)
     System.delete_env("MN_NETWORK_ONLY")
     System.delete_env("MN_NETWORK_JOIN_TOKEN")
     System.delete_env("MN_REDIS_URL")
@@ -234,10 +228,8 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       restore_env(:node_state_store, old_node_state_store)
       restore_env(:service_registry, old_service_registry)
       restore_system_env("MN_REDIS_NAMESPACE", old_system_namespace)
-      restore_env(@admin_token_env, old_token)
-      restore_env(@admin_token_file_env, old_token_file)
-      restore_env(@operator_token_env, old_operator_token)
-      restore_env(@operator_token_file_env, old_operator_token_file)
+      restore_env(@identity_token_env, old_identity_token)
+      restore_env(@identity_token_file_env, old_identity_token_file)
       restore_env("MN_NETWORK_ONLY", old_network_only)
       restore_env("MN_NETWORK_JOIN_TOKEN", old_network_token)
       restore_env("MN_HOME", old_mn_home)
@@ -267,33 +259,36 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
         JobServer.clear_jobs(%ClearJobsRequest{}, nil)
       end
 
-    assert Exception.message(error) =~ "ClearJobs requires #{@admin_token_env}"
+    assert Exception.message(error) == "gRPC client identity is required for this RPC"
   end
 
-  test "clear_jobs accepts the configured admin token" do
-    System.put_env(@admin_token_env, "configured-admin-token")
+  test "clear_jobs accepts the configured client identity" do
+    System.put_env(@identity_token_env, "configured-identity")
 
     try do
       response =
-        JobServer.clear_jobs(%ClearJobsRequest{admin_token: "configured-admin-token"}, nil)
+        JobServer.clear_jobs(
+          %ClearJobsRequest{},
+          identity_stream("configured-identity")
+        )
 
       assert %ClearJobsResponse{} = response
       assert is_integer(response.cleared_count)
     rescue
       error in GRPC.RPCError ->
-        refute Exception.message(error) =~ "ClearJobs requires #{@admin_token_env}"
+        refute Exception.message(error) =~ "client identity is required"
     end
   end
 
-  test "clear_jobs rejects mismatched admin token" do
-    System.put_env(@admin_token_env, "configured-admin-token")
+  test "clear_jobs rejects a mismatched client identity" do
+    System.put_env(@identity_token_env, "configured-identity")
 
     error =
       assert_raise GRPC.RPCError, fn ->
-        JobServer.clear_jobs(%ClearJobsRequest{admin_token: "wrong-admin-token"}, nil)
+        JobServer.clear_jobs(%ClearJobsRequest{}, identity_stream("wrong-identity"))
       end
 
-    assert Exception.message(error) =~ "ClearJobs requires #{@admin_token_env}"
+    assert Exception.message(error) == "gRPC client identity is required for this RPC"
   end
 
   test "network-only mode rejects job submission" do
@@ -503,8 +498,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     System.put_env("MN_NODE_RUNTIME_MODELS", "nemotron3")
     System.put_env("MN_HOST_SHARED_STORAGE_ROOT", "/mnt/mn-shared")
     System.put_env("MN_RUNTIME_SHARED_STORAGE_ROOT", "/root/.mn/shared")
-    System.put_env(@operator_token_env, "primary-auth-token")
-    System.put_env(@admin_token_env, "primary-admin-token")
+    System.put_env(@identity_token_env, "primary-auth-token")
 
     response =
       ClusterServer.network_handshake(
@@ -525,7 +519,6 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert response.redis_url == "redis://:redis-secret@192.168.4.10:6380/0"
     assert response.cluster_nodes == "mirror_neuron@192.168.4.10"
     assert response.grpc_auth_token == "primary-auth-token"
-    assert response.grpc_admin_token == "primary-admin-token"
 
     node_info = Jason.decode!(response.node_info_json)
     assert node_info["node_name"] == "mirror_neuron@test"
@@ -560,16 +553,13 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert response.redis_url == "redis://192.168.4.10:6380/0"
   end
 
-  test "network handshake returns direct grpc tokens before file tokens" do
+  test "network handshake returns the direct identity token before the file token" do
     auth_file = write_token_file("mn-auth-token", "file-auth-token")
-    admin_file = write_token_file("mn-admin-token", "file-admin-token")
 
     System.put_env("MN_NETWORK_ONLY", "true")
     System.put_env("MN_NETWORK_JOIN_TOKEN", "join-secret")
-    System.put_env(@operator_token_env, "stale-auth-token")
-    System.put_env(@operator_token_file_env, auth_file)
-    System.put_env(@admin_token_env, "stale-admin-token")
-    System.put_env(@admin_token_file_env, admin_file)
+    System.put_env(@identity_token_env, "stale-auth-token")
+    System.put_env(@identity_token_file_env, auth_file)
 
     response =
       ClusterServer.network_handshake(
@@ -581,7 +571,6 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       )
 
     assert response.grpc_auth_token == "stale-auth-token"
-    assert response.grpc_admin_token == "stale-admin-token"
   end
 
   test "network-only handshake does not record joining node metadata" do
@@ -945,7 +934,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
   end
 
   test "check services RPC runs generic direct checks and returns a validation report" do
-    System.put_env(@operator_token_env, "operator-token")
+    System.put_env(@identity_token_env, "operator-token")
     port = start_tcp_server()
 
     response =
@@ -975,6 +964,9 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
   defp restore_env(name, nil), do: System.delete_env(name)
   defp restore_env(name, value), do: System.put_env(name, value)
+
+  defp identity_stream(token), do: %{headers: %{"authorization" => "Bearer #{token}"}}
+
   defp restore_system_env(key, nil), do: System.delete_env(key)
   defp restore_system_env(key, value), do: System.put_env(key, value)
 

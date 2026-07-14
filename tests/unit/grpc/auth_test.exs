@@ -53,10 +53,10 @@ defmodule MirrorNeuron.Grpc.AuthTest do
     refute Auth.authorized?(%Stream{headers: %{"authorization" => "Bearer secret-token"}}, "")
   end
 
-  test "authorizes the configured operator token" do
+  test "authorizes the configured client identity" do
     System.put_env("MN_GRPC_AUTH_TOKEN", "configured-operator-token")
     stream = %Stream{headers: %{"authorization" => "Bearer configured-operator-token"}}
 
-    assert :ok = Auth.authorize_operator!(stream)
+    assert :ok = Auth.authorize_identity!(stream)
   end
 end

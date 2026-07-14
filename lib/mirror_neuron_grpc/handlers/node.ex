@@ -116,9 +116,8 @@ defmodule MirrorNeuron.Grpc.Handlers.Node do
     end
   end
 
-  def reconcile_node(request, stream) do
+  def reconcile_node(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("ReconcileNode")
-    MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
 
     opts =
       [
@@ -139,9 +138,8 @@ defmodule MirrorNeuron.Grpc.Handlers.Node do
     end
   end
 
-  def drain_node(request, stream) do
+  def drain_node(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("DrainNode")
-    MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
 
     opts =
       [
@@ -164,9 +162,8 @@ defmodule MirrorNeuron.Grpc.Handlers.Node do
     end
   end
 
-  def cancel_node_drain(request, stream) do
+  def cancel_node_drain(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("CancelNodeDrain")
-    MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
 
     opts =
       [
@@ -187,9 +184,8 @@ defmodule MirrorNeuron.Grpc.Handlers.Node do
     end
   end
 
-  def set_node_maintenance(request, stream) do
+  def set_node_maintenance(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("SetNodeMaintenance")
-    MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
 
     opts =
       [reason: Support.blank_to_nil(request.reason)]
@@ -207,9 +203,8 @@ defmodule MirrorNeuron.Grpc.Handlers.Node do
     end
   end
 
-  def get_node_drain_status(request, stream) do
+  def get_node_drain_status(request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("GetNodeDrainStatus")
-    MirrorNeuron.Grpc.Auth.authorize_operator!(stream)
 
     case MirrorNeuron.node_drain_status(request.node_name) do
       {:ok, result} ->

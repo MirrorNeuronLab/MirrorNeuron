@@ -106,14 +106,6 @@ defmodule MirrorNeuron.Grpc.Handlers.Support do
     end
   end
 
-  def valid_admin_token?(configured_token, request_token)
-      when is_binary(configured_token) and byte_size(configured_token) > 0 and
-             is_binary(request_token) do
-    MirrorNeuron.Grpc.Tokens.secure_compare(request_token, configured_token)
-  end
-
-  def valid_admin_token?(_configured_token, _request_token), do: false
-
   defp cleanup_archived_request_bundle(tmp_dir) do
     with {:ok, fingerprint} <- Fingerprint.compute(tmp_dir),
          {:ok, _bundle} <- fingerprint |> Archive.cache_path() |> JobBundle.load() do

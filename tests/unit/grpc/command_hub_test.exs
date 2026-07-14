@@ -85,6 +85,11 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
   alias Mirrorneuron.Observability.V1.StreamEventsRequest
 
   @test_pid_name :grpc_command_hub_test_pid
+  @identity_token "command-hub-identity"
+
+  defmodule AuthenticatedStream do
+    defstruct headers: %{}
+  end
 
   defmodule FakeJobCommands do
     @test_pid_name :grpc_command_hub_test_pid
@@ -376,8 +381,10 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
     previous = Application.get_env(:mirror_neuron, :grpc_command_dependencies)
     previous_network_only_env = System.get_env("MN_NETWORK_ONLY")
     previous_network_only_app = Application.get_env(:mirror_neuron, :network_only)
+    previous_auth_token = System.get_env("MN_GRPC_AUTH_TOKEN")
 
     System.delete_env("MN_NETWORK_ONLY")
+    System.put_env("MN_GRPC_AUTH_TOKEN", @identity_token)
     Application.put_env(:mirror_neuron, :network_only, false)
 
     on_exit(fn ->
@@ -385,6 +392,7 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
       restore_app_env(:grpc_command_dependencies, previous)
       restore_app_env(:network_only, previous_network_only_app)
       restore_system_env("MN_NETWORK_ONLY", previous_network_only_env)
+      restore_system_env("MN_GRPC_AUTH_TOKEN", previous_auth_token)
     end)
 
     :ok
@@ -404,7 +412,8 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
           request: request,
           response: response
         } <- rpc_cases() do
-      result = apply(server, function, [request, :stream])
+      stream = authenticated_stream()
+      result = apply(server, function, [request, stream])
 
       if response == :streamed do
         assert result == :streamed
@@ -412,7 +421,7 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
         assert match?(%{__struct__: ^response}, result)
       end
 
-      assert_receive {:called, ^service, ^function, ^request, :stream}
+      assert_receive {:called, ^service, ^function, ^request, ^stream}
     end
   end
 
@@ -430,64 +439,55 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
   test "policy registry describes network-only and auth requirements" do
     assert CommandPolicy.policies(:job, :SubmitJob) == %{
              network_only_denied: true,
-             operator_auth_required: false,
-             admin_auth_required: false,
+             identity_auth_required: false,
              network_join_auth_required: false
            }
 
     assert CommandPolicy.policies(:job, :PauseJob) == %{
              network_only_denied: true,
-             operator_auth_required: true,
-             admin_auth_required: false,
+             identity_auth_required: true,
              network_join_auth_required: false
            }
 
     assert CommandPolicy.policies(:job, :ClearJobs) == %{
              network_only_denied: true,
-             operator_auth_required: false,
-             admin_auth_required: true,
+             identity_auth_required: true,
              network_join_auth_required: false
            }
 
     assert CommandPolicy.policies(:cluster, :NetworkHandshake) == %{
              network_only_denied: false,
-             operator_auth_required: false,
-             admin_auth_required: false,
+             identity_auth_required: false,
              network_join_auth_required: true
            }
 
     assert CommandPolicy.policies(:cluster, :PrepareRuntimeModel) == %{
              network_only_denied: false,
-             operator_auth_required: false,
-             admin_auth_required: false,
+             identity_auth_required: false,
              network_join_auth_required: false
            }
 
     assert CommandPolicy.policies(:cluster, :PrepareDockerWorker) == %{
              network_only_denied: false,
-             operator_auth_required: false,
-             admin_auth_required: false,
+             identity_auth_required: false,
              network_join_auth_required: false
            }
 
     assert CommandPolicy.policies(:cluster, :CleanupDockerWorker) == %{
              network_only_denied: false,
-             operator_auth_required: false,
-             admin_auth_required: false,
+             identity_auth_required: false,
              network_join_auth_required: false
            }
 
     assert CommandPolicy.policies(:cluster, :SyncLiteLLMGateway) == %{
              network_only_denied: true,
-             operator_auth_required: true,
-             admin_auth_required: false,
+             identity_auth_required: true,
              network_join_auth_required: false
            }
 
     assert CommandPolicy.policies(:cluster, :RemoveLiteLLMGatewayRoute) == %{
              network_only_denied: true,
-             operator_auth_required: true,
-             admin_auth_required: false,
+             identity_auth_required: true,
              network_join_auth_required: false
            }
   end
@@ -506,6 +506,19 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
     refute_receive {:called, :job, :submit_job, _request, _stream}, 50
   end
 
+  test "hub enforces one client identity policy before protected commands run" do
+    Application.put_env(:mirror_neuron, :grpc_command_dependencies, %{job: FakeJobCommands})
+
+    error =
+      assert_raise GRPC.RPCError, fn ->
+        JobServer.pause_job(%PauseJobRequest{job_id: "job-1"}, nil)
+      end
+
+    assert error.status == GRPC.Status.unauthenticated()
+    assert Exception.message(error) == "gRPC client identity is required for this RPC"
+    refute_receive {:called, :job, :pause_job, _request, _stream}, 50
+  end
+
   test "hub preserves explicit gRPC errors" do
     Application.put_env(:mirror_neuron, :grpc_command_dependencies, %{
       {:job, :GetJob} => RpcErrorCommands
@@ -513,7 +526,7 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
 
     error =
       assert_raise GRPC.RPCError, fn ->
-        JobServer.get_job(%GetJobRequest{job_id: "job-1"}, nil)
+        JobServer.get_job(%GetJobRequest{job_id: "job-1"}, authenticated_stream())
       end
 
     assert error.status == GRPC.Status.invalid_argument()
@@ -529,7 +542,7 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
       capture_log(fn ->
         error =
           assert_raise GRPC.RPCError, fn ->
-            JobServer.get_job(%GetJobRequest{job_id: "job-1"}, nil)
+            JobServer.get_job(%GetJobRequest{job_id: "job-1"}, authenticated_stream())
           end
 
         assert error.status == GRPC.Status.internal()
@@ -553,7 +566,7 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
       capture_log(fn ->
         error =
           assert_raise GRPC.RPCError, fn ->
-            JobServer.get_job(%GetJobRequest{job_id: "job-1"}, nil)
+            JobServer.get_job(%GetJobRequest{job_id: "job-1"}, authenticated_stream())
           end
 
         assert error.status == GRPC.Status.internal()
@@ -950,6 +963,10 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
         response: :streamed
       }
     ]
+  end
+
+  defp authenticated_stream do
+    %AuthenticatedStream{headers: %{"authorization" => "Bearer #{@identity_token}"}}
   end
 
   defp restore_app_env(key, nil), do: Application.delete_env(:mirror_neuron, key)

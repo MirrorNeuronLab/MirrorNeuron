@@ -235,7 +235,6 @@ services:
       ERL_AFLAGS: ${ERL_AFLAGS:-}
       MN_COOKIE: ${MN_COOKIE:-}
       MN_GRPC_AUTH_TOKEN: mirror_neuron_password
-      MN_GRPC_ADMIN_TOKEN: mirror_neuron_password_admin
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
       SLACK_DEFAULT_CHANNEL: ${SLACK_DEFAULT_CHANNEL:-}
       SLACK_API_BASE_URL: ${SLACK_API_BASE_URL:-}

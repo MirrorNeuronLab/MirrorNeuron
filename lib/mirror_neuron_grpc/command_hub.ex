@@ -132,11 +132,16 @@ defmodule MirrorNeuron.Grpc.CommandPolicy do
                          {:observability, :StreamEvents}
                        ])
 
-  @operator_auth_required MapSet.new([
+  @network_join_auth_required MapSet.new([
+                                {:cluster, :NetworkHandshake}
+                              ])
+
+  @identity_auth_required MapSet.new([
                             {:job, :PauseJob},
                             {:job, :ResumeJob},
                             {:job, :ExportJobBackup},
                             {:job, :RestoreJobBackup},
+                            {:job, :ClearJobs},
                             {:cluster, :ReconcileNode},
                             {:cluster, :DrainNode},
                             {:cluster, :CancelNodeDrain},
@@ -149,17 +154,13 @@ defmodule MirrorNeuron.Grpc.CommandPolicy do
                             {:cluster, :RemoveLiteLLMGatewayRoute}
                           ])
 
-  @admin_auth_required MapSet.new([
-                         {:job, :ClearJobs}
-                       ])
-
-  @network_join_auth_required MapSet.new([
-                                {:cluster, :NetworkHandshake}
-                              ])
-
-  def enforce!(service, command, _request, _stream) do
+  def enforce!(service, command, _request, stream) do
     if network_only_denied?(service, command) do
       MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!(command_name(command))
+    end
+
+    if identity_auth_required?(service, command) do
+      MirrorNeuron.Grpc.Auth.authorize_identity!(stream)
     end
 
     :ok
@@ -168,14 +169,17 @@ defmodule MirrorNeuron.Grpc.CommandPolicy do
   def policies(service, command) do
     %{
       network_only_denied: network_only_denied?(service, command),
-      operator_auth_required: MapSet.member?(@operator_auth_required, {service, command}),
-      admin_auth_required: MapSet.member?(@admin_auth_required, {service, command}),
+      identity_auth_required: identity_auth_required?(service, command),
       network_join_auth_required: MapSet.member?(@network_join_auth_required, {service, command})
     }
   end
 
   def network_only_denied?(service, command) do
     MapSet.member?(@network_only_denied, {service, command})
+  end
+
+  defp identity_auth_required?(service, command) do
+    MapSet.member?(@identity_auth_required, {service, command})
   end
 
   defp command_name(command) when is_atom(command), do: Atom.to_string(command)

@@ -14,7 +14,6 @@ defmodule MirrorNeuron.ConfigTest do
     "MN_NETWORK_ONLY",
     "MN_NETWORK_JOIN_TOKEN",
     "MN_GRPC_AUTH_TOKEN",
-    "MN_GRPC_ADMIN_TOKEN",
     "MN_COOKIE"
   ]
 
@@ -101,7 +100,6 @@ defmodule MirrorNeuron.ConfigTest do
     root = tmp_dir()
     System.put_env("MN_ENV", "production")
     System.put_env("MN_GRPC_AUTH_TOKEN", "auth-token")
-    System.put_env("MN_GRPC_ADMIN_TOKEN", "admin-token")
 
     assert %{env: "prod", loaded_files: []} = Config.load_env_files!(root)
     app_env = Config.app_env!()
@@ -132,6 +130,7 @@ defmodule MirrorNeuron.ConfigTest do
     secret = "super-secret-auth-token"
     System.put_env("MN_ENV", "prod")
     System.put_env("MN_GRPC_AUTH_TOKEN", secret)
+    System.put_env("MN_COOKIE", "mirrorneuron")
 
     error =
       assert_raise ArgumentError, fn ->
@@ -191,8 +190,8 @@ defmodule MirrorNeuron.ConfigTest do
   test "validate rejects invalid runtime control timing settings" do
     previous_job_call_timeout = System.get_env("MN_JOB_CALL_TIMEOUT_MS")
     previous_cancel_job_call_timeout = System.get_env("MN_CANCEL_JOB_CALL_TIMEOUT_MS")
-    previous_delivery_retry_attempts = System.get_env("MN_DELIVERY_RETRY_ATTEMPTS")
-    previous_delivery_retry_interval = System.get_env("MN_DELIVERY_RETRY_INTERVAL_MS")
+    previous_ack_timeout = System.get_env("MN_MESSAGE_ACK_TIMEOUT_MS")
+    previous_lease_renew = System.get_env("MN_MESSAGE_LEASE_RENEW_MS")
 
     try do
       System.put_env("MN_JOB_CALL_TIMEOUT_MS", "0")
@@ -209,23 +208,23 @@ defmodule MirrorNeuron.ConfigTest do
       end
 
       System.delete_env("MN_CANCEL_JOB_CALL_TIMEOUT_MS")
-      System.put_env("MN_DELIVERY_RETRY_ATTEMPTS", "-1")
+      System.put_env("MN_MESSAGE_ACK_TIMEOUT_MS", "0")
 
-      assert_raise ArgumentError, ~r/MN_DELIVERY_RETRY_ATTEMPTS/, fn ->
+      assert_raise ArgumentError, ~r/MN_MESSAGE_ACK_TIMEOUT_MS/, fn ->
         Config.validate!()
       end
 
-      System.delete_env("MN_DELIVERY_RETRY_ATTEMPTS")
-      System.put_env("MN_DELIVERY_RETRY_INTERVAL_MS", "-1")
+      System.put_env("MN_MESSAGE_ACK_TIMEOUT_MS", "1000")
+      System.put_env("MN_MESSAGE_LEASE_RENEW_MS", "1000")
 
-      assert_raise ArgumentError, ~r/MN_DELIVERY_RETRY_INTERVAL_MS/, fn ->
+      assert_raise ArgumentError, ~r/MN_MESSAGE_LEASE_RENEW_MS/, fn ->
         Config.validate!()
       end
     after
       restore_env("MN_JOB_CALL_TIMEOUT_MS", previous_job_call_timeout)
       restore_env("MN_CANCEL_JOB_CALL_TIMEOUT_MS", previous_cancel_job_call_timeout)
-      restore_env("MN_DELIVERY_RETRY_ATTEMPTS", previous_delivery_retry_attempts)
-      restore_env("MN_DELIVERY_RETRY_INTERVAL_MS", previous_delivery_retry_interval)
+      restore_env("MN_MESSAGE_ACK_TIMEOUT_MS", previous_ack_timeout)
+      restore_env("MN_MESSAGE_LEASE_RENEW_MS", previous_lease_renew)
     end
   end
 

@@ -267,7 +267,6 @@ defmodule Mirrorneuron.Job.V1.ClearJobsRequest do
     protoc_gen_elixir_version: "0.16.0",
     syntax: :proto3
 
-  field(:admin_token, 1, type: :string, json_name: "adminToken")
   field(:version, 2, type: :uint32)
 end
 

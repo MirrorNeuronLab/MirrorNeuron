@@ -12,15 +12,6 @@ defmodule MirrorNeuron.Grpc.Tokens do
     )
   end
 
-  def admin_token do
-    MirrorNeuron.Config.secret(
-      "MN_GRPC_ADMIN_TOKEN",
-      :grpc_admin_token,
-      "MN_GRPC_ADMIN_TOKEN_FILE",
-      :grpc_admin_token_file
-    )
-  end
-
   def secure_compare(left, right) when is_binary(left) and is_binary(right) do
     byte_size(left) == byte_size(right) and compare_bytes(left, right, 0) == 0
   end

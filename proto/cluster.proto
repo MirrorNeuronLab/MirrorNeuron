@@ -43,7 +43,7 @@ message NetworkHandshakeResponse {
   bool network_only = 10;
   string node_info_json = 11;
   string grpc_auth_token = 12;
-  string grpc_admin_token = 13;
+  reserved 13;
   uint32 version = 14;
 }
 

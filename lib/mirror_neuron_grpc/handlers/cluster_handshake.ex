@@ -32,7 +32,6 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
       network_only: MirrorNeuron.Grpc.NetworkOnly.enabled?(),
       node_info_json: Support.versioned_json(handshake_node_info()),
       grpc_auth_token: MirrorNeuron.Grpc.Tokens.auth_token(),
-      grpc_admin_token: MirrorNeuron.Grpc.Tokens.admin_token(),
       version: @interface_version
     }
   end

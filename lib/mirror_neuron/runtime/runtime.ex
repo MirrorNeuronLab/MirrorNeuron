@@ -11,7 +11,7 @@ defmodule MirrorNeuron.Runtime do
   alias MirrorNeuron.Sandbox.{DockerJobSandbox, OpenShellJobSandbox}
 
   alias MirrorNeuron.Runtime.{
-    Backpressure,
+    Delivery,
     ErrorEnvelope,
     EventBus,
     JobRunner,
@@ -22,8 +22,6 @@ defmodule MirrorNeuron.Runtime do
 
   @default_job_call_timeout_ms 15_000
   @default_cancel_job_call_timeout_ms 5_000
-  @default_delivery_retry_attempts 50
-  @default_delivery_retry_interval_ms 50
 
   def job_call_timeout_ms,
     do:
@@ -39,22 +37,6 @@ defmodule MirrorNeuron.Runtime do
         "MN_CANCEL_JOB_CALL_TIMEOUT_MS",
         :cancel_job_call_timeout_ms,
         @default_cancel_job_call_timeout_ms
-      )
-
-  def delivery_retry_attempts,
-    do:
-      config_nonnegative_integer(
-        "MN_DELIVERY_RETRY_ATTEMPTS",
-        :delivery_retry_attempts,
-        @default_delivery_retry_attempts
-      )
-
-  def delivery_retry_interval_ms,
-    do:
-      config_nonnegative_integer(
-        "MN_DELIVERY_RETRY_INTERVAL_MS",
-        :delivery_retry_interval_ms,
-        @default_delivery_retry_interval_ms
       )
 
   @doc false
@@ -412,19 +394,44 @@ defmodule MirrorNeuron.Runtime do
     wait_until_terminal(job_id, timeout, System.monotonic_time(:millisecond))
   end
 
-  def deliver(job_id, agent_id, message, opts \\ []) do
-    retry_attempts = delivery_retry_attempts(opts)
-    retry_interval_ms = delivery_retry_interval_ms(opts)
+  def deliver(job_id, agent_id, message, _opts \\ []) do
+    case Delivery.enqueue(job_id, agent_id, message) do
+      {:ok, receipt} ->
+        wake_delivery_consumer(job_id, agent_id)
 
-    deliver_with_retry(
-      job_id,
-      agent_id,
-      message,
-      retry_attempts,
-      retry_interval_ms,
-      retry_attempts,
-      opts
-    )
+        EventBus.publish(job_id, %{
+          type: :message_queued,
+          agent_id: agent_id,
+          message_id: receipt.message_id,
+          duplicate: receipt.status == :duplicate,
+          timestamp: timestamp()
+        })
+
+        :ok
+
+      {:error, {:delivery_backpressure, scope, count}} ->
+        details = %{
+          "reason" => "durable_delivery_queue_full",
+          "job_id" => job_id,
+          "agent_id" => agent_id,
+          "scope" => to_string(scope),
+          "pending" => count,
+          "dropped" => false,
+          "retry_after_ms" => Delivery.poll_ms()
+        }
+
+        EventBus.publish(job_id, %{
+          type: :backpressure_rejected,
+          agent_id: agent_id,
+          payload: details,
+          timestamp: timestamp()
+        })
+
+        {:error, {:backpressure, details}}
+
+      {:error, reason} ->
+        {:error, {:delivery_enqueue_failed, reason}}
+    end
   end
 
   defp call_job(job_id, message, opts \\ []) do
@@ -479,105 +486,10 @@ defmodule MirrorNeuron.Runtime do
     )
   end
 
-  defp deliver_with_retry(
-         job_id,
-         agent_id,
-         message,
-         attempts_left,
-         retry_interval_ms,
-         retry_attempts,
-         opts
-       ) do
-    case lookup_agent(job_id, agent_id) do
-      {:ok, pid} ->
-        if stale_local_pid?(pid) do
-          retry_or_dead_letter(
-            job_id,
-            agent_id,
-            message,
-            attempts_left,
-            retry_interval_ms,
-            retry_attempts,
-            opts
-          )
-        else
-          deliver_to_agent(job_id, agent_id, message, pid, opts)
-        end
-
-      :missing ->
-        retry_or_dead_letter(
-          job_id,
-          agent_id,
-          message,
-          attempts_left,
-          retry_interval_ms,
-          retry_attempts,
-          opts
-        )
-
-      {:error, details} ->
-        EventBus.publish(job_id, %{
-          type: :delivery_registry_unavailable,
-          agent_id: agent_id,
-          payload: details,
-          timestamp: timestamp()
-        })
-
-        {:error, {:agent_registry_unavailable, details}}
-    end
-  end
-
-  defp deliver_to_agent(job_id, agent_id, message, pid, opts) do
-    case preflight_delivery(pid, job_id, agent_id, opts) do
-      :ok ->
-        GenServer.cast(pid, {:deliver, message})
-        :ok
-
-      {:error, {:backpressure, details}} = error ->
-        EventBus.publish(job_id, %{
-          type: :backpressure_rejected,
-          agent_id: agent_id,
-          payload: details,
-          timestamp: timestamp()
-        })
-
-        error
-
-      {:error, {:agent_unavailable, details}} = error ->
-        EventBus.publish(job_id, %{
-          type: :delivery_preflight_failed,
-          agent_id: agent_id,
-          payload: details,
-          timestamp: timestamp()
-        })
-
-        Logger.warning("delivery preflight failed",
-          job_id: job_id,
-          agent_id: agent_id,
-          reason: details
-        )
-
-        error
-    end
-  end
-
-  defp lookup_agent(job_id, agent_id) do
+  defp wake_delivery_consumer(job_id, agent_id) do
     case safe_registry_lookup({:agent, job_id, agent_id}) do
-      {:ok, [{pid, _meta} | _]} ->
-        {:ok, pid}
-
-      {:ok, []} ->
-        :missing
-
-      {:error, reason} ->
-        {:error,
-         %{
-           "reason" => "agent_registry_unavailable",
-           "job_id" => job_id,
-           "agent_id" => agent_id,
-           "node" => to_string(Node.self()),
-           "error" => inspect(reason)
-         }}
+      {:ok, [{pid, _meta} | _]} -> GenServer.cast(pid, :delivery_available)
+      _missing_or_unavailable -> :ok
     end
   end
 
@@ -588,131 +500,6 @@ defmodule MirrorNeuron.Runtime do
       exception -> {:error, {exception.__struct__, Exception.message(exception)}}
     catch
       kind, reason -> {:error, {kind, reason}}
-    end
-  end
-
-  defp retry_or_dead_letter(
-         job_id,
-         agent_id,
-         message,
-         attempts_left,
-         retry_interval_ms,
-         retry_attempts,
-         opts
-       )
-
-  defp retry_or_dead_letter(
-         job_id,
-         agent_id,
-         message,
-         attempts_left,
-         retry_interval_ms,
-         retry_attempts,
-         opts
-       )
-       when attempts_left > 0 do
-    if retry_interval_ms > 0, do: Process.sleep(retry_interval_ms)
-
-    deliver_with_retry(
-      job_id,
-      agent_id,
-      message,
-      attempts_left - 1,
-      retry_interval_ms,
-      retry_attempts,
-      opts
-    )
-  end
-
-  defp retry_or_dead_letter(
-         job_id,
-         agent_id,
-         message,
-         _attempts_left,
-         retry_interval_ms,
-         retry_attempts,
-         _opts
-       ) do
-    details = %{
-      "reason" => "agent_not_running",
-      "job_id" => job_id,
-      "agent_id" => agent_id,
-      "retry_attempts" => retry_attempts,
-      "retry_interval_ms" => retry_interval_ms,
-      "lookup_attempts" => retry_attempts + 1,
-      "node" => to_string(Node.self())
-    }
-
-    EventBus.publish(job_id, %{
-      type: :dead_letter,
-      agent_id: agent_id,
-      message: message,
-      payload: details,
-      timestamp: timestamp()
-    })
-
-    Logger.warning(error_message({:agent_not_running, details}),
-      job_id: job_id,
-      agent_id: agent_id,
-      retry_attempts: retry_attempts
-    )
-
-    {:error, {:agent_not_running, details}}
-  end
-
-  defp stale_local_pid?(pid) when is_pid(pid) and node(pid) == node(), do: not Process.alive?(pid)
-  defp stale_local_pid?(_pid), do: false
-
-  defp preflight_delivery(pid, job_id, agent_id, opts) do
-    with {:ok, queue_depth} <- safe_process_queue_depth(pid, job_id, agent_id) do
-      pressure = Backpressure.snapshot(agent_id, %{}, queue_depth, opts)
-
-      cond do
-        Backpressure.saturated?(pressure) ->
-          {:error,
-           {:backpressure,
-            Backpressure.retry_later_reason(pressure, %{
-              "job_id" => job_id,
-              "agent_id" => agent_id,
-              "dropped" => true
-            })}}
-
-        Backpressure.pressured?(pressure) ->
-          :ok
-
-        true ->
-          :ok
-      end
-    else
-      {:error, details} -> {:error, {:agent_unavailable, details}}
-    end
-  end
-
-  defp safe_process_queue_depth(pid, job_id, agent_id) do
-    try do
-      {:ok, Backpressure.process_queue_depth(pid)}
-    rescue
-      exception ->
-        {:error,
-         %{
-           "reason" => "queue_depth_unavailable",
-           "job_id" => job_id,
-           "agent_id" => agent_id,
-           "pid" => inspect(pid),
-           "node" => to_string(Node.self()),
-           "error" => Exception.message(exception)
-         }}
-    catch
-      kind, reason ->
-        {:error,
-         %{
-           "reason" => "queue_depth_unavailable",
-           "job_id" => job_id,
-           "agent_id" => agent_id,
-           "pid" => inspect(pid),
-           "node" => to_string(Node.self()),
-           "error" => inspect({kind, reason})
-         }}
     end
   end
 
@@ -1168,40 +955,11 @@ defmodule MirrorNeuron.Runtime do
   defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
   defp stringify_value(value), do: value
 
-  defp delivery_retry_attempts(opts),
-    do: option_nonnegative_integer(opts, :delivery_retry_attempts, delivery_retry_attempts())
-
-  defp delivery_retry_interval_ms(opts),
-    do:
-      option_nonnegative_integer(opts, :delivery_retry_interval_ms, delivery_retry_interval_ms())
-
-  defp option_nonnegative_integer(opts, key, default) when is_list(opts) do
-    opts
-    |> Keyword.get(key, default)
-    |> nonnegative_integer(default)
-  end
-
-  defp option_nonnegative_integer(opts, key, default) when is_map(opts) do
-    opts
-    |> Map.get(key, Map.get(opts, Atom.to_string(key), default))
-    |> nonnegative_integer(default)
-  end
-
-  defp option_nonnegative_integer(_opts, _key, default), do: default
-
   defp config_positive_integer(env_name, key, default) do
     case System.get_env(env_name) do
       nil -> app_positive_integer(key, default)
       "" -> app_positive_integer(key, default)
       value -> positive_integer(value, app_positive_integer(key, default))
-    end
-  end
-
-  defp config_nonnegative_integer(env_name, key, default) do
-    case System.get_env(env_name) do
-      nil -> app_nonnegative_integer(key, default)
-      "" -> app_nonnegative_integer(key, default)
-      value -> nonnegative_integer(value, app_nonnegative_integer(key, default))
     end
   end
 
@@ -1212,23 +970,9 @@ defmodule MirrorNeuron.Runtime do
     end
   end
 
-  defp app_nonnegative_integer(key, default) do
-    case Application.get_env(:mirror_neuron, key, default) do
-      value when is_integer(value) and value >= 0 -> value
-      _ -> default
-    end
-  end
-
   defp positive_integer(value, default) do
     case parse_integer(value, default) do
       parsed when is_integer(parsed) and parsed > 0 -> parsed
-      _ -> default
-    end
-  end
-
-  defp nonnegative_integer(value, default) do
-    case parse_integer(value, default) do
-      parsed when is_integer(parsed) and parsed >= 0 -> parsed
       _ -> default
     end
   end

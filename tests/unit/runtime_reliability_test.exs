@@ -4,19 +4,20 @@ defmodule MirrorNeuron.RuntimeReliabilityTest do
   import ExUnit.CaptureLog
 
   alias MirrorNeuron.Runtime
+  alias MirrorNeuron.Runtime.Delivery
   alias MirrorNeuron.Persistence.RedisStore
 
   @runtime_envs [
     "MN_JOB_CALL_TIMEOUT_MS",
     "MN_CANCEL_JOB_CALL_TIMEOUT_MS",
-    "MN_DELIVERY_RETRY_ATTEMPTS",
-    "MN_DELIVERY_RETRY_INTERVAL_MS"
+    "MN_MESSAGE_ACK_TIMEOUT_MS",
+    "MN_MESSAGE_DELIVERY_MAX_ATTEMPTS"
   ]
   @runtime_app_keys [
     :job_call_timeout_ms,
     :cancel_job_call_timeout_ms,
-    :delivery_retry_attempts,
-    :delivery_retry_interval_ms
+    :message_ack_timeout_ms,
+    :message_delivery_max_attempts
   ]
 
   defmodule SlowJob do
@@ -66,37 +67,37 @@ defmodule MirrorNeuron.RuntimeReliabilityTest do
     :ok
   end
 
-  test "runtime control and delivery timing defaults are conservative" do
+  test "runtime control and durable delivery timing defaults are conservative" do
     assert Runtime.job_call_timeout_ms() == 15_000
     assert Runtime.cancel_job_call_timeout_ms() == 5_000
-    assert Runtime.delivery_retry_attempts() == 50
-    assert Runtime.delivery_retry_interval_ms() == 50
+    assert Delivery.lease_ms() == 30_000
+    assert Delivery.max_attempts() == 10
   end
 
-  test "runtime control and delivery timing honor env overrides with app fallback" do
+  test "runtime control and durable delivery timing honor env overrides" do
     System.put_env("MN_JOB_CALL_TIMEOUT_MS", "2500")
     System.put_env("MN_CANCEL_JOB_CALL_TIMEOUT_MS", "1500")
-    System.put_env("MN_DELIVERY_RETRY_ATTEMPTS", "3")
-    System.put_env("MN_DELIVERY_RETRY_INTERVAL_MS", "0")
+    System.put_env("MN_MESSAGE_ACK_TIMEOUT_MS", "2500")
+    System.put_env("MN_MESSAGE_DELIVERY_MAX_ATTEMPTS", "3")
 
     assert Runtime.job_call_timeout_ms() == 2_500
     assert Runtime.cancel_job_call_timeout_ms() == 1_500
-    assert Runtime.delivery_retry_attempts() == 3
-    assert Runtime.delivery_retry_interval_ms() == 0
+    assert Delivery.lease_ms() == 2_500
+    assert Delivery.max_attempts() == 3
 
     Application.put_env(:mirror_neuron, :job_call_timeout_ms, 4_000)
     Application.put_env(:mirror_neuron, :cancel_job_call_timeout_ms, 2_000)
-    Application.put_env(:mirror_neuron, :delivery_retry_attempts, 7)
-    Application.put_env(:mirror_neuron, :delivery_retry_interval_ms, 25)
+    Application.put_env(:mirror_neuron, :message_ack_timeout_ms, 4_500)
+    Application.put_env(:mirror_neuron, :message_delivery_max_attempts, 7)
     System.put_env("MN_JOB_CALL_TIMEOUT_MS", "0")
     System.put_env("MN_CANCEL_JOB_CALL_TIMEOUT_MS", "0")
-    System.put_env("MN_DELIVERY_RETRY_ATTEMPTS", "-1")
-    System.put_env("MN_DELIVERY_RETRY_INTERVAL_MS", "invalid")
+    System.delete_env("MN_MESSAGE_ACK_TIMEOUT_MS")
+    System.delete_env("MN_MESSAGE_DELIVERY_MAX_ATTEMPTS")
 
     assert Runtime.job_call_timeout_ms() == 4_000
     assert Runtime.cancel_job_call_timeout_ms() == 2_000
-    assert Runtime.delivery_retry_attempts() == 7
-    assert Runtime.delivery_retry_interval_ms() == 25
+    assert Delivery.lease_ms() == 4_500
+    assert Delivery.max_attempts() == 7
   end
 
   test "missing runtime job returns a structured not-running error" do
@@ -140,22 +141,27 @@ defmodule MirrorNeuron.RuntimeReliabilityTest do
     end
   end
 
-  test "delivery retry exhaustion returns structured diagnostics and does not block indefinitely" do
-    job_id = unique_id("delivery-job")
-    agent_id = "missing-agent"
+  test "delivery is durably accepted even while the target agent is unavailable" do
+    if redis_available?() do
+      with_isolated_redis_namespace(fn ->
+        job_id = unique_id("delivery-job")
+        agent_id = "missing-agent"
+        message_id = unique_id("message")
 
-    capture_log(fn ->
-      assert {:error, {:agent_not_running, details}} =
-               Runtime.deliver(job_id, agent_id, %{"payload" => "hello"},
-                 delivery_retry_attempts: 0,
-                 delivery_retry_interval_ms: 0
-               )
+        message =
+          MirrorNeuron.Message.new(job_id, "source", agent_id, "hello", %{},
+            message_id: message_id
+          )
 
-      assert details["job_id"] == job_id
-      assert details["agent_id"] == agent_id
-      assert details["retry_attempts"] == 0
-      assert details["lookup_attempts"] == 1
-    end)
+        assert :ok = Runtime.deliver(job_id, agent_id, message)
+
+        assert {:ok, receipt} =
+                 RedisStore.fetch_delivery_receipt(job_id, agent_id, message_id)
+
+        assert receipt["status"] == "queued"
+        assert receipt["attempts"] == 0
+      end)
+    end
   end
 
   defp unique_id(prefix), do: "#{prefix}-#{System.unique_integer([:positive])}"

@@ -13,9 +13,7 @@ defmodule MirrorNeuron.Config.Schema do
       spec("MN_API_PORT", :api_port, :integer, default: 8_000),
       spec("MN_GRPC_PORT", :grpc_port, :integer, default: 50_051),
       spec("MN_GRPC_AUTH_TOKEN", :grpc_auth_token, :secret),
-      spec("MN_GRPC_ADMIN_TOKEN", :grpc_admin_token, :secret),
       spec("MN_GRPC_AUTH_TOKEN_FILE", :grpc_auth_token_file, :path),
-      spec("MN_GRPC_ADMIN_TOKEN_FILE", :grpc_admin_token_file, :path),
       spec("MN_COOKIE", :cookie, :secret),
       spec("MN_REDIS_HOST", :redis_host, :string, default: "localhost"),
       spec("MN_REDIS_URL", :redis_url, :url, default: {:redis_url, "MN_REDIS_HOST"}),
@@ -74,8 +72,31 @@ defmodule MirrorNeuron.Config.Schema do
       spec("MN_CANCEL_JOB_CALL_TIMEOUT_MS", :cancel_job_call_timeout_ms, :integer,
         default: 5_000
       ),
-      spec("MN_DELIVERY_RETRY_ATTEMPTS", :delivery_retry_attempts, :integer, default: 50),
-      spec("MN_DELIVERY_RETRY_INTERVAL_MS", :delivery_retry_interval_ms, :integer, default: 50),
+      spec("MN_MESSAGE_DEFAULT_TTL_SECONDS", :message_default_ttl_seconds, :integer,
+        default: 86_400
+      ),
+      spec("MN_MESSAGE_MAX_TTL_SECONDS", :message_max_ttl_seconds, :integer, default: 604_800),
+      spec(
+        "MN_MESSAGE_ACK_RECEIPT_TTL_SECONDS",
+        :message_ack_receipt_ttl_seconds,
+        :integer,
+        default: 3_600
+      ),
+      spec("MN_MESSAGE_STREAM_TTL_SECONDS", :message_stream_ttl_seconds, :integer,
+        default: 604_800
+      ),
+      spec("MN_MESSAGE_MAX_PENDING_PER_AGENT", :message_max_pending_per_agent, :integer,
+        default: 10_000
+      ),
+      spec("MN_MESSAGE_MAX_PENDING_PER_JOB", :message_max_pending_per_job, :integer,
+        default: 100_000
+      ),
+      spec("MN_MESSAGE_ACK_TIMEOUT_MS", :message_ack_timeout_ms, :integer, default: 30_000),
+      spec("MN_MESSAGE_LEASE_RENEW_MS", :message_lease_renew_ms, :integer, default: 10_000),
+      spec("MN_MESSAGE_DELIVERY_MAX_ATTEMPTS", :message_delivery_max_attempts, :integer,
+        default: 10
+      ),
+      spec("MN_MESSAGE_DELIVERY_POLL_MS", :message_delivery_poll_ms, :integer, default: 1_000),
       spec("MN_RELIABILITY_STRATEGY", :reliability_strategy, :string, default: "auto"),
       spec("MN_CLUSTER_HEALTH_STABLE_MS", :cluster_health_stable_ms, :integer, default: 10_000),
       spec("MN_RELIABILITY_OBSERVER_INTERVAL_MS", :reliability_observer_interval_ms, :integer,
