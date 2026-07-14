@@ -46,6 +46,9 @@ defmodule MirrorNeuron.Grpc.Handlers.RuntimeModel do
           status: :invalid_argument,
           message: "#{label} body must be a JSON object"
 
+      {:error, %GRPC.RPCError{} = error} ->
+        raise error
+
       {:error, reason} ->
         raise GRPC.RPCError, status: :failed_precondition, message: to_string(reason)
     end

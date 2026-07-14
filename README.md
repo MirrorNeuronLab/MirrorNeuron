@@ -598,7 +598,10 @@ location, and the CLI uses a Syncthing sidecar to replicate that directory
 between joined nodes. The shared root contains `blobs/` for durable sha256
 content and `jobs/` for temporary per-job staging. Set
 `MN_SYNCTHING_REQUIRED=1` to fail startup/join when replication cannot be
-started or peer-configured.
+started or peer-configured. The sidecar is LAN-only: on every start it disables
+Syncthing relays, global discovery, and NAT traversal while keeping local
+discovery enabled. Configure peer devices with LAN or VPN addresses when they
+cannot be discovered locally.
 
 ---
 

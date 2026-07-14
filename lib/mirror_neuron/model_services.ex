@@ -253,10 +253,18 @@ defmodule MirrorNeuron.ModelServices do
       {:ok, response}
     else
       {:error, %GRPC.RPCError{} = error} ->
-        {:error, "native SDK gRPC prepare failed for #{target}: #{Exception.message(error)}"}
+        # The native SDK uses gRPC status codes to distinguish a model that
+        # cannot run from a node-local service that cannot be reached. Preserve
+        # that contract for the caller instead of flattening it into a generic
+        # Core precondition failure.
+        {:error, error}
 
       {:error, reason} ->
-        {:error, "native SDK gRPC prepare failed for #{target}: #{inspect(reason)}"}
+        {:error,
+         GRPC.RPCError.exception(
+           :unavailable,
+           "native SDK gRPC prepare is unavailable for #{target}: #{inspect(reason)}"
+         )}
     end
   end
 
@@ -327,13 +335,26 @@ defmodule MirrorNeuron.ModelServices do
   end
 
   defp native_sdk_prepare(target, attrs, timeout) do
-    native_sdk_request(
-      target,
-      attrs,
-      timeout,
-      :native_sdk_grpc_client,
-      &__MODULE__.grpc_prepare_runtime_model/3
-    )
+    case native_sdk_request(
+           target,
+           attrs,
+           timeout,
+           :native_sdk_grpc_client,
+           &__MODULE__.grpc_prepare_runtime_model/3
+         ) do
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error, error}
+
+      {:error, reason} ->
+        {:error,
+         GRPC.RPCError.exception(
+           :unavailable,
+           "native SDK gRPC prepare is unavailable for #{target}: #{inspect(reason)}"
+         )}
+
+      result ->
+        result
+    end
   end
 
   defp normalize_runtime_model_prepare_attrs(attrs) when is_map(attrs) do

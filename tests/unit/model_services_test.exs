@@ -78,6 +78,56 @@ defmodule MirrorNeuron.ModelServicesTest do
     end
   end
 
+  test "runtime model preparation preserves a native precondition failure" do
+    previous = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
+    previous_client = Application.get_env(:mirror_neuron, :native_sdk_grpc_client)
+    System.put_env("MN_NATIVE_SDK_GRPC_TARGET", "127.0.0.1:55052")
+
+    try do
+      Application.put_env(:mirror_neuron, :native_sdk_grpc_client, fn _target,
+                                                                      _request,
+                                                                      _timeout ->
+        {:error,
+         GRPC.RPCError.exception(
+           :failed_precondition,
+           "nemotron3 requires at least 48GB unified memory on Apple Silicon."
+         )}
+      end)
+
+      assert {:error, %GRPC.RPCError{} = error} =
+               ModelServices.prepare_runtime_model(%{"model" => "nemotron3"}, 1234)
+
+      assert error.status == GRPC.Status.failed_precondition()
+      assert error.message == "nemotron3 requires at least 48GB unified memory on Apple Silicon."
+    after
+      restore_env("MN_NATIVE_SDK_GRPC_TARGET", previous)
+      restore_app_env(:native_sdk_grpc_client, previous_client)
+    end
+  end
+
+  test "runtime model preparation marks native link failures unavailable" do
+    previous = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
+    previous_client = Application.get_env(:mirror_neuron, :native_sdk_grpc_client)
+    System.put_env("MN_NATIVE_SDK_GRPC_TARGET", "127.0.0.1:55052")
+
+    try do
+      Application.put_env(:mirror_neuron, :native_sdk_grpc_client, fn _target,
+                                                                      _request,
+                                                                      _timeout ->
+        {:error, :econnrefused}
+      end)
+
+      assert {:error, %GRPC.RPCError{} = error} =
+               ModelServices.prepare_runtime_model(%{"model" => "nemotron3"}, 1234)
+
+      assert error.status == GRPC.Status.unavailable()
+      assert error.message =~ "native SDK gRPC prepare is unavailable"
+    after
+      restore_env("MN_NATIVE_SDK_GRPC_TARGET", previous)
+      restore_app_env(:native_sdk_grpc_client, previous_client)
+    end
+  end
+
   test "runtime model preparation normalizes default and purpose requests before forwarding" do
     previous = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
     previous_client = Application.get_env(:mirror_neuron, :native_sdk_grpc_client)

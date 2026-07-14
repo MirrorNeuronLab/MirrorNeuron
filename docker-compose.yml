@@ -30,6 +30,26 @@ services:
       - syncthing
     restart: unless-stopped
     user: "0:0"
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        config_dir="$${STHOMEDIR:-/var/syncthing/config}"
+        config_file="$$config_dir/config.xml"
+        mkdir -p "$$config_dir"
+
+        if [ ! -f "$$config_file" ]; then
+          /bin/syncthing generate --home "$$config_dir" --no-port-probing
+        fi
+
+        sed -i \
+          -e 's#<relaysEnabled>[^<]*</relaysEnabled>#<relaysEnabled>false</relaysEnabled>#' \
+          -e 's#<globalAnnounceEnabled>[^<]*</globalAnnounceEnabled>#<globalAnnounceEnabled>false</globalAnnounceEnabled>#' \
+          -e 's#<natEnabled>[^<]*</natEnabled>#<natEnabled>false</natEnabled>#' \
+          -e 's#<localAnnounceEnabled>[^<]*</localAnnounceEnabled>#<localAnnounceEnabled>true</localAnnounceEnabled>#' \
+          "$$config_file"
+
+        exec /bin/entrypoint.sh /bin/syncthing serve
     environment:
       STGUIADDRESS: 0.0.0.0:8384
       STGUIAPIKEY: ${MN_SYNCTHING_API_KEY:-}
