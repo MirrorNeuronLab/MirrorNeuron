@@ -66,7 +66,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       completed_system_targets: completed_system_targets_from(existing_job),
       pressure: %{},
       policy_state: policy_state_from(existing_job),
-      workflow_state: WorkflowLedger.new(manifest, runtime_topology.nodes, existing_job),
+      workflow_state: WorkflowLedger.new(manifest, runtime_topology.nodes, existing_job, job_id),
       pending_policy_timers: %{},
       recovery_tasks: %{},
       health_check_timer_ref: nil,

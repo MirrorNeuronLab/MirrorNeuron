@@ -32,7 +32,14 @@ defmodule MirrorNeuron.Manifest do
   alias MirrorNeuron.{AgentRegistry, AgentTemplates, ResourceSpec}
   alias MirrorNeuron.Runner.Policy, as: RunnerPolicy
   alias MirrorNeuron.ServiceSpec
-  alias MirrorNeuron.Runtime.{DeploymentPolicy, LifecyclePolicy, RouteCondition, SchedulePolicy}
+
+  alias MirrorNeuron.Runtime.{
+    DeploymentPolicy,
+    LifecyclePolicy,
+    RouteCondition,
+    SchedulePolicy,
+    WorkflowTrigger
+  }
 
   @known_top_level_keys MapSet.new([
                           "apiVersion",
@@ -413,6 +420,7 @@ defmodule MirrorNeuron.Manifest do
       |> validate_required(manifest)
       |> validate_nodes(manifest)
       |> validate_edges(manifest)
+      |> validate_workflow_flow(manifest)
       |> validate_entrypoints(manifest)
       |> validate_type(manifest)
       |> validate_required_context_engine(manifest)
@@ -497,6 +505,126 @@ defmodule MirrorNeuron.Manifest do
       end)
 
     add_errors(errors, edge_errors)
+  end
+
+  defp validate_workflow_flow(errors, manifest) do
+    flow = if is_map(manifest.flow), do: manifest.flow, else: %{}
+    steps = Map.get(flow, "steps", [])
+    graph = if is_map(Map.get(flow, "graph")), do: Map.get(flow, "graph"), else: %{}
+    graph_edges = Map.get(graph, "edges", [])
+
+    if is_list(steps) and steps != [] do
+      step_ids =
+        steps
+        |> Enum.filter(&is_map/1)
+        |> Enum.map(&(Map.get(&1, "id") |> to_string()))
+
+      duplicate_ids = step_ids -- Enum.uniq(step_ids)
+      valid_ids = MapSet.new(Enum.reject(step_ids, &(&1 == "")))
+
+      step_errors =
+        steps
+        |> Enum.filter(&is_map/1)
+        |> Enum.flat_map(fn step ->
+          step_id = Map.get(step, "id") |> to_string()
+
+          case WorkflowTrigger.from_step(step, graph) do
+            {:ok, %{"rule" => "quorum_success", "quorum" => quorum}} ->
+              incoming_count =
+                graph_edges
+                |> List.wrap()
+                |> Enum.count(&(is_map(&1) and Map.get(&1, "to") == step_id))
+
+              []
+              |> maybe_collect_error(step_id == "", "workflow step id is required")
+              |> maybe_collect_error(
+                incoming_count > 0 and quorum > incoming_count,
+                "workflow step #{step_id} quorum #{quorum} exceeds its #{incoming_count} upstream steps"
+              )
+
+            {:ok, _trigger} ->
+              maybe_collect_error([], step_id == "", "workflow step id is required")
+
+            {:error, reason} ->
+              ["workflow step #{step_id || "unknown"} has invalid trigger rule: #{reason}"]
+          end
+        end)
+
+      graph_errors =
+        graph_edges
+        |> List.wrap()
+        |> Enum.filter(&is_map/1)
+        |> Enum.flat_map(fn edge ->
+          from = to_string(Map.get(edge, "from") || "")
+          to = to_string(Map.get(edge, "to") || "")
+
+          []
+          |> maybe_collect_error(
+            not MapSet.member?(valid_ids, from),
+            "workflow edge references missing from step #{from}"
+          )
+          |> maybe_collect_error(
+            not MapSet.member?(valid_ids, to),
+            "workflow edge references missing to step #{to}"
+          )
+          |> maybe_collect_error(
+            from == to and from != "",
+            "workflow edge cannot point from #{from} to itself"
+          )
+        end)
+
+      cycle_errors =
+        if graph_errors == [] and
+             workflow_cycle?(MapSet.to_list(valid_ids), List.wrap(graph_edges)) do
+          ["workflow graph must be acyclic"]
+        else
+          []
+        end
+
+      errors
+      |> add_errors(Enum.map(Enum.uniq(duplicate_ids), &"duplicate workflow step id #{&1}"))
+      |> add_errors(step_errors)
+      |> add_errors(graph_errors)
+      |> add_errors(cycle_errors)
+    else
+      errors
+    end
+  end
+
+  defp workflow_cycle?(step_ids, edges) do
+    parents = Map.new(step_ids, &{&1, MapSet.new()})
+
+    parents =
+      Enum.reduce(edges, parents, fn edge, acc ->
+        from = to_string(Map.get(edge, "from") || "")
+        to = to_string(Map.get(edge, "to") || "")
+
+        if Map.has_key?(acc, from) and Map.has_key?(acc, to) do
+          Map.update!(acc, to, &MapSet.put(&1, from))
+        else
+          acc
+        end
+      end)
+
+    do_workflow_cycle?(parents, [])
+  end
+
+  defp do_workflow_cycle?(parents, removed) do
+    ready =
+      parents
+      |> Enum.reject(fn {step_id, _parents} -> step_id in removed end)
+      |> Enum.filter(fn {_step_id, dependencies} ->
+        MapSet.subset?(dependencies, MapSet.new(removed))
+      end)
+      |> Enum.map(&elem(&1, 0))
+
+    case ready do
+      [] ->
+        map_size(parents) != length(removed)
+
+      _ ->
+        do_workflow_cycle?(parents, Enum.uniq(removed ++ ready))
+    end
   end
 
   defp validate_completion_contract(errors, manifest) do

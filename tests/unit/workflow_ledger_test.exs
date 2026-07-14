@@ -316,6 +316,436 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     refute Map.has_key?(state["steps"], "removed_step")
   end
 
+  test "runs a linear pipeline in dependency order" do
+    state = dag_state(["a", "b", "c"], [edge("a", "b"), edge("b", "c")])
+    {state, [_]} = receive_message(state, "b")
+    state = state |> receive_message("a") |> elem(0) |> complete_step("a")
+    {state, _, [{:redeliver, "b", "b", message}]} = WorkflowLedger.reconcile(state, timestamp(2))
+    state = state |> receive_workflow_message(message) |> elem(0) |> complete_step("b")
+    {state, [_]} = receive_message(state, "c")
+    state = complete_step(state, "c")
+    assert WorkflowLedger.completed?(state)
+  end
+
+  test "fans one completed step out to parallel downstream steps" do
+    state = dag_state(["a", "b", "c"], [edge("a", "b"), edge("a", "c")])
+    state = state |> receive_message("a") |> elem(0) |> complete_step("a")
+    state = state |> receive_message("b") |> elem(0)
+    state = state |> receive_message("c") |> elem(0)
+
+    assert get_in(state, ["steps", "b", "status"]) == "running"
+    assert get_in(state, ["steps", "c", "status"]) == "running"
+  end
+
+  test "fans in only after every required parent succeeds" do
+    state =
+      dag_state(["a", "b", "c", "join"], [edge("a", "join"), edge("b", "join"), edge("c", "join")])
+
+    {state, [_]} = receive_message(state, "join")
+
+    state =
+      Enum.reduce(["a", "b", "c"], state, fn step_id, acc ->
+        acc |> receive_message(step_id) |> elem(0) |> complete_step(step_id)
+      end)
+
+    {state, _, [{:redeliver, "join", "join", message}]} =
+      WorkflowLedger.reconcile(state, timestamp(2))
+
+    {state, [_]} = receive_workflow_message(state, message)
+    assert get_in(state, ["steps", "join", "status"]) == "running"
+  end
+
+  test "scatters items into mapped steps and gathers their outputs" do
+    state =
+      dag_state(["source", "worker", "collect"], [
+        edge("source", "worker"),
+        edge("worker", "collect")
+      ])
+
+    {state, [_]} = receive_message(state, "source")
+
+    {state, events, []} =
+      WorkflowLedger.on_agent_event(
+        state,
+        "source",
+        :workflow_step_scatter,
+        %{"target" => "worker", "items" => [%{"id" => 1}, %{"id" => 2}]},
+        timestamp(1)
+      )
+
+    assert Enum.any?(events, &(&1.type == :workflow_step_scattered))
+
+    assert get_in(state, ["steps", "worker", "status"]) == "skipped"
+
+    state = complete_step(state, "source")
+    {state, _, worker_actions} = WorkflowLedger.reconcile(state, timestamp(2))
+
+    assert Enum.map(worker_actions, fn {:redeliver, step_id, _, _} -> step_id end) == [
+             "worker[0]",
+             "worker[1]"
+           ]
+
+    state =
+      Enum.reduce(worker_actions, state, fn {:redeliver, _step_id, _agent_id, message}, acc ->
+        acc |> receive_workflow_message(message) |> elem(0)
+      end)
+
+    {state, [_]} = receive_message(state, "collect")
+    state = state |> complete_step("worker[0]") |> complete_step("worker[1]")
+
+    {state, _, [{:redeliver, "collect", "collect", message}]} =
+      WorkflowLedger.reconcile(state, timestamp(3))
+
+    {state, [_]} = receive_workflow_message(state, message)
+    assert get_in(state, ["steps", "collect", "status"]) == "running"
+  end
+
+  test "restores mapped items and expanded edges after a coordinator restart" do
+    step_specs = ["source", "worker", "collect"]
+    edges = [edge("source", "worker"), edge("worker", "collect")]
+    state = dag_state(step_specs, edges)
+    {state, [_]} = receive_message(state, "source")
+
+    {state, _, []} =
+      WorkflowLedger.on_agent_event(
+        state,
+        "source",
+        :workflow_step_scatter,
+        %{"target" => "worker", "items" => [%{"id" => 1}, %{"id" => 2}]},
+        timestamp(1)
+      )
+
+    restored =
+      WorkflowLedger.new(
+        dag_manifest(step_specs, edges),
+        dag_nodes(step_specs),
+        %{"workflow_state" => state}
+      )
+
+    assert Map.has_key?(restored["steps"], "worker[0]")
+    assert Map.has_key?(restored["steps"], "worker[1]")
+    assert Enum.any?(restored["edges"], &(&1["from"] == "worker[0]" and &1["to"] == "collect"))
+  end
+
+  test "tracks a mapped worker failure against the mapped item" do
+    state = dag_state(["source", "worker"], [edge("source", "worker")])
+    {state, [_]} = receive_message(state, "source")
+
+    {state, _, _} =
+      WorkflowLedger.on_agent_event(
+        state,
+        "source",
+        :workflow_step_scatter,
+        %{"target" => "worker", "items" => [%{"id" => 1}]},
+        timestamp(1)
+      )
+
+    state = complete_step(state, "source")
+
+    {state, _, [{:redeliver, "worker[0]", "worker", message}]} =
+      WorkflowLedger.reconcile(state, timestamp(2))
+
+    {state, [_]} = receive_workflow_message(state, message)
+
+    {state, _, [{:fail_job, "worker[0]", "worker lost"}]} =
+      WorkflowLedger.on_agent_failed(state, "worker", "worker lost", timestamp(3))
+
+    assert get_in(state, ["steps", "worker[0]", "status"]) == "failed"
+  end
+
+  test "selects branch targets and skips the unselected branch" do
+    state =
+      dag_state(
+        ["router", "left", "right", {"join", "none_failed_min_one_success"}],
+        [
+          edge("router", "left"),
+          edge("router", "right"),
+          edge("left", "join"),
+          edge("right", "join")
+        ]
+      )
+
+    state = state |> receive_message("router") |> elem(0)
+
+    {state, events, _} =
+      WorkflowLedger.on_agent_event(
+        state,
+        "router",
+        :workflow_step_branch,
+        %{"branches" => ["left"]},
+        timestamp(1)
+      )
+
+    assert Enum.any?(events, &(&1.type == :workflow_branch_selected))
+    assert get_in(state, ["steps", "right", "status"]) == "skipped"
+    assert get_in(state, ["steps", "join", "status"]) == "pending"
+  end
+
+  test "short circuits and skips every downstream step" do
+    state =
+      dag_state(["guard", "work", "cleanup"], [edge("guard", "work"), edge("work", "cleanup")])
+
+    state = state |> receive_message("guard") |> elem(0)
+
+    {state, events, _} =
+      WorkflowLedger.on_agent_event(
+        state,
+        "guard",
+        :workflow_step_skipped,
+        %{"reason" => "no input", "skip_downstream" => true},
+        timestamp(1)
+      )
+
+    assert Enum.count(events, &(&1.type == :workflow_step_skipped)) == 3
+    assert Enum.all?(Map.values(state["steps"]), &(Map.get(&1, "status") == "skipped"))
+  end
+
+  test "starts a one-success join after the first successful parent" do
+    state = dag_state(["a", "b", {"join", "one_success"}], [edge("a", "join"), edge("b", "join")])
+    {state, [_]} = receive_message(state, "join")
+    state = state |> receive_message("a") |> elem(0) |> complete_step("a")
+
+    {state, _, [{:redeliver, "join", "join", message}]} =
+      WorkflowLedger.reconcile(state, timestamp(2))
+
+    {state, [_]} = receive_workflow_message(state, message)
+    assert get_in(state, ["steps", "join", "status"]) == "running"
+  end
+
+  test "starts a one-done join after a handled failure" do
+    state =
+      dag_state([{"a", "all_success", "continue_partial"}, {"join", "one_done"}], [
+        edge("a", "join")
+      ])
+
+    state = state |> receive_message("a") |> elem(0)
+
+    {state, events, [{:redeliver, "join", "join", message}]} =
+      WorkflowLedger.on_agent_failed(state, "a", "provider unavailable", timestamp(1))
+
+    assert Enum.any?(events, &(&1.type == :workflow_step_failed))
+    assert get_in(state, ["steps", "a", "terminal_outcome"]) == "failed"
+    {state, [_]} = receive_workflow_message(state, message)
+    assert get_in(state, ["steps", "join", "status"]) == "running"
+  end
+
+  test "runs a failure handler after the first handled failure" do
+    state =
+      dag_state([{"a", "all_success", "continue_partial"}, {"alert", "one_failed"}], [
+        edge("a", "alert")
+      ])
+
+    state = state |> receive_message("a") |> elem(0)
+
+    {state, _, [{:redeliver, "alert", "alert", message}]} =
+      WorkflowLedger.on_agent_failed(state, "a", "provider unavailable", timestamp(1))
+
+    {state, [_]} = receive_workflow_message(state, message)
+    assert get_in(state, ["steps", "alert", "status"]) == "running"
+  end
+
+  test "waits for every terminal parent before cleanup" do
+    state =
+      dag_state(
+        ["a", {"b", "all_success", "continue_partial"}, {"cleanup", "all_done"}],
+        [edge("a", "cleanup"), edge("b", "cleanup")]
+      )
+
+    {state, [_]} = receive_message(state, "cleanup")
+    state = state |> receive_message("a") |> elem(0) |> complete_step("a")
+    state = state |> receive_message("b") |> elem(0)
+    state = state |> on_failed("b", "failed work") |> elem(0)
+
+    {state, _, [{:redeliver, "cleanup", "cleanup", message}]} =
+      WorkflowLedger.reconcile(state, timestamp(2))
+
+    {state, [_]} = receive_workflow_message(state, message)
+    assert get_in(state, ["steps", "cleanup", "status"]) == "running"
+  end
+
+  test "joins a selected branch when other branches are skipped" do
+    state =
+      dag_state(
+        ["selected", "skipped", {"join", "none_failed_min_one_success"}],
+        [edge("selected", "join"), edge("skipped", "join")]
+      )
+
+    {state, [_]} = receive_message(state, "join")
+    state = state |> receive_message("selected") |> elem(0) |> complete_step("selected")
+
+    {state, _, _} =
+      WorkflowLedger.on_agent_event(
+        state,
+        "skipped",
+        :workflow_step_skipped,
+        %{"reason" => "branch not selected"},
+        timestamp(1)
+      )
+
+    {state, _, [{:redeliver, "join", "join", message}]} =
+      WorkflowLedger.reconcile(state, timestamp(2))
+
+    {state, [_]} = receive_workflow_message(state, message)
+    assert get_in(state, ["steps", "join", "status"]) == "running"
+  end
+
+  test "advances through a fallback chain only after each handled failure" do
+    state =
+      dag_state(
+        [
+          {"primary", "all_success", "continue_partial"},
+          {"fallback", "one_failed", "continue_partial"},
+          {"emergency", "one_failed"}
+        ],
+        [edge("primary", "fallback"), edge("fallback", "emergency")]
+      )
+
+    state = state |> receive_message("primary") |> elem(0)
+
+    {state, _, [{:redeliver, "fallback", "fallback", fallback_message}]} =
+      on_failed(state, "primary", "primary unavailable")
+
+    {state, [_]} = receive_workflow_message(state, fallback_message)
+
+    {state, _, [{:redeliver, "emergency", "emergency", emergency_message}]} =
+      on_failed(state, "fallback", "fallback unavailable")
+
+    {state, [_]} = receive_workflow_message(state, emergency_message)
+    assert get_in(state, ["steps", "emergency", "status"]) == "running"
+  end
+
+  test "releases a quorum join after the configured number of successes" do
+    state =
+      dag_state(
+        ["a", "b", "c", {"join", %{"rule" => "quorum_success", "quorum" => 2}}],
+        [edge("a", "join"), edge("b", "join"), edge("c", "join")]
+      )
+
+    {state, [_]} = receive_message(state, "join")
+    state = state |> receive_message("a") |> elem(0) |> complete_step("a")
+    state = state |> receive_message("b") |> elem(0) |> complete_step("b")
+
+    {state, _, [{:redeliver, "join", "join", message}]} =
+      WorkflowLedger.reconcile(state, timestamp(2))
+
+    {state, [_]} = receive_workflow_message(state, message)
+    assert get_in(state, ["steps", "join", "status"]) == "running"
+  end
+
+  test "runs teardown after failed work when its all-done trigger is satisfied" do
+    state =
+      dag_state(
+        ["setup", {"work", "all_success", "continue_partial"}, {"teardown", "all_done"}],
+        [edge("setup", "work"), edge("work", "teardown")]
+      )
+
+    state = state |> receive_message("setup") |> elem(0) |> complete_step("setup")
+    state = state |> receive_message("work") |> elem(0)
+
+    {state, _, [{:redeliver, "teardown", "teardown", message}]} =
+      on_failed(state, "work", "work failed")
+
+    {state, [_]} = receive_workflow_message(state, message)
+    assert get_in(state, ["steps", "teardown", "status"]) == "running"
+  end
+
+  test "continues after a sensor receives an external event" do
+    state = dag_state(["sensor", "continue"], [edge("sensor", "continue")])
+
+    external =
+      Message.new("job", "external", "sensor", "file_arrived", %{"path" => "inbox/report.csv"})
+
+    {state, [_]} = receive_workflow_message(state, external)
+    state = complete_step(state, "sensor")
+    {state, [_]} = receive_message(state, "continue")
+    assert get_in(state, ["steps", "continue", "status"]) == "running"
+  end
+
+  defp dag_state(step_specs, edges) do
+    manifest = dag_manifest(step_specs, edges)
+    nodes = dag_nodes(step_specs)
+
+    {state, []} = WorkflowLedger.new(manifest, nodes) |> WorkflowLedger.job_running(timestamp(0))
+    state
+  end
+
+  defp dag_manifest(step_specs, edges) do
+    %Manifest{
+      flow: %{
+        "steps" => Enum.map(step_specs, &dag_step/1),
+        "graph" => %{"edges" => edges}
+      }
+    }
+  end
+
+  defp dag_nodes(step_specs) do
+    Enum.map(step_specs, fn spec ->
+      step_id = spec |> dag_step() |> Map.fetch!("id")
+      %{node_id: step_id, config: %{"timeout_seconds" => 10, "max_attempts" => 1}}
+    end)
+  end
+
+  defp dag_step({id, trigger_rule, failure_policy}) do
+    dag_step(id)
+    |> Map.put("trigger_rule", trigger_rule)
+    |> put_in(["control", "failure_policy"], failure_policy)
+  end
+
+  defp dag_step({id, trigger_rule}), do: dag_step(id) |> Map.put("trigger_rule", trigger_rule)
+
+  defp dag_step(id) when is_binary(id) do
+    %{
+      "id" => id,
+      "run" => id,
+      "control" => %{
+        "required" => true,
+        "failure_policy" => "fail_workflow",
+        "timeout_seconds" => 10,
+        "retry" => %{"max_attempts" => 1, "backoff_seconds" => 0}
+      }
+    }
+  end
+
+  defp edge(from, to) do
+    %{
+      "id" => "#{from}_to_#{to}",
+      "from" => from,
+      "to" => to,
+      "accepts" => ["done"],
+      "required" => true
+    }
+  end
+
+  defp receive_message(state, step_id) do
+    message = Message.new("job", "upstream", step_id, "done", %{})
+    receive_workflow_message(state, message)
+  end
+
+  defp receive_workflow_message(state, message) do
+    WorkflowLedger.on_message_received(state, Message.to(message), message, timestamp(0))
+  end
+
+  defp complete_step(state, step_id) do
+    {state, _events, _actions} =
+      WorkflowLedger.on_agent_event(
+        state,
+        step_id,
+        :workflow_step_attempt_completed,
+        %{"step_id" => step_id, "status" => "completed"},
+        timestamp(1)
+      )
+
+    state
+  end
+
+  defp on_failed(state, step_id, reason) do
+    WorkflowLedger.on_agent_failed(state, step_id, reason, timestamp(1))
+  end
+
+  defp timestamp(offset_seconds) do
+    "2026-06-02T16:00:#{offset_seconds |> Integer.to_string() |> String.pad_leading(2, "0")}.000Z"
+  end
+
   defp manifest(opts \\ []) do
     required? = Keyword.get(opts, :required?, true)
 

@@ -813,6 +813,57 @@ defmodule MirrorNeuron.ManifestTest do
            )
   end
 
+  test "accepts event-driven DAG triggers and validates DAG trigger rules" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "event-driven-dag",
+      "entrypoints" => ["sensor"],
+      "triggers" => [
+        %{
+          "name" => "dataset-uploaded",
+          "enabled" => true,
+          "event_type" => "file_uploaded",
+          "filters" => %{"path" => %{"prefix" => "/datasets/"}}
+        }
+      ],
+      "flow" => %{
+        "steps" => [
+          %{"id" => "sensor", "run" => "sensor"},
+          %{
+            "id" => "publish",
+            "run" => "publish",
+            "trigger_rule" => %{"rule" => "quorum_success", "quorum" => 1}
+          }
+        ],
+        "graph" => %{
+          "edges" => [%{"id" => "sensor-publish", "from" => "sensor", "to" => "publish"}]
+        }
+      },
+      "nodes" => [
+        %{"node_id" => "sensor", "agent_type" => "sensor", "role" => "root"},
+        %{"node_id" => "publish", "agent_type" => "executor"}
+      ],
+      "edges" => [
+        %{"from_node" => "sensor", "to_node" => "publish", "message_type" => "file_ready"}
+      ],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, normalized} = Manifest.load(flow_manifest(manifest))
+    assert normalized.triggers |> hd() |> Map.fetch!("event_type") == "file_uploaded"
+
+    assert {:error, errors} =
+             Manifest.load(
+               put_in(
+                 flow_manifest(manifest),
+                 ["flow", "steps", Access.at(1), "trigger_rule", "quorum"],
+                 2
+               )
+             )
+
+    assert Enum.any?(errors, &String.contains?(&1, "quorum 2 exceeds"))
+  end
+
   test "loads a job bundle from a folder with manifest.json and payloads" do
     tmp_dir =
       Path.join(
