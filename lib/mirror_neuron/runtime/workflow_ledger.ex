@@ -1423,8 +1423,19 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
       nil
     else
       run_id = to_string(Map.get(raw, "run") || step_id)
-      node = Map.get(runtime_by_id, run_id) || Map.get(runtime_by_id, step_id)
-      agent_id = if node, do: node.node_id, else: run_id
+      configured_agent_id = to_string(Map.get(raw, "agent_id") || "")
+
+      node =
+        Map.get(runtime_by_id, configured_agent_id) ||
+          Map.get(runtime_by_id, run_id) || Map.get(runtime_by_id, step_id)
+
+      agent_id =
+        cond do
+          node -> node.node_id
+          configured_agent_id != "" -> configured_agent_id
+          true -> run_id
+        end
+
       node_config = if node && is_map(node.config), do: node.config, else: %{}
       control = if is_map(Map.get(raw, "control")), do: Map.get(raw, "control"), else: %{}
       retry = if is_map(Map.get(control, "retry")), do: Map.get(control, "retry"), else: %{}

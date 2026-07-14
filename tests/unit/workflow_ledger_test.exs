@@ -80,6 +80,28 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     assert get_in(state, ["steps", "step_a", "status"]) == "partial"
   end
 
+  test "binds a workflow step to its explicitly named runtime agent" do
+    manifest = %Manifest{
+      flow: %{
+        "steps" => [
+          %{
+            "id" => "prepare",
+            "run" => "prepare_voice_service",
+            "agent_id" => "ingress",
+            "control" => %{"required" => true, "retry" => %{"max_attempts" => 1}}
+          }
+        ],
+        "graph" => %{"edges" => []}
+      }
+    }
+
+    {state, []} =
+      WorkflowLedger.new(manifest, [%{node_id: "ingress", config: %{}}])
+      |> WorkflowLedger.job_running()
+
+    assert WorkflowLedger.agent_to_step(state) == %{"ingress" => "prepare"}
+  end
+
   test "blocks early join messages and redelivers when dependencies are satisfied" do
     {state, []} =
       WorkflowLedger.new(join_manifest(), join_runtime_nodes())

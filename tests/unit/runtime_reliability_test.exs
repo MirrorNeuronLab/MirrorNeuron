@@ -74,6 +74,13 @@ defmodule MirrorNeuron.RuntimeReliabilityTest do
     assert Delivery.max_attempts() == 10
   end
 
+  test "workflow graph-mutating control events are delivered durably before step completion" do
+    assert Delivery.coordinator_event_requires_ack?("workflow_step_branch")
+    assert Delivery.coordinator_event_requires_ack?(:workflow_step_scatter)
+    assert Delivery.coordinator_event_requires_ack?("workflow_step_skipped")
+    refute Delivery.coordinator_event_requires_ack?("sandbox_job_completed")
+  end
+
   test "runtime control and durable delivery timing honor env overrides" do
     System.put_env("MN_JOB_CALL_TIMEOUT_MS", "2500")
     System.put_env("MN_CANCEL_JOB_CALL_TIMEOUT_MS", "1500")

@@ -26,7 +26,9 @@ defmodule MirrorNeuron.Runtime.Delivery do
                                       "workflow_step_completed",
                                       "workflow_step_partial",
                                       "workflow_step_skipped",
-                                      "workflow_step_failed"
+                                      "workflow_step_failed",
+                                      "workflow_step_branch",
+                                      "workflow_step_scatter"
                                     ])
 
   def enqueue(job_id, agent_id, message) do
