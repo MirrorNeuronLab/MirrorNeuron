@@ -4,7 +4,7 @@ defmodule MirrorNeuron.RuntimeTest do
   alias MirrorNeuron.Message
   alias MirrorNeuron.Persistence.{DiskCheckpoint, RedisStore}
   alias MirrorNeuron.Runtime
-  alias MirrorNeuron.Runtime.AgentWorker
+  alias MirrorNeuron.Runtime.{AgentWorker, Delivery}
   alias MirrorNeuron.ServiceRegistry
 
   defmodule BundlePathEchoRunner do
@@ -688,6 +688,15 @@ defmodule MirrorNeuron.RuntimeTest do
     assert get_in(job, ["workflow_state", "steps", "step_a", "status"]) == "completed"
     assert get_in(job, ["workflow_state", "steps", "step_b", "status"]) == "completed"
 
+    wait_until(
+      fn ->
+        RedisStore.delivery_pending_count(job_id, Delivery.coordinator_agent_id()) == {:ok, 0}
+      end,
+      1_000
+    )
+
+    assert {:ok, 0} = RedisStore.delivery_pending_count(job_id, Delivery.coordinator_agent_id())
+
     wait_until(fn -> event_count(job_id, "job_completed") == 1 end, 1_000)
     assert {:ok, events} = MirrorNeuron.events(job_id)
     assert Enum.count(events, &(&1["type"] == "job_completed")) == 1
@@ -875,13 +884,36 @@ defmodule MirrorNeuron.RuntimeTest do
 
     GenServer.cast(pid, {:deliver, message})
 
-    assert_receive {:agent_completed_run, "worker", result}, 2_000
+    consumer = Delivery.consumer_id(job_id, Delivery.coordinator_agent_id())
+
+    delivery =
+      Enum.reduce_while(1..100, nil, fn _, _acc ->
+        case Delivery.read(job_id, Delivery.coordinator_agent_id(), consumer) do
+          {:ok, [delivery]} ->
+            {:halt, delivery}
+
+          {:ok, []} ->
+            Process.sleep(20)
+            {:cont, nil}
+        end
+      end)
+
+    assert delivery
+    result = get_in(delivery.message, ["body", "result"])
     assert result["bundle_root"] == manifest_ref["cache_path"]
     assert result["manifest_path"] == Path.join(manifest_ref["cache_path"], "manifest.json")
     assert result["payloads_path"] == Path.join(manifest_ref["cache_path"], "payloads")
     assert result["bundle_exists"] == true
     assert result["manifest_exists"] == true
     assert result["payloads_exists"] == true
+
+    assert :ok =
+             Delivery.ack(
+               job_id,
+               Delivery.coordinator_agent_id(),
+               consumer,
+               delivery
+             )
 
     GenServer.stop(pid)
     RedisStore.delete_job(job_id)
@@ -3043,7 +3075,7 @@ defmodule MirrorNeuron.RuntimeTest do
     }
   end
 
-  test "persists a terminal job record even if the coordinator is gone" do
+  test "keeps a terminal report durable while the coordinator is gone" do
     job_id = "worker_fallback_test-#{System.unique_integer([:positive])}"
 
     node = %{
@@ -3085,14 +3117,29 @@ defmodule MirrorNeuron.RuntimeTest do
     GenServer.cast(pid, {:deliver, message})
 
     wait_until(fn ->
-      match?({:ok, %{"status" => "completed"}}, MirrorNeuron.inspect_job(job_id))
+      RedisStore.delivery_pending_count(job_id, Delivery.coordinator_agent_id()) == {:ok, 1}
     end)
 
-    assert {:ok, job} = MirrorNeuron.inspect_job(job_id)
-    assert job["status"] == "completed"
-    assert get_in(job, ["result", "agent_id"]) == "sink"
-    assert get_in(job, ["result", "output", "count"]) == 1
-    assert get_in(job, ["result", "output", "last_message", "value"]) == "done"
+    assert {:error, _reason} = MirrorNeuron.inspect_job(job_id)
+
+    consumer = Delivery.consumer_id(job_id, Delivery.coordinator_agent_id())
+
+    assert {:ok, [delivery]} =
+             Delivery.read(job_id, Delivery.coordinator_agent_id(), consumer)
+
+    report = Message.body(delivery.message)
+    assert report["kind"] == "agent_completed_run"
+    assert report["agent_id"] == "sink"
+    assert get_in(report, ["result", "count"]) == 1
+    assert get_in(report, ["result", "last_message", "value"]) == "done"
+
+    assert :ok =
+             Delivery.ack(
+               job_id,
+               Delivery.coordinator_agent_id(),
+               consumer,
+               delivery
+             )
 
     GenServer.stop(pid)
     RedisStore.delete_job(job_id)

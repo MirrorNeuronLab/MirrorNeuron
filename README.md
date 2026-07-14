@@ -463,10 +463,13 @@ idempotent by `message_id`; an agent claims a delivery lease, renews it while
 working, and ACKs only after its state and emitted messages are durable. Missing
 ACKs are reclaimed with bounded retries and then dead-lettered. BEAM/Horde
 signals are wake-ups only, so a dropped cross-node signal cannot lose the
-message. Streams, receipts, counters, and indexes all carry TTLs; ACK deletes
-the stream entry, explicit job deletion removes delivery keys immediately, and
-terminal jobs shorten remaining delivery retention to one hour. Delivery is
-at-least-once, so handlers and external side effects must remain idempotent.
+message. Workflow state changes and run completion use the same mechanism for
+agent-to-coordinator reports; high-volume telemetry remains best-effort because
+it is observational rather than state-bearing. Streams, receipts, counters,
+and indexes all carry TTLs; ACK deletes the stream entry, explicit job deletion
+removes delivery keys immediately, and terminal jobs shorten remaining delivery
+retention to one hour. Delivery is at-least-once, so handlers and external side
+effects must remain idempotent.
 
 ---
 

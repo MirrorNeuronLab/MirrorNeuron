@@ -170,8 +170,20 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     now_ms = Keyword.fetch!(opts, :now_ms)
     count = Keyword.get(opts, :count, 1)
 
-    with :ok <- ensure_delivery_group(stream_key, Keyword.fetch!(opts, :stream_ttl_seconds)),
-         {:ok, claimed} <- claim_stale_deliveries(stream_key, consumer, lease_ms, count),
+    with :ok <-
+           maybe_ensure_delivery_group(
+             stream_key,
+             Keyword.fetch!(opts, :stream_ttl_seconds),
+             Keyword.get(opts, :ensure_group, true)
+           ),
+         {:ok, claimed} <-
+           maybe_claim_stale_deliveries(
+             stream_key,
+             consumer,
+             lease_ms,
+             count,
+             Keyword.get(opts, :claim_stale, true)
+           ),
          {:ok, entries} <- read_new_deliveries(stream_key, consumer, count - length(claimed)) do
       (claimed ++ entries)
       |> Enum.reduce_while({:ok, []}, fn entry, {:ok, acc} ->
@@ -3661,6 +3673,11 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
+  defp maybe_ensure_delivery_group(stream_key, stream_ttl_seconds, true),
+    do: ensure_delivery_group(stream_key, stream_ttl_seconds)
+
+  defp maybe_ensure_delivery_group(_stream_key, _stream_ttl_seconds, false), do: :ok
+
   defp claim_stale_deliveries(stream_key, consumer, lease_ms, count) when count > 0 do
     case command([
            "XAUTOCLAIM",
@@ -3679,6 +3696,12 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   defp claim_stale_deliveries(_stream_key, _consumer, _lease_ms, _count), do: {:ok, []}
+
+  defp maybe_claim_stale_deliveries(stream_key, consumer, lease_ms, count, true),
+    do: claim_stale_deliveries(stream_key, consumer, lease_ms, count)
+
+  defp maybe_claim_stale_deliveries(_stream_key, _consumer, _lease_ms, _count, false),
+    do: {:ok, []}
 
   defp read_new_deliveries(stream_key, consumer, count) when count > 0 do
     case command([

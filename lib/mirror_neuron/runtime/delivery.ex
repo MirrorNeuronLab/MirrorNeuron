@@ -19,6 +19,15 @@ defmodule MirrorNeuron.Runtime.Delivery do
   @default_poll_ms 1_000
   @retry_base_ms 500
   @retry_max_ms 30_000
+  @coordinator_agent_id "__mirror_neuron_job_coordinator__"
+  @state_bearing_coordinator_events MapSet.new([
+                                      "agent_beacon_missed",
+                                      "workflow_step_started",
+                                      "workflow_step_completed",
+                                      "workflow_step_partial",
+                                      "workflow_step_skipped",
+                                      "workflow_step_failed"
+                                    ])
 
   def enqueue(job_id, agent_id, message) do
     normalized = normalize_message(job_id, agent_id, message)
@@ -49,9 +58,30 @@ defmodule MirrorNeuron.Runtime.Delivery do
     end
   end
 
+  def report(job_id, agent_id, report_id, body) do
+    job_id
+    |> Message.new(
+      agent_id,
+      @coordinator_agent_id,
+      "runtime.agent_report",
+      body,
+      message_id: report_id,
+      class: "control"
+    )
+    |> then(&enqueue(job_id, @coordinator_agent_id, &1))
+    |> accepted()
+  end
+
+  def coordinator_agent_id, do: @coordinator_agent_id
+
+  def coordinator_event_requires_ack?(event_type),
+    do: MapSet.member?(@state_bearing_coordinator_events, to_string(event_type))
+
   def read(job_id, agent_id, consumer, opts \\ []) do
     RedisStore.read_deliveries(job_id, agent_id, consumer,
       lease_ms: if(Keyword.get(opts, :reclaim, false), do: 0, else: lease_ms()),
+      claim_stale: Keyword.get(opts, :claim_stale, true),
+      ensure_group: Keyword.get(opts, :ensure_group, true),
       max_attempts: max_attempts(),
       now_ms: System.system_time(:millisecond),
       count: Keyword.get(opts, :count, 1),

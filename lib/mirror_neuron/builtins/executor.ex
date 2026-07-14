@@ -527,10 +527,24 @@ defmodule MirrorNeuron.Builtins.Executor do
   end
 
   defp report_event(context, event_type, payload) do
-    send(
-      context.coordinator,
-      {:agent_event, context.node.node_id, event_type, workflow_payload(context, payload)}
-    )
+    payload = workflow_payload(context, payload)
+
+    case Map.get(context, :coordinator_reporter) do
+      reporter
+      when is_function(reporter, 3) ->
+        if MirrorNeuron.Runtime.Delivery.coordinator_event_requires_ack?(event_type) do
+          reporter.(
+            "agent_event",
+            %{"event_type" => to_string(event_type), "payload" => payload},
+            "runner:#{event_type}"
+          )
+        else
+          send(context.coordinator, {:agent_event, context.node.node_id, event_type, payload})
+        end
+
+      _other ->
+        send(context.coordinator, {:agent_event, context.node.node_id, event_type, payload})
+    end
   end
 
   defp workflow_payload(context, payload) do

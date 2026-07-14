@@ -13,6 +13,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   alias MirrorNeuron.Runtime.{
     AgentWorker,
     Backpressure,
+    Delivery,
     ErrorEnvelope,
     EventBus,
     LifecyclePolicy,
@@ -70,6 +71,13 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       recovery_tasks: %{},
       health_check_timer_ref: nil,
       health_check_token: nil,
+      coordinator_delivery_consumer:
+        Delivery.consumer_id(job_id, Delivery.coordinator_agent_id()),
+      coordinator_delivery_group_ready?: false,
+      coordinator_delivery_reclaim?: true,
+      coordinator_delivery_next_reclaim_at_ms: 0,
+      coordinator_delivery_timer_ref: nil,
+      coordinator_delivery_token: nil,
       deployment_context: deployment_context_from(opts, existing_job),
       health_check_interval_ms:
         Application.get_env(
@@ -109,7 +117,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       })
 
       publish_workflow_events(next_state, [])
-      {:noreply, schedule_health_check(next_state)}
+      {:noreply, schedule_runtime_timers(next_state)}
     else
       {:paused_for_review, paused_state} ->
         {:noreply, paused_state}
@@ -155,7 +163,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       persist_job(next_state)
       EventBus.publish(state.job_id, %{type: :job_running, timestamp: Runtime.timestamp()})
       publish_workflow_events(next_state, workflow_events)
-      {:noreply, schedule_health_check(next_state)}
+      {:noreply, schedule_runtime_timers(next_state)}
     else
       {:error, {:execution_profile_unavailable, profile, agent_id}, failed_state} ->
         paused_state =
@@ -197,7 +205,11 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       terminate_agent_workers(state, WorkflowLedger.active_agent_ids(state.workflow_state))
     end
 
-    next_state = %{state | status: "paused", workflow_state: workflow_state}
+    next_state =
+      state
+      |> Map.merge(%{status: "paused", workflow_state: workflow_state})
+      |> cancel_coordinator_delivery_timer()
+
     persist_job(next_state)
     EventBus.publish(state.job_id, %{type: :job_paused, timestamp: Runtime.timestamp()})
     publish_workflow_events(next_state, workflow_events)
@@ -218,7 +230,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         refresh_disk_checkpoint(recovered_state)
         EventBus.publish(state.job_id, %{type: :job_resumed, timestamp: Runtime.timestamp()})
         publish_workflow_events(recovered_state, workflow_events)
-        {:reply, {:ok, "resumed"}, schedule_health_check(recovered_state)}
+        {:reply, {:ok, "resumed"}, schedule_runtime_timers(recovered_state)}
 
       {:error, reason, failed_state} ->
         {:reply, {:error, reason}, failed_state}
@@ -431,6 +443,31 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       ) do
     {:reply, {:error, "job is #{state.status}"}, state}
   end
+
+  @impl true
+  def handle_cast(:coordinator_delivery_available, %{status: "running"} = state) do
+    {:noreply, schedule_coordinator_delivery_poll(state, 0)}
+  end
+
+  def handle_cast(:coordinator_delivery_available, state), do: {:noreply, state}
+
+  @impl true
+  def handle_info(
+        {:coordinator_delivery_poll, token},
+        %{coordinator_delivery_token: token, status: "running"} = state
+      ) do
+    state = clear_coordinator_delivery_timer(state)
+    poll_coordinator_deliveries(state)
+  end
+
+  def handle_info(
+        {:coordinator_delivery_poll, token},
+        %{coordinator_delivery_token: token} = state
+      ) do
+    {:noreply, clear_coordinator_delivery_timer(state)}
+  end
+
+  def handle_info({:coordinator_delivery_poll, _stale_token}, state), do: {:noreply, state}
 
   @impl true
   def handle_info({:agent_event, agent_id, event_type, payload}, state) do
@@ -646,6 +683,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   def terminate(_reason, state) do
     state
     |> cancel_health_check_timer()
+    |> cancel_coordinator_delivery_timer()
     |> cancel_policy_timers()
     |> cancel_recovery_tasks()
 
@@ -1979,6 +2017,225 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   defp clear_health_check_timer(state),
     do: %{state | health_check_timer_ref: nil, health_check_token: nil}
+
+  defp schedule_runtime_timers(state) do
+    state
+    |> schedule_health_check()
+    |> schedule_coordinator_delivery_poll(0)
+  end
+
+  defp poll_coordinator_deliveries(state) do
+    reclaim? = coordinator_delivery_reclaim_due?(state)
+    coordinator_agent_id = Delivery.coordinator_agent_id()
+
+    case Delivery.read(
+           state.job_id,
+           coordinator_agent_id,
+           state.coordinator_delivery_consumer,
+           reclaim: state.coordinator_delivery_reclaim?,
+           claim_stale: reclaim?,
+           ensure_group: not state.coordinator_delivery_group_ready?
+         ) do
+      {:ok, []} ->
+        next_state = mark_coordinator_delivery_poll_succeeded(state, reclaim?)
+        {:noreply, schedule_coordinator_delivery_poll(next_state, Delivery.poll_ms())}
+
+      {:ok, [delivery | _rest]} ->
+        state = mark_coordinator_delivery_poll_succeeded(state, reclaim?)
+        process_coordinator_delivery(delivery, state)
+
+      {:error, reason} ->
+        Logger.warning("failed to poll durable coordinator reports",
+          job_id: state.job_id,
+          reason: inspect(reason)
+        )
+
+        next_state = %{state | coordinator_delivery_group_ready?: false}
+        {:noreply, schedule_coordinator_delivery_poll(next_state, Delivery.poll_ms())}
+    end
+  end
+
+  defp process_coordinator_delivery(%{discard_reason: reason} = delivery, state) do
+    _result =
+      Delivery.dead_letter(
+        state.job_id,
+        Delivery.coordinator_agent_id(),
+        delivery,
+        reason
+      )
+
+    {:noreply, schedule_coordinator_delivery_poll(state, 0)}
+  end
+
+  defp process_coordinator_delivery(delivery, state) do
+    renewer =
+      Delivery.start_lease_renewer(
+        state.job_id,
+        Delivery.coordinator_agent_id(),
+        state.coordinator_delivery_consumer,
+        delivery.stream_id
+      )
+
+    result = dispatch_coordinator_report(Message.body(delivery.message), state)
+    Delivery.stop_lease_renewer(renewer)
+
+    case result do
+      {:error, reason} ->
+        _result =
+          Delivery.dead_letter(
+            state.job_id,
+            Delivery.coordinator_agent_id(),
+            delivery,
+            reason
+          )
+
+        {:noreply, schedule_coordinator_delivery_poll(state, 0)}
+
+      callback ->
+        finish_coordinator_delivery(delivery, callback, state)
+    end
+  end
+
+  defp dispatch_coordinator_report(
+         %{
+           "kind" => "agent_event",
+           "agent_id" => agent_id,
+           "event_type" => event_type,
+           "payload" => payload
+         },
+         state
+       ) do
+    handle_info({:agent_event, agent_id, event_type, payload}, state)
+  end
+
+  defp dispatch_coordinator_report(
+         %{
+           "kind" => "workflow_message_received",
+           "agent_id" => agent_id,
+           "message" => message
+         },
+         state
+       ) do
+    handle_info({:workflow_message_received, agent_id, message}, state)
+  end
+
+  defp dispatch_coordinator_report(
+         %{
+           "kind" => "workflow_message_acked",
+           "agent_id" => agent_id,
+           "message" => message
+         },
+         state
+       ) do
+    handle_info({:workflow_message_acked, agent_id, message}, state)
+  end
+
+  defp dispatch_coordinator_report(
+         %{"kind" => "agent_completed_run", "agent_id" => agent_id, "result" => result},
+         state
+       ) do
+    handle_info({:agent_completed_run, agent_id, result}, state)
+  end
+
+  defp dispatch_coordinator_report(report, _state),
+    do: {:error, {:invalid_coordinator_report, report}}
+
+  defp finish_coordinator_delivery(delivery, callback, state) do
+    ack_result =
+      Delivery.ack(
+        state.job_id,
+        Delivery.coordinator_agent_id(),
+        state.coordinator_delivery_consumer,
+        delivery
+      )
+
+    if ack_result != :ok do
+      Logger.warning("failed to acknowledge durable coordinator report",
+        job_id: state.job_id,
+        message_id: delivery.message_id,
+        reason: inspect(ack_result)
+      )
+    end
+
+    case callback do
+      {:noreply, next_state} ->
+        {:noreply, schedule_coordinator_delivery_poll(next_state, 0)}
+
+      {:stop, reason, next_state} ->
+        {:stop, reason, next_state}
+
+      other ->
+        Logger.error("invalid coordinator report callback",
+          job_id: state.job_id,
+          callback: inspect(other)
+        )
+
+        {:noreply, schedule_coordinator_delivery_poll(state, Delivery.poll_ms())}
+    end
+  end
+
+  defp coordinator_delivery_reclaim_due?(state) do
+    state.coordinator_delivery_reclaim? or
+      System.monotonic_time(:millisecond) >= state.coordinator_delivery_next_reclaim_at_ms
+  end
+
+  defp mark_coordinator_delivery_poll_succeeded(state, reclaim?) do
+    next_reclaim_at_ms =
+      if reclaim? do
+        System.monotonic_time(:millisecond) + Delivery.lease_ms()
+      else
+        state.coordinator_delivery_next_reclaim_at_ms
+      end
+
+    %{
+      state
+      | coordinator_delivery_reclaim?: false,
+        coordinator_delivery_group_ready?: true,
+        coordinator_delivery_next_reclaim_at_ms: next_reclaim_at_ms
+    }
+  end
+
+  defp schedule_coordinator_delivery_poll(state, delay_ms) do
+    state = cancel_coordinator_delivery_timer(state)
+    token = make_ref()
+
+    timer_ref =
+      Process.send_after(self(), {:coordinator_delivery_poll, token}, max(delay_ms, 0))
+
+    %{
+      state
+      | coordinator_delivery_timer_ref: timer_ref,
+        coordinator_delivery_token: token
+    }
+  end
+
+  defp cancel_coordinator_delivery_timer(
+         %{
+           coordinator_delivery_timer_ref: ref,
+           coordinator_delivery_token: token
+         } = state
+       )
+       when is_reference(ref) do
+    Process.cancel_timer(ref)
+
+    receive do
+      {:coordinator_delivery_poll, ^token} -> :ok
+    after
+      0 -> :ok
+    end
+
+    clear_coordinator_delivery_timer(state)
+  end
+
+  defp cancel_coordinator_delivery_timer(state), do: state
+
+  defp clear_coordinator_delivery_timer(state) do
+    %{
+      state
+      | coordinator_delivery_timer_ref: nil,
+        coordinator_delivery_token: nil
+    }
+  end
 
   defp build_runtime_topology(manifest, scheduler_plan) do
     job_type = scheduler_plan["job_type"]

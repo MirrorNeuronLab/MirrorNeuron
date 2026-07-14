@@ -160,6 +160,17 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert first_delivery.attempt == 1
     Process.sleep(5)
 
+    assert {:ok, []} =
+             RedisStore.read_deliveries(job_id, agent_id, "consumer-two",
+               lease_ms: 1,
+               claim_stale: false,
+               ensure_group: false,
+               max_attempts: Delivery.max_attempts(),
+               now_ms: System.system_time(:millisecond),
+               count: 1,
+               stream_ttl_seconds: Delivery.stream_ttl_seconds()
+             )
+
     assert {:ok, [second_delivery]} =
              RedisStore.read_deliveries(job_id, agent_id, "consumer-two",
                lease_ms: 1,

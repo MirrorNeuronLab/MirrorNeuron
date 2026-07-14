@@ -99,6 +99,8 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
           heartbeat_timer_ref: nil,
           heartbeat_token: nil,
           delivery_consumer: Delivery.consumer_id(job_id, node.node_id),
+          delivery_group_ready?: false,
+          next_delivery_reclaim_at_ms: 0,
           delivery_timer_ref: nil,
           delivery_token: nil,
           reclaim_deliveries?: not is_nil(recovery_snapshot),
@@ -229,19 +231,23 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   end
 
   defp poll_deliveries(state) do
+    reclaim? = delivery_reclaim_due?(state)
+
     case Delivery.read(
            state.job_id,
            state.node.node_id,
            state.delivery_consumer,
-           reclaim: state.reclaim_deliveries?
+           reclaim: state.reclaim_deliveries?,
+           claim_stale: reclaim?,
+           ensure_group: not state.delivery_group_ready?
          ) do
       {:ok, []} ->
         state
-        |> Map.put(:reclaim_deliveries?, false)
+        |> mark_delivery_poll_succeeded(reclaim?)
         |> schedule_delivery_poll(Delivery.poll_ms())
 
       {:ok, [delivery | _rest]} ->
-        state = %{state | reclaim_deliveries?: false}
+        state = mark_delivery_poll_succeeded(state, reclaim?)
 
         delivery
         |> process_delivery(state)
@@ -254,8 +260,31 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
           reason: inspect(reason)
         )
 
-        schedule_delivery_poll(state, Delivery.poll_ms())
+        state
+        |> Map.put(:delivery_group_ready?, false)
+        |> schedule_delivery_poll(Delivery.poll_ms())
     end
+  end
+
+  defp delivery_reclaim_due?(state) do
+    state.reclaim_deliveries? or
+      System.monotonic_time(:millisecond) >= state.next_delivery_reclaim_at_ms
+  end
+
+  defp mark_delivery_poll_succeeded(state, reclaim?) do
+    next_reclaim_at_ms =
+      if reclaim? do
+        System.monotonic_time(:millisecond) + Delivery.lease_ms()
+      else
+        state.next_delivery_reclaim_at_ms
+      end
+
+    %{
+      state
+      | reclaim_deliveries?: false,
+        delivery_group_ready?: true,
+        next_delivery_reclaim_at_ms: next_reclaim_at_ms
+    }
   end
 
   defp process_delivery(%{discard_reason: reason} = delivery, state) do
@@ -376,18 +405,27 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       artifact_refs: state.runtime_context[:artifact_refs] || [],
       template_type: Map.get(state.node, :type, "generic"),
       invocation: state.processed_messages + 1,
-      workflow: workflow
+      workflow: workflow,
+      coordinator_reporter: fn kind, fields, delivery_key ->
+        enqueue_coordinator_report(state, message, kind, fields, delivery_key)
+      end
     }
 
-    if map_size(workflow) > 0 do
-      send(state.coordinator, {:workflow_message_received, state.node.node_id, message})
+    with :ok <- maybe_report_workflow_message(state, message, workflow, "received") do
+      send(
+        state.coordinator,
+        {:agent_event, state.node.node_id, :agent_message_received, Message.summary(message)}
+      )
+
+      handle_agent_message(message, state, context, workflow)
+    else
+      {:error, reason} ->
+        persist_snapshot(state)
+        {:error, {:coordinator_report_failed, reason}, state}
     end
+  end
 
-    send(
-      state.coordinator,
-      {:agent_event, state.node.node_id, :agent_message_received, Message.summary(message)}
-    )
-
+  defp handle_agent_message(message, state, context, workflow) do
     case state.module.handle_message(message, state.local_state, context) do
       {:ok, new_local_state, actions} ->
         next_state =
@@ -403,11 +441,15 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
           :ok ->
             persist_snapshot(next_state)
 
-            if map_size(workflow) > 0 do
-              send(state.coordinator, {:workflow_message_acked, state.node.node_id, message})
-            end
+            case maybe_report_workflow_message(state, message, workflow, "acked") do
+              :ok ->
+                {:ok, next_state}
 
-            {:ok, next_state}
+              {:error, reason} ->
+                failed_state = %{state | inflight_message: message}
+                persist_snapshot(failed_state)
+                {:error, {:coordinator_report_failed, reason}, failed_state}
+            end
 
           {:error, reason} ->
             failed_state = %{state | inflight_message: message}
@@ -544,13 +586,22 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     result
   end
 
-  defp execute_action({:event, event_type, payload}, incoming, state, _action_index) do
-    send(
-      state.coordinator,
-      {:agent_event, state.node.node_id, event_type, enrich_workflow_payload(payload, incoming)}
-    )
+  defp execute_action({:event, event_type, payload}, incoming, state, action_index) do
+    normalized_event_type = to_string(event_type)
+    payload = enrich_workflow_payload(payload, incoming)
 
-    :ok
+    if Delivery.coordinator_event_requires_ack?(normalized_event_type) do
+      enqueue_coordinator_report(
+        state,
+        incoming,
+        "agent_event",
+        %{"event_type" => normalized_event_type, "payload" => payload},
+        action_index
+      )
+    else
+      send(state.coordinator, {:agent_event, state.node.node_id, event_type, payload})
+      :ok
+    end
   end
 
   defp execute_action({:checkpoint, snapshot}, _incoming, state, _action_index) do
@@ -558,24 +609,27 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     :ok
   end
 
-  defp execute_action({:complete_step, result}, incoming, state, _action_index) do
-    send(
-      state.coordinator,
-      {:agent_event, state.node.node_id, :workflow_step_attempt_completed,
-       enrich_workflow_payload(result, incoming)}
+  defp execute_action({:complete_step, result}, incoming, state, action_index) do
+    enqueue_coordinator_report(
+      state,
+      incoming,
+      "agent_event",
+      %{
+        "event_type" => "workflow_step_attempt_completed",
+        "payload" => enrich_workflow_payload(result, incoming)
+      },
+      action_index
     )
-
-    :ok
   end
 
-  defp execute_action({:complete_run, result}, _incoming, state, _action_index) do
-    send(state.coordinator, {:agent_completed_run, state.node.node_id, result})
-
-    if agent_completion_writes_terminal_job?(state) and not coordinator_alive?(state.coordinator) do
-      persist_terminal_completion(state, result)
-    end
-
-    :ok
+  defp execute_action({:complete_run, result}, incoming, state, action_index) do
+    enqueue_coordinator_report(
+      state,
+      incoming,
+      "agent_completed_run",
+      %{"result" => result},
+      action_index
+    )
   end
 
   defp evaluate_route_edge(edge, message_type, route_context, state) do
@@ -752,79 +806,49 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     Map.new(map, fn {key, value} -> {to_string(key), value} end)
   end
 
-  defp persist_terminal_completion(state, result) do
-    updates = %{
-      "status" => "completed",
-      "result" => %{"agent_id" => state.node.node_id, "output" => result}
-    }
+  defp maybe_report_workflow_message(_state, _message, workflow, _status)
+       when map_size(workflow) == 0,
+       do: :ok
 
-    persist_terminal_job(state, updates)
-  end
+  defp maybe_report_workflow_message(state, message, _workflow, status) do
+    workflow_agent_steps = Map.get(state.runtime_context, :workflow_agent_steps, %{})
 
-  defp agent_completion_writes_terminal_job?(state) do
-    Map.get(state.runtime_context, :job_type, "batch") == "batch"
-  end
-
-  defp coordinator_alive?(pid) when is_pid(pid) and node(pid) == node(), do: Process.alive?(pid)
-
-  defp coordinator_alive?(pid) when is_pid(pid) do
-    case :rpc.call(node(pid), Process, :alive?, [pid], 5_000) do
-      true -> true
-      _ -> false
+    if Map.has_key?(workflow_agent_steps, state.node.node_id) do
+      enqueue_coordinator_report(
+        state,
+        message,
+        "workflow_message_#{status}",
+        %{"message" => message},
+        status
+      )
+    else
+      :ok
     end
   end
 
-  defp coordinator_alive?(_pid), do: false
+  defp enqueue_coordinator_report(state, incoming, kind, fields, delivery_key) do
+    report_id = coordinator_report_id(state, incoming, kind, delivery_key)
 
-  defp persist_terminal_job(state, updates) do
-    defaults =
-      %{
-        "graph_id" => state.runtime_context[:graph_id],
-        "job_name" => state.runtime_context[:job_name],
-        "root_agent_ids" => state.runtime_context[:entrypoints] || [],
-        "placement_policy" => state.runtime_context[:placement_policy] || "local",
-        "recovery_policy" => state.runtime_context[:recovery_policy] || "local_restart",
-        "manifest" => state.runtime_context[:manifest],
-        "manifest_ref" => manifest_ref(state),
-        "submitted_at" => state.runtime_context[:submitted_at] || Runtime.timestamp()
-      }
-      |> maybe_put_lease(state)
+    body =
+      fields
+      |> Map.put("kind", kind)
+      |> Map.put("agent_id", state.node.node_id)
 
-    case RedisStore.persist_terminal_job(state.job_id, updates, defaults) do
-      {:ok, _job} ->
+    case Delivery.report(state.job_id, state.node.node_id, report_id, body) do
+      :ok ->
+        GenServer.cast(state.coordinator, :coordinator_delivery_available)
         :ok
 
       {:error, reason} ->
-        Logger.warning(
-          "failed to persist terminal job state for #{state.job_id}/#{state.node.node_id}: #{inspect(reason)}"
-        )
+        {:error, reason}
     end
   end
 
-  defp manifest_ref(state) do
-    state.runtime_context[:manifest_ref] ||
-      %{
-        "graph_id" => state.runtime_context[:graph_id],
-        "manifest_version" => state.runtime_context[:manifest_version],
-        "manifest_path" => state.runtime_context[:manifest_path],
-        "job_path" => state.runtime_context[:bundle_root]
-      }
-  end
-
-  defp maybe_put_lease(map, state) do
-    case state.runtime_context[:lease_epoch] do
-      nil ->
-        map
-
-      epoch ->
-        map
-        |> Map.put("lease_epoch", epoch)
-        |> Map.put("lease_owner", state.runtime_context[:lease_owner])
-        |> Map.put("lease", %{
-          "epoch" => epoch,
-          "owner_id" => state.runtime_context[:lease_owner]
-        })
-    end
+  defp coordinator_report_id(state, incoming, kind, delivery_key) do
+    [state.job_id, state.node.node_id, Message.id(incoming), kind, to_string(delivery_key)]
+    |> Enum.join(":")
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.url_encode64(padding: false)
   end
 
   defp stringify_local_state(map) when is_map(map) do
