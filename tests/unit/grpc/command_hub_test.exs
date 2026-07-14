@@ -241,6 +241,27 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
           version: 1
         })
 
+    def get_runtime_statuses(request, stream),
+      do:
+        reply(:get_runtime_statuses, request, stream, %GetResourceResponse{
+          resource_json: "{\"nodes\":[]}",
+          version: 1
+        })
+
+    def publish_runtime_status(request, stream),
+      do:
+        reply(:publish_runtime_status, request, stream, %SetResourceResponse{
+          resource_json: "{\"status\":\"accepted\"}",
+          version: 1
+        })
+
+    def ack_runtime_status_events(request, stream),
+      do:
+        reply(:ack_runtime_status_events, request, stream, %SetResourceResponse{
+          resource_json: "{\"status\":\"acked\"}",
+          version: 1
+        })
+
     def sync_lite_llm_gateway(request, stream),
       do:
         reply(:sync_lite_llm_gateway, request, stream, %SetResourceResponse{
@@ -476,6 +497,24 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
     assert CommandPolicy.policies(:cluster, :CleanupDockerWorker) == %{
              network_only_denied: false,
              identity_auth_required: false,
+             network_join_auth_required: false
+           }
+
+    assert CommandPolicy.policies(:cluster, :GetRuntimeStatuses) == %{
+             network_only_denied: false,
+             identity_auth_required: true,
+             network_join_auth_required: false
+           }
+
+    assert CommandPolicy.policies(:cluster, :PublishRuntimeStatus) == %{
+             network_only_denied: false,
+             identity_auth_required: true,
+             network_join_auth_required: false
+           }
+
+    assert CommandPolicy.policies(:cluster, :AckRuntimeStatusEvents) == %{
+             network_only_denied: false,
+             identity_auth_required: true,
              network_join_auth_required: false
            }
 
@@ -831,6 +870,30 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
         command: :SetResource,
         server: ClusterServer,
         function: :set_resource,
+        request: %SetResourceRequest{},
+        response: SetResourceResponse
+      },
+      %{
+        service: :cluster,
+        command: :GetRuntimeStatuses,
+        server: ClusterServer,
+        function: :get_runtime_statuses,
+        request: %GetResourceRequest{},
+        response: GetResourceResponse
+      },
+      %{
+        service: :cluster,
+        command: :PublishRuntimeStatus,
+        server: ClusterServer,
+        function: :publish_runtime_status,
+        request: %SetResourceRequest{},
+        response: SetResourceResponse
+      },
+      %{
+        service: :cluster,
+        command: :AckRuntimeStatusEvents,
+        server: ClusterServer,
+        function: :ack_runtime_status_events,
         request: %SetResourceRequest{},
         response: SetResourceResponse
       },

@@ -463,6 +463,24 @@ defmodule Mirrorneuron.Cluster.V1.ClusterService.Service do
     Mirrorneuron.Cluster.V1.SetResourceResponse
   )
 
+  rpc(
+    :GetRuntimeStatuses,
+    Mirrorneuron.Cluster.V1.GetResourceRequest,
+    Mirrorneuron.Cluster.V1.GetResourceResponse
+  )
+
+  rpc(
+    :PublishRuntimeStatus,
+    Mirrorneuron.Cluster.V1.SetResourceRequest,
+    Mirrorneuron.Cluster.V1.SetResourceResponse
+  )
+
+  rpc(
+    :AckRuntimeStatusEvents,
+    Mirrorneuron.Cluster.V1.SetResourceRequest,
+    Mirrorneuron.Cluster.V1.SetResourceResponse
+  )
+
   rpc(:AddNode, Mirrorneuron.Cluster.V1.AddNodeRequest, Mirrorneuron.Cluster.V1.AddNodeResponse)
 
   rpc(

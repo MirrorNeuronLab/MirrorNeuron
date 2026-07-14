@@ -10,6 +10,7 @@ defmodule MirrorNeuron.Cluster.NodeState do
   @active_statuses ["healthy", "joining"]
   @operator_statuses ["maintenance", "draining"]
   @inactive_statuses ["disconnected", "maintenance", "draining", "offline", "quarantined"]
+  @runtime_status_domains ["jobs", "models"]
 
   def mark(node, status, attrs \\ %{}) do
     node_name = to_string(node)
@@ -103,6 +104,48 @@ defmodule MirrorNeuron.Cluster.NodeState do
     end
   end
 
+  def publish_runtime_status(domain, revision, status)
+      when is_binary(domain) and is_binary(revision) and is_map(status) do
+    domain = String.trim(domain)
+    revision = String.trim(revision)
+
+    cond do
+      domain not in @runtime_status_domains ->
+        {:error,
+         "runtime status domain must be one of #{Enum.join(@runtime_status_domains, ", ")}"}
+
+      revision == "" ->
+        {:error, "runtime status revision is required"}
+
+      true ->
+        publish_runtime_status_snapshot(domain, revision, status)
+    end
+  end
+
+  def publish_runtime_status(_domain, _revision, _status) do
+    {:error, "runtime status requires a domain, revision, and object status"}
+  end
+
+  def runtime_status_events(count \\ 100) do
+    store().read_node_runtime_status_events(to_string(NodeAdapter.self()), count)
+  end
+
+  def ack_runtime_status_events(event_ids) when is_list(event_ids) do
+    store().ack_node_runtime_status_events(to_string(NodeAdapter.self()), event_ids)
+  end
+
+  def cluster_runtime_status do
+    store().runtime_status_snapshots(["jobs", "schedules", "deployments"])
+  end
+
+  def cluster_runtime_status_events(count \\ 100) do
+    store().read_node_cluster_runtime_status_events(to_string(NodeAdapter.self()), count)
+  end
+
+  def ack_cluster_runtime_status_events(event_ids) when is_list(event_ids) do
+    store().ack_node_cluster_runtime_status_events(to_string(NodeAdapter.self()), event_ids)
+  end
+
   def advertise_self(status \\ "healthy", attrs \\ %{}) do
     hardware = map_get(attrs, "hardware") || Hardware.info()
 
@@ -162,6 +205,50 @@ defmodule MirrorNeuron.Cluster.NodeState do
 
   defp default_status(node) do
     if node in [NodeAdapter.self() | NodeAdapter.list()], do: "healthy", else: "offline"
+  end
+
+  defp publish_runtime_status_snapshot(domain, revision, status) do
+    node_name = NodeAdapter.self() |> to_string()
+
+    existing =
+      case fetch(node_name) do
+        {:ok, state} when is_map(state) -> state
+        _ -> %{}
+      end
+
+    runtime_status =
+      case Map.get(existing, "runtime_status") do
+        statuses when is_map(statuses) -> statuses
+        _ -> %{}
+      end
+
+    current = Map.get(runtime_status, domain)
+
+    if is_map(current) and Map.get(current, "revision") == revision and
+         Map.get(current, "status") == status do
+      {:ok, runtime_status_ack(node_name, domain, revision, "unchanged", current)}
+    else
+      snapshot = %{
+        "revision" => revision,
+        "reported_at" =>
+          DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
+        "status" => status
+      }
+
+      with {:ok, _state} <- store().persist_node_runtime_status(node_name, domain, snapshot) do
+        {:ok, runtime_status_ack(node_name, domain, revision, "accepted", snapshot)}
+      end
+    end
+  end
+
+  defp runtime_status_ack(node_name, domain, revision, status, snapshot) do
+    %{
+      "node" => node_name,
+      "domain" => domain,
+      "revision" => revision,
+      "status" => status,
+      "snapshot" => snapshot
+    }
   end
 
   defp store do

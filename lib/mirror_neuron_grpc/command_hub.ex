@@ -150,6 +150,9 @@ defmodule MirrorNeuron.Grpc.CommandPolicy do
                             {:cluster, :ListServices},
                             {:cluster, :ResolveService},
                             {:cluster, :CheckServices},
+                            {:cluster, :GetRuntimeStatuses},
+                            {:cluster, :PublishRuntimeStatus},
+                            {:cluster, :AckRuntimeStatusEvents},
                             {:cluster, :SyncLiteLLMGateway},
                             {:cluster, :RemoveLiteLLMGatewayRoute}
                           ])
@@ -246,6 +249,11 @@ defmodule MirrorNeuron.Grpc.CommandHub do
                      {:cluster, :GetSystemSummary} => MirrorNeuron.Grpc.Handlers.Resource,
                      {:cluster, :GetResource} => MirrorNeuron.Grpc.Handlers.Resource,
                      {:cluster, :SetResource} => MirrorNeuron.Grpc.Handlers.Resource,
+                     {:cluster, :GetRuntimeStatuses} => MirrorNeuron.Grpc.Handlers.RuntimeStatus,
+                     {:cluster, :PublishRuntimeStatus} =>
+                       MirrorNeuron.Grpc.Handlers.RuntimeStatus,
+                     {:cluster, :AckRuntimeStatusEvents} =>
+                       MirrorNeuron.Grpc.Handlers.RuntimeStatus,
                      {:cluster, :SyncLiteLLMGateway} => MirrorNeuron.Grpc.Handlers.RuntimeModel,
                      {:cluster, :RemoveLiteLLMGatewayRoute} =>
                        MirrorNeuron.Grpc.Handlers.RuntimeModel,

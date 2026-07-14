@@ -624,6 +624,23 @@ there are no operator/admin token scopes or credentials embedded in requests.
 join token and keep network-facing nodes scoped to cluster/resource inspection
 when `MN_NETWORK_ONLY=true`.
 
+`ClusterService.PublishRuntimeStatus` persists acknowledged per-node runtime
+status snapshots, such as model inventory, in shared Redis.
+`GetRuntimeStatuses` reads those snapshots without probing peer BEAM nodes;
+node-local reconcilers use that view to update only their own runtime services.
+Status changes are also delivered through a per-node Redis Stream consumer
+group and acknowledged only after the local reconciliation succeeds.
+This stream is only a cross-node synchronization path; it does not replace
+local runtime calls or insert a second proxy into model requests.
+
+Job, schedule, and deployment state remains canonical in the existing shared
+Redis stores. Schedule and deployment writes atomically append a separate
+cross-node status event in the same Redis transaction. Each node reads the
+event, verifies a revisioned canonical snapshot, and acknowledges it; pending
+events are retried by Redis Streams. Events originating on the same node are
+acknowledged without being treated as remote work. Job state-bearing delivery
+continues to use its existing acknowledged Redis Streams path.
+
 ---
 
 ## Project structure

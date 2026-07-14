@@ -21,6 +21,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   @default_blob_ref_ttl_seconds 7 * 24 * 60 * 60
   @default_recovery_eval_ttl_seconds 24 * 60 * 60
   @delivery_consumer_group "mirror_neuron_agents"
+  @runtime_status_event_max_count 10_000
   @recovery_eval_statuses ["pending", "running", "blocked", "complete", "failed"]
   @terminal_recovery_eval_statuses ["complete", "failed"]
   @service_index_fields [
@@ -429,16 +430,20 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   def persist_schedule(schedule_id, schedule_map) do
     schedule = prepare_schedule(schedule_id, schedule_map)
+    revision = runtime_status_revision(schedule)
 
     commands =
       [
         ["SET", key("schedule", schedule_id), Jason.encode!(schedule)],
         ["SADD", key(@schedules_set), schedule_id],
         ["ZREM", key(@schedule_due_zset), schedule_id]
-      ] ++ schedule_due_commands(schedule)
+      ] ++
+        schedule_due_commands(schedule) ++
+        [cluster_runtime_status_event_command("schedules", schedule_id, "upsert", revision)]
 
     with {:ok, results} <- transaction(commands),
          :ok <- expect_first_result(results, fn value -> value == "OK" end),
+         :ok <- expect_no_redis_errors(results),
          :ok <- wait_for_replicas() do
       {:ok, schedule}
     else
@@ -450,6 +455,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   def persist_schedule_fenced(schedule_id, schedule_map, lease_name, owner_id, epoch) do
     schedule = prepare_schedule(schedule_id, schedule_map)
     due_score = schedule_due_score(schedule)
+    revision = runtime_status_revision(schedule)
 
     script = """
     if redis.call("get", KEYS[1]) ~= ARGV[1] then
@@ -464,21 +470,31 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       redis.call("zadd", KEYS[4], ARGV[4], ARGV[3])
     end
 
+    redis.call(
+      "xadd", KEYS[5], "MAXLEN", "~", ARGV[7], "*",
+      "node", ARGV[5], "domain", "schedules", "entity_id", ARGV[3],
+      "action", "upsert", "revision", ARGV[6]
+    )
+
     return 1
     """
 
     args = [
       "EVAL",
       script,
-      "4",
+      "5",
       key("lease", lease_name),
       key("schedule", schedule_id),
       key(@schedules_set),
       key(@schedule_due_zset),
+      cluster_runtime_status_stream_key(),
       fenced_lease_value(owner_id, epoch),
       Jason.encode!(schedule),
       schedule_id,
-      due_score
+      due_score,
+      to_string(NodeAdapter.self()),
+      revision,
+      to_string(@runtime_status_event_max_count)
     ]
 
     case command(args) do
@@ -530,11 +546,19 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   def delete_schedule(schedule_id) do
+    revision = runtime_status_revision(%{"deleted" => schedule_id, "at" => timestamp()})
+
     with {:ok, results} <-
            transaction([
              ["DEL", key("schedule", schedule_id)],
              ["SREM", key(@schedules_set), schedule_id],
-             ["ZREM", key(@schedule_due_zset), schedule_id]
+             ["ZREM", key(@schedule_due_zset), schedule_id],
+             cluster_runtime_status_event_command(
+               "schedules",
+               schedule_id,
+               "delete",
+               revision
+             )
            ]),
          :ok <- expect_no_redis_errors(results),
          :ok <- delete_schedule_lease_metadata(schedule_id),
@@ -547,6 +571,8 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   def delete_schedule_fenced(schedule_id, lease_name, owner_id, epoch) do
+    revision = runtime_status_revision(%{"deleted" => schedule_id, "at" => timestamp()})
+
     script = """
     if redis.call("get", KEYS[1]) ~= ARGV[1] then
       return 0
@@ -557,20 +583,29 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     redis.call("zrem", KEYS[4], ARGV[2])
     redis.call("del", KEYS[1])
     redis.call("del", KEYS[5])
+    redis.call(
+      "xadd", KEYS[6], "MAXLEN", "~", ARGV[5], "*",
+      "node", ARGV[3], "domain", "schedules", "entity_id", ARGV[2],
+      "action", "delete", "revision", ARGV[4]
+    )
     return 1
     """
 
     case command([
            "EVAL",
            script,
-           "5",
+           "6",
            key("lease", lease_name),
            key("schedule", schedule_id),
            key(@schedules_set),
            key(@schedule_due_zset),
            key("lease", lease_name, "epoch"),
+           cluster_runtime_status_stream_key(),
            fenced_lease_value(owner_id, epoch),
-           schedule_id
+           schedule_id,
+           to_string(NodeAdapter.self()),
+           revision,
+           to_string(@runtime_status_event_max_count)
          ]) do
       {:ok, 1} ->
         with :ok <- delete_schedule_lease_metadata(schedule_id), do: wait_for_replicas()
@@ -623,6 +658,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       |> Map.put("updated_at", timestamp())
 
     deployment_key = Map.get(deployment, "deployment_key")
+    revision = runtime_status_revision(deployment)
 
     script = """
     local existing = redis.call("get", KEYS[1])
@@ -655,19 +691,29 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       redis.call("sadd", ARGV[4] .. ARGV[3] .. ":deployments", ARGV[1])
     end
 
+    redis.call(
+      "xadd", KEYS[3], "MAXLEN", "~", ARGV[7], "*",
+      "node", ARGV[5], "domain", "deployments", "entity_id", ARGV[1],
+      "action", "upsert", "revision", ARGV[6]
+    )
+
     return 1
     """
 
     args = [
       "EVAL",
       script,
-      "2",
+      "3",
       key("deployment", deployment_id),
       key(@deployments_set),
+      cluster_runtime_status_stream_key(),
       deployment_id,
       Jason.encode!(deployment),
       if(is_binary(deployment_key), do: deployment_key, else: ""),
-      key("deployment", "key", "")
+      key("deployment", "key", ""),
+      to_string(NodeAdapter.self()),
+      revision,
+      to_string(@runtime_status_event_max_count)
     ]
 
     case command(args) do
@@ -1582,6 +1628,155 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     else
       {:error, reason} -> {:error, format_reason(reason)}
       other -> {:error, format_reason(other)}
+    end
+  end
+
+  def persist_node_runtime_status(node_name, domain, snapshot) do
+    script = """
+    local state = {}
+    local encoded = redis.call("get", KEYS[1])
+    if encoded then state = cjson.decode(encoded) end
+    local runtime_status = state["runtime_status"] or {}
+    runtime_status[ARGV[2]] = cjson.decode(ARGV[3])
+    state["runtime_status"] = runtime_status
+    state["node"] = ARGV[1]
+    state["updated_at"] = ARGV[4]
+    local updated = cjson.encode(state)
+    redis.call("set", KEYS[1], updated)
+    redis.call("sadd", KEYS[2], ARGV[1])
+    local event_id = redis.call(
+      "xadd", KEYS[3], "MAXLEN", "~", ARGV[5], "*",
+      "node", ARGV[1], "domain", ARGV[2], "revision", ARGV[6]
+    )
+    return {updated, event_id}
+    """
+
+    args = [
+      "EVAL",
+      script,
+      "3",
+      key("node", node_name, "state"),
+      key("nodes"),
+      runtime_status_stream_key(),
+      node_name,
+      domain,
+      Jason.encode!(stringify_map(snapshot)),
+      timestamp(),
+      to_string(@runtime_status_event_max_count),
+      to_string(Map.get(snapshot, "revision") || Map.get(snapshot, :revision) || "")
+    ]
+
+    with {:ok, [encoded, _event_id]} <- command(args),
+         {:ok, state} when is_map(state) <- Jason.decode(encoded),
+         :ok <- wait_for_replicas() do
+      {:ok, state}
+    else
+      {:ok, _invalid} -> {:error, :invalid_node_state}
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
+    end
+  end
+
+  def read_node_runtime_status_events(node_name, count \\ 100) do
+    stream_key = runtime_status_stream_key()
+    group = runtime_status_consumer_group(node_name)
+    consumer = to_string(node_name)
+
+    with :ok <- ensure_runtime_status_group(stream_key, group),
+         {:ok, pending} <-
+           read_runtime_status_stream(stream_key, group, consumer, "0", count),
+         {:ok, fresh} <-
+           read_runtime_status_stream(
+             stream_key,
+             group,
+             consumer,
+             ">",
+             max(count - length(pending), 0)
+           ) do
+      {:ok, pending ++ fresh}
+    end
+  end
+
+  def ack_node_runtime_status_events(node_name, event_ids) when is_list(event_ids) do
+    ack_runtime_status_stream_events(
+      runtime_status_stream_key(),
+      runtime_status_consumer_group(node_name),
+      event_ids
+    )
+  end
+
+  def runtime_status_snapshots(domains) when is_list(domains) do
+    domains
+    |> Enum.map(&to_string/1)
+    |> Enum.uniq()
+    |> Enum.reduce_while({:ok, %{}}, fn domain, {:ok, snapshots} ->
+      case runtime_status_records(domain) do
+        {:ok, records} ->
+          records = sort_runtime_status_records(domain, records)
+          status = %{"count" => length(records), "records" => records}
+
+          snapshot = %{
+            "revision" => runtime_status_revision(status),
+            "reported_at" => timestamp(),
+            "status" => status
+          }
+
+          {:cont, {:ok, Map.put(snapshots, domain, snapshot)}}
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  def read_node_cluster_runtime_status_events(node_name, count \\ 100) do
+    stream_key = cluster_runtime_status_stream_key()
+    group = cluster_runtime_status_consumer_group(node_name)
+    consumer = to_string(node_name)
+
+    with :ok <- ensure_runtime_status_group(stream_key, group),
+         {:ok, pending} <-
+           read_runtime_status_stream(stream_key, group, consumer, "0", count),
+         {:ok, fresh} <-
+           read_runtime_status_stream(
+             stream_key,
+             group,
+             consumer,
+             ">",
+             max(count - length(pending), 0)
+           ) do
+      {:ok, pending ++ fresh}
+    end
+  end
+
+  def ack_node_cluster_runtime_status_events(node_name, event_ids) when is_list(event_ids) do
+    ack_runtime_status_stream_events(
+      cluster_runtime_status_stream_key(),
+      cluster_runtime_status_consumer_group(node_name),
+      event_ids
+    )
+  end
+
+  defp ack_runtime_status_stream_events(stream_key, group, event_ids) do
+    event_ids =
+      event_ids
+      |> Enum.map(&to_string/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
+
+    if event_ids == [] do
+      {:ok, 0}
+    else
+      case command(["XACK", stream_key, group | event_ids]) do
+        {:ok, count} when is_integer(count) ->
+          with :ok <- wait_for_replicas(), do: {:ok, count}
+
+        {:error, reason} ->
+          {:error, format_reason(reason)}
+
+        other ->
+          {:error, {:unexpected_runtime_status_ack_result, other}}
+      end
     end
   end
 
@@ -3644,6 +3839,133 @@ defmodule MirrorNeuron.Persistence.RedisStore do
           {parsed, ""} -> parsed
           _ -> default
         end
+    end
+  end
+
+  defp runtime_status_stream_key, do: key("runtime", "status", "events")
+
+  defp cluster_runtime_status_stream_key,
+    do: key("runtime", "cluster", "status", "events")
+
+  defp runtime_status_consumer_group(node_name),
+    do: key("runtime", "status", "consumer", node_name)
+
+  defp cluster_runtime_status_consumer_group(node_name),
+    do: key("runtime", "cluster", "status", "consumer", node_name)
+
+  defp cluster_runtime_status_event_command(domain, entity_id, action, revision) do
+    [
+      "XADD",
+      cluster_runtime_status_stream_key(),
+      "MAXLEN",
+      "~",
+      to_string(@runtime_status_event_max_count),
+      "*",
+      "node",
+      to_string(NodeAdapter.self()),
+      "domain",
+      domain,
+      "entity_id",
+      entity_id,
+      "action",
+      action,
+      "revision",
+      revision
+    ]
+  end
+
+  defp runtime_status_records("jobs"), do: list_job_summaries()
+  defp runtime_status_records("schedules"), do: list_schedules()
+  defp runtime_status_records("deployments"), do: list_deployments()
+  defp runtime_status_records(domain), do: {:error, {:unsupported_runtime_status_domain, domain}}
+
+  defp sort_runtime_status_records(domain, records) when is_list(records) do
+    id_field =
+      case domain do
+        "jobs" -> "job_id"
+        "schedules" -> "schedule_id"
+        "deployments" -> "deployment_id"
+      end
+
+    Enum.sort_by(records, &(Map.get(&1, id_field) || ""))
+  end
+
+  defp runtime_status_revision(value) do
+    value
+    |> canonical_runtime_status_value()
+    |> :erlang.term_to_binary()
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+  end
+
+  defp canonical_runtime_status_value(value) when is_map(value) do
+    value
+    |> Enum.map(fn {key, nested} ->
+      {to_string(key), canonical_runtime_status_value(nested)}
+    end)
+    |> Enum.sort_by(&elem(&1, 0))
+  end
+
+  defp canonical_runtime_status_value(value) when is_list(value),
+    do: Enum.map(value, &canonical_runtime_status_value/1)
+
+  defp canonical_runtime_status_value(value), do: value
+
+  defp ensure_runtime_status_group(stream_key, group) do
+    case command(["XGROUP", "CREATE", stream_key, group, "0", "MKSTREAM"]) do
+      {:ok, "OK"} ->
+        :ok
+
+      {:error, %Redix.Error{message: message}} when is_binary(message) ->
+        if String.contains?(message, "BUSYGROUP"), do: :ok, else: {:error, message}
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
+
+      other ->
+        {:error, {:unexpected_runtime_status_group_result, other}}
+    end
+  end
+
+  defp read_runtime_status_stream(_stream_key, _group, _consumer, _id, count)
+       when count <= 0,
+       do: {:ok, []}
+
+  defp read_runtime_status_stream(stream_key, group, consumer, id, count) do
+    case command([
+           "XREADGROUP",
+           "GROUP",
+           group,
+           consumer,
+           "COUNT",
+           to_string(count),
+           "STREAMS",
+           stream_key,
+           id
+         ]) do
+      {:ok, nil} ->
+        {:ok, []}
+
+      {:ok, [[^stream_key, entries]]} ->
+        {:ok,
+         Enum.map(entries, fn [event_id, fields] ->
+           fields = pairs_to_map(fields)
+
+           %{
+             "id" => event_id,
+             "node" => fields["node"],
+             "domain" => fields["domain"],
+             "entity_id" => fields["entity_id"],
+             "action" => fields["action"],
+             "revision" => fields["revision"]
+           }
+         end)}
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
+
+      other ->
+        {:error, {:unexpected_runtime_status_read_result, other}}
     end
   end
 

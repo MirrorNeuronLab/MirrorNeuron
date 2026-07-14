@@ -27,12 +27,24 @@ defmodule MirrorNeuron.Persistence.RedisForwardingTest do
       :persistent_term.put({__MODULE__, :rpc_results}, Map.put(results, key, result))
     end
 
+    def put_rpc_result(node, module, function, result) do
+      key = {node, module, function, :any_args}
+      results = :persistent_term.get({__MODULE__, :rpc_results}, %{})
+      :persistent_term.put({__MODULE__, :rpc_results}, Map.put(results, key, result))
+    end
+
     def rpc_call(node, module, function, args, timeout) do
       send(Process.whereis(@test_pid_name), {:rpc_call, node, module, function, args, timeout})
 
       result =
         :persistent_term.get({__MODULE__, :rpc_results}, %{})
-        |> Map.get({node, module, function, args}, {:badrpc, :unexpected_call})
+        |> then(fn results ->
+          Map.get(
+            results,
+            {node, module, function, args},
+            Map.get(results, {node, module, function, :any_args}, {:badrpc, :unexpected_call})
+          )
+        end)
 
       case result do
         {:raise, message} -> raise message
@@ -118,14 +130,6 @@ defmodule MirrorNeuron.Persistence.RedisForwardingTest do
     primary = :primary@lab
     schedule_id = "schedule-forwarded"
 
-    commands = [
-      ["MULTI"],
-      ["DEL", "#{@namespace}:schedule:#{schedule_id}"],
-      ["SREM", "#{@namespace}:schedules", schedule_id],
-      ["ZREM", "#{@namespace}:schedule:due", schedule_id],
-      ["EXEC"]
-    ]
-
     ClusterNodeAdapterStub.put_list([primary])
 
     ClusterNodeAdapterStub.put_rpc_result(
@@ -140,16 +144,56 @@ defmodule MirrorNeuron.Persistence.RedisForwardingTest do
       primary,
       RedisStore,
       :redis_pipeline_from_peer,
-      [commands],
-      {:ok, ["OK", "QUEUED", "QUEUED", "QUEUED", [1, 1, 1]]}
+      {:ok, ["OK", "QUEUED", "QUEUED", "QUEUED", "QUEUED", [1, 1, 1, "1-0"]]}
     )
 
-    assert :ok = RedisStore.delete_schedule(schedule_id)
+    ClusterNodeAdapterStub.put_rpc_result(
+      primary,
+      RedisStore,
+      :redis_command_from_peer,
+      {:ok, ["0", []]}
+    )
+
+    result = RedisStore.delete_schedule(schedule_id)
 
     assert_receive {:rpc_call, ^primary, MirrorNeuron.Grpc.NetworkOnly, :enabled?, [], 1_000}
 
-    assert_receive {:rpc_call, ^primary, RedisStore, :redis_pipeline_from_peer, [^commands],
-                    5_000}
+    assert_receive {:rpc_call, ^primary, RedisStore, :redis_pipeline_from_peer,
+                    [forwarded_commands], 5_000}
+
+    schedule_key = "#{@namespace}:schedule:#{schedule_id}"
+    schedules_key = "#{@namespace}:schedules"
+    due_key = "#{@namespace}:schedule:due"
+    stream_key = "#{@namespace}:runtime:cluster:status:events"
+
+    assert [
+             ["MULTI"],
+             ["DEL", ^schedule_key],
+             ["SREM", ^schedules_key, ^schedule_id],
+             ["ZREM", ^due_key, ^schedule_id],
+             [
+               "XADD",
+               ^stream_key,
+               "MAXLEN",
+               "~",
+               "10000",
+               "*",
+               "node",
+               "control@lab",
+               "domain",
+               "schedules",
+               "entity_id",
+               ^schedule_id,
+               "action",
+               "delete",
+               "revision",
+               revision
+             ],
+             ["EXEC"]
+           ] = forwarded_commands
+
+    assert is_binary(revision) and byte_size(revision) == 64
+    assert result == :ok
   end
 
   test "falls back to the local Redis error path when no primary peer exists" do

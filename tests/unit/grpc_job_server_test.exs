@@ -60,6 +60,92 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       end
     end
 
+    def persist_node_runtime_status(node_name, domain, snapshot) do
+      existing =
+        case fetch_node_state(node_name) do
+          {:ok, state} -> state
+          _ -> %{}
+        end
+
+      runtime_status = Map.get(existing, "runtime_status", %{})
+
+      persist_node_state(
+        node_name,
+        Map.put(existing, "runtime_status", Map.put(runtime_status, domain, snapshot))
+      )
+    end
+
+    def read_node_runtime_status_events(_node_name, _count) do
+      {:ok,
+       [
+         %{
+           "id" => "1-0",
+           "node" => "mirror_neuron@spark",
+           "domain" => "models",
+           "revision" => "spark-v1"
+         },
+         %{
+           "id" => "1-1",
+           "node" => "mirror_neuron@test",
+           "domain" => "models",
+           "revision" => "local-v1"
+         },
+         %{
+           "id" => "1-2",
+           "node" => "mirror_neuron@spark",
+           "domain" => "jobs",
+           "revision" => "jobs-v1"
+         }
+       ]}
+    end
+
+    def ack_node_runtime_status_events(_node_name, event_ids) do
+      notify({:runtime_status_events_acked, event_ids})
+      {:ok, length(Enum.uniq(event_ids))}
+    end
+
+    def runtime_status_snapshots(_domains) do
+      {:ok,
+       %{
+         "jobs" => %{"revision" => "jobs-v1", "status" => %{"count" => 0, "records" => []}},
+         "schedules" => %{
+           "revision" => "schedules-v1",
+           "status" => %{"count" => 1, "records" => [%{"schedule_id" => "nightly"}]}
+         },
+         "deployments" => %{
+           "revision" => "deployments-v1",
+           "status" => %{"count" => 0, "records" => []}
+         }
+       }}
+    end
+
+    def read_node_cluster_runtime_status_events(_node_name, _count) do
+      {:ok,
+       [
+         %{
+           "id" => "2-0",
+           "node" => "mirror_neuron@spark",
+           "domain" => "schedules",
+           "entity_id" => "nightly",
+           "action" => "upsert",
+           "revision" => "schedules-v1"
+         },
+         %{
+           "id" => "2-1",
+           "node" => "mirror_neuron@test",
+           "domain" => "deployments",
+           "entity_id" => "local-deployment",
+           "action" => "upsert",
+           "revision" => "local-deployment-v1"
+         }
+       ]}
+    end
+
+    def ack_node_cluster_runtime_status_events(_node_name, event_ids) do
+      notify({:cluster_runtime_status_events_acked, event_ids})
+      {:ok, length(Enum.uniq(event_ids))}
+    end
+
     def list_node_states do
       states =
         nodes()
@@ -407,6 +493,102 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       restore_env("MN_NATIVE_SDK_GRPC_TARGET", previous_target)
       restore_env(:native_sdk_grpc_client, previous_client)
     end
+  end
+
+  test "publish runtime status acknowledges the Redis-backed node snapshot" do
+    System.put_env(@identity_token_env, "runtime-status-test")
+
+    response =
+      ClusterServer.publish_runtime_status(
+        %SetResourceRequest{
+          resource_json:
+            Jason.encode!(%{
+              "domain" => "models",
+              "revision" => "models-v1",
+              "status" => %{
+                "models" => [%{"id" => "nemotron3", "installed" => true}]
+              }
+            })
+        },
+        identity_stream("runtime-status-test")
+      )
+
+    assert %{
+             "domain" => "models",
+             "revision" => "models-v1",
+             "status" => "accepted"
+           } = Jason.decode!(response.resource_json)
+
+    self_node = ClusterNodeAdapterStub.self() |> to_string()
+    assert {:ok, state} = NodeState.fetch(self_node)
+
+    assert get_in(state, ["runtime_status", "models", "status", "models"]) == [
+             %{"id" => "nemotron3", "installed" => true}
+           ]
+  end
+
+  test "get runtime statuses reads shared snapshots without probing peer nodes" do
+    System.put_env(@identity_token_env, "runtime-status-test")
+    remote_node = "mirror_neuron@spark"
+
+    assert {:ok, _state} =
+             NodeState.mark(remote_node, "healthy", %{
+               "grpc_host" => "192.168.4.173",
+               "runtime_status" => %{
+                 "models" => %{
+                   "revision" => "spark-v1",
+                   "status" => %{"models" => [%{"id" => "nemotron3"}]}
+                 }
+               }
+             })
+
+    response =
+      ClusterServer.get_runtime_statuses(
+        %Mirrorneuron.Cluster.V1.GetResourceRequest{},
+        identity_stream("runtime-status-test")
+      )
+
+    assert %{
+             "nodes" => nodes,
+             "events" => [event],
+             "cluster_status" => cluster_status,
+             "cluster_events" => [cluster_event],
+             "cluster_event_ack" => %{"acked_count" => 2}
+           } = Jason.decode!(response.resource_json)
+
+    assert event["id"] == "1-0"
+    assert cluster_event["domain"] == "schedules"
+
+    assert get_in(cluster_status, ["schedules", "status", "records"]) == [
+             %{"schedule_id" => "nightly"}
+           ]
+
+    assert_receive {:runtime_status_events_acked, ["1-1", "1-2"]}
+    assert_receive {:cluster_runtime_status_events_acked, ["2-0", "2-1"]}
+    spark = Enum.find(nodes, &(&1["name"] == remote_node))
+    assert spark["grpc_host"] == "192.168.4.173"
+    assert get_in(spark, ["runtime_status", "models", "revision"]) == "spark-v1"
+    refute_receive {:rpc_call, _, _, _, _}
+  end
+
+  test "ack runtime status events acknowledges the local Redis Stream consumer group" do
+    System.put_env(@identity_token_env, "runtime-status-test")
+
+    response =
+      ClusterServer.ack_runtime_status_events(
+        %SetResourceRequest{
+          resource_json: Jason.encode!(%{"event_ids" => ["1-0", "2-0", "1-0"]})
+        },
+        identity_stream("runtime-status-test")
+      )
+
+    assert %{
+             "status" => "acked",
+             "event_ids" => ["1-0", "2-0"],
+             "acked_count" => 2
+           } = Jason.decode!(response.resource_json)
+
+    assert_receive {:runtime_status_events_acked, ["1-0", "2-0"]}
   end
 
   test "prepare runtime model command preserves native model preconditions" do

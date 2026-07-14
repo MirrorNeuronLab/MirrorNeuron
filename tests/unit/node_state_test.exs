@@ -30,6 +30,32 @@ defmodule MirrorNeuron.Cluster.NodeStateTest do
       end
     end
 
+    def persist_node_runtime_status(node_name, domain, snapshot) do
+      existing =
+        case fetch_node_state(node_name) do
+          {:ok, state} -> state
+          _ -> %{}
+        end
+
+      runtime_status = Map.get(existing, "runtime_status", %{})
+
+      persist_node_state(
+        node_name,
+        Map.put(existing, "runtime_status", Map.put(runtime_status, domain, snapshot))
+      )
+    end
+
+    def read_node_runtime_status_events(_node_name, _count), do: {:ok, []}
+
+    def ack_node_runtime_status_events(_node_name, event_ids),
+      do: {:ok, length(Enum.uniq(event_ids))}
+
+    def runtime_status_snapshots(_domains), do: {:ok, %{}}
+    def read_node_cluster_runtime_status_events(_node_name, _count), do: {:ok, []}
+
+    def ack_node_cluster_runtime_status_events(_node_name, event_ids),
+      do: {:ok, length(Enum.uniq(event_ids))}
+
     def list_node_states do
       states =
         nodes()
@@ -77,6 +103,38 @@ defmodule MirrorNeuron.Cluster.NodeStateTest do
     assert get_in(state, ["maintenance", "reason"]) == "patch window"
     assert state["profiles"] == ["mlx-metal"]
     assert NodeState.schedulable?("node-a@lab") == false
+  end
+
+  test "publish_runtime_status stores an idempotent per-node snapshot" do
+    assert {:ok, accepted} =
+             NodeState.publish_runtime_status("models", "inventory-v1", %{
+               "models" => [%{"id" => "nemotron3", "installed" => true}]
+             })
+
+    assert accepted["status"] == "accepted"
+    assert accepted["domain"] == "models"
+    assert accepted["revision"] == "inventory-v1"
+
+    assert {:ok, state} = NodeState.fetch(accepted["node"])
+
+    assert get_in(state, ["runtime_status", "models", "status", "models"]) == [
+             %{"id" => "nemotron3", "installed" => true}
+           ]
+
+    reported_at = get_in(state, ["runtime_status", "models", "reported_at"])
+
+    assert {:ok, unchanged} =
+             NodeState.publish_runtime_status("models", "inventory-v1", %{
+               "models" => [%{"id" => "nemotron3", "installed" => true}]
+             })
+
+    assert unchanged["status"] == "unchanged"
+    assert get_in(unchanged, ["snapshot", "reported_at"]) == reported_at
+  end
+
+  test "publish_runtime_status rejects unsupported domains" do
+    assert {:error, message} = NodeState.publish_runtime_status("commands", "v1", %{})
+    assert message =~ "jobs, models"
   end
 
   test "mark_connected preserves active drain state on heartbeat or reconnect" do

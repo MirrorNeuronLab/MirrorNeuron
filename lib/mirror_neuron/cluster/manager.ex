@@ -25,6 +25,7 @@ defmodule MirrorNeuron.Cluster.Manager do
               status: Map.get(state, "status", "healthy"),
               scheduling_eligible: Map.get(state, "scheduling_eligible", true),
               drain: Map.get(state, "drain"),
+              runtime_status: Map.get(state, "runtime_status", %{}),
               connected_nodes: runtime_connected_nodes(node),
               self?: node == NodeAdapter.self(),
               scheduler_hint:

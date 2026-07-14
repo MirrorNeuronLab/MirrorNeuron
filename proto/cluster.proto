@@ -6,6 +6,9 @@ service ClusterService {
   rpc GetSystemSummary (GetSystemSummaryRequest) returns (GetSystemSummaryResponse);
   rpc GetResource (GetResourceRequest) returns (GetResourceResponse);
   rpc SetResource (SetResourceRequest) returns (SetResourceResponse);
+  rpc GetRuntimeStatuses (GetResourceRequest) returns (GetResourceResponse);
+  rpc PublishRuntimeStatus (SetResourceRequest) returns (SetResourceResponse);
+  rpc AckRuntimeStatusEvents (SetResourceRequest) returns (SetResourceResponse);
   rpc AddNode (AddNodeRequest) returns (AddNodeResponse);
   rpc RemoveNode (RemoveNodeRequest) returns (RemoveNodeResponse);
   rpc ReconcileNode (ReconcileNodeRequest) returns (ReconcileNodeResponse);
