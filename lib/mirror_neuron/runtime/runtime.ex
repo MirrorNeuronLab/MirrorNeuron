@@ -94,23 +94,31 @@ defmodule MirrorNeuron.Runtime do
   def error_message(reason) when is_atom(reason), do: Atom.to_string(reason)
   def error_message(reason), do: inspect(reason)
 
-  def start_job(manifest, opts \\ []) do
-    job_id = Keyword.get(opts, :job_id, generate_job_id(manifest.graph_id))
+  def start_job(manifest, opts \\ [])
+
+  def start_job(%MirrorNeuron.Manifest{} = manifest, opts) do
     bundle = Keyword.get(opts, :job_bundle)
 
-    service_preflight =
-      MirrorNeuron.ServicePreflight.run(bundle || %MirrorNeuron.JobBundle{manifest: manifest})
+    with :ok <- validate_submission_identifiers(manifest, opts),
+         {:ok, job_id} <- submission_job_id(manifest, opts) do
+      service_preflight =
+        MirrorNeuron.ServicePreflight.run(bundle || %MirrorNeuron.JobBundle{manifest: manifest})
 
-    with :ok <- service_preflight,
-         :ok <-
-           ContextEnginePreflight.ensure_available(
-             Map.get(manifest, :required_context_engine, false)
-           ) do
-      start_job_after_preflight(job_id, manifest, opts, bundle)
+      with :ok <- service_preflight,
+           :ok <-
+             ContextEnginePreflight.ensure_available(
+               Map.get(manifest, :required_context_engine, false)
+             ) do
+        start_job_after_preflight(job_id, manifest, opts, bundle)
+      else
+        {:error, reason} -> {:error, reason}
+      end
     else
       {:error, reason} -> {:error, reason}
     end
   end
+
+  def start_job(_manifest, _opts), do: {:error, "manifest must be a normalized workflow object"}
 
   defp start_job_after_preflight(job_id, manifest, opts, bundle) do
     manifest_ref = bundle_ref(manifest, bundle)
@@ -628,6 +636,34 @@ defmodule MirrorNeuron.Runtime do
 
   @doc false
   def generate_job_id(graph_id), do: JobId.generate(graph_id)
+
+  defp validate_submission_identifiers(manifest, opts) do
+    with :ok <- validate_identifier("graph_id", manifest.graph_id),
+         :ok <- validate_identifier("job_name", manifest.job_name),
+         :ok <- validate_optional_identifier("job_id", Keyword.get(opts, :job_id)) do
+      :ok
+    end
+  end
+
+  defp submission_job_id(manifest, opts) do
+    case Keyword.get(opts, :job_id) do
+      nil -> {:ok, generate_job_id(manifest.graph_id)}
+      job_id -> {:ok, job_id}
+    end
+  end
+
+  defp validate_optional_identifier(_field, nil), do: :ok
+  defp validate_optional_identifier(field, value), do: validate_identifier(field, value)
+
+  defp validate_identifier(field, value) when is_binary(value) do
+    if String.trim(value) == "" do
+      {:error, "#{field} must be a non-empty string"}
+    else
+      :ok
+    end
+  end
+
+  defp validate_identifier(field, _value), do: {:error, "#{field} must be a non-empty string"}
 
   @doc false
   def bundle_ref(manifest, bundle) do

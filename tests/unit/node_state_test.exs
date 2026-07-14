@@ -258,6 +258,19 @@ defmodule MirrorNeuron.Cluster.NodeStateTest do
     assert NodeState.schedulable?(self_node)
   end
 
+  test "advertise_self normalizes stale object-shaped profiles" do
+    self_node = Node.self() |> to_string()
+
+    assert {:ok, _state} =
+             NodeState.mark(self_node, "healthy", %{
+               "profiles" => %{},
+               "scheduling_eligible" => true
+             })
+
+    assert {:ok, advertised} = NodeState.advertise_self("healthy", %{"hardware" => %{}})
+    assert advertised["profiles"] == []
+  end
+
   test "direct node monitor marks preserve operator disconnect until explicitly cleared" do
     assert {:ok, _state} =
              NodeState.mark("node-d@lab", "disconnected", %{

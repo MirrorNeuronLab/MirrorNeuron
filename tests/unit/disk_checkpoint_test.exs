@@ -119,6 +119,11 @@ defmodule MirrorNeuron.Persistence.DiskCheckpointTest do
     assert :waiter_acquired = Task.await(waiter, 2_000)
   end
 
+  test "rejects a map job id without attempting to stringify it" do
+    assert {:error, :invalid_job_id} = DiskCheckpoint.with_job_lock(%{}, fn -> :ok end)
+    assert {:error, :invalid_job_id} = DiskCheckpoint.persist_job(%{}, %{"status" => "running"})
+  end
+
   test "checkpoint scans wait for in-progress job transitions", %{job_id: job_id} do
     parent = self()
 

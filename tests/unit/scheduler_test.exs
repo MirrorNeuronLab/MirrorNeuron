@@ -865,6 +865,33 @@ defmodule MirrorNeuron.SchedulerTest do
     assert [%{"agent_id" => "worker", "node" => "gpu@lab"}] = plan["placements"]
   end
 
+  test "ignores object-shaped profile metadata in a node advertisement" do
+    {:ok, manifest} =
+      load_manifest(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "map-profile-metadata",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{"cpu_cores" => 1, "memory_mb" => 512}
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    node =
+      large_node()
+      |> Map.put("profiles", %{})
+      |> put_in(["hardware", "capabilities"], %{})
+
+    assert {:ok, plan} = Scheduler.plan(manifest, nodes: [node], jobs: [])
+    assert [%{"agent_id" => "worker", "node" => "large@lab"}] = plan["placements"]
+  end
+
   test "returns placement failure when no node has enough resources" do
     {:ok, manifest} =
       load_manifest(%{

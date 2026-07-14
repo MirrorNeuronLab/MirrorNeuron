@@ -363,49 +363,62 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
-  def persist_job(job_id, job_map) do
-    encoded = Jason.encode!(job_map)
-    encoded_summary = Jason.encode!(job_summary(job_id, job_map))
+  def persist_job(job_id, job_map) when is_map(job_map) do
+    with :ok <- validate_identifier("job_id", job_id) do
+      encoded = Jason.encode!(job_map)
+      encoded_summary = Jason.encode!(job_summary(job_id, job_map))
 
-    with :ok <- validate_job_lease_epoch(job_id, job_map),
-         :ok <- persist_disk_job(job_id, job_map),
-         {:ok, results} <-
-           transaction([
-             ["SET", key("job", job_id), encoded],
-             ["SET", key("job", job_id, "summary"), encoded_summary],
-             ["SADD", key(@jobs_set), job_id]
-           ]),
-         :ok <- expect_persist_job_results(results),
-         :ok <- apply_job_retention(job_id, job_map),
-         :ok <- wait_for_replicas(),
-         :ok <- cleanup_terminal_disk_checkpoint(job_id, job_map) do
-      {:ok, job_map}
+      with :ok <- validate_job_lease_epoch(job_id, job_map),
+           :ok <- persist_disk_job(job_id, job_map),
+           {:ok, results} <-
+             transaction([
+               ["SET", key("job", job_id), encoded],
+               ["SET", key("job", job_id, "summary"), encoded_summary],
+               ["SADD", key(@jobs_set), job_id]
+             ]),
+           :ok <- expect_persist_job_results(results),
+           :ok <- apply_job_retention(job_id, job_map),
+           :ok <- wait_for_replicas(),
+           :ok <- cleanup_terminal_disk_checkpoint(job_id, job_map) do
+        {:ok, job_map}
+      end
     end
   end
 
-  def persist_terminal_job(job_id, updates, defaults \\ %{}) do
-    existing =
-      case fetch_job(job_id) do
-        {:ok, job} when is_map(job) -> job
-        _ -> %{}
-      end
+  def persist_job(_job_id, _job_map), do: {:error, "job must be an object"}
 
-    job_map =
-      defaults
-      |> Map.merge(existing)
-      |> Map.merge(updates)
-      |> Map.put("job_id", job_id)
-      |> Map.put_new("submitted_at", timestamp())
-      |> Map.put("updated_at", timestamp())
+  def persist_terminal_job(job_id, updates, defaults \\ %{})
 
-    persist_job(job_id, job_map)
+  def persist_terminal_job(job_id, updates, defaults) when is_map(updates) and is_map(defaults) do
+    with :ok <- validate_identifier("job_id", job_id) do
+      existing =
+        case fetch_job(job_id) do
+          {:ok, job} when is_map(job) -> job
+          _ -> %{}
+        end
+
+      job_map =
+        defaults
+        |> Map.merge(existing)
+        |> Map.merge(updates)
+        |> Map.put("job_id", job_id)
+        |> Map.put_new("submitted_at", timestamp())
+        |> Map.put("updated_at", timestamp())
+
+      persist_job(job_id, job_map)
+    end
   end
 
+  def persist_terminal_job(_job_id, _updates, _defaults),
+    do: {:error, "job updates and defaults must be objects"}
+
   def fetch_job(job_id) do
-    case command(["GET", key("job", job_id)]) do
-      {:ok, nil} -> {:error, "job #{job_id} was not found"}
-      {:ok, contents} -> Jason.decode(contents)
-      {:error, reason} -> {:error, format_reason(reason)}
+    with :ok <- validate_identifier("job_id", job_id) do
+      case command(["GET", key("job", job_id)]) do
+        {:ok, nil} -> {:error, "job #{job_id} was not found"}
+        {:ok, contents} -> Jason.decode(contents)
+        {:error, reason} -> {:error, format_reason(reason)}
+      end
     end
   end
 
@@ -4536,6 +4549,16 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   defp namespace,
     do: Config.string("MN_REDIS_NAMESPACE", :redis_namespace)
+
+  defp validate_identifier(field, value) when is_binary(value) do
+    if String.trim(value) == "" do
+      {:error, "#{field} must be a non-empty string"}
+    else
+      :ok
+    end
+  end
+
+  defp validate_identifier(field, _value), do: {:error, "#{field} must be a non-empty string"}
 
   defp format_reason(reason) when is_binary(reason), do: reason
   defp format_reason(reason), do: inspect(reason)

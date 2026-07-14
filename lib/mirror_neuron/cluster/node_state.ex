@@ -155,6 +155,7 @@ defmodule MirrorNeuron.Cluster.NodeState do
       |> Map.merge(Profile.node_advertisement())
       |> Map.merge(MirrorNeuron.Artifacts.Registry.node_advertisement())
       |> Map.merge(attrs)
+      |> Map.update("profiles", [], &(list_value(&1) |> Enum.uniq() |> Enum.sort()))
       |> Map.put_new("operator_disconnect", false)
       |> Map.put_new("scheduling_eligible", true)
       |> merge_capabilities(hardware)
@@ -187,14 +188,17 @@ defmodule MirrorNeuron.Cluster.NodeState do
       |> Map.put(profile_name, Map.merge(%{"status" => to_string(status)}, attrs))
 
     profiles =
+      existing
+      |> Map.get("profiles", [])
+      |> list_value()
+
+    profiles =
       case to_string(status) do
         "healthy" ->
-          [profile_name | Map.get(existing, "profiles", [])] |> Enum.uniq() |> Enum.sort()
+          [profile_name | profiles] |> Enum.uniq() |> Enum.sort()
 
         _ ->
-          existing
-          |> Map.get("profiles", [])
-          |> Enum.reject(&(&1 == profile_name))
+          Enum.reject(profiles, &(&1 == profile_name))
       end
 
     mark(node_name, Map.get(existing, "status", default_status(node)), %{
@@ -305,10 +309,24 @@ defmodule MirrorNeuron.Cluster.NodeState do
     Map.put(attrs, "capabilities", capabilities)
   end
 
-  defp list_value(value) when is_list(value), do: Enum.map(value, &to_string/1)
+  defp list_value(value) when is_list(value) do
+    Enum.flat_map(value, &list_item_value/1)
+  end
+
   defp list_value(value) when is_binary(value), do: String.split(value, ",", trim: true)
   defp list_value(nil), do: []
-  defp list_value(value), do: [to_string(value)]
+
+  defp list_value(value) when is_atom(value) or is_number(value) or is_boolean(value),
+    do: [to_string(value)]
+
+  defp list_value(_value), do: []
+
+  defp list_item_value(value) when is_binary(value), do: [value]
+
+  defp list_item_value(value) when is_atom(value) or is_number(value) or is_boolean(value),
+    do: [to_string(value)]
+
+  defp list_item_value(_value), do: []
 
   defp normalize_capability(value) do
     value

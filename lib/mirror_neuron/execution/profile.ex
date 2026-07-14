@@ -321,9 +321,23 @@ defmodule MirrorNeuron.Execution.Profile do
   defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
   defp stringify_value(value), do: value
 
-  defp list_value(value) when is_list(value), do: Enum.map(value, &to_string/1)
+  defp list_value(value) when is_list(value) do
+    Enum.flat_map(value, &list_item_value/1)
+  end
+
   defp list_value(value) when is_binary(value), do: split_csv(value)
+
+  defp list_value(value) when is_atom(value) or is_number(value) or is_boolean(value),
+    do: [to_string(value)]
+
   defp list_value(_value), do: []
+
+  defp list_item_value(value) when is_binary(value), do: [value]
+
+  defp list_item_value(value) when is_atom(value) or is_number(value) or is_boolean(value),
+    do: [to_string(value)]
+
+  defp list_item_value(_value), do: []
 
   defp split_csv(value) when is_binary(value) do
     value

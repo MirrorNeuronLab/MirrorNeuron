@@ -1787,7 +1787,13 @@ defmodule MirrorNeuron.Scheduler do
 
   defp map_get(map, key), do: MirrorNeuron.SafeAccess.map_get(map, key)
 
-  defp list_value(value) when is_list(value), do: Enum.map(value, &to_string/1)
+  # Node advertisements are supplied by SDKs as untrusted JSON-like data.  In
+  # particular, older advertisements used `%{}` for an empty profile set.
+  # Capability and profile fields are list-shaped, so objects are not valid
+  # entries and must not be coerced through `String.Chars`.
+  defp list_value(value) when is_list(value) do
+    Enum.flat_map(value, &list_item_value/1)
+  end
 
   defp list_value(value) when is_binary(value) do
     value
@@ -1797,7 +1803,18 @@ defmodule MirrorNeuron.Scheduler do
   end
 
   defp list_value(value) when is_nil(value), do: []
-  defp list_value(value), do: [to_string(value)]
+
+  defp list_value(value) when is_atom(value) or is_number(value) or is_boolean(value),
+    do: [to_string(value)]
+
+  defp list_value(_value), do: []
+
+  defp list_item_value(value) when is_binary(value), do: [value]
+
+  defp list_item_value(value) when is_atom(value) or is_number(value) or is_boolean(value),
+    do: [to_string(value)]
+
+  defp list_item_value(_value), do: []
 
   defp truthy?(value) when value in [true, "true", "TRUE", "True", "1", 1, "yes", "on"],
     do: true

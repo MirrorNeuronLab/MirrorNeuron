@@ -10,9 +10,15 @@ defmodule MirrorNeuron.Persistence.DiskCheckpoint do
   @job_file "job.json"
   @agents_dir "agents"
 
-  def with_job_lock(job_id, operation) when is_function(operation, 0) do
-    with_encoded_job_lock(encoded_segment(job_id), operation)
+  def with_job_lock(job_id, operation) when is_binary(job_id) and is_function(operation, 0) do
+    if String.trim(job_id) == "" do
+      {:error, :invalid_job_id}
+    else
+      with_encoded_job_lock(encoded_segment(job_id), operation)
+    end
   end
+
+  def with_job_lock(_job_id, _operation), do: {:error, :invalid_job_id}
 
   defp with_encoded_job_lock(encoded_job_id, operation) do
     resource = {__MODULE__, root(), encoded_job_id}
@@ -219,15 +225,10 @@ defmodule MirrorNeuron.Persistence.DiskCheckpoint do
     end
   end
 
-  defp job_dir(job_id) do
-    job_id = to_string(job_id)
+  defp job_dir(job_id) when is_binary(job_id) and job_id != "",
+    do: {:ok, Path.join(root(), encoded_segment(job_id))}
 
-    if String.trim(job_id) == "" do
-      {:error, :invalid_job_id}
-    else
-      {:ok, Path.join(root(), encoded_segment(job_id))}
-    end
-  end
+  defp job_dir(_job_id), do: {:error, :invalid_job_id}
 
   defp encoded_segment(value) do
     value

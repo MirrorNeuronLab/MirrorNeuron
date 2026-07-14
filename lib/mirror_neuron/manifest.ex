@@ -184,7 +184,7 @@ defmodule MirrorNeuron.Manifest do
       metadata: Map.get(raw, "metadata", %{}),
       nodes: Enum.map(raw_nodes, &normalize_node/1),
       edges: Enum.map(raw_edges, &normalize_edge/1),
-      policies: Map.get(raw, "policies", %{}),
+      policies: normalize_policies(Map.get(raw, "policies", %{})),
       entrypoints: normalize_entrypoints(Map.get(raw, "entrypoints"), raw_nodes),
       initial_inputs: normalize_initial_inputs(Map.get(raw, "initial_inputs", %{})),
       reload: normalize_reload(Map.get(raw, "reload", %{})),
@@ -441,7 +441,14 @@ defmodule MirrorNeuron.Manifest do
   defp validate_required(errors, manifest) do
     errors
     |> maybe_add_error(is_nil(manifest.manifest_version), "manifest_version is required")
-    |> maybe_add_error(is_nil(manifest.graph_id), "workflow id (graph_id) is required")
+    |> maybe_add_error(
+      not nonempty_string?(manifest.graph_id),
+      "graph_id must be a non-empty string"
+    )
+    |> maybe_add_error(
+      not nonempty_string?(manifest.job_name),
+      "job_name must be a non-empty string"
+    )
     |> maybe_add_error(manifest.nodes == [], "nodes must not be empty")
   end
 
@@ -713,11 +720,13 @@ defmodule MirrorNeuron.Manifest do
 
   defp validate_policies(errors, manifest) do
     supported_recovery_modes = Application.get_env(:mirror_neuron, :supported_recovery_modes, [])
-    recovery_mode = Map.get(manifest.policies, "recovery_mode", "auto")
+    policies = manifest.policies
+    recovery_mode = if is_map(policies), do: Map.get(policies, "recovery_mode", "auto")
 
     errors
+    |> maybe_add_error(not is_map(policies), "policies must be an object")
     |> maybe_add_error(
-      recovery_mode not in supported_recovery_modes,
+      is_map(policies) and recovery_mode not in supported_recovery_modes,
       "unsupported recovery_mode #{inspect(recovery_mode)}"
     )
     |> validate_scheduler_policy(manifest)
@@ -727,14 +736,15 @@ defmodule MirrorNeuron.Manifest do
     |> add_errors(LifecyclePolicy.validate_manifest(manifest))
   end
 
-  defp validate_scheduler_policy(errors, manifest) do
+  defp validate_scheduler_policy(errors, %{policies: policies})
+       when is_map(policies) do
     job_type =
-      Map.get(manifest.policies, "job_type") ||
-        get_in(manifest.policies, ["scheduler", "job_type"])
+      Map.get(policies, "job_type") ||
+        get_in(policies, ["scheduler", "job_type"])
 
     strategy =
-      Map.get(manifest.policies, "scheduler_strategy") ||
-        get_in(manifest.policies, ["scheduler", "strategy"])
+      Map.get(policies, "scheduler_strategy") ||
+        get_in(policies, ["scheduler", "strategy"])
 
     errors
     |> maybe_add_error(
@@ -748,6 +758,8 @@ defmodule MirrorNeuron.Manifest do
       "unsupported scheduler strategy #{inspect(strategy)}"
     )
   end
+
+  defp validate_scheduler_policy(errors, _manifest), do: errors
 
   defp validate_node_scheduling(errors, manifest) do
     scheduling_errors =
@@ -987,6 +999,9 @@ defmodule MirrorNeuron.Manifest do
   defp normalize_optional_map(value) when is_map(value), do: json_safe(value)
   defp normalize_optional_map(_value), do: nil
 
+  defp normalize_policies(nil), do: %{}
+  defp normalize_policies(value), do: value
+
   defp normalize_optional_list(value) when is_list(value), do: Enum.map(value, &json_safe/1)
   defp normalize_optional_list(_value), do: []
 
@@ -1023,6 +1038,9 @@ defmodule MirrorNeuron.Manifest do
 
   defp maybe_add_error(errors, true, message), do: [message | errors]
   defp maybe_add_error(errors, false, _message), do: errors
+
+  defp nonempty_string?(value) when is_binary(value), do: String.trim(value) != ""
+  defp nonempty_string?(_value), do: false
 
   defp contains_completion_key?(map, target_key) when is_map(map) do
     Enum.any?(map, fn

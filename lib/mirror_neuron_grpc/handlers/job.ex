@@ -42,7 +42,9 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
             raise GRPC.RPCError, status: GRPC.Status.invalid_argument(), message: reason
 
           {:error, reason} ->
-            raise GRPC.RPCError, status: :invalid_argument, message: inspect(reason)
+            raise GRPC.RPCError,
+              status: :invalid_argument,
+              message: MirrorNeuron.Runtime.error_message(reason)
         end
       end)
 
@@ -51,7 +53,9 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
         response
 
       {:error, reason} ->
-        raise GRPC.RPCError, status: :invalid_argument, message: inspect(reason)
+        raise GRPC.RPCError,
+          status: :invalid_argument,
+          message: MirrorNeuron.Runtime.error_message(reason)
     end
   end
 

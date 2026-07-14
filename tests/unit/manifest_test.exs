@@ -538,6 +538,45 @@ defmodule MirrorNeuron.ManifestTest do
     assert normalized.required_context_engine == false
   end
 
+  test "normalizes null policies to an empty policy object" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "null-policies",
+      "entrypoints" => ["sink"],
+      "nodes" => [%{"node_id" => "sink", "agent_type" => "aggregator"}],
+      "edges" => [],
+      "policies" => nil
+    }
+
+    assert {:ok, normalized} = Manifest.load(flow_manifest(manifest))
+    assert normalized.policies == %{}
+  end
+
+  test "rejects map-valued graph and job identifiers" do
+    base = %{
+      "manifest_version" => "1.0",
+      "entrypoints" => ["sink"],
+      "nodes" => [%{"node_id" => "sink", "agent_type" => "aggregator"}],
+      "edges" => [],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:error, graph_errors} = Manifest.load(flow_manifest(Map.put(base, "graph_id", %{})))
+    assert "graph_id must be a non-empty string" in graph_errors
+    assert "job_name must be a non-empty string" in graph_errors
+
+    assert {:error, job_name_errors} =
+             Manifest.load(
+               flow_manifest(
+                 base
+                 |> Map.put("graph_id", "valid-graph")
+                 |> Map.put("job_name", %{})
+               )
+             )
+
+    assert "job_name must be a non-empty string" in job_name_errors
+  end
+
   test "rejects non-boolean requiredContextEngine" do
     manifest = %{
       "manifest_version" => "1.0",
