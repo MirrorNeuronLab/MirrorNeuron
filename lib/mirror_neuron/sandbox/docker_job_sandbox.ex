@@ -25,26 +25,44 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
   end
 
   def ensure(job_id, image, config, opts \\ []) do
-    if native_sandbox_prep_enabled?() do
-      with {:ok, pid} <- ensure_process(job_id, image, config, opts) do
-        ensure_with_owner(pid, {:ensure, image, config, opts})
-      end
-    else
-      prepared_sandbox(job_id, image, config)
+    cond do
+      prepared_container?(config) ->
+        prepared_sandbox(job_id, image, config)
+
+      native_sandbox_prep_enabled?() ->
+        with {:ok, pid} <- ensure_process(job_id, image, config, opts) do
+          ensure_with_owner(pid, {:ensure, image, config, opts})
+        end
+
+      true ->
+        prepared_sandbox(job_id, image, config)
     end
   end
 
   def cleanup_job_local(job_id, config \\ %{}) do
-    if native_sandbox_prep_enabled?() do
-      case if(Process.whereis(@registry), do: Registry.lookup(@registry, key(job_id)), else: []) do
-        [{pid, _meta}] ->
-          cleanup_process(pid)
+    cond do
+      prepared_container?(config) ->
+        :ok
 
-        [] ->
-          cleanup_container_by_job_id(job_id, config)
-      end
-    else
-      :ok
+      native_sandbox_prep_enabled?() ->
+        case if(Process.whereis(@registry), do: Registry.lookup(@registry, key(job_id)), else: []) do
+          [{pid, _meta}] ->
+            cleanup_process(pid)
+
+          [] ->
+            cleanup_container_by_job_id(job_id, config)
+        end
+
+      true ->
+        :ok
+    end
+  end
+
+  @doc false
+  def prepared_container?(config) do
+    case prepared_container_name(config) do
+      name when is_binary(name) -> String.trim(name) != ""
+      _ -> false
     end
   end
 

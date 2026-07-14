@@ -41,6 +41,21 @@ defmodule MirrorNeuron.NativeResourceBoundaryTest do
     assert sandbox["image"] == "worker:latest"
   end
 
+  test "SDK-prepared DockerWorker remains authoritative when legacy native prep is enabled" do
+    System.put_env("MN_CORE_ALLOW_NATIVE_SANDBOX_PREP", "1")
+    job_id = "prepared-boundary-#{System.unique_integer([:positive])}"
+
+    config = %{
+      "docker_worker_container_name" => "mn-compose-worker",
+      "docker_bin" => "/does/not/exist"
+    }
+
+    assert {:ok, sandbox} = DockerJobSandbox.ensure(job_id, "worker:latest", config)
+    assert sandbox["container_name"] == "mn-compose-worker"
+    assert Registry.lookup(MirrorNeuron.Sandbox.Registry, {:docker_worker, job_id}) == []
+    assert :ok = DockerJobSandbox.cleanup_job_local(job_id, config)
+  end
+
   test "DockerWorker runner refuses unprepared ad hoc containers by default" do
     assert {:error, reason} =
              DockerWorker.run(

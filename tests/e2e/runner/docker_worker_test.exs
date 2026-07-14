@@ -139,6 +139,51 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     refute "--publish" in run_call
   end
 
+  test "executes in the Compose-prepared worker instead of creating a second container", %{
+    tmp_dir: tmp_dir
+  } do
+    fake_docker = Path.join(tmp_dir, "fake-docker-prepared")
+    args_log = Path.join(tmp_dir, "prepared-args.log")
+
+    File.write!(fake_docker, """
+    #!/usr/bin/env bash
+    printf '%s\\n' "$@" >> #{args_log}
+    printf -- '---\\n' >> #{args_log}
+    if [ "$1" = "exec" ] && [ "$2" = "-w" ]; then
+      echo "prepared worker output"
+      exit 0
+    fi
+    if [ "$1" = "cp" ] || [ "$1" = "exec" ]; then
+      exit 0
+    fi
+    exit 9
+    """)
+
+    File.chmod!(fake_docker, 0o755)
+
+    assert {:ok, result} =
+             DockerWorker.run(
+               %{"hello" => "compose"},
+               %{
+                 "image" => "example/worker:latest",
+                 "command" => ["sh", "-lc", "echo worker output"],
+                 "docker_bin" => fake_docker,
+                 "docker_worker_container_name" => "mn-compose-worker",
+                 "reuse_shared_container" => false
+               },
+               job_id: "prepared-job",
+               agent_id: "worker"
+             )
+
+    assert result["container_name"] == "mn-compose-worker"
+    assert result["stdout"] =~ "prepared worker output"
+
+    calls = docker_calls(args_log)
+    refute Enum.any?(calls, &(List.first(&1) == "run"))
+    assert Enum.any?(calls, &(Enum.take(&1, 2) == ["exec", "-w"]))
+    assert Enum.any?(calls, &(List.first(&1) == "cp"))
+  end
+
   test "uses prepared model endpoint instead of docker model cli", %{tmp_dir: tmp_dir} do
     fake_docker = Path.join(tmp_dir, "fake-docker-model-endpoint")
     args_log = Path.join(tmp_dir, "model-endpoint-args.log")
