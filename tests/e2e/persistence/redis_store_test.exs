@@ -814,7 +814,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
              ])
   end
 
-  test "job deletion preserves its retry ledger when filesystem cleanup fails" do
+  test "job deletion clears the record when shared storage belongs to another runtime" do
     job_id = "failed-resource-cleanup-#{System.unique_integer([:positive])}"
     old_shared_root = System.get_env("MN_RUNTIME_SHARED_STORAGE_ROOT")
     old_artifact_root = System.get_env("MN_JOB_ARTIFACT_ROOT")
@@ -847,7 +847,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     end)
 
     assert {:ok, artifact_path} = JobStore.ensure_job_dir(job_id)
-    File.write!(Path.join(artifact_path, "result.txt"), "retain until cleanup succeeds")
+    File.write!(Path.join(artifact_path, "result.txt"), "remove with terminal job record")
 
     assert {:ok, _job} =
              RedisStore.persist_terminal_job(job_id, %{
@@ -859,16 +859,10 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
                }
              })
 
-    assert {:error, reason} = RedisStore.delete_job(job_id)
-    assert reason =~ "outside shared storage root"
-    assert {:ok, %{"status" => "completed"}} = RedisStore.fetch_job(job_id)
-    assert File.exists?(Path.join(artifact_path, "result.txt"))
-
-    assert {:ok, job} = RedisStore.fetch_job(job_id)
-    assert {:ok, _job} = RedisStore.persist_job(job_id, Map.put(job, "manifest", %{}))
     assert :ok = RedisStore.delete_job(job_id)
     assert {:error, _reason} = RedisStore.fetch_job(job_id)
     refute File.exists?(artifact_path)
+    assert File.dir?(outside_submission)
   end
 
   test "retention retries sandbox cleanup on disconnected persisted placement nodes" do

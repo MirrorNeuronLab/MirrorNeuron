@@ -612,6 +612,11 @@ defmodule MirrorNeuron.SchedulerTest do
     assert {:blocked, %{"status" => "runnable_later"}} =
              Scheduler.availability(manifest, nodes: [small_node()], jobs: busy_jobs)
 
+    paused_jobs = Enum.map(busy_jobs, &Map.put(&1, "status", "paused"))
+
+    assert {:blocked, %{"status" => "runnable_later"}} =
+             Scheduler.availability(manifest, nodes: [small_node()], jobs: paused_jobs)
+
     impossible = %{manifest | nodes: [%{hd(manifest.nodes) | resources: %{"gpu_count" => 1}}]}
 
     assert {:error, %{"status" => "not_runnable"}} =

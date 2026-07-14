@@ -599,12 +599,35 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   defp do_delete_job(job_id) do
     with {:ok, job_map} <- job_for_cleanup(job_id),
          :ok <- delete_service_instances(job_id: job_id),
-         :ok <- SharedStorage.cleanup_job(job_id, job_map),
+         :ok <- cleanup_shared_storage(job_id, job_map),
          :ok <- JobStore.cleanup_job(job_id),
          :ok <- DiskCheckpoint.delete_job(job_id),
          {:ok, agent_ids} <- command(["SMEMBERS", key("job", job_id, "agents")]),
          :ok <- delete_job_redis_keys(job_id, agent_ids) do
       :ok
+    end
+  end
+
+  # A job record can outlive the runtime that submitted it. In that case its
+  # shared-storage path may be valid on the former host but intentionally
+  # unsafe from this runtime. Keep the path safety check, but do not let an
+  # inaccessible artifact directory make a terminal job impossible to clear.
+  defp cleanup_shared_storage(job_id, job_map) do
+    case SharedStorage.cleanup_job(job_id, job_map) do
+      :ok ->
+        :ok
+
+      {:error, reason}
+      when reason == "mn_storage.submission_path is outside shared storage root" ->
+        Logger.warning(
+          "could not clean shared submission storage for #{job_id}; " <>
+            "leaving it untouched and deleting the terminal job record: #{inspect(reason)}"
+        )
+
+        :ok
+
+      error ->
+        error
     end
   end
 

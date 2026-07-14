@@ -152,7 +152,7 @@ defmodule MirrorNeuron.Runtime do
         )
 
       {:error, reason} ->
-        maybe_pause_placement_failure(job_id, manifest, manifest_ref, reliability, reason)
+        maybe_pause_placement_failure(job_id, manifest, manifest_ref, reliability, opts, reason)
     end
   end
 
@@ -929,36 +929,48 @@ defmodule MirrorNeuron.Runtime do
     end
   end
 
-  defp maybe_pause_placement_failure(job_id, manifest, manifest_ref, reliability, reason) do
-    if profile_placement_failure?(reason) do
-      review_reason = profile_placement_review_reason(manifest, reason)
-      scheduler_plan = placement_failure_plan(manifest, reason)
+  defp maybe_pause_placement_failure(job_id, manifest, manifest_ref, reliability, opts, reason) do
+    cond do
+      profile_placement_failure?(reason) ->
+        review_reason = profile_placement_review_reason(manifest, reason)
+        scheduler_plan = placement_failure_plan(manifest, reason)
 
-      with :ok <-
-             persist_initial_job(job_id, manifest, manifest_ref, reliability, scheduler_plan),
-           {:ok, _job} <-
-             RedisStore.persist_terminal_job(
-               job_id,
-               placement_pause_updates(review_reason),
-               placement_pause_defaults(manifest, manifest_ref, reliability, scheduler_plan)
-             ) do
-        publish_reliability_events(job_id, reliability)
+        with :ok <-
+               persist_initial_job(job_id, manifest, manifest_ref, reliability, scheduler_plan),
+             {:ok, _job} <-
+               RedisStore.persist_terminal_job(
+                 job_id,
+                 placement_pause_updates(review_reason),
+                 placement_pause_defaults(manifest, manifest_ref, reliability, scheduler_plan)
+               ) do
+          publish_reliability_events(job_id, reliability)
 
-        EventBus.publish(job_id, %{
-          type: :job_paused_for_manual_restart,
-          reason: review_reason,
-          execution_profile: placement_failure_profile(manifest),
-          timestamp: timestamp()
-        })
+          EventBus.publish(job_id, %{
+            type: :job_paused_for_manual_restart,
+            reason: review_reason,
+            execution_profile: placement_failure_profile(manifest),
+            timestamp: timestamp()
+          })
 
-        {:ok, job_id, nil}
-      else
-        {:error, persist_reason} -> {:error, persist_reason}
-        other -> {:error, "failed to persist placement pause: #{inspect(other)}"}
-      end
-    else
-      {:error, reason}
+          {:ok, job_id, nil}
+        else
+          {:error, persist_reason} -> {:error, persist_reason}
+          other -> {:error, "failed to persist placement pause: #{inspect(other)}"}
+        end
+
+      resources_temporarily_unavailable?(manifest, opts) ->
+        {:error,
+         "resource_overloaded: no runtime resources are available to run this workflow now; " <>
+           "wait for active jobs to finish or cancel a paused job that holds the required resources. " <>
+           reason}
+
+      true ->
+        {:error, reason}
     end
+  end
+
+  defp resources_temporarily_unavailable?(manifest, opts) do
+    match?({:blocked, _}, Scheduler.availability(manifest, opts))
   end
 
   defp profile_placement_failure?(reason) do
