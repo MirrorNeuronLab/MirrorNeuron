@@ -338,6 +338,28 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     refute Map.has_key?(state["steps"], "removed_step")
   end
 
+  test "uses the declared step timeout as the default workflow beacon deadline" do
+    manifest = %Manifest{
+      flow: %{
+        "steps" => [
+          %{
+            "id" => "slow_llm_step",
+            "run" => "slow_llm_step",
+            "control" => %{"timeout_seconds" => 300}
+          }
+        ],
+        "graph" => %{"edges" => []}
+      }
+    }
+
+    {state, []} =
+      WorkflowLedger.new(manifest, [%{node_id: "slow_llm_step", config: %{}}])
+      |> WorkflowLedger.job_running()
+
+    assert get_in(state, ["steps", "slow_llm_step", "timeout_seconds"]) == 300
+    assert get_in(state, ["steps", "slow_llm_step", "beacon_timeout_ms"]) == 300_000
+  end
+
   test "runs a linear pipeline in dependency order" do
     state = dag_state(["a", "b", "c"], [edge("a", "b"), edge("b", "c")])
     {state, [_]} = receive_message(state, "b")

@@ -2,7 +2,7 @@ name: mirror-neuron
 
 services:
   redis:
-    image: redis:7
+    image: redis:8
     container_name: mirror-neuron-redis
     restart: unless-stopped
     expose:

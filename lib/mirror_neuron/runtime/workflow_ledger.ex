@@ -1440,6 +1440,22 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
       control = if is_map(Map.get(raw, "control")), do: Map.get(raw, "control"), else: %{}
       retry = if is_map(Map.get(control, "retry")), do: Map.get(control, "retry"), else: %{}
 
+      timeout_seconds =
+        positive_int(
+          Map.get(control, "timeout_seconds") || Map.get(node_config, "timeout_seconds"),
+          @default_timeout_seconds
+        )
+
+      # DockerWorker can report a terminal result but does not stream workflow
+      # beacons while an LLM request is in flight.  Do not fail those valid
+      # long-running steps at the generic 45-second beacon interval; their
+      # declared workflow timeout remains the authoritative upper bound.
+      beacon_timeout_ms =
+        positive_int(
+          Map.get(control, "beacon_timeout_ms") || Map.get(node_config, "beacon_timeout_ms"),
+          timeout_seconds * 1_000
+        )
+
       trigger_rule =
         case WorkflowTrigger.from_step(raw, graph) do
           {:ok, rule} -> rule
@@ -1466,13 +1482,8 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
             Map.get(retry, "backoff_seconds")
           ),
         "retry_backoff_multiplier" => positive_number(Map.get(retry, "backoff_multiplier"), 2),
-        "timeout_seconds" =>
-          positive_int(
-            Map.get(control, "timeout_seconds") || Map.get(node_config, "timeout_seconds"),
-            @default_timeout_seconds
-          ),
-        "beacon_timeout_ms" =>
-          positive_int(Map.get(node_config, "beacon_timeout_ms"), @default_beacon_timeout_ms)
+        "timeout_seconds" => timeout_seconds,
+        "beacon_timeout_ms" => beacon_timeout_ms
       }
     end
   end
