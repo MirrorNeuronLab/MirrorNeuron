@@ -137,6 +137,49 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert ttl in 1..Delivery.ack_receipt_ttl_seconds()
   end
 
+  test "unacknowledged deliveries are reclaimed after their lease expires" do
+    job_id = "delivery-reclaim-#{System.unique_integer([:positive])}"
+    agent_id = "worker"
+    message_id = "message-#{System.unique_integer([:positive])}"
+
+    message =
+      Message.new(job_id, "source", agent_id, "work", %{"value" => 1}, message_id: message_id)
+
+    assert {:ok, %{status: :queued}} = Delivery.enqueue(job_id, agent_id, message)
+
+    assert {:ok, [first_delivery]} =
+             RedisStore.read_deliveries(job_id, agent_id, "consumer-one",
+               lease_ms: 30_000,
+               max_attempts: Delivery.max_attempts(),
+               now_ms: System.system_time(:millisecond),
+               count: 1,
+               stream_ttl_seconds: Delivery.stream_ttl_seconds()
+             )
+
+    assert first_delivery.message_id == message_id
+    assert first_delivery.attempt == 1
+    Process.sleep(5)
+
+    assert {:ok, [second_delivery]} =
+             RedisStore.read_deliveries(job_id, agent_id, "consumer-two",
+               lease_ms: 1,
+               max_attempts: Delivery.max_attempts(),
+               now_ms: System.system_time(:millisecond),
+               count: 1,
+               stream_ttl_seconds: Delivery.stream_ttl_seconds()
+             )
+
+    assert second_delivery.message_id == message_id
+    assert second_delivery.stream_id == first_delivery.stream_id
+    assert second_delivery.attempt == 2
+
+    assert :ok = Delivery.ack(job_id, agent_id, "consumer-two", second_delivery)
+    assert {:ok, receipt} = RedisStore.fetch_delivery_receipt(job_id, agent_id, message_id)
+    assert receipt["status"] == "acked"
+    assert receipt["attempts"] == 2
+    assert {:ok, 0} = RedisStore.delivery_pending_count(job_id, agent_id)
+  end
+
   test "queued delivery records and indexes always have ttl", %{namespace: namespace} do
     job_id = "delivery-ttl-#{System.unique_integer([:positive])}"
     agent_id = "worker"
