@@ -5,6 +5,9 @@ defmodule MirrorNeuron.AgentRegistry do
     "router" => Builtins.Router,
     "executor" => Builtins.Executor,
     "aggregator" => Builtins.Aggregator,
+    "step_join" => Builtins.StepJoin,
+    "step_sink" => Builtins.StepSink,
+    "step_source" => Builtins.StepSource,
     "sensor" => Builtins.Sensor,
     "module" => Builtins.Module
   }

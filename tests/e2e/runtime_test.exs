@@ -598,6 +598,139 @@ defmodule MirrorNeuron.RuntimeTest do
     RedisStore.delete_job(job_id)
   end
 
+  test "routes a multi-agent logical step through source, join, and sink boundaries" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "step_boundary_runtime",
+      "entrypoints" => ["analyze__start"],
+      "initial_inputs" => %{
+        "analyze__start" => [%{"args" => [], "kwargs" => %{"request" => "Acme"}}]
+      },
+      "flow" => %{
+        "steps" => [
+          %{
+            "id" => "analyze",
+            "run" => "analyze__start",
+            "agent_id" => "analyze__start",
+            "agent_ids" => [
+              "analyze__start",
+              "analyze__research_a",
+              "analyze__research_b",
+              "analyze__join",
+              "analyze__end"
+            ],
+            "control" => %{
+              "required" => true,
+              "failure_policy" => "fail_workflow",
+              "timeout_seconds" => 5,
+              "retry" => %{"max_attempts" => 1, "backoff_seconds" => 0}
+            }
+          }
+        ],
+        "graph" => %{"edges" => []}
+      },
+      "nodes" => [
+        %{
+          "node_id" => "analyze__start",
+          "agent_type" => "step_source",
+          "config" => %{
+            "step_id" => "analyze",
+            "required_upstreams" => [],
+            "fields" => %{
+              "request" => %{"$ref" => "run_input", "path" => ["request"]}
+            },
+            "output_message_type" => "analyze_started"
+          }
+        },
+        %{
+          "node_id" => "analyze__research_a",
+          "agent_type" => "router",
+          "config" => %{"emit_type" => "research_a_completed"}
+        },
+        %{
+          "node_id" => "analyze__research_b",
+          "agent_type" => "router",
+          "config" => %{"emit_type" => "research_b_completed"}
+        },
+        %{
+          "node_id" => "analyze__join",
+          "agent_type" => "step_join",
+          "config" => %{
+            "expected_sources" => ["analyze__research_a", "analyze__research_b"],
+            "output_keys" => %{
+              "analyze__research_a" => "research_a",
+              "analyze__research_b" => "research_b"
+            },
+            "output_message_type" => "research_joined"
+          }
+        },
+        %{
+          "node_id" => "analyze__end",
+          "agent_type" => "step_sink",
+          "config" => %{
+            "step_id" => "analyze",
+            "fields" => %{"result" => %{"$ref" => "flow_output"}},
+            "output_message_type" => "analyze_completed"
+          }
+        },
+        %{
+          "node_id" => "workflow__terminal",
+          "agent_type" => "aggregator",
+          "config" => %{
+            "complete_after" => 1,
+            "terminal_sink" => true,
+            "complete_run" => true
+          }
+        }
+      ],
+      "edges" => [
+        %{
+          "from_node" => "analyze__start",
+          "to_node" => "analyze__research_a",
+          "message_type" => "analyze_started"
+        },
+        %{
+          "from_node" => "analyze__start",
+          "to_node" => "analyze__research_b",
+          "message_type" => "analyze_started"
+        },
+        %{
+          "from_node" => "analyze__research_a",
+          "to_node" => "analyze__join",
+          "message_type" => "research_a_completed"
+        },
+        %{
+          "from_node" => "analyze__research_b",
+          "to_node" => "analyze__join",
+          "message_type" => "research_b_completed"
+        },
+        %{
+          "from_node" => "analyze__join",
+          "to_node" => "analyze__end",
+          "message_type" => "research_joined"
+        },
+        %{
+          "from_node" => "analyze__end",
+          "to_node" => "workflow__terminal",
+          "message_type" => "analyze_completed"
+        }
+      ],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, job_id, job} = run_manifest(manifest, await: true, timeout: 3_000)
+    assert job["status"] == "completed"
+    assert get_in(job, ["workflow_state", "steps", "analyze", "status"]) == "completed"
+    assert get_in(job, ["result", "output", "last_message", "outputs", "result"])
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+    assert Enum.any?(events, &(&1["type"] == "step_source_dispatched"))
+    assert Enum.any?(events, &(&1["type"] == "step_join_completed"))
+    assert Enum.any?(events, &(&1["type"] == "step_sink_completed"))
+
+    RedisStore.delete_job(job_id)
+  end
+
   test "workflow steps complete through ledger before terminal sink completes the run" do
     manifest = %{
       "manifest_version" => "1.0",

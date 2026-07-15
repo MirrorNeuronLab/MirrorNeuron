@@ -132,8 +132,61 @@ defmodule MirrorNeuron.Builtins.Executor do
         end
 
       {:error, reason, attempts} ->
-        {:error, enrich_error(reason, attempts),
-         %{state | runs: state.runs + 1, last_error: inspect(enrich_error(reason, attempts))}}
+        error = enrich_error(reason, attempts)
+
+        case Map.get(state.config, "failure_message_type") do
+          message_type when is_binary(message_type) and message_type != "" ->
+            metadata =
+              case Map.get(payload, "_mn_step") do
+                value when is_map(value) -> value
+                _ -> %{}
+              end
+
+            diagnostics =
+              case Map.get(metadata, "diagnostics") do
+                value when is_map(value) -> value
+                _ -> %{}
+              end
+
+            fallback_metadata =
+              Map.put(
+                metadata,
+                "diagnostics",
+                Map.merge(diagnostics, %{
+                  "fallback_used" => true,
+                  "failed_agent_id" => context.node.node_id
+                })
+              )
+
+            fallback_payload = %{
+              "agent_id" => context.node.node_id,
+              "outputs" => %{
+                "error" => error,
+                "fallback_used" => true,
+                "failed_agent_id" => context.node.node_id
+              },
+              "artifacts" => Message.artifacts(normalized_message),
+              "status" => "failed",
+              "_mn_step" => fallback_metadata
+            }
+
+            {:ok,
+             %{
+               state
+               | runs: state.runs + 1,
+                 last_output_payload: fallback_payload,
+                 last_error: inspect(error)
+             },
+             [
+               {:event, :executor_fallback_dispatched,
+                %{"agent_id" => context.node.node_id, "error" => error}},
+               {:emit, message_type, fallback_payload,
+                [artifacts: Message.artifacts(normalized_message)]}
+             ]}
+
+          _ ->
+            {:error, error, %{state | runs: state.runs + 1, last_error: inspect(error)}}
+        end
     end
   after
     LeaseManager.release(lease_manager, lease["lease_id"])
@@ -454,10 +507,20 @@ defmodule MirrorNeuron.Builtins.Executor do
         "runtime_step_mode"
       ])
       |> Map.put("agent_id", default_payload["agent_id"])
+      |> propagate_step_metadata(default_payload)
     else
       _ -> default_payload
     end
   end
+
+  defp propagate_step_metadata(payload, %{"input" => input}) when is_map(input) do
+    case Map.get(input, "_mn_step") do
+      metadata when is_map(metadata) -> Map.put(payload, "_mn_step", metadata)
+      _ -> payload
+    end
+  end
+
+  defp propagate_step_metadata(payload, _default_payload), do: payload
 
   defp sdk_step_result?(decoded) do
     is_map(Map.get(decoded, "outputs")) and
