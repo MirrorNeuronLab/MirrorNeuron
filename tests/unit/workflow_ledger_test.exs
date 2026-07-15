@@ -102,6 +102,36 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     assert WorkflowLedger.agent_to_step(state) == %{"ingress" => "prepare"}
   end
 
+  test "binds every compiled crew invocation to its logical workflow step" do
+    manifest = %Manifest{
+      flow: %{
+        "steps" => [
+          %{
+            "id" => "prepare",
+            "run" => "prepare",
+            "agent_id" => "prepare",
+            "agent_ids" => ["prepare", "prepare__extractor", "prepare__normalizer"],
+            "control" => %{"required" => true, "retry" => %{"max_attempts" => 1}}
+          }
+        ],
+        "graph" => %{"edges" => []}
+      }
+    }
+
+    nodes =
+      Enum.map(["prepare", "prepare__extractor", "prepare__normalizer"], fn node_id ->
+        %{node_id: node_id, config: %{}}
+      end)
+
+    {state, []} = WorkflowLedger.new(manifest, nodes) |> WorkflowLedger.job_running()
+
+    assert WorkflowLedger.agent_to_step(state) == %{
+             "prepare" => "prepare",
+             "prepare__extractor" => "prepare",
+             "prepare__normalizer" => "prepare"
+           }
+  end
+
   test "blocks early join messages and redelivers when dependencies are satisfied" do
     {state, []} =
       WorkflowLedger.new(join_manifest(), join_runtime_nodes())

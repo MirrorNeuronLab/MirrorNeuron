@@ -1436,6 +1436,20 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
           true -> run_id
         end
 
+      agent_ids =
+        raw
+        |> Map.get("agent_ids", [])
+        |> case do
+          values when is_list(values) ->
+            values
+            |> Enum.map(&to_string/1)
+            |> Enum.reject(&(&1 == ""))
+            |> then(fn normalized -> if normalized == [], do: [agent_id], else: normalized end)
+
+          _ ->
+            [agent_id]
+        end
+
       node_config = if node && is_map(node.config), do: node.config, else: %{}
       control = if is_map(Map.get(raw, "control")), do: Map.get(raw, "control"), else: %{}
       retry = if is_map(Map.get(control, "retry")), do: Map.get(control, "retry"), else: %{}
@@ -1466,7 +1480,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
         "id" => step_id,
         "label" => to_string(Map.get(raw, "label") || step_id),
         "run" => run_id,
-        "agent_ids" => [agent_id],
+        "agent_ids" => agent_ids,
         "required" => Map.get(control, "required", true) != false,
         "failure_policy" => to_string(Map.get(control, "failure_policy") || "fail_workflow"),
         "trigger_rule" => trigger_rule,

@@ -89,7 +89,9 @@ defmodule MirrorNeuron.Builtins.Executor do
           "input" => payload
         }
 
-        case structured_actions(result, state, normalized_message, output_payload) do
+        routed_output_payload = routed_output_payload(result, output_payload)
+
+        case structured_actions(result, state, normalized_message, routed_output_payload) do
           {:ok, structured_state, structured_actions} ->
             {structured_output_actions, structured_control_actions} =
               Enum.split_with(structured_actions, &output_action?/1)
@@ -108,10 +110,11 @@ defmodule MirrorNeuron.Builtins.Executor do
                 structured_control_actions ++
                 implicit_workflow_step_completion_actions(
                   context,
-                  output_payload,
-                  structured_actions
+                  routed_output_payload,
+                  structured_actions,
+                  state.config
                 ) ++
-                default_output_actions(state.config, output_payload) ++
+                default_output_actions(state.config, routed_output_payload) ++
                 structured_output_actions
 
             {:ok,
@@ -119,7 +122,7 @@ defmodule MirrorNeuron.Builtins.Executor do
                state
                | runs: state.runs + 1,
                  agent_state: structured_state,
-                 last_output_payload: output_payload,
+                 last_output_payload: routed_output_payload,
                  last_result: Map.put(Map.put(result, "attempts", attempts), "lease", lease),
                  last_error: nil
              }, actions}
@@ -413,10 +416,18 @@ defmodule MirrorNeuron.Builtins.Executor do
   defp output_action?({:emit_message, _}), do: true
   defp output_action?(_action), do: false
 
-  defp implicit_workflow_step_completion_actions(context, payload, structured_actions) do
+  defp implicit_workflow_step_completion_actions(
+         context,
+         payload,
+         structured_actions,
+         config
+       ) do
     workflow = Map.get(context, :workflow)
 
     cond do
+      Map.get(config, "workflow_complete_step", true) == false ->
+        []
+
       not is_map(workflow) or map_size(workflow) == 0 ->
         []
 
@@ -426,6 +437,33 @@ defmodule MirrorNeuron.Builtins.Executor do
       true ->
         [{:complete_step, payload}]
     end
+  end
+
+  defp routed_output_payload(result, default_payload) do
+    with stdout when is_binary(stdout) and stdout != "" <- Map.get(result, "stdout"),
+         {:ok, decoded} when is_map(decoded) <- Jason.decode(stdout),
+         true <- sdk_step_result?(decoded) do
+      decoded
+      |> Map.take([
+        "outputs",
+        "artifacts",
+        "metrics",
+        "status",
+        "workflow_step_id",
+        "run_id",
+        "runtime_step_mode"
+      ])
+      |> Map.put("agent_id", default_payload["agent_id"])
+    else
+      _ -> default_payload
+    end
+  end
+
+  defp sdk_step_result?(decoded) do
+    is_map(Map.get(decoded, "outputs")) and
+      is_list(Map.get(decoded, "artifacts")) and
+      is_map(Map.get(decoded, "metrics")) and
+      is_binary(Map.get(decoded, "status"))
   end
 
   defp max_attempts(config) do
