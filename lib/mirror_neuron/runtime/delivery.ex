@@ -68,6 +68,7 @@ defmodule MirrorNeuron.Runtime.Delivery do
       "runtime.agent_report",
       body,
       message_id: report_id,
+      correlation_id: report_id,
       class: "control"
     )
     |> then(&enqueue(job_id, @coordinator_agent_id, &1))
@@ -78,6 +79,14 @@ defmodule MirrorNeuron.Runtime.Delivery do
 
   def coordinator_event_requires_ack?(event_type),
     do: MapSet.member?(@state_bearing_coordinator_events, to_string(event_type))
+
+  @doc false
+  def stable_workflow_message(message) do
+    update_in(message, ["envelope"], fn
+      envelope when is_map(envelope) -> Map.delete(envelope, "attempt")
+      envelope -> envelope
+    end)
+  end
 
   def read(job_id, agent_id, consumer, opts \\ []) do
     RedisStore.read_deliveries(job_id, agent_id, consumer,

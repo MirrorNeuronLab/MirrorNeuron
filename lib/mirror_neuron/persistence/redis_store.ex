@@ -54,7 +54,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   def enqueue_delivery(job_id, agent_id, message, opts) do
     message_id = MirrorNeuron.Message.id(message)
     encoded = Jason.encode!(message)
-    digest = :crypto.hash(:sha256, encoded) |> Base.encode16(case: :lower)
+    digest = delivery_identity_digest(message)
     now_ms = Keyword.fetch!(opts, :now_ms)
     deadline_ms = Keyword.fetch!(opts, :deadline_ms)
     pending_ttl_seconds = Keyword.fetch!(opts, :pending_ttl_seconds)
@@ -161,6 +161,17 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       other ->
         {:error, {:unexpected_delivery_enqueue_result, other}}
     end
+  end
+
+  defp delivery_identity_digest(message) do
+    message
+    |> update_in(["envelope"], fn
+      envelope when is_map(envelope) -> Map.drop(envelope, ["attempt", "timestamp"])
+      envelope -> envelope
+    end)
+    |> Jason.encode!()
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
   end
 
   @doc false

@@ -818,7 +818,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
         state,
         message,
         "workflow_message_#{status}",
-        %{"message" => message},
+        %{"message" => Delivery.stable_workflow_message(message)},
         status
       )
     else

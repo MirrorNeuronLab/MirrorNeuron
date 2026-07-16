@@ -137,6 +137,34 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert ttl in 1..Delivery.ack_receipt_ttl_seconds()
   end
 
+  test "delivery identity ignores transport timestamps and attempts" do
+    job_id = "delivery-transport-#{System.unique_integer([:positive])}"
+    agent_id = "worker"
+    message_id = "message-#{System.unique_integer([:positive])}"
+
+    first =
+      Message.new(job_id, "source", agent_id, "work", %{"value" => 1},
+        message_id: message_id,
+        timestamp: "2026-07-16T00:00:00.000Z",
+        attempt: 1
+      )
+
+    redelivered =
+      first
+      |> put_in(["envelope", "timestamp"], "2026-07-16T00:01:00.000Z")
+      |> put_in(["envelope", "attempt"], 2)
+
+    assert {:ok, %{status: :queued}} = Delivery.enqueue(job_id, agent_id, first)
+    assert {:ok, %{status: :duplicate}} = Delivery.enqueue(job_id, agent_id, redelivered)
+
+    conflicting = put_in(redelivered, ["body", "value"], 2)
+
+    assert {:error, {:message_id_conflict, ^message_id, "queued"}} =
+             Delivery.enqueue(job_id, agent_id, conflicting)
+
+    RedisStore.delete_job(job_id)
+  end
+
   test "unacknowledged deliveries are reclaimed after their lease expires" do
     job_id = "delivery-reclaim-#{System.unique_integer([:positive])}"
     agent_id = "worker"

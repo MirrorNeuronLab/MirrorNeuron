@@ -3278,6 +3278,72 @@ defmodule MirrorNeuron.RuntimeTest do
     RedisStore.delete_job(job_id)
   end
 
+  test "workflow coordinator reports remain idempotent across delivery retries" do
+    job_id = "workflow_report_retry_test-#{System.unique_integer([:positive])}"
+    report_id = "stable-workflow-received-report"
+
+    first_attempt =
+      Message.new(job_id, "external", "retrying_worker", "retryable_work", %{"value" => 1},
+        correlation_id: "retry-correlation",
+        headers: %{
+          "mn.workflow.run_id" => "workflow-run",
+          "mn.workflow.step_id" => "retry_step",
+          "mn.workflow.attempt" => 1,
+          "mn.workflow.attempt_id" => "retry_step:attempt:1",
+          "mn.workflow.idempotency_key" => "workflow-run:retry_step:1"
+        }
+      )
+      |> put_in(["envelope", "attempt"], 1)
+
+    second_attempt = put_in(first_attempt, ["envelope", "attempt"], 2)
+
+    report_body = fn message ->
+      %{
+        "kind" => "workflow_message_received",
+        "agent_id" => "retrying_worker",
+        "message" => Delivery.stable_workflow_message(message)
+      }
+    end
+
+    assert :ok =
+             Delivery.report(
+               job_id,
+               "retrying_worker",
+               report_id,
+               report_body.(first_attempt)
+             )
+
+    assert :ok =
+             Delivery.report(
+               job_id,
+               "retrying_worker",
+               report_id,
+               report_body.(second_attempt)
+             )
+
+    assert RedisStore.delivery_pending_count(job_id, Delivery.coordinator_agent_id()) ==
+             {:ok, 1}
+
+    consumer = Delivery.consumer_id(job_id, Delivery.coordinator_agent_id())
+
+    assert {:ok, [report]} =
+             Delivery.read(job_id, Delivery.coordinator_agent_id(), consumer)
+
+    body = Message.body(report.message)
+    assert body["kind"] == "workflow_message_received"
+    refute Map.has_key?(get_in(body, ["message", "envelope"]), "attempt")
+
+    assert :ok =
+             Delivery.ack(
+               job_id,
+               Delivery.coordinator_agent_id(),
+               consumer,
+               report
+             )
+
+    RedisStore.delete_job(job_id)
+  end
+
   test "internal snapshots do not emit duplicate checkpoint messages" do
     job_id = "checkpoint_perf_test-#{System.unique_integer([:positive])}"
     parent = self()
