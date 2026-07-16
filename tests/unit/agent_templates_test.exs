@@ -22,6 +22,10 @@ defmodule MirrorNeuron.AgentTemplatesTest do
     assert AgentTemplates.canonical_type("accumulator") == "reduce"
     assert AgentTemplates.supported_type?("batch")
     assert AgentTemplates.supported_for_agent_type?("map", "router")
+    assert AgentTemplates.supported_for_agent_type?("generic", "step_source")
+    assert AgentTemplates.supported_for_agent_type?("reduce", "step_join")
+    assert AgentTemplates.supported_for_agent_type?("reduce", "step_sink")
+    refute AgentTemplates.supported_for_agent_type?("stream", "step_source")
     refute AgentTemplates.supported_for_agent_type?("stream", "aggregator")
   end
 

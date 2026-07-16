@@ -18,6 +18,9 @@ defmodule MirrorNeuron.AgentTemplates do
     "router" => ["generic", "map"],
     "executor" => ["generic", "stream", "map", "reduce", "batch"],
     "aggregator" => ["generic", "reduce"],
+    "step_join" => ["generic", "reduce"],
+    "step_sink" => ["generic", "reduce"],
+    "step_source" => ["generic"],
     "sensor" => ["generic"],
     "module" => ["generic", "stream", "map", "reduce", "batch"]
   }

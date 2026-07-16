@@ -675,6 +675,49 @@ defmodule MirrorNeuron.ManifestTest do
     assert Enum.find(normalized.nodes, &(&1.node_id == "sink")).type == "reduce"
   end
 
+  test "accepts step boundary agent template combinations" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "step-boundaries",
+      "entrypoints" => ["analyze__start"],
+      "nodes" => [
+        %{
+          "node_id" => "analyze__start",
+          "agent_type" => "step_source",
+          "type" => "generic"
+        },
+        %{
+          "node_id" => "analyze__join",
+          "agent_type" => "step_join",
+          "type" => "reduce"
+        },
+        %{
+          "node_id" => "analyze__end",
+          "agent_type" => "step_sink",
+          "type" => "reduce"
+        }
+      ],
+      "edges" => [
+        %{
+          "from_node" => "analyze__start",
+          "to_node" => "analyze__join",
+          "message_type" => "analyze_started"
+        },
+        %{
+          "from_node" => "analyze__join",
+          "to_node" => "analyze__end",
+          "message_type" => "analyze_joined"
+        }
+      ],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, normalized} = Manifest.load(flow_manifest(manifest))
+    assert Enum.find(normalized.nodes, &(&1.node_id == "analyze__start")).type == "generic"
+    assert Enum.find(normalized.nodes, &(&1.node_id == "analyze__join")).type == "reduce"
+    assert Enum.find(normalized.nodes, &(&1.node_id == "analyze__end")).type == "reduce"
+  end
+
   test "rejects unsupported template types" do
     manifest = %{
       "manifest_version" => "1.0",
