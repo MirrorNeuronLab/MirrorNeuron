@@ -1023,7 +1023,19 @@ defmodule MirrorNeuron.RuntimeTest do
       Enum.reduce_while(1..100, nil, fn _, _acc ->
         case Delivery.read(job_id, Delivery.coordinator_agent_id(), consumer) do
           {:ok, [delivery]} ->
-            {:halt, delivery}
+            if get_in(delivery.message, ["body", "kind"]) == "agent_completed_run" do
+              {:halt, delivery}
+            else
+              assert :ok =
+                       Delivery.ack(
+                         job_id,
+                         Delivery.coordinator_agent_id(),
+                         consumer,
+                         delivery
+                       )
+
+              {:cont, nil}
+            end
 
           {:ok, []} ->
             Process.sleep(20)
@@ -2041,6 +2053,7 @@ defmodule MirrorNeuron.RuntimeTest do
     assert {:ok, events} = MirrorNeuron.events(job_id)
     assert Enum.any?(events, &(&1["type"] == "local_recovery_auto_resumed"))
     assert Enum.any?(events, &(&1["type"] == "sandbox_job_completed"))
+    assert_event_before(events, "sandbox_job_completed", "job_completed")
 
     RedisStore.delete_job(job_id)
   end

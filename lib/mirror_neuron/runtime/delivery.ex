@@ -21,6 +21,7 @@ defmodule MirrorNeuron.Runtime.Delivery do
   @retry_max_ms 30_000
   @coordinator_agent_id "__mirror_neuron_job_coordinator__"
   @state_bearing_coordinator_events MapSet.new([
+                                      "sandbox_job_completed",
                                       "agent_beacon_missed",
                                       "workflow_step_started",
                                       "workflow_step_completed",
