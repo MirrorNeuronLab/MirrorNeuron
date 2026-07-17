@@ -66,6 +66,8 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
 
     case MirrorNeuron.job_details(job_id, compact: true, event_limit: 10) do
       {:ok, details_map} ->
+        details_map = MirrorNeuron.Monitor.bound_job_details(details_map)
+
         %GetJobResponse{
           job_json: Support.versioned_json(details_map),
           version: @interface_version

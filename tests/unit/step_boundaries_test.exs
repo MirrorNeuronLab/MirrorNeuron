@@ -54,18 +54,26 @@ defmodule MirrorNeuron.StepBoundariesTest do
              Enum.find(actions, &match?({:emit, "score__start_completed", _, _}, &1))
 
     assert dispatched["outputs"] == %{"company" => "Acme", "claims" => ["one"]}
-    assert dispatched["_mn_step"]["step_input"] == dispatched["outputs"]
+    refute Map.has_key?(dispatched["_mn_step"], "run_inputs")
+    refute Map.has_key?(dispatched["_mn_step"], "step_input")
 
     {:ok, replayed, replay_actions} = StepSource.handle_message(research, state2, %{})
     assert replayed == state2
     assert Enum.any?(replay_actions, &match?({:event, :step_source_duplicate_ignored, _}, &1))
   end
 
-  test "root step source unwraps immutable run inputs from the runner envelope" do
+  @tag :tmp_dir
+  test "root step source stages immutable run inputs outside step metadata", %{tmp_dir: tmp_dir} do
+    submission = Path.join(tmp_dir, "submission")
+
     node = %{
       config: %{
         "step_id" => "root",
         "required_upstreams" => [],
+        "environment" => %{
+          "MN_JOB_SHARED_STORAGE_ROOT" => submission,
+          "MN_STORAGE_SUBMISSION_ID" => "submission-1"
+        },
         "fields" => %{
           "company" => %{"$ref" => "run_input", "path" => ["company"]}
         },
@@ -85,14 +93,19 @@ defmodule MirrorNeuron.StepBoundariesTest do
           "root-message"
         ),
         state,
-        %{}
+        %{job_id: "job-1", workflow: %{"run_id" => "run-1"}}
       )
 
     assert {:emit, "root_started", result, _opts} =
              Enum.find(actions, &match?({:emit, "root_started", _, _}, &1))
 
     assert result["outputs"] == %{"company" => "Acme"}
-    assert result["_mn_step"]["run_inputs"] == %{"company" => "Acme"}
+    refute Map.has_key?(result["_mn_step"], "run_inputs")
+    assert result["_mn_step"]["run_inputs_ref"]["kind"] == "run_inputs"
+
+    assert File.regular?(
+             Path.join(submission, result["_mn_step"]["run_inputs_ref"]["relative_path"])
+           )
   end
 
   test "named join waits for every required agent output" do

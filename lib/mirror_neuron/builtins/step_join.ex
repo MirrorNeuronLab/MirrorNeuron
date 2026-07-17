@@ -96,7 +96,7 @@ defmodule MirrorNeuron.Builtins.StepJoin do
     metadata =
       expected
       |> Enum.find_value(%{}, fn source ->
-        metadata = StepContract.metadata(state.outputs[source])
+        metadata = StepContract.reference_metadata(state.outputs[source])
         if map_size(metadata) > 0, do: metadata
       end)
 

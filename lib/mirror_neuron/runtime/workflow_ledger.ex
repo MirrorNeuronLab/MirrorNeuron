@@ -2,6 +2,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   @moduledoc false
 
   alias MirrorNeuron.Message
+  alias MirrorNeuron.Artifacts.StagedArtifact
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.ErrorEnvelope
   alias MirrorNeuron.Runtime.WorkflowTrigger
@@ -126,6 +127,101 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
 
   def finish(state, status, now \\ Runtime.timestamp()) do
     if enabled?(state), do: put_state_status(state, to_string(status), now), else: state
+  end
+
+  def compact_snapshot(%{"steps" => steps} = state) when is_map(steps) do
+    compact_steps =
+      Map.new(steps, fn {step_id, step} ->
+        value =
+          if is_map(step) do
+            step
+            |> Map.drop(["last_message", "output"])
+            |> maybe_put_output_ref(Map.get(step, "output"))
+          else
+            step
+          end
+
+        {step_id, value}
+      end)
+
+    state
+    |> Map.drop(["messages"])
+    |> Map.put("steps", compact_steps)
+  end
+
+  def compact_snapshot(state), do: state
+
+  def persistable_snapshot(%{"steps" => steps} = state, manifest) when is_map(steps) do
+    persisted_steps =
+      Map.new(steps, fn {step_id, step} ->
+        value =
+          if is_map(step) do
+            step
+            |> persist_step_value("output", "output_ref", "step_output", state, manifest)
+            |> persist_step_value(
+              "last_message",
+              "last_message_ref",
+              "workflow_message",
+              state,
+              manifest
+            )
+          else
+            step
+          end
+
+        {step_id, value}
+      end)
+
+    Map.put(state, "steps", persisted_steps)
+  end
+
+  def persistable_snapshot(state, _manifest), do: state
+
+  defp persist_step_value(step, field, reference_field, kind, state, manifest) do
+    case Map.get(step, field) do
+      nil ->
+        step
+
+      value ->
+        reference =
+          StagedArtifact.output_ref(value) ||
+            stage_ledger_value(value, kind, state, manifest)
+
+        cond do
+          is_map(reference) ->
+            step
+            |> Map.delete(field)
+            |> Map.put(reference_field, reference)
+
+          StagedArtifact.inline_value?(value) ->
+            step
+
+          true ->
+            step
+            |> Map.delete(field)
+            |> Map.put(reference_field <> "_error", %{
+              "code" => "artifact_staging_failed",
+              "retryable" => true
+            })
+        end
+    end
+  end
+
+  defp stage_ledger_value(value, kind, state, manifest) do
+    case StagedArtifact.stage_from_manifest(value, manifest,
+           kind: kind,
+           run_id: run_id(state) || Map.get(state, "job_id") || "run"
+         ) do
+      {:ok, reference} -> reference
+      {:error, _reason} -> nil
+    end
+  end
+
+  defp maybe_put_output_ref(step, output) do
+    case Map.get(step, "output_ref") || StagedArtifact.output_ref(output) do
+      reference when is_map(reference) -> Map.put(step, "output_ref", reference)
+      _ -> step
+    end
   end
 
   def decorate_message(state, agent_id, message, extra_headers \\ %{}) do
@@ -426,7 +522,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
       dependencies_satisfied?(state, step) and synthetic_trigger_required?(state, step) ->
         redeliver_or_trigger(state, step, now)
 
-      dependencies_satisfied?(state, step) and is_map(Map.get(step, "last_message")) ->
+      dependencies_satisfied?(state, step) and last_message_present?(step) ->
         redeliver_or_trigger(state, step, now)
 
       true ->
@@ -458,12 +554,12 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
     Map.get(step, "status") in ["pending", "ready", "blocked"] and
       (dependencies_impossible?(state, step) or
          (dependencies_satisfied?(state, step) and
-            is_nil(Map.get(step, "last_message")) and
+            not last_message_present?(step) and
             synthetic_trigger_required?(state, step)))
   end
 
   defp redeliver_or_trigger(state, step, now) do
-    case Map.get(step, "last_message") do
+    case step_last_message(step) do
       message when is_map(message) ->
         step =
           step
@@ -533,7 +629,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
           "step_id" => Map.get(edge, "from"),
           "status" => Map.get(parent, "status"),
           "outcome" => Map.get(parent, "terminal_outcome"),
-          "output" => Map.get(parent, "output")
+          "output" => step_output(parent)
         }
       end)
 
@@ -1028,7 +1124,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
         complete_step(state, step, payload, now)
 
       true ->
-        block_step_for_dependencies(state, step, Map.get(step, "last_message"), now)
+        block_step_for_dependencies(state, step, step_last_message(step), now)
     end
   end
 
@@ -1155,6 +1251,35 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
 
   defp maybe_put_last_message(step, _message), do: step
 
+  defp last_message_present?(step) when is_map(step) do
+    is_map(Map.get(step, "last_message")) or
+      StagedArtifact.ref?(Map.get(step, "last_message_ref"))
+  end
+
+  defp last_message_present?(_step), do: false
+
+  defp step_last_message(step) when is_map(step) do
+    case Map.get(step, "last_message") do
+      message when is_map(message) -> message
+      _ -> resolve_reference(Map.get(step, "last_message_ref"))
+    end
+  end
+
+  defp step_last_message(_step), do: nil
+
+  defp step_output(step) when is_map(step) do
+    case Map.get(step, "output") do
+      nil -> resolve_reference(Map.get(step, "output_ref"))
+      output -> StagedArtifact.resolve_output!(output)
+    end
+  end
+
+  defp step_output(_step), do: nil
+
+  defp resolve_reference(reference) do
+    if StagedArtifact.ref?(reference), do: StagedArtifact.resolve!(reference), else: nil
+  end
+
   defp stale_attempt_output?(step, payload) when is_map(payload) do
     current_attempt = Map.get(step, "current_attempt")
     payload_attempt_id = payload_attempt_id(payload)
@@ -1198,7 +1323,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   defp maybe_put_blocked_message_status(state, _message, _step_id, _now, _reason), do: state
 
   defp retry_message(state, step, now) do
-    case Map.get(step, "last_message") do
+    case step_last_message(step) do
       message when is_map(message) ->
         metadata = attempt_metadata(state, step, message, now)
         decorated = decorate_message(state, primary_agent_id(step), message, metadata.headers)

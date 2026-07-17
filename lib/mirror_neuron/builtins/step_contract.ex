@@ -1,6 +1,8 @@
 defmodule MirrorNeuron.Builtins.StepContract do
   @moduledoc false
 
+  alias MirrorNeuron.Artifacts.StagedArtifact
+
   def resolve_fields(fields, context) when is_map(fields) and is_map(context) do
     Map.new(fields, fn {key, value} -> {to_string(key), resolve(value, context)} end)
   end
@@ -51,7 +53,15 @@ defmodule MirrorNeuron.Builtins.StepContract do
 
   def metadata(_payload), do: %{}
 
-  def output_payload(%{"outputs" => outputs}) when is_map(outputs), do: outputs
+  def reference_metadata(payload) do
+    payload
+    |> metadata()
+    |> Map.drop(["run_inputs", "step_input"])
+  end
+
+  def output_payload(%{"outputs" => outputs}) when is_map(outputs),
+    do: StagedArtifact.resolve_output!(outputs)
+
   def output_payload(payload) when is_map(payload), do: payload
   def output_payload(_payload), do: %{}
 
@@ -93,8 +103,13 @@ defmodule MirrorNeuron.Builtins.StepContract do
   defp resolve(value, _context), do: value
 
   defp resolve_path(value, path) when is_list(path) do
-    Enum.reduce(path, value, fn part, current ->
-      if is_map(current), do: Map.get(current, to_string(part)), else: nil
+    value
+    |> StagedArtifact.resolve_output!()
+    |> then(fn resolved ->
+      Enum.reduce(path, resolved, fn part, current ->
+        current = StagedArtifact.resolve_output!(current)
+        if is_map(current), do: Map.get(current, to_string(part)), else: nil
+      end)
     end)
   end
 

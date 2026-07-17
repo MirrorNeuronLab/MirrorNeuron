@@ -20,7 +20,7 @@ defmodule MirrorNeuron.Builtins.StepSink do
       {:ok, state, [{:event, :step_sink_duplicate_ignored, event_payload(state)}]}
     else
       artifacts = StepContract.artifacts(payload, artifacts(message))
-      metadata = StepContract.metadata(payload)
+      metadata = StepContract.reference_metadata(payload)
       flow_output = StepContract.output_payload(payload)
 
       outputs =

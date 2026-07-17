@@ -23,7 +23,7 @@ defmodule MirrorNeuron.Artifacts.SharedStorageTest do
     {:ok, root: root}
   end
 
-  test "terminal success copies outputs and deletes submission storage", %{root: root} do
+  test "terminal success copies outputs and retains submission storage", %{root: root} do
     submission = Path.join([root, "submissions", "sub-1"])
     source = Path.join([submission, "outputs", "user"])
     target = Path.join(root, "target")
@@ -38,7 +38,7 @@ defmodule MirrorNeuron.Artifacts.SharedStorageTest do
              )
 
     assert File.read!(Path.join(target, "report.txt")) == "done"
-    refute File.exists?(submission)
+    assert File.exists?(submission)
   end
 
   test "master host output copy leaves shared submission for launcher", %{root: root} do
@@ -64,7 +64,7 @@ defmodule MirrorNeuron.Artifacts.SharedStorageTest do
     assert File.exists?(submission)
   end
 
-  test "terminal cancel removes submission storage when outputs are missing", %{root: root} do
+  test "terminal cancel retains submission storage when outputs are missing", %{root: root} do
     submission = Path.join([root, "submissions", "sub-cancel"])
     source = Path.join([submission, "outputs", "user"])
     target = Path.join(root, "target-cancel")
@@ -78,7 +78,7 @@ defmodule MirrorNeuron.Artifacts.SharedStorageTest do
              )
 
     assert [%{"code" => "missing_output_source", "fatal" => false}] = warnings
-    refute File.exists?(submission)
+    assert File.exists?(submission)
   end
 
   test "failed output copy returns warning and keeps submission storage", %{root: root} do

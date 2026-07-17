@@ -3,6 +3,7 @@ defmodule MirrorNeuron.ExecutorTest do
 
   alias MirrorNeuron.Builtins.Executor
   alias MirrorNeuron.Execution.LeaseManager
+  alias MirrorNeuron.Artifacts.StagedArtifact
 
   defmodule FlakyRunner do
     def run(_payload, _config, _opts) do
@@ -35,6 +36,54 @@ defmodule MirrorNeuron.ExecutorTest do
       attempt = Process.get(:sandbox_worker_attempt, 0) + 1
       Process.put(:sandbox_worker_attempt, attempt)
       {:error, %{"error" => "missing script", "logs" => "python3.11: can't open file"}}
+    end
+  end
+
+  defmodule LargeFallbackRunner do
+    def run(_payload, _config, _opts) do
+      {:ok,
+       %{
+         "sandbox_name" => "large-fallback-runner",
+         "exit_code" => 0,
+         "stdout" => "{}",
+         "stderr" => "",
+         "logs" => String.duplicate("x", 1_100_000)
+       }}
+    end
+  end
+
+  defmodule SharedResultRunner do
+    def run(_payload, config, _opts) do
+      environment = Map.fetch!(config, "environment")
+      submission = Map.fetch!(environment, "MN_JOB_SHARED_STORAGE_ROOT")
+      pointer = Map.fetch!(environment, "MN_STEP_RESULT_FILE")
+
+      result = %{
+        "outputs" => %{"value" => "shared-result"},
+        "artifacts" => [],
+        "metrics" => %{},
+        "status" => "completed"
+      }
+
+      {:ok, reference} =
+        MirrorNeuron.Artifacts.StagedArtifact.stage(result,
+          kind: "worker_result",
+          submission_path: submission,
+          submission_id: Map.get(environment, "MN_STORAGE_SUBMISSION_ID"),
+          run_id: "run-1"
+        )
+
+      File.mkdir_p!(Path.dirname(pointer))
+      File.write!(pointer, Jason.encode!(%{"result_ref" => reference}))
+
+      {:ok,
+       %{
+         "sandbox_name" => "shared-result-runner",
+         "exit_code" => 0,
+         "stdout" => "worker log only",
+         "stderr" => "",
+         "logs" => "worker log only"
+       }}
     end
   end
 
@@ -176,6 +225,7 @@ defmodule MirrorNeuron.ExecutorTest do
 
     assert payload["sandbox"]["attempts"] == 2
     assert payload["sandbox"]["lease"]["slots"] == 1
+    refute Map.has_key?(payload, "input")
 
     assert_receive {:agent_event, "prime_worker_0001", :executor_lease_requested,
                     %{"pool" => "default", "slots" => 1}}
@@ -185,6 +235,99 @@ defmodule MirrorNeuron.ExecutorTest do
 
     assert_receive {:agent_event, "prime_worker_0001", :executor_lease_released,
                     %{"pool" => "default", "slots" => 1, "lease_id" => _lease_id}}
+  end
+
+  @tag :tmp_dir
+  test "oversized fallback result is staged and never echoes executor input", %{tmp_dir: tmp_dir} do
+    lease_manager =
+      start_supervised!({LeaseManager, name: unique_name(), capacities: %{"default" => 1}})
+
+    submission = Path.join(tmp_dir, "submission")
+
+    node = %{
+      node_id: "large_worker",
+      config: %{
+        :runner_module => LargeFallbackRunner,
+        :lease_manager => lease_manager,
+        "max_attempts" => 1,
+        "output_message_type" => "large_result",
+        "environment" => %{
+          "MN_JOB_SHARED_STORAGE_ROOT" => submission,
+          "MN_STORAGE_SUBMISSION_ID" => "submission-1"
+        }
+      }
+    }
+
+    {:ok, state} = Executor.init(node)
+    original = %{"nested" => %{"prior" => String.duplicate("input", 10_000)}}
+
+    context = %{
+      job_id: "job-1",
+      node: %{node_id: "large_worker"},
+      coordinator: self(),
+      workflow: %{"run_id" => "run-1"},
+      bundle_root: tmp_dir,
+      manifest_path: Path.join(tmp_dir, "manifest.json"),
+      payloads_path: Path.join(tmp_dir, "payloads")
+    }
+
+    assert {:ok, _state, actions} =
+             Executor.handle_message(%{type: "request", payload: original}, state, context)
+
+    assert {:emit, "large_result", payload, _opts} =
+             Enum.find(actions, &match?({:emit, _, _, _}, &1))
+
+    reference = payload["outputs"][StagedArtifact.output_key()]
+    resolved = StagedArtifact.resolve!(reference, submission_path: submission)
+
+    refute Map.has_key?(resolved, "input")
+    refute inspect(resolved) =~ String.duplicate("input", 100)
+  end
+
+  @tag :tmp_dir
+  test "reads SDK structured result from shared pointer while preserving stdout logs", %{
+    tmp_dir: tmp_dir
+  } do
+    lease_manager =
+      start_supervised!({LeaseManager, name: unique_name(), capacities: %{"default" => 1}})
+
+    submission = Path.join(tmp_dir, "submission")
+
+    node = %{
+      node_id: "shared_worker",
+      config: %{
+        :runner_module => SharedResultRunner,
+        :lease_manager => lease_manager,
+        "command" => ["python3", "-m", "mn_sdk.step_runtime"],
+        "output_message_type" => "shared_result",
+        "environment" => %{
+          "MN_JOB_SHARED_STORAGE_ROOT" => submission,
+          "MN_STORAGE_SUBMISSION_ID" => "submission-1"
+        }
+      }
+    }
+
+    {:ok, state} = Executor.init(node)
+
+    context = %{
+      job_id: "job-1",
+      node: %{node_id: "shared_worker"},
+      coordinator: self(),
+      workflow: %{"run_id" => "run-1", "attempt_id" => "attempt-1"},
+      bundle_root: tmp_dir,
+      manifest_path: Path.join(tmp_dir, "manifest.json"),
+      payloads_path: Path.join(tmp_dir, "payloads")
+    }
+
+    assert {:ok, _state, actions} =
+             Executor.handle_message(%{type: "request", payload: %{}}, state, context)
+
+    assert {:emit, "shared_result", payload, _opts} =
+             Enum.find(actions, &match?({:emit, _, _, _}, &1))
+
+    assert payload["outputs"] == %{"value" => "shared-result"}
+    assert payload["status"] == "completed"
+    refute Map.has_key?(payload, "sandbox")
   end
 
   test "does not retry non-transient sandbox failures" do

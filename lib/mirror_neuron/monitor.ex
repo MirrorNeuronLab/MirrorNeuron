@@ -6,6 +6,18 @@ defmodule MirrorNeuron.Monitor do
   @terminal_statuses ["completed", "failed", "cancelled"]
   @compact_string_bytes 8_192
   @compact_list_items 50
+  @compact_job_drop_fields ["manifest", "result"]
+  @compact_event_drop_fields [
+    "input",
+    "last_message",
+    "messages",
+    "output",
+    "outputs",
+    "result",
+    "workflow_state"
+  ]
+  @compact_step_drop_fields ["last_message", "output"]
+  @max_compact_job_bytes 1_000_000
 
   def list_jobs(opts \\ []) do
     with {:ok, jobs} <- list_job_records(opts) do
@@ -64,9 +76,19 @@ defmodule MirrorNeuron.Monitor do
     event_limit = Keyword.get(opts, :event_limit, 25)
     event_start = if is_integer(event_limit) and event_limit > 0, do: -event_limit, else: 0
 
-    with {:ok, job} <- RedisStore.fetch_job(job_id),
+    job_fetch =
+      if Keyword.get(opts, :compact, false),
+        do: &RedisStore.fetch_job_summary/1,
+        else: &RedisStore.fetch_job/1
+
+    event_fetch =
+      if Keyword.get(opts, :compact, false),
+        do: fn -> {:ok, []} end,
+        else: fn -> RedisStore.read_events(job_id, event_start, -1) end
+
+    with {:ok, job} <- job_fetch.(job_id),
          {:ok, agents} <- RedisStore.list_agents(job_id),
-         {:ok, events} <- RedisStore.read_events(job_id, event_start, -1) do
+         {:ok, events} <- event_fetch.() do
       agent_summaries = Enum.map(agents, &summarize_agent/1)
       sandboxes = sandbox_summaries(events, agent_summaries)
 
@@ -88,15 +110,148 @@ defmodule MirrorNeuron.Monitor do
     end
   end
 
+  def bound_job_details(details, max_bytes \\ @max_compact_job_bytes)
+
+  def bound_job_details(details, max_bytes) when is_map(details) and is_integer(max_bytes) do
+    if encoded_size(details) <= max_bytes do
+      details
+    else
+      reduced =
+        details
+        |> Map.put("recent_events", [])
+        |> Map.update("summary", %{}, fn summary ->
+          if is_map(summary), do: Map.put(summary, "detail_truncated", true), else: summary
+        end)
+        |> Map.update("job", %{}, &minimal_job/1)
+
+      if encoded_size(reduced) <= max_bytes do
+        reduced
+      else
+        hard_bound_job_details(reduced)
+      end
+    end
+  end
+
+  def bound_job_details(details, _max_bytes), do: details
+
+  defp minimal_job(job) when is_map(job) do
+    job
+    |> Map.drop(["result"])
+    |> Map.update("workflow_state", nil, &minimal_workflow_state/1)
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp minimal_job(job), do: job
+
+  defp minimal_workflow_state(%{"steps" => steps} = state) when is_map(steps) do
+    minimal_steps =
+      Map.new(steps, fn {step_id, step} ->
+        value =
+          if is_map(step) do
+            Map.take(step, [
+              "id",
+              "status",
+              "attempt_count",
+              "started_at",
+              "ended_at",
+              "last_event_at",
+              "terminal_outcome",
+              "terminal_reason",
+              "output_ref"
+            ])
+          else
+            %{"status" => "unknown"}
+          end
+
+        {step_id, value}
+      end)
+
+    state
+    |> Map.take(["schema_version", "job_id", "run_id", "status", "created_at", "updated_at"])
+    |> Map.put("steps", minimal_steps)
+  end
+
+  defp minimal_workflow_state(_state), do: nil
+
+  defp hard_bound_job_details(details) do
+    job = Map.get(details, "job", %{})
+    workflow_state = Map.get(job, "workflow_state", %{})
+    step_count = workflow_state |> Map.get("steps", %{}) |> map_size_or_zero()
+
+    %{
+      "job" =>
+        job
+        |> Map.drop(["workflow_state"])
+        |> Map.take([
+          "job_id",
+          "graph_id",
+          "job_name",
+          "status",
+          "job_type",
+          "submitted_at",
+          "updated_at",
+          "manifest_ref",
+          "result_ref",
+          "workflow_state_ref"
+        ])
+        |> Map.put("workflow_step_count", step_count),
+      "summary" =>
+        details
+        |> Map.get("summary", %{})
+        |> Map.take(["job_id", "graph_id", "job_name", "status", "submitted_at", "updated_at"])
+        |> Map.put("detail_truncated", true),
+      "agents" => details |> Map.get("agents", []) |> Enum.take(25) |> compact_value(),
+      "recent_events" => [],
+      "sandboxes" => details |> Map.get("sandboxes", []) |> Enum.take(25) |> compact_value()
+    }
+  end
+
+  defp map_size_or_zero(value) when is_map(value), do: map_size(value)
+  defp map_size_or_zero(_value), do: 0
+
+  defp encoded_size(value), do: value |> Jason.encode!() |> byte_size()
+
   defp public_job(job, opts) do
     job = Map.drop(job, ["manifest"])
 
     if Keyword.get(opts, :compact, false) do
-      compact_value(job)
+      compact_job(job)
     else
       job
     end
   end
+
+  defp compact_job(job) do
+    job
+    |> Map.drop(@compact_job_drop_fields)
+    |> Map.update("workflow_state", nil, &compact_workflow_state/1)
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+    |> compact_value()
+  end
+
+  defp compact_workflow_state(%{"steps" => steps} = state) when is_map(steps) do
+    compact_steps =
+      Map.new(steps, fn {step_id, step} ->
+        compact_step =
+          if is_map(step) do
+            step
+            |> Map.drop(@compact_step_drop_fields)
+            |> maybe_put_staged_ref("output_ref", Map.get(step, "output"))
+          else
+            step
+          end
+
+        {step_id, compact_step}
+      end)
+
+    state
+    |> Map.drop(["messages"])
+    |> Map.put("steps", compact_steps)
+  end
+
+  defp compact_workflow_state(_state), do: nil
 
   def cluster_overview(opts \\ []) do
     opts = Keyword.put_new(opts, :summary, :basic)
@@ -353,11 +508,57 @@ defmodule MirrorNeuron.Monitor do
 
   defp maybe_compact_values(values, opts) do
     if Keyword.get(opts, :compact, false) do
-      compact_value(values)
+      Enum.map(values, &compact_event/1)
     else
       values
     end
   end
+
+  defp compact_event(event) when is_map(event) do
+    event
+    |> Map.drop(@compact_event_drop_fields)
+    |> Map.update("payload", nil, &compact_event_payload/1)
+    |> maybe_put_staged_ref("payload_ref", event_payload_candidate(event))
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+    |> compact_value()
+  end
+
+  defp compact_event(event), do: compact_value(event)
+
+  defp compact_event_payload(payload) when is_map(payload) do
+    payload
+    |> Map.drop(@compact_event_drop_fields)
+    |> Map.update("_mn_step", nil, fn
+      metadata when is_map(metadata) -> Map.drop(metadata, ["run_inputs", "step_input"])
+      _ -> nil
+    end)
+    |> maybe_put_staged_ref("payload_ref", event_payload_candidate(payload))
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp compact_event_payload(payload), do: compact_value(payload)
+
+  defp event_payload_candidate(value) when is_map(value) do
+    Map.get(value, "payload_ref") ||
+      Map.get(value, "result_ref") ||
+      Map.get(value, "workflow_state_ref") ||
+      get_in(value, ["outputs", "_mn_staged_artifact"]) ||
+      get_in(value, ["result", "_mn_staged_artifact"])
+  end
+
+  defp event_payload_candidate(_value), do: nil
+
+  defp maybe_put_staged_ref(map, key, reference) when is_map(reference) do
+    if Map.get(reference, "version") == "mn.staged_artifact/v1" do
+      Map.put_new(map, key, reference)
+    else
+      map
+    end
+  end
+
+  defp maybe_put_staged_ref(map, _key, _reference), do: map
 
   defp compact_value(value) when is_binary(value) do
     if byte_size(value) > @compact_string_bytes do

@@ -69,7 +69,6 @@ defmodule MirrorNeuron.Artifacts.SharedStorage do
 
       {:error, warnings}
     else
-      cleanup_storage(storage, job_id)
       {:ok, warnings}
     end
   end

@@ -3,7 +3,9 @@ defmodule MirrorNeuron.Builtins.Executor do
 
   alias MirrorNeuron.Execution.Profile
   alias MirrorNeuron.Execution.LeaseManager
+  alias MirrorNeuron.Builtins.StepContract
   alias MirrorNeuron.Message
+  alias MirrorNeuron.Artifacts.StagedArtifact
   alias MirrorNeuron.Runner.OpenShell
 
   @transient_markers [
@@ -18,6 +20,7 @@ defmodule MirrorNeuron.Builtins.Executor do
     "timed out",
     "agent beacon deadline exceeded",
     "deadline exceeded",
+    "artifact_not_ready",
     "unavailable"
   ]
 
@@ -83,52 +86,53 @@ defmodule MirrorNeuron.Builtins.Executor do
 
     case run_with_retry(payload, state, context, normalized_message) do
       {:ok, result, attempts} ->
-        output_payload = %{
-          "agent_id" => context.node.node_id,
-          "sandbox" => Map.merge(result, %{"attempts" => attempts, "lease" => lease}),
-          "input" => payload
-        }
+        with {:ok, default_payload} <-
+               bounded_default_payload(result, payload, attempts, lease, state.config, context) do
+          routed_output_payload = routed_output_payload(result, default_payload, payload)
 
-        routed_output_payload = routed_output_payload(result, output_payload)
+          case structured_actions(result, state, normalized_message, routed_output_payload) do
+            {:ok, structured_state, structured_actions} ->
+              {structured_output_actions, structured_control_actions} =
+                Enum.split_with(structured_actions, &output_action?/1)
 
-        case structured_actions(result, state, normalized_message, routed_output_payload) do
-          {:ok, structured_state, structured_actions} ->
-            {structured_output_actions, structured_control_actions} =
-              Enum.split_with(structured_actions, &output_action?/1)
+              actions =
+                [
+                  {:event, :sandbox_job_completed,
+                   %{
+                     "sandbox_name" => result["sandbox_name"],
+                     "exit_code" => result["exit_code"],
+                     "attempts" => attempts,
+                     "lease_id" => lease["lease_id"],
+                     "pool" => lease["pool"]
+                   }}
+                ] ++
+                  structured_control_actions ++
+                  implicit_workflow_step_completion_actions(
+                    context,
+                    routed_output_payload,
+                    structured_actions,
+                    state.config
+                  ) ++
+                  default_output_actions(state.config, routed_output_payload) ++
+                  structured_output_actions
 
-            actions =
-              [
-                {:event, :sandbox_job_completed,
-                 %{
-                   "sandbox_name" => result["sandbox_name"],
-                   "exit_code" => result["exit_code"],
-                   "attempts" => attempts,
-                   "lease_id" => lease["lease_id"],
-                   "pool" => lease["pool"]
-                 }}
-              ] ++
-                structured_control_actions ++
-                implicit_workflow_step_completion_actions(
-                  context,
-                  routed_output_payload,
-                  structured_actions,
-                  state.config
-                ) ++
-                default_output_actions(state.config, routed_output_payload) ++
-                structured_output_actions
+              {:ok,
+               %{
+                 state
+                 | runs: state.runs + 1,
+                   agent_state: structured_state,
+                   last_output_payload: routed_output_payload,
+                   last_result: Map.put(Map.put(result, "attempts", attempts), "lease", lease),
+                   last_error: nil
+               }, actions}
 
-            {:ok,
-             %{
-               state
-               | runs: state.runs + 1,
-                 agent_state: structured_state,
-                 last_output_payload: routed_output_payload,
-                 last_result: Map.put(Map.put(result, "attempts", attempts), "lease", lease),
-                 last_error: nil
-             }, actions}
-
+            {:error, reason} ->
+              {:error, reason, %{state | runs: state.runs + 1, last_error: inspect(reason)}}
+          end
+        else
           {:error, reason} ->
-            {:error, reason, %{state | runs: state.runs + 1, last_error: inspect(reason)}}
+            error = %{"error" => "failed to stage executor result", "reason" => inspect(reason)}
+            {:error, error, %{state | runs: state.runs + 1, last_error: inspect(error)}}
         end
 
       {:error, reason, attempts} ->
@@ -268,6 +272,7 @@ defmodule MirrorNeuron.Builtins.Executor do
 
   defp run_with_retry(payload, state, context, message, attempt) do
     config = state.config
+    runner_config = with_step_result_pointer(config, context, attempt)
     runner = resolve_runner(config)
 
     # We pass the overall invocation counter (to salt sandbox directories securely between distinct payloads or retries)
@@ -275,7 +280,7 @@ defmodule MirrorNeuron.Builtins.Executor do
 
     case runner.run(
            payload,
-           config,
+           runner_config,
            message: message,
            attempt: attempt,
            invocation: invocation,
@@ -293,7 +298,18 @@ defmodule MirrorNeuron.Builtins.Executor do
            end
          ) do
       {:ok, result} ->
-        {:ok, result, attempt}
+        case attach_structured_result(result, runner_config) do
+          {:ok, result} ->
+            {:ok, result, attempt}
+
+          {:error, reason} ->
+            if retryable?(reason) and attempt < max_attempts(config) do
+              Process.sleep(backoff_ms(config, attempt))
+              run_with_retry(payload, state, context, message, attempt + 1)
+            else
+              {:error, reason, attempt}
+            end
+        end
 
       {:error, reason} ->
         if retryable?(reason) and attempt < max_attempts(config) do
@@ -306,7 +322,7 @@ defmodule MirrorNeuron.Builtins.Executor do
   end
 
   defp structured_actions(result, state, incoming, default_payload) do
-    case decode_structured_stdout(result) do
+    case decode_structured_result(result) do
       :ignore ->
         {:ok, state.agent_state, []}
 
@@ -420,9 +436,8 @@ defmodule MirrorNeuron.Builtins.Executor do
     end
   end
 
-  defp decode_structured_stdout(result) do
-    with stdout when is_binary(stdout) and stdout != "" <- Map.get(result, "stdout"),
-         {:ok, decoded} <- Jason.decode(stdout) do
+  defp decode_structured_result(result) do
+    with {:ok, decoded} <- decoded_result_payload(result) do
       cond do
         legacy_completion_payload?(decoded) ->
           {:error,
@@ -438,6 +453,18 @@ defmodule MirrorNeuron.Builtins.Executor do
         true ->
           :ignore
       end
+    else
+      _ -> :ignore
+    end
+  end
+
+  defp decoded_result_payload(%{"structured_result" => decoded}) when is_map(decoded),
+    do: {:ok, decoded}
+
+  defp decoded_result_payload(result) do
+    with stdout when is_binary(stdout) and stdout != "" <- Map.get(result, "stdout"),
+         {:ok, decoded} <- Jason.decode(stdout) do
+      {:ok, decoded}
     else
       _ -> :ignore
     end
@@ -492,9 +519,8 @@ defmodule MirrorNeuron.Builtins.Executor do
     end
   end
 
-  defp routed_output_payload(result, default_payload) do
-    with stdout when is_binary(stdout) and stdout != "" <- Map.get(result, "stdout"),
-         {:ok, decoded} when is_map(decoded) <- Jason.decode(stdout),
+  defp routed_output_payload(result, default_payload, input_payload) do
+    with {:ok, decoded} when is_map(decoded) <- decoded_result_payload(result),
          true <- sdk_step_result?(decoded) do
       decoded
       |> Map.take([
@@ -507,20 +533,141 @@ defmodule MirrorNeuron.Builtins.Executor do
         "runtime_step_mode"
       ])
       |> Map.put("agent_id", default_payload["agent_id"])
-      |> propagate_step_metadata(default_payload)
+      |> propagate_step_metadata(input_payload)
     else
       _ -> default_payload
     end
   end
 
-  defp propagate_step_metadata(payload, %{"input" => input}) when is_map(input) do
-    case Map.get(input, "_mn_step") do
-      metadata when is_map(metadata) -> Map.put(payload, "_mn_step", metadata)
-      _ -> payload
-    end
+  defp propagate_step_metadata(payload, input) when is_map(input) do
+    metadata = StepContract.reference_metadata(input)
+    if map_size(metadata) > 0, do: Map.put(payload, "_mn_step", metadata), else: payload
   end
 
   defp propagate_step_metadata(payload, _default_payload), do: payload
+
+  defp bounded_default_payload(result, input, attempts, lease, config, context) do
+    payload = %{
+      "agent_id" => context.node.node_id,
+      "sandbox" =>
+        result
+        |> Map.drop(["structured_result"])
+        |> Map.merge(%{"attempts" => attempts, "lease" => lease})
+    }
+
+    opts = staging_opts(config, context)
+
+    case StagedArtifact.maybe_stage_output(payload, opts) do
+      {:ok, ^payload, nil} ->
+        {:ok, propagate_step_metadata(payload, input)}
+
+      {:ok, staged_output, reference} ->
+        {:ok,
+         %{
+           "agent_id" => context.node.node_id,
+           "outputs" => staged_output,
+           "artifacts" => [reference],
+           "status" => "completed"
+         }
+         |> propagate_step_metadata(input)}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp staging_opts(config, context) do
+    environment = Map.get(config, "environment", %{})
+    workflow = Map.get(context, :workflow, %{})
+
+    [
+      kind: "executor_result",
+      submission_path: Map.get(environment, "MN_JOB_SHARED_STORAGE_ROOT"),
+      submission_id: Map.get(environment, "MN_STORAGE_SUBMISSION_ID"),
+      run_id: Map.get(workflow, "run_id") || context.job_id
+    ]
+  end
+
+  defp with_step_result_pointer(config, context, attempt) do
+    environment = Map.get(config, "environment", %{})
+    submission_path = Map.get(environment, "MN_JOB_SHARED_STORAGE_ROOT")
+
+    if sdk_step_runtime?(config) and is_binary(submission_path) and submission_path != "" do
+      workflow = Map.get(context, :workflow, %{})
+      run_id = Map.get(workflow, "run_id") || context.job_id || "run"
+      attempt_id = Map.get(workflow, "attempt_id") || "attempt-#{attempt}"
+
+      pointer =
+        Path.join([
+          submission_path,
+          "outputs",
+          "runs",
+          safe_component(run_id),
+          "artifacts",
+          "results",
+          safe_component(context.node.node_id),
+          safe_component(attempt_id) <> "-#{attempt}.json"
+        ])
+
+      Map.put(config, "environment", Map.put(environment, "MN_STEP_RESULT_FILE", pointer))
+    else
+      config
+    end
+  end
+
+  defp sdk_step_runtime?(config) do
+    case Map.get(config, "command") do
+      command when is_binary(command) ->
+        String.contains?(command, "mn_sdk.step_runtime")
+
+      command when is_list(command) ->
+        Enum.any?(command, &String.contains?(to_string(&1), "mn_sdk.step_runtime"))
+
+      _ ->
+        false
+    end
+  end
+
+  defp attach_structured_result(result, config) do
+    environment = Map.get(config, "environment", %{})
+
+    case Map.get(environment, "MN_STEP_RESULT_FILE") do
+      path when is_binary(path) and path != "" ->
+        try do
+          resolved =
+            StagedArtifact.resolve_pointer!(path,
+              submission_path: Map.get(environment, "MN_JOB_SHARED_STORAGE_ROOT")
+            )
+
+          {:ok, Map.put(result, "structured_result", resolved)}
+        rescue
+          error in StagedArtifact.NotReadyError ->
+            {:error,
+             %{
+               "error" => Exception.message(error),
+               "code" => error.code,
+               "retryable" => error.retryable
+             }}
+
+          error in StagedArtifact.IntegrityError ->
+            {:error, %{"error" => Exception.message(error), "code" => "artifact_integrity_error"}}
+        end
+
+      _ ->
+        {:ok, result}
+    end
+  end
+
+  defp safe_component(value) do
+    value
+    |> to_string()
+    |> String.replace(~r/[^A-Za-z0-9._-]+/, "-")
+    |> String.trim(".-")
+    |> case do
+      "" -> "run"
+      normalized -> normalized
+    end
+  end
 
   defp sdk_step_result?(decoded) do
     is_map(Map.get(decoded, "outputs")) and

@@ -433,6 +433,16 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
+  def fetch_job_summary(job_id) do
+    with :ok <- validate_identifier("job_id", job_id) do
+      case command(["GET", key("job", job_id, "summary")]) do
+        {:ok, nil} -> {:error, "job #{job_id} summary was not found"}
+        {:ok, contents} -> Jason.decode(contents)
+        {:error, reason} -> {:error, format_reason(reason)}
+      end
+    end
+  end
+
   def list_job_ids do
     case command(["SMEMBERS", key(@jobs_set)]) do
       {:ok, job_ids} -> {:ok, Enum.sort(compact_legacy_job_ids(job_ids))}
@@ -2095,9 +2105,54 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       "active_executors" => field(job, "active_executors", 0),
       "nodes" => field(job, "nodes", []),
       "sandbox_names" => field(job, "sandbox_names", []),
-      "last_event" => field(job, "last_event")
+      "last_event" => field(job, "last_event"),
+      "manifest_ref" => field(job, "manifest_ref"),
+      "result_ref" => field(job, "result_ref"),
+      "workflow_state_ref" => field(job, "workflow_state_ref"),
+      "workflow_state" => workflow_state_summary(field(job, "workflow_state"))
     }
   end
+
+  defp workflow_state_summary(%{"steps" => steps} = state) when is_map(steps) do
+    summarized_steps =
+      Map.new(steps, fn {step_id, step} ->
+        summary =
+          if is_map(step) do
+            Map.take(step, [
+              "id",
+              "label",
+              "status",
+              "agent_ids",
+              "attempt_count",
+              "started_at",
+              "ended_at",
+              "last_event_at",
+              "terminal_outcome",
+              "terminal_reason",
+              "output_ref"
+            ])
+          else
+            %{"status" => "unknown"}
+          end
+
+        {step_id, summary}
+      end)
+
+    state
+    |> Map.take([
+      "schema_version",
+      "enabled",
+      "job_id",
+      "run_id",
+      "status",
+      "step_order",
+      "created_at",
+      "updated_at"
+    ])
+    |> Map.put("steps", summarized_steps)
+  end
+
+  defp workflow_state_summary(_state), do: nil
 
   defp recovery_hint(job) do
     if field(job, "status") == "failed" and runner_interruption_result?(field(job, "result")) do

@@ -5,7 +5,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   alias MirrorNeuron.Execution.Profile
   alias MirrorNeuron.Message
   alias MirrorNeuron.Persistence.RedisStore
-  alias MirrorNeuron.Artifacts.SharedStorage
+  alias MirrorNeuron.Artifacts.{SharedStorage, StagedArtifact}
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.{JobBundle, ServiceRegistry, ServiceSpec}
   alias MirrorNeuron.Scheduler
@@ -50,6 +50,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       opts: opts,
       status: status,
       result: result,
+      result_ref: existing_job && existing_job["result_ref"],
+      workflow_state_ref: existing_job && existing_job["workflow_state_ref"],
       submitted_at: submitted_at,
       agent_ids: runtime_topology.agent_ids,
       runtime_nodes: runtime_topology.nodes,
@@ -2903,11 +2905,22 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     {result, event_fields} = attach_failure_error(state, status, result, event_type, event_fields)
     {result, event_fields} = finalize_shared_storage(state, status, result, event_fields)
 
+    finished_workflow = WorkflowLedger.finish(state.workflow_state, status)
+    result = strip_result_workflow_state(result)
+
+    {result_ref, workflow_state_ref} =
+      stage_terminal_snapshots(state, result, finished_workflow)
+
+    compact_result = compact_terminal_result(status, result, result_ref, workflow_state_ref)
+    compact_workflow = WorkflowLedger.compact_snapshot(finished_workflow)
+
     next_state = %{
       state
       | status: status,
-        result: result,
-        workflow_state: WorkflowLedger.finish(state.workflow_state, status),
+        result: compact_result,
+        result_ref: result_ref,
+        workflow_state_ref: workflow_state_ref,
+        workflow_state: compact_workflow,
         pending_workflow_completion: nil
     }
 
@@ -2916,12 +2929,90 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
     event =
       event_fields
+      |> Map.drop([:output, :result, :workflow_state, "output", "result", "workflow_state"])
+      |> maybe_put_event_ref(:payload_ref, result_ref)
+      |> maybe_put_event_ref(:result_ref, result_ref)
+      |> maybe_put_event_ref(:workflow_state_ref, workflow_state_ref)
       |> Map.put(:type, event_type)
       |> Map.put(:timestamp, Runtime.timestamp())
 
     EventBus.publish(state.job_id, event)
     next_state
   end
+
+  defp strip_result_workflow_state(result) when is_map(result) do
+    result
+    |> Map.delete(:workflow_state)
+    |> Map.delete("workflow_state")
+  end
+
+  defp strip_result_workflow_state(result), do: result
+
+  defp stage_terminal_snapshots(state, result, workflow_state) do
+    manifest = MirrorNeuron.Manifest.to_map(state.manifest)
+    run_id = WorkflowLedger.run_id(workflow_state) || state.job_id
+
+    result_ref =
+      stage_terminal_snapshot(result, manifest,
+        kind: "job_result",
+        run_id: run_id
+      )
+
+    workflow_state_ref =
+      stage_terminal_snapshot(workflow_state, manifest,
+        kind: "workflow_state",
+        run_id: run_id
+      )
+
+    {result_ref, workflow_state_ref}
+  end
+
+  defp stage_terminal_snapshot(value, manifest, opts) do
+    case StagedArtifact.stage_from_manifest(value, manifest, opts) do
+      {:ok, reference} ->
+        reference
+
+      {:error, reason} ->
+        Logger.warning("failed to stage terminal artifact: #{inspect(reason)}")
+        nil
+    end
+  end
+
+  defp compact_terminal_result(status, result, result_ref, workflow_state_ref) do
+    summary =
+      inline_terminal_result(result)
+      |> Map.put("status", status)
+
+    summary
+    |> maybe_put_event_ref("result_ref", result_ref)
+    |> maybe_put_event_ref("workflow_state_ref", workflow_state_ref)
+  end
+
+  defp inline_terminal_result(result) when is_map(result) do
+    if StagedArtifact.inline_value?(result) do
+      stringify_map(result)
+    else
+      result
+      |> Map.take([
+        :agent_id,
+        "agent_id",
+        :error,
+        "error",
+        :failure,
+        "failure",
+        :finalization_warnings,
+        "finalization_warnings"
+      ])
+      |> Map.new(fn {key, value} -> {to_string(key), value} end)
+    end
+  end
+
+  defp inline_terminal_result(result) do
+    if StagedArtifact.inline_value?(result), do: %{"output" => result}, else: %{}
+  end
+
+  defp maybe_put_event_ref(map, _key, nil), do: map
+  defp maybe_put_event_ref(map, key, reference), do: Map.put(map, key, reference)
 
   defp finalize_shared_storage(state, status, result, event_fields) do
     manifest = MirrorNeuron.Manifest.to_map(state.manifest)
@@ -3096,10 +3187,16 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         restart_policy: job_restart_policy(state),
         reschedule_policy: job_reschedule_policy(state),
         policy_state: state.policy_state,
-        workflow_state: state.workflow_state,
+        workflow_state:
+          WorkflowLedger.persistable_snapshot(
+            state.workflow_state,
+            MirrorNeuron.Manifest.to_map(state.manifest)
+          ),
         pending_workflow_completion: state.pending_workflow_completion,
         deployment: deployment_job_fields(state),
         result: state.result,
+        result_ref: state.result_ref,
+        workflow_state_ref: state.workflow_state_ref,
         topology: MirrorNeuron.Manifest.topology(state.manifest),
         runtime_topology: runtime_topology(state),
         manifest: MirrorNeuron.Manifest.to_map(state.manifest),
@@ -3155,6 +3252,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         recovery_policy: effective_recovery_policy(state),
         reliability_degraded: reliability_degraded?(state),
         result: state.result,
+        result_ref: state.result_ref,
+        workflow_state_ref: state.workflow_state_ref,
         topology: MirrorNeuron.Manifest.topology(state.manifest),
         runtime_topology: runtime_topology(state),
         manifest: MirrorNeuron.Manifest.to_map(state.manifest),
@@ -3167,7 +3266,11 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         restart_policy: job_restart_policy(state),
         reschedule_policy: job_reschedule_policy(state),
         policy_state: state.policy_state,
-        workflow_state: state.workflow_state,
+        workflow_state:
+          WorkflowLedger.persistable_snapshot(
+            state.workflow_state,
+            MirrorNeuron.Manifest.to_map(state.manifest)
+          ),
         pending_workflow_completion: state.pending_workflow_completion,
         deployment: deployment_job_fields(state)
       }

@@ -195,6 +195,56 @@ defmodule MirrorNeuron.MonitorTest do
     RedisStore.delete_job(job_id)
   end
 
+  test "compact job details omit recursive workflow outputs and event payloads" do
+    job_id = "monitor-compact-budget-#{System.unique_integer([:positive])}"
+
+    recursive = %{
+      "outputs" => %{
+        "next" => %{
+          "input" => %{
+            "outputs" => %{"previous" => %{"blob" => String.duplicate("x", 2_000_000)}},
+            "_mn_step" => %{
+              "step_input" => %{"previous" => %{"blob" => String.duplicate("x", 2_000_000)}}
+            }
+          }
+        }
+      }
+    }
+
+    RedisStore.persist_job(job_id, %{
+      "job_id" => job_id,
+      "graph_id" => "compact_demo",
+      "status" => "completed",
+      "result" => recursive,
+      "workflow_state" => %{
+        "status" => "completed",
+        "steps" => %{
+          "publish" => %{
+            "id" => "publish",
+            "status" => "completed",
+            "output" => recursive,
+            "last_message" => recursive
+          }
+        }
+      }
+    })
+
+    RedisStore.append_event(job_id, %{
+      "type" => "workflow_step_attempt_completed",
+      "payload" => recursive
+    })
+
+    assert {:ok, details} = Monitor.job_details(job_id, compact: true, event_limit: 10)
+    encoded = Jason.encode!(details)
+
+    assert byte_size(encoded) < 1_048_576
+    refute Map.has_key?(details["job"], "result")
+    refute Map.has_key?(details["job"]["workflow_state"]["steps"]["publish"], "output")
+    refute String.contains?(encoded, String.duplicate("x", 1000))
+
+    RedisStore.delete_job(job_id)
+  end
+
   test "lists only live jobs when requested" do
     live_job_id = "monitor-live-#{System.unique_integer([:positive])}"
     stale_job_id = "monitor-stale-#{System.unique_integer([:positive])}"

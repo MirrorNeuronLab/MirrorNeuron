@@ -3,6 +3,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
 
   alias MirrorNeuron.Message
   alias MirrorNeuron.Manifest
+  alias MirrorNeuron.Artifacts.StagedArtifact
   alias MirrorNeuron.Runtime.WorkflowLedger
 
   test "tracks workflow attempts, retries timed out steps, and fails after attempts are exhausted" do
@@ -818,6 +819,50 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
 
   defp timestamp(offset_seconds) do
     "2026-06-02T16:00:#{offset_seconds |> Integer.to_string() |> String.pad_leading(2, "0")}.000Z"
+  end
+
+  @tag :tmp_dir
+  test "persistable snapshot externalizes step outputs and retry messages", %{tmp_dir: tmp_dir} do
+    submission = Path.join(tmp_dir, "submission")
+    large_output = %{"nested" => String.duplicate("result", 200_000)}
+    message = Message.new("job-1", "source", "worker", "run", %{"input" => large_output})
+
+    state = %{
+      "enabled" => true,
+      "job_id" => "job-1",
+      "run_id" => "run-1",
+      "steps" => %{
+        "worker" => %{
+          "id" => "worker",
+          "status" => "running",
+          "output" => large_output,
+          "last_message" => message
+        }
+      }
+    }
+
+    manifest = %{
+      "metadata" => %{
+        "mn_storage" => %{
+          "submission_id" => "submission-1",
+          "submission_path" => submission
+        }
+      }
+    }
+
+    persisted = WorkflowLedger.persistable_snapshot(state, manifest)
+    step = persisted["steps"]["worker"]
+
+    refute Map.has_key?(step, "output")
+    refute Map.has_key?(step, "last_message")
+
+    assert StagedArtifact.resolve!(step["output_ref"], submission_path: submission) ==
+             large_output
+
+    assert StagedArtifact.resolve!(step["last_message_ref"], submission_path: submission) ==
+             message
+
+    assert byte_size(Jason.encode!(persisted)) < 10_000
   end
 
   defp manifest(opts \\ []) do
