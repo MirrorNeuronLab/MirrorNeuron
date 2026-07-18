@@ -16,7 +16,13 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
-  def kick, do: GenServer.cast(__MODULE__, :scan)
+  def kick do
+    if Process.whereis(__MODULE__) do
+      GenServer.cast(__MODULE__, :scan)
+    else
+      :ok
+    end
+  end
 
   def reconcile_now(job_id) when is_binary(job_id) do
     reconcile_cancellation(job_id, to_string(Node.self()))
@@ -56,47 +62,62 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
   defp reconcile_cancellation(job_id, local_node) do
     # A stale coordinator is allowed to receive the cancellation and stop, but
     # cannot persist a write after the request fence has advanced.
-    _ = Runtime.cancel_job(job_id)
-    _ = OpenShellJobSandbox.cleanup_job_local(job_id)
-    _ = DockerJobSandbox.cleanup_job_local(job_id)
-    _ = DiskCheckpoint.delete_job(job_id)
+    try do
+      with :ok <- stop_local_job(job_id),
+           :ok <- OpenShellJobSandbox.cleanup_job_local(job_id),
+           :ok <- DockerJobSandbox.cleanup_job_local(job_id),
+           :ok <- DiskCheckpoint.delete_job(job_id) do
+        case CancellationStore.acknowledge(job_id, local_node) do
+          {:ok, :completed, _cancellation} ->
+            EventBus.publish(job_id, %{
+              type: :job_cancelled,
+              reason: "durable cluster cancellation acknowledged",
+              timestamp: Runtime.timestamp()
+            })
 
-    case CancellationStore.acknowledge(job_id, local_node) do
-      {:ok, :completed, _cancellation} ->
-        EventBus.publish(job_id, %{
-          type: :job_cancelled,
-          reason: "durable cluster cancellation acknowledged",
-          timestamp: Runtime.timestamp()
-        })
+            :ok
 
-        :ok
+          {:ok, :pending, _cancellation} ->
+            EventBus.publish(job_id, %{
+              type: :job_cancellation_acknowledged,
+              node: local_node,
+              timestamp: Runtime.timestamp()
+            })
 
-      {:ok, :pending, _cancellation} ->
-        EventBus.publish(job_id, %{
-          type: :job_cancellation_acknowledged,
-          node: local_node,
-          timestamp: Runtime.timestamp()
-        })
+            :ok
 
-        :ok
+          {:ok, :not_target, _cancellation} ->
+            :ok
 
-      {:ok, :not_target, _cancellation} ->
-        :ok
-
-      {:error, reason} ->
+          {:error, reason} ->
+            Logger.warning(
+              "could not acknowledge durable cancellation for #{job_id}: #{inspect(reason)}"
+            )
+        end
+      else
+        {:error, reason} ->
+          Logger.warning(
+            "durable cancellation cleanup is incomplete for #{job_id}; acknowledgement will retry: #{inspect(reason)}"
+          )
+      end
+    rescue
+      error ->
         Logger.warning(
-          "could not acknowledge durable cancellation for #{job_id}: #{inspect(reason)}"
+          "durable cancellation reconciliation failed for #{job_id}: #{Exception.message(error)}"
+        )
+    catch
+      kind, reason ->
+        Logger.warning(
+          "durable cancellation reconciliation failed for #{job_id}: #{inspect({kind, reason})}"
         )
     end
-  rescue
-    error ->
-      Logger.warning(
-        "durable cancellation reconciliation failed for #{job_id}: #{Exception.message(error)}"
-      )
-  catch
-    kind, reason ->
-      Logger.warning(
-        "durable cancellation reconciliation failed for #{job_id}: #{inspect({kind, reason})}"
-      )
+  end
+
+  defp stop_local_job(job_id) do
+    case Runtime.cancel_job(job_id) do
+      {:ok, _status} -> :ok
+      {:error, {:job_not_running, ^job_id}} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
   end
 end

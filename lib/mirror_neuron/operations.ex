@@ -1,7 +1,7 @@
 defmodule MirrorNeuron.Operations do
   @moduledoc false
 
-  alias MirrorNeuron.Cluster.{NodeDrainer, Reconciler}
+  alias MirrorNeuron.Cluster.{Control, NodeDrainer, Reconciler}
   alias MirrorNeuron.Monitor
   alias MirrorNeuron.Operations.Supervisor
   alias MirrorNeuron.Persistence.OperationStore
@@ -135,16 +135,37 @@ defmodule MirrorNeuron.Operations do
   def execute("clear_jobs", %{"job_id" => job_id}, _opts), do: clear_item(job_id)
 
   def execute("reconcile_node", %{"job_id" => job_id, "node_name" => node_name}, opts) do
-    case Reconciler.reconcile_job(job_id, node_name, opts) do
-      {:ok, result} -> reconcile_result(result)
-      {:error, reason} -> {:failed, %{}, inspect(reason)}
+    if control_node?() do
+      execute_on_runtime("reconcile_node", %{"job_id" => job_id, "node_name" => node_name}, opts)
+    else
+      case Reconciler.reconcile_job(job_id, node_name, opts) do
+        {:ok, result} -> reconcile_result(result)
+        {:error, reason} -> {:failed, %{}, inspect(reason)}
+      end
     end
   end
 
   def execute("drain_node", %{"job_id" => job_id, "node_name" => node_name}, opts) do
-    case NodeDrainer.drain_job(job_id, node_name, Keyword.put(opts, :continue, true)) do
-      {:ok, result} -> drain_result(result)
-      {:error, reason} -> {:failed, %{}, inspect(reason)}
+    if control_node?() do
+      execute_on_runtime("drain_node", %{"job_id" => job_id, "node_name" => node_name}, opts)
+    else
+      case NodeDrainer.drain_job(job_id, node_name, Keyword.put(opts, :continue, true)) do
+        {:ok, result} -> drain_result(result)
+        {:error, reason} -> {:failed, %{}, inspect(reason)}
+      end
+    end
+  end
+
+  # A drain with no eligible jobs still has an operator-visible effect: it puts
+  # the node into draining/maintenance and removes it from new placement.
+  def execute("drain_node", %{"node_name" => node_name}, opts) do
+    if control_node?() do
+      execute_on_runtime("drain_node", %{"node_name" => node_name}, opts)
+    else
+      case NodeDrainer.drain_node(node_name, Keyword.put(opts, :continue, true)) do
+        {:ok, result} -> drain_result(result)
+        {:error, reason} -> {:failed, %{}, inspect(reason)}
+      end
     end
   end
 
@@ -234,6 +255,13 @@ defmodule MirrorNeuron.Operations do
           |> Enum.map(
             &%{"id" => &1["job_id"], "job_id" => &1["job_id"], "node_name" => node_name}
           )
+
+        targets =
+          if kind == "drain_node" and targets == [] do
+            [%{"id" => "node:" <> node_name, "node_name" => node_name}]
+          else
+            targets
+          end
 
         {:ok, targets}
       end
@@ -325,4 +353,14 @@ defmodule MirrorNeuron.Operations do
       true -> "complete"
     end
   end
+
+  defp execute_on_runtime(kind, target, opts) do
+    case Control.call(__MODULE__, :execute, [kind, target, opts]) do
+      {:badrpc, reason} -> {:failed, %{}, "runtime operation routing failed: #{inspect(reason)}"}
+      {:error, reason} -> {:failed, %{}, "runtime operation routing failed: #{inspect(reason)}"}
+      result -> result
+    end
+  end
+
+  defp control_node?, do: MirrorNeuron.Application.node_role() == "control"
 end

@@ -156,6 +156,13 @@ defmodule MirrorNeuron.RuntimeReliabilityTest do
         assert {:error, {:cancellation_fenced, 1, _fence_epoch}} =
                  RedisStore.persist_job(job_id, stale_write)
 
+        assert {:error, {:cancellation_fenced, 1, _fence_epoch}} =
+                 RedisStore.persist_agent(job_id, "worker", %{
+                   "agent_id" => "worker",
+                   "assigned_node" => remote_node,
+                   "lease_epoch" => 1
+                 })
+
         assert {:error, {:job_cancelling, ^job_id}} = Runtime.resume_job(job_id)
 
         assert {:ok, :completed, _cancellation} =

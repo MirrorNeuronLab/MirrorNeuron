@@ -17,9 +17,10 @@ and desktop presentation are separate contracts consumed by Core.
 - `MirrorNeuron`: in-process job, deployment, schedule, cluster, inspection,
   backup, and control facade.
 - `lib/mirror_neuron_grpc/` with `proto/*.proto`: remote control,
-  observability, job, and cluster services.
+  observability, job, cluster, and durable operation services.
 - executable job manifests and bundles accepted by `JobBundle`/`Manifest`.
-- Redis-backed job, event, delivery, schedule, deployment, and snapshot records.
+- Redis-backed job, cancellation, operation/event, delivery, schedule,
+  deployment, and snapshot records.
 - structured runtime events, error envelopes, artifacts, and runner results.
 
 Exact function and RPC definitions are authoritative. Changes to these surfaces
@@ -52,8 +53,19 @@ messages follow the declared failure/dead-letter path.
 ## Lifecycle and Persistence
 
 Job and agent lifecycle transitions are validated and persisted. Terminal job
-states are completed, failed, or cancelled. Pause, resume, cancel, backup,
-restore, deployment, and schedule operations preserve event/status coherence.
+states are completed, failed, or cancelled. `cancelling` is a fenced,
+non-recoverable transition: durable cancellation intent revokes the old lease,
+rejects stale coordinator/agent writes, and prevents recovery, resume,
+scheduling, and drain migration until locally owned cleanup is acknowledged.
+Pause, resume, cancel, backup, restore, deployment, and schedule operations
+preserve event/status coherence.
+
+Fixed server-defined group-operation kinds persist their immutable target
+snapshot, item states, counters, errors, timestamps, and replayable progress
+events in Redis. OTP-supervised runners apply bounded unordered concurrency;
+unfinished work is resumed after a Core restart. A request is successful when
+durable cancellation intent has been committed even when remote cleanup remains
+pending.
 
 Redis is the primary durable coordination store. Disk checkpoints and shared
 artifact storage supplement declared recovery paths. Recovery verifies runtime

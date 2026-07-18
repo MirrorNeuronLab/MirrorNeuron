@@ -13,6 +13,7 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
   @default_health_probe_interval_ms 10_000
   @default_health_misses 3
   @default_health_probe_timeout_ms 2_000
+  @default_self_advertise_retry_ms 1_000
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -20,9 +21,10 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
 
   @impl true
   def init(opts) do
-    if Keyword.get(opts, :monitor_nodes, true) do
+    monitor_nodes = Keyword.get(opts, :monitor_nodes, true)
+
+    if monitor_nodes do
       :net_kernel.monitor_nodes(true)
-      node_state(opts).advertise_self("healthy", %{"self" => true})
     end
 
     state = %{
@@ -85,8 +87,12 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
             "MN_NODE_HEALTH_PROBE_TIMEOUT_MS",
             :node_health_probe_timeout_ms,
             @default_health_probe_timeout_ms
-          )
+          ),
+      self_advertise_retry_ms:
+        Keyword.get(opts, :self_advertise_retry_ms, @default_self_advertise_retry_ms)
     }
+
+    state = if monitor_nodes, do: advertise_self(state), else: state
 
     {:ok, schedule_health_probe(state)}
   end
@@ -151,6 +157,8 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
   def handle_info({:health_probe, _stale_token}, state), do: {:noreply, state}
 
   def handle_info(:health_probe, state), do: {:noreply, run_health_probes(state)}
+
+  def handle_info(:advertise_self, state), do: {:noreply, advertise_self(state)}
 
   def handle_info(_msg, state), do: {:noreply, state}
 
@@ -479,6 +487,35 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
     else
       node_state.mark(node, "healthy")
     end
+  end
+
+  defp advertise_self(state) do
+    case state.node_state.advertise_self("healthy", %{"self" => true}) do
+      :ok ->
+        state
+
+      {:ok, _advertisement} ->
+        state
+
+      {:error, reason} ->
+        retry_self_advertisement(state, reason)
+
+      other ->
+        retry_self_advertisement(state, other)
+    end
+  rescue
+    exception -> retry_self_advertisement(state, Exception.message(exception))
+  catch
+    kind, reason -> retry_self_advertisement(state, {kind, reason})
+  end
+
+  defp retry_self_advertisement(state, reason) do
+    Logger.warning(
+      "could not advertise local cluster node; retrying in #{state.self_advertise_retry_ms}ms: #{inspect(reason)}"
+    )
+
+    Process.send_after(self(), :advertise_self, state.self_advertise_retry_ms)
+    state
   end
 
   defp node_name(node) when is_atom(node), do: Atom.to_string(node)

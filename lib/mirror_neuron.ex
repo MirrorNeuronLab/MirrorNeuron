@@ -339,13 +339,11 @@ defmodule MirrorNeuron do
     end
   end
 
-  def cancel(job_id) do
-    if control_node?() do
-      call_control_or_runtime(job_id, :cancel, [job_id])
-    else
-      request_durable_cancellation(job_id)
-    end
-  end
+  # Cancellation intent is written to the shared store before any work is
+  # routed. In particular, do not forward this through a control node: an
+  # unavailable owner must produce `cancellation_pending` immediately instead
+  # of consuming the legacy job-control timeout.
+  def cancel(job_id), do: request_durable_cancellation(job_id)
 
   def cancel_all do
     with {:ok, operation} <- start_operation("cancel_all_jobs"),
@@ -354,13 +352,10 @@ defmodule MirrorNeuron do
     end
   end
 
-  def start_operation(kind, opts \\ []) do
-    if control_node?() do
-      Control.call(__MODULE__, :start_operation, [kind, opts])
-    else
-      Operations.start(kind, opts)
-    end
-  end
+  # Operation intent, snapshots, and runner ownership are cluster-wide Redis
+  # records. Starting locally works on both control and runtime nodes; the
+  # runner lease prevents duplicate execution after a restart or rejoin.
+  def start_operation(kind, opts \\ []), do: Operations.start(kind, opts)
 
   def operation(operation_id), do: Operations.get(operation_id)
 

@@ -81,7 +81,10 @@ defmodule MirrorNeuron.Grpc.Handlers.Operation do
             now = monotonic_ms()
 
             if OperationStore.terminal?(operation) do
-              stream
+              # Runner status is committed just before its terminal event. Read
+              # once more so a client that was following during that tiny
+              # window still receives the replayable completion record.
+              deliver_terminal_events(operation_id, next_sequence, stream)
             else
               if heartbeat_ms > 0 and now - heartbeat_at >= heartbeat_ms do
                 GRPC.Server.send_reply(
@@ -131,6 +134,18 @@ defmodule MirrorNeuron.Grpc.Handlers.Operation do
 
   defp positive_integer(value) when is_integer(value) and value > 0, do: value
   defp positive_integer(_value), do: nil
+
+  defp deliver_terminal_events(operation_id, after_sequence, stream) do
+    case MirrorNeuron.operation_events(operation_id, after_sequence) do
+      {:ok, events} ->
+        Enum.each(events, &GRPC.Server.send_reply(stream, event_response(&1)))
+        stream
+
+      _ ->
+        stream
+    end
+  end
+
   defp latest_sequence(sequence, []), do: sequence
   defp latest_sequence(_sequence, events), do: events |> List.last() |> Map.get("sequence", 0)
 

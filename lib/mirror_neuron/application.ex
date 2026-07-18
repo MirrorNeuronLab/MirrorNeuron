@@ -35,7 +35,9 @@ defmodule MirrorNeuron.Application do
         {Cluster.Supervisor, [topologies, [name: MirrorNeuron.ClusterSupervisor]]},
         MirrorNeuron.Persistence.CheckpointLock,
         MirrorNeuron.Redis,
-        MirrorNeuron.Persistence.Retention
+        MirrorNeuron.Persistence.Retention,
+        {Task.Supervisor, name: MirrorNeuron.Runtime.RecoveryTaskSupervisor},
+        MirrorNeuron.Operations.Supervisor
       ] ++ grpc_child_specs()
 
     children =
@@ -58,8 +60,6 @@ defmodule MirrorNeuron.Application do
               MirrorNeuron.Runtime.AgentSupervisor,
               MirrorNeuron.Runtime.LocalAgentSupervisor,
               MirrorNeuron.Runtime.HordeCluster,
-              {Task.Supervisor, name: MirrorNeuron.Runtime.RecoveryTaskSupervisor},
-              MirrorNeuron.Operations.Supervisor,
               MirrorNeuron.Runtime.CancellationReconciler,
               MirrorNeuron.ServiceMonitor,
               MirrorNeuron.Bundle.Manager,

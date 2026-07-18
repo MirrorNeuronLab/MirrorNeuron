@@ -379,6 +379,23 @@ MirrorNeuron.resume("job-id")
 MirrorNeuron.cancel("job-id")
 ```
 
+Cancellation is durable across a cluster. When the owning node cannot be
+reached, Core records `cancelling`, advances the job fence, revokes its lease,
+and returns `cancellation_pending` immediately. The owner performs local agent,
+sandbox, and checkpoint cleanup when it rejoins; the job becomes `cancelled`
+only after every recorded owner acknowledgement. Recovery, resume, scheduling,
+and drain migration do not run while a job is `cancelling`.
+
+### Durable group operations
+
+`cancel_all_jobs`, terminal-job clearing, node reconciliation, and node drain
+are persisted operations rather than one synchronous fan-out. Start an allowed
+operation with `MirrorNeuron.start_operation/2`, inspect it with
+`MirrorNeuron.operation/1`, and replay its ordered progress records with
+`MirrorNeuron.operation_events/2`. Workers complete out of order under bounded
+native OTP task concurrency (8 for cancellation/clear, 2 for reconcile/drain).
+Unfinished records are resumed after a Core restart.
+
 ---
 
 ## Resource-aware scheduling preview
@@ -537,7 +554,7 @@ present. Production does not require any `.env` file.
 | `MN_JOB_LEASE_DURATION_MS` | Job lease duration for fenced runtime ownership; defaults to 60000. |
 | `MN_JOB_LEASE_RENEW_INTERVAL_MS` | Job lease renewal cadence; defaults to 10000. |
 | `MN_JOB_CALL_TIMEOUT_MS` | Timeout for runtime job control calls such as pause, resume, pressure, and external message submit; defaults to 15000. |
-| `MN_CANCEL_JOB_CALL_TIMEOUT_MS` | Timeout for cancel before forcing durable cancellation of active orphaned jobs; defaults to 5000. |
+| `MN_CANCEL_JOB_CALL_TIMEOUT_MS` | Local coordinator cancellation call timeout; unavailable remote ownership is recorded as durable `cancellation_pending` instead of waiting for this timeout. Defaults to 5000. |
 | `MN_MESSAGE_DEFAULT_TTL_SECONDS` | Default lifetime for an agent message; defaults to 86400. |
 | `MN_MESSAGE_MAX_TTL_SECONDS` | Maximum accepted agent-message lifetime; defaults to 604800. |
 | `MN_MESSAGE_ACK_RECEIPT_TTL_SECONDS` | Retention for ACK and dead-letter receipts; defaults to 3600. |
@@ -612,6 +629,7 @@ MirrorNeuron Core includes protobuf definitions and generated Elixir modules for
 - `proto/job.proto`
 - `proto/cluster.proto`
 - `proto/observability.proto`
+- `proto/operations.proto`
 
 Generated modules live under `lib/mirror_neuron_grpc/`. The gRPC listener binds
 to `MN_CORE_HOST` and listens on `MN_GRPC_PORT`.
@@ -623,6 +641,11 @@ there are no operator/admin token scopes or credentials embedded in requests.
 `ClusterService.NetworkHandshake` is used by cluster join flows to verify the
 join token and keep network-facing nodes scoped to cluster/resource inspection
 when `MN_NETWORK_ONLY=true`.
+
+`OperationsService` starts only server-defined group-operation kinds, reads
+their durable snapshots, and streams replayable item events. The stream accepts
+an `after_sequence` cursor so clients can detach and reattach without restarting
+the operation.
 
 `ClusterService.PublishRuntimeStatus` persists acknowledged per-node runtime
 status snapshots, such as model inventory, in shared Redis.

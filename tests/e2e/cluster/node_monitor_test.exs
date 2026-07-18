@@ -33,6 +33,28 @@ defmodule MirrorNeuron.Cluster.NodeMonitorTest do
     end
   end
 
+  defmodule RetryingNodeStateStub do
+    def reset, do: :persistent_term.put({__MODULE__, :attempts}, 0)
+
+    def advertise_self(status, attrs \\ %{}) do
+      attempt = :persistent_term.get({__MODULE__, :attempts}, 0) + 1
+      :persistent_term.put({__MODULE__, :attempts}, attempt)
+
+      send(
+        Process.whereis(:node_monitor_test_pid),
+        {:self_advertise_attempt, attempt, status, attrs}
+      )
+
+      if attempt == 1 do
+        {:error, "LOADING Redis is loading the dataset in memory"}
+      else
+        {:ok, %{"status" => status}}
+      end
+    end
+
+    def mark(_node, _status, _attrs \\ %{}), do: :ok
+  end
+
   defmodule LeaderStub do
     def node_down(node) do
       send(Process.whereis(:node_monitor_test_pid), {:leader_node_down, node})
@@ -90,6 +112,21 @@ defmodule MirrorNeuron.Cluster.NodeMonitorTest do
     end)
 
     :ok
+  end
+
+  test "retries self advertisement when Redis is still loading during startup" do
+    RetryingNodeStateStub.reset()
+
+    start_monitor(
+      monitor_nodes: true,
+      node_state: RetryingNodeStateStub,
+      self_advertise_retry_ms: 5,
+      health_probe_interval_ms: 0
+    )
+
+    assert_receive {:self_advertise_attempt, 1, "healthy", %{"self" => true}}
+    assert_receive {:self_advertise_attempt, 2, "healthy", %{"self" => true}}, 100
+    refute_receive {:self_advertise_attempt, 3, _status, _attrs}, 20
   end
 
   test "nodeup during reconnect cancels retries without releasing live capacity or pausing jobs" do
