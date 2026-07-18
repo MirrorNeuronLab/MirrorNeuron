@@ -57,7 +57,8 @@ defmodule MirrorNeuron.Runtime.HordeCluster do
       enabled: enabled,
       refresh_ms: Keyword.get(opts, :refresh_ms, @refresh_ms),
       refresh_timer_ref: nil,
-      refresh_token: nil
+      refresh_token: nil,
+      memberships: %{}
     }
 
     {:ok, if(enabled, do: schedule_refresh(state, 0), else: state)}
@@ -66,7 +67,7 @@ defmodule MirrorNeuron.Runtime.HordeCluster do
   @impl true
   def handle_info({event, _node}, %{enabled: true} = state)
       when event in [:nodeup, :nodedown] do
-    {:noreply, schedule_refresh(state)}
+    {:noreply, state |> Map.put(:memberships, %{}) |> schedule_refresh()}
   end
 
   def handle_info({event, _node}, state) when event in [:nodeup, :nodedown],
@@ -74,15 +75,13 @@ defmodule MirrorNeuron.Runtime.HordeCluster do
 
   def handle_info({:refresh, token}, %{enabled: true, refresh_token: token} = state) do
     state = clear_refresh_timer(state)
-    refresh_members()
-    {:noreply, schedule_refresh(state)}
+    {:noreply, state |> refresh_members() |> schedule_refresh()}
   end
 
   def handle_info({:refresh, _stale_token}, state), do: {:noreply, state}
 
   def handle_info(:refresh, %{enabled: true} = state) do
-    refresh_members()
-    {:noreply, state}
+    {:noreply, refresh_members(state)}
   end
 
   def handle_info(:refresh, state), do: {:noreply, state}
@@ -91,8 +90,7 @@ defmodule MirrorNeuron.Runtime.HordeCluster do
 
   @impl true
   def handle_cast(:refresh, %{enabled: true} = state) do
-    refresh_members()
-    {:noreply, schedule_refresh(state)}
+    {:noreply, state |> refresh_members() |> schedule_refresh()}
   end
 
   def handle_cast(:refresh, state), do: {:noreply, state}
@@ -103,29 +101,75 @@ defmodule MirrorNeuron.Runtime.HordeCluster do
     :ok
   end
 
-  defp refresh_members do
+  @doc false
+  def refresh_horde_memberships(hordes, nodes, previous, opts \\ []) do
+    set_members = Keyword.get(opts, :set_members, &Horde.Cluster.set_members/2)
+    whereis = Keyword.get(opts, :whereis, &Process.whereis/1)
+
+    Enum.reduce(hordes, previous, fn horde, memberships ->
+      members = horde_members(horde, nodes)
+      signature = {whereis.(horde), MapSet.new(members)}
+
+      if Map.get(memberships, horde) == signature do
+        memberships
+      else
+        case safely_set_members(set_members, horde, members) do
+          :ok -> Map.put(memberships, horde, signature)
+          :error -> memberships
+        end
+      end
+    end)
+  end
+
+  defp refresh_members(state) do
     configured = configured_nodes()
     connect_configured_nodes(configured)
 
-    nodes = member_nodes(Node.self(), Node.list(), configured)
+    nodes =
+      Node.self()
+      |> member_nodes(Node.list(), configured)
+      |> Enum.sort_by(&to_string/1)
 
-    Enum.each(@hordes, fn horde ->
-      case Horde.Cluster.set_members(horde, horde_members(horde, nodes)) do
-        :ok ->
-          :ok
-
-        {:error, reason} ->
-          Logger.warning(
-            "failed to update Horde members for #{inspect(horde)}: #{inspect(reason)}"
-          )
-      end
-    end)
+    memberships = refresh_horde_memberships(@hordes, nodes, state.memberships)
+    %{state | memberships: memberships}
   rescue
     error ->
       Logger.warning("failed to refresh Horde cluster membership: #{Exception.message(error)}")
+      state
   catch
     kind, reason ->
       Logger.warning("failed to refresh Horde cluster membership: #{inspect({kind, reason})}")
+      state
+  end
+
+  defp safely_set_members(set_members, horde, members) do
+    case set_members.(horde, members) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("failed to update Horde members for #{inspect(horde)}: #{inspect(reason)}")
+        :error
+
+      other ->
+        Logger.warning("failed to update Horde members for #{inspect(horde)}: #{inspect(other)}")
+
+        :error
+    end
+  rescue
+    error ->
+      Logger.warning(
+        "failed to update Horde members for #{inspect(horde)}: #{Exception.message(error)}"
+      )
+
+      :error
+  catch
+    kind, reason ->
+      Logger.warning(
+        "failed to update Horde members for #{inspect(horde)}: #{inspect({kind, reason})}"
+      )
+
+      :error
   end
 
   defp connect_configured_nodes(nodes) do

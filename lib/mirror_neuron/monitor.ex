@@ -58,7 +58,8 @@ defmodule MirrorNeuron.Monitor do
       "active_executors" => Map.get(job, "active_executors", 0),
       "nodes" => Map.get(job, "nodes", []),
       "sandbox_names" => Map.get(job, "sandbox_names", []),
-      "last_event" => Map.get(job, "last_event")
+      "last_event" => Map.get(job, "last_event"),
+      "failure" => Map.get(job, "failure")
     }
   end
 
@@ -193,13 +194,22 @@ defmodule MirrorNeuron.Monitor do
           "updated_at",
           "manifest_ref",
           "result_ref",
-          "workflow_state_ref"
+          "workflow_state_ref",
+          "failure"
         ])
         |> Map.put("workflow_step_count", step_count),
       "summary" =>
         details
         |> Map.get("summary", %{})
-        |> Map.take(["job_id", "graph_id", "job_name", "status", "submitted_at", "updated_at"])
+        |> Map.take([
+          "job_id",
+          "graph_id",
+          "job_name",
+          "status",
+          "submitted_at",
+          "updated_at",
+          "failure"
+        ])
         |> Map.put("detail_truncated", true),
       "agents" => details |> Map.get("agents", []) |> Enum.take(25) |> compact_value(),
       "recent_events" => [],

@@ -2106,6 +2106,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       "nodes" => field(job, "nodes", []),
       "sandbox_names" => field(job, "sandbox_names", []),
       "last_event" => field(job, "last_event"),
+      "failure" => failure_summary(job),
       "manifest_ref" => field(job, "manifest_ref"),
       "result_ref" => field(job, "result_ref"),
       "workflow_state_ref" => field(job, "workflow_state_ref"),
@@ -2153,6 +2154,43 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   defp workflow_state_summary(_state), do: nil
+
+  defp failure_summary(job) do
+    result = field(job, "result")
+
+    if field(job, "status") == "failed" and is_map(result) do
+      error = field(result, "error")
+      error_fields = if is_map(error), do: error, else: %{}
+
+      summary = %{
+        "message" => failure_message(error, result),
+        "category" => field(error_fields, "category"),
+        "component" => field(error_fields, "component"),
+        "agent_id" => field(error_fields, "agent_id") || field(result, "agent_id"),
+        "step_id" => field(error_fields, "step_id") || field(result, "step_id"),
+        "node" => field(error_fields, "node"),
+        "retryable" => field(error_fields, "retryable")
+      }
+
+      summary
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+      |> Map.new()
+      |> case do
+        empty when map_size(empty) == 0 -> nil
+        bounded -> bounded
+      end
+    end
+  end
+
+  defp failure_message(error, _result) when is_binary(error), do: error
+
+  defp failure_message(error, result) when is_map(error) do
+    field(error, "message") || field(error, "description") || field(result, "status_reason")
+  end
+
+  defp failure_message(_error, result) do
+    field(result, "status_reason") || field(result, "reason")
+  end
 
   defp recovery_hint(job) do
     if field(job, "status") == "failed" and runner_interruption_result?(field(job, "result")) do

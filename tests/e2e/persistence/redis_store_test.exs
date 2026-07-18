@@ -1768,8 +1768,50 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert summary["job_id"] == job_id
     assert summary["status"] == "failed"
     assert summary["recovery_hint"] == "runner_interruption"
+
+    assert summary["failure"] == %{
+             "agent_id" => "job_runner",
+             "message" => "job coordinator exited before terminal state"
+           }
+
     refute Map.has_key?(summary, "result")
 
+    RedisStore.delete_job(job_id)
+  end
+
+  test "failed job summaries retain bounded structured diagnostics" do
+    job_id = "summary-failed-bootstrap-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _job} =
+             RedisStore.persist_job(job_id, %{
+               "job_id" => job_id,
+               "graph_id" => "summary_failed_bootstrap",
+               "status" => "failed",
+               "result" => %{
+                 "error" => %{
+                   "category" => "timeout",
+                   "component" => "job_coordinator",
+                   "message" => "failed to start agent audit__end: :timeout",
+                   "agent_id" => "audit__end",
+                   "node" => "mirror_neuron@10.0.4.27",
+                   "retryable" => true,
+                   "details" => String.duplicate("not-in-summary", 10_000)
+                 }
+               }
+             })
+
+    assert {:ok, [summary]} = RedisStore.list_job_summaries()
+
+    assert summary["failure"] == %{
+             "agent_id" => "audit__end",
+             "category" => "timeout",
+             "component" => "job_coordinator",
+             "message" => "failed to start agent audit__end: :timeout",
+             "node" => "mirror_neuron@10.0.4.27",
+             "retryable" => true
+           }
+
+    refute Map.has_key?(summary["failure"], "details")
     RedisStore.delete_job(job_id)
   end
 

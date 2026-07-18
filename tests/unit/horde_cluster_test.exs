@@ -94,7 +94,8 @@ defmodule MirrorNeuron.Runtime.HordeClusterTest do
       enabled: true,
       refresh_ms: 10_000,
       refresh_timer_ref: nil,
-      refresh_token: nil
+      refresh_token: nil,
+      memberships: %{DemoHorde => {:old_pid, MapSet.new()}}
     }
 
     assert {:noreply, refreshed} =
@@ -111,8 +112,103 @@ defmodule MirrorNeuron.Runtime.HordeClusterTest do
     refute coalesced.refresh_token == refreshed.refresh_token
     assert Process.read_timer(first_ref) == false
     assert is_integer(Process.read_timer(second_ref))
+    assert coalesced.memberships == %{}
 
     assert :ok = HordeCluster.terminate(:normal, coalesced)
     assert Process.read_timer(second_ref) == false
+  end
+
+  test "unchanged Horde membership is not synchronously rewritten on every refresh" do
+    test_pid = self()
+
+    set_members = fn horde, members ->
+      send(test_pid, {:set_members, horde, members})
+      :ok
+    end
+
+    whereis = fn _horde -> :stable_horde_pid end
+    nodes = [:node_a, :node_b]
+
+    memberships =
+      HordeCluster.refresh_horde_memberships(
+        [DemoRegistry, DemoSupervisor],
+        nodes,
+        %{},
+        set_members: set_members,
+        whereis: whereis
+      )
+
+    assert_receive {:set_members, DemoRegistry,
+                    [{DemoRegistry, :node_a}, {DemoRegistry, :node_b}]}
+
+    assert_receive {:set_members, DemoSupervisor,
+                    [{DemoSupervisor, :node_a}, {DemoSupervisor, :node_b}]}
+
+    assert memberships ==
+             HordeCluster.refresh_horde_memberships(
+               [DemoRegistry, DemoSupervisor],
+               Enum.reverse(nodes),
+               memberships,
+               set_members: set_members,
+               whereis: whereis
+             )
+
+    refute_receive {:set_members, _, _}
+  end
+
+  test "a failed Horde update does not block other Horde membership updates" do
+    test_pid = self()
+
+    set_members = fn
+      FailingHorde, _members ->
+        exit(:timeout)
+
+      horde, members ->
+        send(test_pid, {:set_members, horde, members})
+        :ok
+    end
+
+    memberships =
+      HordeCluster.refresh_horde_memberships(
+        [FailingHorde, HealthyHorde],
+        [:node_a],
+        %{},
+        set_members: set_members,
+        whereis: fn horde -> {horde, :pid} end
+      )
+
+    assert_receive {:set_members, HealthyHorde, [{HealthyHorde, :node_a}]}
+    refute Map.has_key?(memberships, FailingHorde)
+    assert Map.has_key?(memberships, HealthyHorde)
+  end
+
+  test "a restarted Horde process forces membership to be applied again" do
+    test_pid = self()
+
+    set_members = fn horde, members ->
+      send(test_pid, {:set_members, horde, members})
+      :ok
+    end
+
+    initial =
+      HordeCluster.refresh_horde_memberships(
+        [DemoHorde],
+        [:node_a],
+        %{},
+        set_members: set_members,
+        whereis: fn _horde -> :first_pid end
+      )
+
+    assert_receive {:set_members, DemoHorde, [{DemoHorde, :node_a}]}
+
+    HordeCluster.refresh_horde_memberships(
+      [DemoHorde],
+      [:node_a],
+      initial,
+      set_members: set_members,
+      whereis: fn _horde -> :replacement_pid end
+    )
+
+    assert_receive {:set_members, DemoHorde, [{DemoHorde, :node_a}]}
   end
 end
