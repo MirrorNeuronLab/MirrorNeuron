@@ -252,6 +252,41 @@ defmodule MirrorNeuron.MonitorTest do
     RedisStore.delete_job(job_id)
   end
 
+  test "compact job details expose a bounded failure cause" do
+    job_id = "monitor-compact-failure-#{System.unique_integer([:positive])}"
+
+    RedisStore.persist_job(job_id, %{
+      "job_id" => job_id,
+      "graph_id" => "failed_bootstrap",
+      "status" => "failed",
+      "result" => %{
+        "error" => %{
+          "category" => "timeout",
+          "component" => "job_coordinator",
+          "message" => "failed to start agent audit__end: :timeout",
+          "agent_id" => "audit__end",
+          "details" => String.duplicate("not-public", 100_000)
+        }
+      }
+    })
+
+    assert {:ok, details} = Monitor.job_details(job_id, compact: true, event_limit: 10)
+
+    expected = %{
+      "agent_id" => "audit__end",
+      "category" => "timeout",
+      "component" => "job_coordinator",
+      "message" => "failed to start agent audit__end: :timeout"
+    }
+
+    assert details["job"]["failure"] == expected
+    assert details["summary"]["failure"] == expected
+    refute Map.has_key?(details["job"], "result")
+    refute String.contains?(Jason.encode!(details), "not-public")
+
+    RedisStore.delete_job(job_id)
+  end
+
   test "lists only live jobs when requested" do
     live_job_id = "monitor-live-#{System.unique_integer([:positive])}"
     stale_job_id = "monitor-stale-#{System.unique_integer([:positive])}"

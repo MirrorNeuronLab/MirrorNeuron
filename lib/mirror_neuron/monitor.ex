@@ -456,7 +456,8 @@ defmodule MirrorNeuron.Monitor do
         |> Enum.sort(),
       "sandbox_names" =>
         details["sandboxes"] |> Enum.map(& &1["sandbox_name"]) |> Enum.uniq() |> Enum.sort(),
-      "last_event" => format_last_event(events)
+      "last_event" => format_last_event(events),
+      "failure" => Map.get(job, "failure")
     }
   end
 
