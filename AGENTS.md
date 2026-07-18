@@ -45,6 +45,10 @@ Important paths:
 ## Runtime Invariants
 
 - Validate and normalize manifests before scheduling or starting work.
+- Avoid oversized runtime and persistence modules. New behavior must live in a
+  cohesive module with a clear domain boundary; split mixed concerns before
+  extending a large legacy module, preserving public module contracts through
+  narrow delegating facades where needed.
 - Only generated/owning step boundary controls complete logical steps.
 - Keep coordination messages bounded, explicit, and serializable. Large or
   sensitive results are durable artifacts referenced by messages.
