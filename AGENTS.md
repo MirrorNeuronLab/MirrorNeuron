@@ -1,249 +1,117 @@
 # AGENTS.md
 
-You are working on `MirrorNeuron`, an Elixir/BEAM runtime for long-lived, message-driven multi-agent workflows.
+Instructions for coding agents working in this repository. These instructions
+apply only to `MirrorNeuron` Core.
 
-Read this file before making changes. Follow the existing codebase closely and prefer small, idiomatic edits over broad rewrites.
+## Start Here
 
-## Issue Fixing Policy
+1. Read `SPEC.md`, then the relevant parts of `README.md`.
+2. Read the touched module, adjacent modules, and the closest unit/E2E tests.
+3. Check `git status` and preserve unrelated work.
+4. Confirm the change belongs in Core. Product-specific agents, Python
+   compilation helpers, CLI rendering, REST adaptation, and domain workflows
+   belong outside this repository.
 
-- Unless the user explicitly asks for a temporary workaround, fix the root cause in the intended layer or contract.
-- Avoid adding fallback paths, compatibility shims, feature flags, or temp solutions that mask a broken primary path.
-- If fallback behavior is already product-specified, keep it narrow, documented, and tested; do not use it to avoid fixing the primary path.
+Core is an Elixir/OTP runtime. Prefer small, idiomatic changes using explicit
+messages, pattern matching, supervision, and stable data contracts.
 
+## Architecture Boundary
 
-## Core Mandates
-
-- Match existing project conventions before introducing new structure.
-- Inspect adjacent code, tests, and docs before editing.
-- Do not assume a library, framework pattern, or dependency is appropriate just because it is common elsewhere.
-- Do not add new dependencies unless the user explicitly asks or the current approach is clearly impossible.
-- Keep comments sparse and high value. Explain why, not what.
-- Do not revert unrelated local changes.
-- Finish the loop when practical: code, tests, formatting, and brief docs updates if behavior changed.
-
-## Project Snapshot
-
-MirrorNeuron is built around a strict boundary:
-
-- BEAM handles orchestration, supervision, routing, clustering, persistence, and observability.
-- Isolated execution is delegated to the sandbox / OpenShell path used by `executor` nodes.
-
-The runtime is intentionally small and generic. It is not a home for product-specific agents.
-
-### Runtime principles
-
-- Agents are long-lived processes.
-- Workflows are defined by manifest-driven graphs.
-- Messages are explicit envelopes.
-- Supervision is preferred over defensive complexity.
-- CLI and operator visibility matter as much as raw execution.
-
-## What Exists Today
-
-MirrorNeuron already includes:
-
-- built-in primitives: `router`, `executor`, `aggregator`, `sensor`
-- agent templates: `generic`, `stream`, `map`, `reduce`, `batch`, `accumulator`
-- Redis-backed persistence for job state, snapshots, and event history
-- cluster support through `libcluster` and `Horde`
-- a terminal-first CLI and monitor flow
-
-Prefer extending the existing primitives and templates before inventing new top-level concepts.
-
-## Project Structure
+Core owns workflow execution, supervision, physical routing, delivery,
+persistence, clustering, scheduling, resource admission, runner selection, and
+gRPC services. Isolated or domain execution happens through runners and staged
+payloads; do not embed blueprint business behavior in Core.
 
 Important paths:
 
-- `mix.exs`: project config and dependencies
-- `lib/mirror_neuron/application.ex`: OTP application startup
-- `lib/mirror_neuron.ex`: public runtime-facing API
-- `lib/mirror_neuron/manifest.ex`: manifest loading, normalization, and validation
-- `lib/mirror_neuron/message.ex`: runtime message envelope shape
-- `lib/mirror_neuron/job_bundle.ex`: job bundle loading
-- `lib/mirror_neuron/runtime/`: job coordinator, supervisors, event bus, runtime wiring
-- `lib/mirror_neuron/builtins/`: runtime primitives such as router/executor/aggregator/sensor
-- `lib/mirror_neuron/agent_templates/`: reusable workflow behavior templates
-- `lib/mirror_neuron/cluster/`: cluster membership and control
-- `lib/mirror_neuron/persistence/redis_store.ex`: persistence adapter
-- `lib/mirror_neuron/sandbox/`: sandbox and OpenShell integration
-- `lib/mirror_neuron/execution/`: execution lease management
-- `lib/mirror_neuron_grpc/`: generated protobuf modules and gRPC service handlers
-- `proto/`: protobuf service definitions
-- `scripts/`: local, cluster, Redis, and release helper scripts
-- `tests/`: ExUnit coverage for runtime, gRPC, manifests, persistence, runners, clustering, and templates
+- `lib/mirror_neuron.ex`: public runtime/control facade.
+- `lib/mirror_neuron/application.ex`: OTP startup and supervision.
+- `lib/mirror_neuron/manifest.ex`, `job_bundle.ex`, `bundle/`: executable
+  manifest and bundle loading.
+- `lib/mirror_neuron/runtime/`: job lifecycle, delivery, workflow ledger,
+  backpressure, deployment, scheduling, recovery, and reliability.
+- `lib/mirror_neuron/builtins/`: generic routing/execution/step boundaries.
+- `lib/mirror_neuron/agent_templates/`: generic agent process templates.
+- `lib/mirror_neuron/persistence/`, `redis/`: durable state, snapshots,
+  retention, and Redis HA.
+- `lib/mirror_neuron/cluster/`: membership, leadership, draining, and repair.
+- `lib/mirror_neuron/runner/`, `sandbox/`, `execution/`: host, Docker,
+  OpenShell, sandbox, upload, and lease boundaries.
+- `lib/mirror_neuron/artifacts/`: job artifacts and shared storage.
+- `lib/mirror_neuron_grpc/`, `proto/`: public gRPC handlers/contracts.
+- `config/`: defaults and runtime environment validation.
+- `tests/unit`, `tests/e2e`, `tests/api`: layered ExUnit coverage.
 
-The active CLI and larger user/operator docs live in sibling ecosystem repositories, not in this checkout.
+## Runtime Invariants
 
-## Where To Start By Task
+- Validate and normalize manifests before scheduling or starting work.
+- Only generated/owning step boundary controls complete logical steps.
+- Keep coordination messages bounded, explicit, and serializable. Large or
+  sensitive results are durable artifacts referenced by messages.
+- Preserve message identity, TTL, lease, ACK, retry, deduplication, and
+  dead-letter semantics. A retry must not duplicate externally visible work.
+- Persist lifecycle changes and publish corresponding events consistently.
+- Scope locks, queues, supervisors, and cleanup to the job/agent/resource they
+  protect; unrelated jobs must continue making progress.
+- Recovery must reject unsafe or incompatible state rather than guessing.
+- Control-node forwarding and local execution must expose equivalent public
+  results.
+- Keep resource admission and runner policy explicit. Do not bypass isolation
+  or broaden OpenShell/network policy to make a test pass.
+- Treat manifests, paths, environment values, runner output, Redis data, gRPC
+  requests, and remote-node data as untrusted.
 
-If the request is about manifests:
+## OpenShell and Runner Safety
 
-- inspect `lib/mirror_neuron/manifest.ex`
-- inspect `lib/mirror_neuron/job_bundle.ex`
-- inspect `tests/mirror_neuron/manifest_test.exs`
-- update example bundles if manifest semantics change
+- Put blueprint-specific system packages and network rules in the blueprint's
+  custom image/policy, not the Core image.
+- Private/LAN access needs exact hosts/ports and scoped `allowed_ips`; do not
+  broadly permit RFC1918 ranges.
+- Policies list the resolved executable and any required launcher. Diagnose
+  denials from sandbox logs before widening a rule.
+- Plain HTTP clients may need narrow TCP passthrough rather than REST inspection
+  when they do not use CONNECT.
+- Cleanup only sandboxes, processes, uploads, and leases owned by the job.
 
-If the request is about runtime lifecycle, job states, or supervision:
+## Where to Start
 
-- inspect `lib/mirror_neuron/runtime/job_coordinator.ex`
-- inspect `lib/mirror_neuron/runtime/job_runner.ex`
-- inspect `lib/mirror_neuron/runtime/agent_worker.ex`
-- inspect `lib/mirror_neuron/runtime/job_supervisor.ex`
-- inspect `tests/mirror_neuron/runtime_test.exs`
+- Manifest/bundle: `manifest.ex`, `job_bundle.ex`, `bundle/`,
+  `tests/unit/manifest_test.exs`, `blueprint_validation_test.exs`.
+- Lifecycle/delivery: `runtime/job_coordinator.ex`, `job_runner.ex`,
+  `agent_worker.ex`, `delivery.ex`, `workflow_ledger.ex` and matching unit tests.
+- Persistence/recovery: `persistence/`, `runtime/local_recovery.ex`,
+  `recovery_safety.ex`, backup/recovery tests.
+- Cluster: `cluster/`, `distributed_registry.ex`, `rpc.ex`, cluster tests.
+- Runners/sandbox: `runner/`, `sandbox/`, `execution/lease_manager.ex`, runner
+  and cleanup tests.
+- gRPC: `lib/mirror_neuron_grpc/`, `proto/`, API/gRPC handler tests. Update proto
+  sources and regenerate bindings together when the wire contract changes.
 
-If the request is about built-in agent behavior:
+## Change and Verification Workflow
 
-- inspect `lib/mirror_neuron/builtins/`
-- inspect `lib/mirror_neuron/agent_templates/`
-- inspect `tests/mirror_neuron/agent_templates_test.exs`
-- keep the runtime generic; avoid domain-specific built-ins
+- Add focused success, failure, lifecycle-transition, and recovery tests for
+  meaningful changes.
+- Public manifest, gRPC, config, event, message, or persistence changes require
+  compatibility review and updates to `README.md`/`SPEC.md` as applicable.
+- Do not add dependencies without a clear Core-level need.
+- Do not hand-edit build artifacts or generated protobuf files without their
+  source change/regeneration path.
 
-If the request is about CLI behavior:
-
-- confirm whether the requested behavior belongs in this core runtime or the external CLI repository
-- inspect gRPC/public API behavior here only when the core service contract is involved
-
-If the request is about persistence or recovery:
-
-- inspect `lib/mirror_neuron/persistence/redis_store.ex`
-- inspect `lib/mirror_neuron/redis.ex`
-- inspect runtime coordinator and event bus interactions
-
-If the request is about clustering or remote control:
-
-- inspect `lib/mirror_neuron/cluster/`
-- inspect `lib/mirror_neuron/distributed_registry.ex`
-- inspect `lib/mirror_neuron/rpc.ex`
-
-If the request is about sandboxed execution:
-
-- inspect `lib/mirror_neuron/sandbox/`
-- inspect `lib/mirror_neuron/execution/lease_manager.ex`
-- inspect `lib/mirror_neuron/builtins/executor.ex`
-
-### OpenShell network policy notes
-
-- Keep blueprint-specific system packages in the blueprint's custom OpenShell image, not in the core Docker image.
-- When an OpenShell agent must call a private or LAN service, the policy must usually include `allowed_ips` scoped to the exact private IP/CIDR. OpenShell's SSRF protection blocks RFC1918/private upstreams by default even when the host and port match.
-- For plain HTTP services such as local Ollama on `:11434`, prefer a narrow TCP passthrough endpoint with `allowed_ips` instead of `protocol: rest` L7 rules unless the client is known to use HTTP CONNECT. If OpenShell logs `endpoint has L7 rules; use CONNECT`, the endpoint is using REST inspection with a non-CONNECT HTTP client.
-- Include the actual resolved executable path in `binaries`, not only symlinks. For example, `/usr/bin/python3` may resolve to `/usr/bin/python3.12`.
-- If the executable is launched through a wrapper such as `bash`, OpenShell may require the launcher path as well as the child binary. Check sandbox logs for `binary`, `ancestors`, and `reason` before widening policy.
-- Keep these policies least-privilege: exact host, exact port, exact `allowed_ips`, and only the launcher/binary paths needed by that agent.
-
-## Development Workflow
-
-Typical local loop:
+Run:
 
 ```bash
-mix deps.get
-mix format
+mix format --check-formatted
 mix test
+mix compile --warnings-as-errors
+find scripts -name '*.sh' -print0 | xargs -0 -n1 bash -n
 ```
 
-Useful CLI checks:
+Redis-backed and live cluster/OpenShell tests may need external services; keep
+ordinary unit tests deterministic and report unexercised integrations.
 
-```bash
-mn blueprint validate examples/research_flow
-mn blueprint run examples/research_flow
-mn inspect nodes
-mn job monitor
-```
+## Issue-Fixing Policy
 
-When Redis-backed tests or runtime flows are needed:
-
-```bash
-docker run -d --name mirror-neuron-redis -p 6379:6379 redis:7
-mix test
-```
-
-Some sandbox behavior also depends on OpenShell being available. If a test or manual check needs it and it is missing, say so clearly.
-
-## Coding Guidance
-
-### Elixir / OTP
-
-- Prefer small functions with clear pattern matching over deeply nested conditionals.
-- Follow the current OTP style used in the touched module.
-- Use supervision and message passing rather than ad hoc retry loops.
-- Keep process state explicit and serializable when possible.
-- Preserve current naming and alias/import style from nearby modules.
-
-### Runtime design
-
-- Keep control-plane messages small and explicit.
-- Preserve the separation between orchestration and isolated execution.
-- Do not bypass manifest validation when adding manifest features.
-- Do not sneak business-specific behavior into the runtime kernel.
-- Prefer extending templates or config-driven behavior over branching the core runtime.
-
-### Manifests and schemas
-
-- Backward compatibility matters.
-- Normalize inputs before validating where appropriate.
-- Reject malformed manifests early with helpful errors.
-- If manifest semantics change, update examples and relevant docs.
-
-### CLI and UX
-
-- Default output should remain readable for humans.
-- Machine-readable output should stay stable if exposed publicly.
-- Error messages should be direct and actionable.
-
-## Testing Expectations
-
-- Add or update tests for every meaningful behavior change.
-- Prefer the narrowest tests that cover the change.
-- Update unit tests first, then run broader verification as needed.
-- If you change CLI behavior, add or adjust CLI-facing tests.
-- If you change manifest validation, add both happy-path and failure-path coverage.
-- If you change recovery or lifecycle behavior, verify the event/status transitions.
-
-At minimum, after code changes run:
-
-```bash
-mix format
-mix test
-```
-
-If the change affects the executable or command surface, also run:
-
-```bash
-```
-
-## Docs Expectations
-
-If you add or change a user-visible feature, update the relevant docs:
-
-- `README.md` for top-level usage changes
-- `docs/cli.md` for command behavior
-- `docs/api.md` for public inspection/control API changes
-- `docs/development.md` for contributor workflow changes
-- `examples/` when examples should demonstrate the new behavior
-
-## Good Change Shape
-
-Aim for this sequence:
-
-1. Read the relevant module, adjacent modules, and tests.
-2. Make the smallest idiomatic change that satisfies the request.
-3. Add or update tests near the changed behavior.
-4. Run formatting and tests.
-5. Update docs only where behavior or operator expectations changed.
-
-## Avoid
-
-- broad refactors unrelated to the task
-- new dependencies without strong justification
-- business-specific agent types in the core runtime
-- bypassing persistence or event publication in lifecycle changes
-- changing public CLI semantics silently
-- speculative abstractions that are not yet needed
-
-## Handy References
-
-- `README.md`
-- `docs/development.md`
-- `docs/runtime-architecture.md`
-- `docs/reliability.md`
-- `docs/cli.md`
-- `docs/api.md`
+- Fix the root cause in the owning runtime contract unless the user explicitly
+  requests a temporary workaround.
+- Do not add fallback paths, shims, or flags that hide a broken primary path.
+- Keep product-specified compatibility behavior narrow, documented, and tested.
