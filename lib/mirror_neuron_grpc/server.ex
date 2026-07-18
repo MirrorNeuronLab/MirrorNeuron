@@ -87,6 +87,20 @@ defmodule MirrorNeuron.Grpc.ObservabilityServer do
   end
 end
 
+defmodule MirrorNeuron.Grpc.OperationsServer do
+  use GRPC.Server, service: Mirrorneuron.Operations.V1.OperationsService.Service
+
+  for {function, command} <- [
+        start_operation: :StartOperation,
+        get_operation: :GetOperation,
+        stream_operation_events: :StreamOperationEvents
+      ] do
+    def unquote(function)(request, stream) do
+      MirrorNeuron.Grpc.CommandHub.dispatch(:operations, unquote(command), request, stream)
+    end
+  end
+end
+
 defmodule MirrorNeuron.Grpc.Endpoint do
   use GRPC.Endpoint
 
@@ -95,4 +109,5 @@ defmodule MirrorNeuron.Grpc.Endpoint do
   run(MirrorNeuron.Grpc.JobServer)
   run(MirrorNeuron.Grpc.ClusterServer)
   run(MirrorNeuron.Grpc.ObservabilityServer)
+  run(MirrorNeuron.Grpc.OperationsServer)
 end

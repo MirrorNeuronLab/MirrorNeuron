@@ -212,12 +212,16 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
   def clear_jobs(_request, _stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("ClearJobs")
 
-    case MirrorNeuron.Monitor.clear_jobs() do
-      {:ok, count} ->
-        %ClearJobsResponse{cleared_count: count, version: @interface_version}
+    with {:ok, operation} <- MirrorNeuron.start_operation("clear_jobs"),
+         {:ok, completed} <- MirrorNeuron.Operations.await(operation["operation_id"], 30_000) do
+      result = MirrorNeuron.Operations.legacy_clear_result(completed)
 
+      %ClearJobsResponse{cleared_count: result["cleared_count"], version: @interface_version}
+    else
       {:error, reason} ->
-        raise GRPC.RPCError, status: GRPC.Status.internal(), message: reason
+        raise GRPC.RPCError,
+          status: GRPC.Status.internal(),
+          message: MirrorNeuron.Runtime.error_message(reason)
     end
   end
 end

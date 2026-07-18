@@ -57,12 +57,30 @@ defmodule MirrorNeuron.Cluster.NodeDrainer do
         jobs
         |> Enum.filter(&active_job?/1)
         |> Enum.filter(&job_on_node?(&1, node_name))
+        |> filter_only_job_ids(option(opts, :only_job_ids))
         |> Enum.reduce(empty_result(context), fn job, acc ->
           record_action(acc, process_job(job, context))
         end)
         |> maybe_complete_drain(context)
 
       {:ok, result}
+    end
+  end
+
+  def drain_job(job_id, node, opts \\ []) when is_binary(job_id) do
+    with {:ok, result} <-
+           drain_node(node, Keyword.put(opts, :only_job_ids, [job_id])) do
+      action =
+        result
+        |> Map.get("actions", [])
+        |> List.first()
+        |> Kernel.||(%{
+          "job_id" => job_id,
+          "status" => "skipped",
+          "reason" => "job was not selected"
+        })
+
+      {:ok, action}
     end
   end
 
@@ -410,6 +428,13 @@ defmodule MirrorNeuron.Cluster.NodeDrainer do
   defp active_job?(job) do
     Map.get(job, "status") in @active_job_statuses and
       Map.get(job, "status") not in @completion_statuses
+  end
+
+  defp filter_only_job_ids(jobs, nil), do: jobs
+
+  defp filter_only_job_ids(jobs, job_ids) do
+    ids = job_ids |> List.wrap() |> Enum.map(&to_string/1) |> MapSet.new()
+    Enum.filter(jobs, &(Map.get(&1, "job_id") in ids))
   end
 
   defp job_on_node?(job, node) do

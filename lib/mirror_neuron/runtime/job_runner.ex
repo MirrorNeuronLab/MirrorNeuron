@@ -60,6 +60,16 @@ defmodule MirrorNeuron.Runtime.JobRunner do
     node_name = to_string(Node.self())
     opts = put_bundle_ref(opts, manifest)
 
+    case RedisStore.fetch_job(job_id) do
+      {:ok, %{"status" => "cancelling"}} ->
+        {:stop, :normal}
+
+      _ ->
+        acquire_and_start_coordinator(job_id, manifest, opts, lease_name, node_name)
+    end
+  end
+
+  defp acquire_and_start_coordinator(job_id, manifest, opts, lease_name, node_name) do
     case acquire_job_lease(lease_name, node_name) do
       {:ok, lease} ->
         start_coordinator_with_lease(job_id, manifest, opts, node_name, lease)

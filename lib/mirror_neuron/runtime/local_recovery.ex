@@ -10,6 +10,7 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
 
   @active_statuses ["pending", "running", "paused"]
   @terminal_statuses ["completed", "failed", "cancelled"]
+  @nonrecoverable_statuses @terminal_statuses ++ ["cancelling"]
   @default_startup_scan_delay_ms 500
   @default_scan_interval_ms 5_000
 
@@ -71,12 +72,12 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
 
   defp restore_disk_checkpoint(%{job: %{"job_id" => job_id} = disk_job, agents: agents}) do
     cond do
-      disk_job["status"] in @terminal_statuses ->
+      disk_job["status"] in @nonrecoverable_statuses ->
         _ = DiskCheckpoint.delete_job(job_id)
 
       true ->
         case RedisStore.fetch_job(job_id) do
-          {:ok, %{"status" => status}} when status in @terminal_statuses ->
+          {:ok, %{"status" => status}} when status in @nonrecoverable_statuses ->
             _ = DiskCheckpoint.delete_job(job_id)
 
           {:ok, redis_job} ->

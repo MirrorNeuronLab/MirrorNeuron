@@ -3520,18 +3520,28 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   defp validate_job_lease_epoch(job_id, job_map) do
     incoming = lease_epoch(job_map)
 
-    case {incoming, existing_job_lease_epoch(job_id)} do
-      {nil, _existing} ->
-        :ok
+    case existing_cancellation_fence_epoch(job_id) do
+      fence when is_integer(fence) ->
+        if is_integer(incoming) and incoming >= fence do
+          :ok
+        else
+          {:error, {:cancellation_fenced, incoming, fence}}
+        end
 
-      {_incoming, nil} ->
-        :ok
+      nil ->
+        case {incoming, existing_job_lease_epoch(job_id)} do
+          {nil, _existing} ->
+            :ok
 
-      {incoming, existing} when incoming >= existing ->
-        :ok
+          {_incoming, nil} ->
+            :ok
 
-      {incoming, existing} ->
-        {:error, {:stale_lease_epoch, incoming, existing}}
+          {incoming, existing} when incoming >= existing ->
+            :ok
+
+          {incoming, existing} ->
+            {:error, {:stale_lease_epoch, incoming, existing}}
+        end
     end
   end
 
@@ -3625,18 +3635,28 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   defp validate_agent_lease_epoch(job_id, snapshot) do
     incoming = lease_epoch(snapshot)
 
-    case {incoming, existing_job_lease_epoch(job_id)} do
-      {nil, _existing} ->
-        :ok
+    case existing_cancellation_fence_epoch(job_id) do
+      fence when is_integer(fence) ->
+        if is_integer(incoming) and incoming >= fence do
+          :ok
+        else
+          {:error, {:cancellation_fenced, incoming, fence}}
+        end
 
-      {_incoming, nil} ->
-        :ok
+      nil ->
+        case {incoming, existing_job_lease_epoch(job_id)} do
+          {nil, _existing} ->
+            :ok
 
-      {incoming, existing} when incoming >= existing ->
-        :ok
+          {_incoming, nil} ->
+            :ok
 
-      {incoming, existing} ->
-        {:error, {:stale_lease_epoch, incoming, existing}}
+          {incoming, existing} when incoming >= existing ->
+            :ok
+
+          {incoming, existing} ->
+            {:error, {:stale_lease_epoch, incoming, existing}}
+        end
     end
   end
 
@@ -3656,10 +3676,25 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
+  defp existing_cancellation_fence_epoch(job_id) do
+    case command(["GET", key("job", job_id)]) do
+      {:ok, encoded} when is_binary(encoded) ->
+        case Jason.decode(encoded) do
+          {:ok, job} -> parse_integer(Map.get(job, "cancellation_fence_epoch"))
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
   defp lease_epoch(map) when is_map(map) do
     direct =
       Map.get(map, "lease_epoch") ||
         Map.get(map, :lease_epoch) ||
+        Map.get(map, "cancellation_fence_epoch") ||
+        Map.get(map, :cancellation_fence_epoch) ||
         get_in(map, ["lease", "epoch"]) ||
         get_in(map, [:lease, :epoch]) ||
         get_in(map, ["metadata", "lease_epoch"]) ||

@@ -59,6 +59,9 @@ defmodule MirrorNeuron.Runtime do
   def error_message({:job_call_timeout, job_id, timeout_ms}),
     do: "timed out calling job #{job_id} after #{timeout_ms}ms"
 
+  def error_message({:job_cancelling, job_id}),
+    do: "job #{job_id} has a durable cancellation in progress"
+
   def error_message({:job_call_failed, job_id, reason}),
     do: "job #{job_id} call failed: #{inspect(reason)}"
 
@@ -204,6 +207,16 @@ defmodule MirrorNeuron.Runtime do
   def pause_job(job_id), do: call_job(job_id, :pause)
 
   def resume_job(job_id) do
+    case cancellation_blocked?(job_id) do
+      true ->
+        {:error, {:job_cancelling, job_id}}
+
+      false ->
+        resume_unblocked_job(job_id)
+    end
+  end
+
+  defp resume_unblocked_job(job_id) do
     case call_job(job_id, :resume) do
       {:error, reason} = error ->
         if job_not_running_error?(reason) do
@@ -288,6 +301,15 @@ defmodule MirrorNeuron.Runtime do
     end
   end
 
+  def clear_job(job_id) when is_binary(job_id) do
+    with {:ok, job} <- RedisStore.fetch_job(job_id),
+         :ok <- prepare_job_cleanup(job, false),
+         :ok <- cleanup_job_sandboxes(job_id, job),
+         :ok <- RedisStore.delete_job(job_id) do
+      :ok
+    end
+  end
+
   defp prepare_job_cleanup(%{"status" => status}, _force_all)
        when status in ["completed", "failed", "cancelled"],
        do: :ok
@@ -339,6 +361,10 @@ defmodule MirrorNeuron.Runtime do
     else
       {:error, {:job_metadata_unavailable, reason}}
     end
+  end
+
+  defp cancellation_blocked?(job_id) do
+    match?({:ok, %{"status" => "cancelling"}}, RedisStore.fetch_job(job_id))
   end
 
   defp sandbox_cleanup_nodes(job, agents) do

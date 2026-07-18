@@ -1,0 +1,44 @@
+syntax = "proto3";
+package mirrorneuron.operations.v1;
+
+service OperationsService {
+  rpc StartOperation (StartOperationRequest) returns (StartOperationResponse);
+  rpc GetOperation (GetOperationRequest) returns (GetOperationResponse);
+  rpc StreamOperationEvents (StreamOperationEventsRequest) returns (stream OperationEventResponse);
+}
+
+// The server owns target selection. Clients can only choose a fixed operation
+// kind and supply its validated options.
+message StartOperationRequest {
+  string kind = 1;
+  string options_json = 2;
+  uint32 version = 3;
+}
+
+message StartOperationResponse {
+  string operation_json = 1;
+  uint32 version = 2;
+}
+
+message GetOperationRequest {
+  string operation_id = 1;
+  uint32 version = 2;
+}
+
+message GetOperationResponse {
+  string operation_json = 1;
+  uint32 version = 2;
+}
+
+message StreamOperationEventsRequest {
+  string operation_id = 1;
+  int64 after_sequence = 2;
+  bool follow = 3;
+  int32 heartbeat_interval_ms = 4;
+  uint32 version = 5;
+}
+
+message OperationEventResponse {
+  string event_json = 1;
+  uint32 version = 2;
+}

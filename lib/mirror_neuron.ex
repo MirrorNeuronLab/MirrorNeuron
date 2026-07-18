@@ -2,11 +2,11 @@ defmodule MirrorNeuron do
   alias MirrorNeuron.Cluster.Control
   alias MirrorNeuron.JobBundle
   alias MirrorNeuron.Monitor
-  alias MirrorNeuron.Persistence.RedisStore
+  alias MirrorNeuron.Operations
+  alias MirrorNeuron.Persistence.{CancellationStore, RedisStore}
   alias MirrorNeuron.Runtime
+  alias MirrorNeuron.Runtime.CancellationReconciler
 
-  @active_job_statuses ["pending", "validated", "scheduled", "running", "paused"]
-  @cancel_all_max_concurrency 8
   @cluster_job_control_timeout_ms 8_000
 
   def validate_manifest(input) do
@@ -244,7 +244,11 @@ defmodule MirrorNeuron do
     if control_node?() do
       Control.call(__MODULE__, :reconcile_node, [node_name, opts])
     else
-      MirrorNeuron.Cluster.Reconciler.reconcile_node(node_name, opts)
+      with {:ok, operation} <-
+             start_operation("reconcile_node", Keyword.put(opts, :node_name, node_name)),
+           {:ok, settled} <- Operations.await_settled(operation["operation_id"], 30_000) do
+        {:ok, Operations.legacy_reconcile_result(settled)}
+      end
     end
   end
 
@@ -252,7 +256,11 @@ defmodule MirrorNeuron do
     if control_node?() do
       Control.call(__MODULE__, :drain_node, [node_name, opts])
     else
-      MirrorNeuron.Cluster.NodeDrainer.drain_node(node_name, opts)
+      with {:ok, operation} <-
+             start_operation("drain_node", Keyword.put(opts, :node_name, node_name)),
+           {:ok, settled} <- Operations.await_settled(operation["operation_id"], 30_000) do
+        {:ok, Operations.legacy_drain_result(settled)}
+      end
     end
   end
 
@@ -332,153 +340,32 @@ defmodule MirrorNeuron do
   end
 
   def cancel(job_id) do
-    result =
-      if control_node?() do
-        call_control_or_runtime(job_id, :cancel, [job_id])
-      else
-        case Runtime.cancel_job(job_id) do
-          {:error, reason} = error ->
-            if job_not_running_error?(reason) do
-              case call_runtime_by_job(job_id, Runtime, :cancel_job, [job_id]) do
-                {:error, fallback_reason} when is_tuple(fallback_reason) ->
-                  if runtime_lookup_unavailable_error?(fallback_reason),
-                    do: error,
-                    else: {:error, fallback_reason}
-
-                other ->
-                  other
-              end
-            else
-              error
-            end
-
-          other ->
-            other
-        end
-      end
-
-    case result do
-      {:error, reason} = error ->
-        if cancel_force_fallback_error?(reason) do
-          force_cancel_orphaned_job(job_id, Runtime.error_message(reason))
-        else
-          error
-        end
-
-      other ->
-        other
+    if control_node?() do
+      call_control_or_runtime(job_id, :cancel, [job_id])
+    else
+      request_durable_cancellation(job_id)
     end
   end
 
   def cancel_all do
-    with {:ok, jobs} <-
-           Monitor.list_jobs(limit: 2_147_483_647, include_terminal: false, summary: :basic) do
-      job_ids =
-        jobs
-        |> Enum.filter(&active_job?/1)
-        |> Enum.map(& &1["job_id"])
-
-      results =
-        job_ids
-        |> Task.async_stream(&cancel/1,
-          max_concurrency: @cancel_all_max_concurrency,
-          ordered: true,
-          timeout: @cluster_job_control_timeout_ms,
-          on_timeout: :kill_task
-        )
-        |> Enum.zip(job_ids)
-        |> Enum.map(fn {result, job_id} -> cancel_all_result(job_id, result) end)
-
-      cancelled_count = Enum.count(results, &(&1["status"] == "cancelled"))
-
-      {:ok,
-       %{
-         "cancelled_count" => cancelled_count,
-         "failed_count" => length(results) - cancelled_count,
-         "results" => results
-       }}
+    with {:ok, operation} <- start_operation("cancel_all_jobs"),
+         {:ok, completed} <- Operations.await(operation["operation_id"], 30_000) do
+      {:ok, Operations.legacy_cancel_all_result(completed)}
     end
   end
 
-  defp force_cancel_orphaned_job(job_id, original_error) do
-    case RedisStore.fetch_job(job_id) do
-      {:ok, %{"status" => status} = job} when status in ["pending", "running", "paused"] ->
-        require Logger
-
-        Logger.info(
-          "Job #{job_id} process not found or did not respond, forcefully cancelling via Redis."
-        )
-
-        updates = %{
-          "status" => "cancelled",
-          "result" => %{"reason" => "forced cancellation of orphaned job"}
-        }
-
-        defaults = %{
-          "graph_id" => job["graph_id"] || "unknown",
-          "job_name" => job["job_name"] || "unknown",
-          "root_agent_ids" => job["root_agent_ids"] || [],
-          "placement_policy" => job["placement_policy"] || "local",
-          "recovery_policy" => job["recovery_policy"] || "local_restart",
-          "manifest_ref" => job["manifest_ref"] || %{},
-          "submitted_at" => job["submitted_at"] || Runtime.timestamp()
-        }
-
-        RedisStore.persist_terminal_job(job_id, updates, defaults)
-        cleanup_job_sandboxes(job_id)
-
-        MirrorNeuron.Runtime.EventBus.publish(job_id, %{
-          type: :job_cancelled,
-          reason: "forced cancellation",
-          timestamp: Runtime.timestamp()
-        })
-
-        {:ok, "cancelled"}
-
-      {:ok, %{"status" => "cancelled"}} ->
-        cleanup_job_sandboxes(job_id)
-        {:ok, "cancelled"}
-
-      {:ok, _job} ->
-        cleanup_job_sandboxes(job_id)
-        {:error, "job is already in a terminal state"}
-
-      {:error, reason} ->
-        if is_binary(reason) and String.contains?(reason, "was not found") do
-          {:error, reason}
-        else
-          {:error, original_error}
-        end
+  def start_operation(kind, opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :start_operation, [kind, opts])
+    else
+      Operations.start(kind, opts)
     end
   end
 
-  defp cleanup_job_sandboxes(job_id) do
-    Runtime.cleanup_job_sandboxes(job_id)
-  end
+  def operation(operation_id), do: Operations.get(operation_id)
 
-  defp active_job?(%{"job_id" => job_id, "status" => status})
-       when is_binary(job_id) and job_id != "",
-       do: status in @active_job_statuses
-
-  defp active_job?(_job), do: false
-
-  defp cancel_all_result(job_id, {:ok, {:ok, "cancelled"}}),
-    do: %{"job_id" => job_id, "status" => "cancelled"}
-
-  defp cancel_all_result(job_id, {:ok, {:ok, status}}),
-    do: %{"job_id" => job_id, "status" => to_string(status)}
-
-  defp cancel_all_result(job_id, {:ok, {:error, reason}}),
-    do: %{"job_id" => job_id, "status" => "failed", "error" => Runtime.error_message(reason)}
-
-  defp cancel_all_result(job_id, {:exit, :timeout}),
-    do: %{"job_id" => job_id, "status" => "failed", "error" => "cancellation timed out"}
-
-  defp cancel_all_result(job_id, {:exit, reason}),
-    do: %{"job_id" => job_id, "status" => "failed", "error" => inspect(reason)}
-
-  defp cancel_all_result(job_id, other),
-    do: %{"job_id" => job_id, "status" => "failed", "error" => inspect(other)}
+  def operation_events(operation_id, after_sequence \\ 0),
+    do: Operations.events(operation_id, after_sequence)
 
   def cleanup_jobs(opts \\ []) do
     if control_node?() do
@@ -486,6 +373,52 @@ defmodule MirrorNeuron do
     else
       Runtime.cleanup_jobs(opts)
     end
+  end
+
+  defp request_durable_cancellation(job_id) do
+    case RedisStore.fetch_job(job_id) do
+      {:ok, %{"status" => status}} when status in ["completed", "failed", "cancelled"] ->
+        {:ok, "cancelled"}
+
+      {:ok, job} ->
+        with {:ok, target_nodes} <- cancellation_target_nodes(job_id, job),
+             {:ok, _request_state, cancellation} <-
+               CancellationStore.request(job_id, target_nodes) do
+          local_node = to_string(Node.self())
+
+          if local_node in Map.get(cancellation, "target_nodes", []) and
+               local_node not in Map.get(cancellation, "acknowledged_nodes", []) do
+            _ = CancellationReconciler.reconcile_now(job_id)
+          else
+            CancellationReconciler.kick()
+          end
+
+          case RedisStore.fetch_job(job_id) do
+            {:ok, %{"status" => "cancelled"}} -> {:ok, "cancelled"}
+            _ -> {:ok, "cancellation_pending"}
+          end
+        end
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp cancellation_target_nodes(job_id, job) do
+    agents =
+      case RedisStore.list_agents(job_id) do
+        {:ok, records} -> records
+        _ -> []
+      end
+
+    targets =
+      agents
+      |> Enum.map(&Map.get(&1, "assigned_node"))
+      |> Kernel.++([Map.get(job, "lease_owner"), get_in(job, ["lease", "owner_id"])])
+      |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
+      |> Enum.uniq()
+
+    {:ok, if(targets == [], do: [to_string(Node.self())], else: targets)}
   end
 
   def send_message(job_id, agent_id, message) do
@@ -585,12 +518,4 @@ defmodule MirrorNeuron do
     do: String.starts_with?(reason, "job ") and String.contains?(reason, "not running")
 
   defp job_not_running_error?(_reason), do: false
-
-  defp cancel_force_fallback_error?({:job_call_timeout, _job_id, _timeout_ms}), do: true
-  defp cancel_force_fallback_error?(reason), do: job_not_running_error?(reason)
-
-  defp runtime_lookup_unavailable_error?({:runtime_lookup_unavailable, _job_id, _reason}),
-    do: true
-
-  defp runtime_lookup_unavailable_error?(_reason), do: false
 end

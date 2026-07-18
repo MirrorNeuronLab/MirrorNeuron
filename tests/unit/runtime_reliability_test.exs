@@ -5,7 +5,7 @@ defmodule MirrorNeuron.RuntimeReliabilityTest do
 
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.Delivery
-  alias MirrorNeuron.Persistence.RedisStore
+  alias MirrorNeuron.Persistence.{CancellationStore, RedisStore}
 
   @runtime_envs [
     "MN_JOB_CALL_TIMEOUT_MS",
@@ -126,24 +126,66 @@ defmodule MirrorNeuron.RuntimeReliabilityTest do
     Process.exit(pid, :kill)
   end
 
-  test "cancel force-cancels active jobs when the coordinator call times out" do
+  test "cancel records durable intent before an unreachable owner can time out" do
     if redis_available?() do
       with_isolated_redis_namespace(fn ->
-        System.put_env("MN_CANCEL_JOB_CALL_TIMEOUT_MS", "10")
-        job_id = unique_id("slow-cancel-job")
+        job_id = unique_id("deferred-cancel-job")
+        remote_node = "mirror_neuron@unreachable"
 
         assert {:ok, _job} = RedisStore.persist_job(job_id, active_job(job_id))
-        pid = start_supervised!({SlowJob, job_id})
 
-        capture_log(fn ->
-          assert {:ok, "cancelled"} = MirrorNeuron.cancel(job_id)
-        end)
+        assert {:ok, _agent} =
+                 RedisStore.persist_agent(job_id, "worker", %{
+                   "agent_id" => "worker",
+                   "assigned_node" => remote_node,
+                   "lease_epoch" => 1
+                 })
+
+        assert {:ok, "cancellation_pending"} = MirrorNeuron.cancel(job_id)
 
         assert {:ok, job} = RedisStore.fetch_job(job_id)
-        assert job["status"] == "cancelled"
-        assert get_in(job, ["result", "reason"]) == "forced cancellation of orphaned job"
+        assert job["status"] == "cancelling"
+        assert is_integer(job["cancellation_fence_epoch"])
 
-        Process.exit(pid, :kill)
+        assert {:ok, cancellation} = CancellationStore.fetch(job_id)
+        assert cancellation["target_nodes"] == [remote_node]
+        assert cancellation["acknowledged_nodes"] == []
+
+        stale_write = Map.put(active_job(job_id), "lease_epoch", 1)
+
+        assert {:error, {:cancellation_fenced, 1, _fence_epoch}} =
+                 RedisStore.persist_job(job_id, stale_write)
+
+        assert {:error, {:job_cancelling, ^job_id}} = Runtime.resume_job(job_id)
+
+        assert {:ok, :completed, _cancellation} =
+                 CancellationStore.acknowledge(job_id, remote_node)
+
+        assert {:ok, %{"status" => "cancelled"}} = RedisStore.fetch_job(job_id)
+      end)
+    end
+  end
+
+  test "repeated cancellation reuses the durable request" do
+    if redis_available?() do
+      with_isolated_redis_namespace(fn ->
+        job_id = unique_id("idempotent-cancel-job")
+        remote_node = "mirror_neuron@unreachable"
+
+        assert {:ok, _job} = RedisStore.persist_job(job_id, active_job(job_id))
+
+        assert {:ok, _agent} =
+                 RedisStore.persist_agent(job_id, "worker", %{
+                   "agent_id" => "worker",
+                   "assigned_node" => remote_node,
+                   "lease_epoch" => 1
+                 })
+
+        assert {:ok, "cancellation_pending"} = MirrorNeuron.cancel(job_id)
+        assert {:ok, first} = CancellationStore.fetch(job_id)
+        assert {:ok, "cancellation_pending"} = MirrorNeuron.cancel(job_id)
+        assert {:ok, second} = CancellationStore.fetch(job_id)
+        assert second["request_id"] == first["request_id"]
       end)
     end
   end

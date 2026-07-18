@@ -56,6 +56,34 @@ defmodule MirrorNeuron.Cluster.Reconciler do
     end
   end
 
+  def reconcile_job(job_id, node, opts \\ []) when is_binary(job_id) do
+    node_name = node_name(node)
+    opts = Keyword.put_new(opts, :trigger, "operator_reconcile")
+
+    with {:ok, job} <- redis_store(opts).fetch_job(job_id) do
+      result =
+        safe_job_result(job, "node reconciliation", fn ->
+          cond do
+            Map.get(job, "status") not in @active_statuses ->
+              skipped(job, "job is #{Map.get(job, "status")}")
+
+            not affected_by_node?(job, node_name) ->
+              skipped(job, "job is not affected by #{node_name}")
+
+            true ->
+              with {:ok, full_job} <- fetch_reconciliation_job(job, opts) do
+                enqueue_or_run_affected_job(full_job, node_name, opts)
+              else
+                {:error, reason} ->
+                  failed(job, "could not load job for node reconciliation: #{inspect(reason)}")
+              end
+          end
+        end)
+
+      {:ok, result}
+    end
+  end
+
   def reschedule_agents(job_id, agent_ids, opts \\ []) do
     opts = Keyword.put_new(opts, :trigger, "restart_exhausted")
 

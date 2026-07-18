@@ -128,6 +128,9 @@ defmodule MirrorNeuron.Grpc.CommandPolicy do
                          {:cluster, :ListServices},
                          {:cluster, :ResolveService},
                          {:cluster, :CheckServices},
+                         {:operations, :StartOperation},
+                         {:operations, :GetOperation},
+                         {:operations, :StreamOperationEvents},
                          {:cluster, :SyncLiteLLMGateway},
                          {:cluster, :RemoveLiteLLMGatewayRoute},
                          {:observability, :StreamEvents}
@@ -155,7 +158,10 @@ defmodule MirrorNeuron.Grpc.CommandPolicy do
                             {:cluster, :PublishRuntimeStatus},
                             {:cluster, :AckRuntimeStatusEvents},
                             {:cluster, :SyncLiteLLMGateway},
-                            {:cluster, :RemoveLiteLLMGatewayRoute}
+                            {:cluster, :RemoveLiteLLMGatewayRoute},
+                            {:operations, :StartOperation},
+                            {:operations, :GetOperation},
+                            {:operations, :StreamOperationEvents}
                           ])
 
   def enforce!(service, command, _request, stream) do
@@ -291,9 +297,16 @@ defmodule MirrorNeuron.Grpc.CommandHub do
                      {:observability, :StreamEvents},
                      MirrorNeuron.Grpc.Handlers.Observability
                    )
+                   |> Map.merge(
+                     Map.new(
+                       [:StartOperation, :GetOperation, :StreamOperationEvents],
+                       &{{:operations, &1}, MirrorNeuron.Grpc.Handlers.Operation}
+                     )
+                   )
 
   @safe_identifier_keys [
     :job_id,
+    :operation_id,
     :node_name,
     :schedule_id,
     :id_or_key,
