@@ -5,6 +5,10 @@ defmodule MirrorNeuron do
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
 
+  @active_job_statuses ["pending", "validated", "scheduled", "running", "paused"]
+  @cancel_all_max_concurrency 8
+  @cluster_job_control_timeout_ms 8_000
+
   def validate_manifest(input) do
     with {:ok, bundle} <- JobBundle.load(input) do
       {:ok, bundle}
@@ -366,6 +370,36 @@ defmodule MirrorNeuron do
     end
   end
 
+  def cancel_all do
+    with {:ok, jobs} <-
+           Monitor.list_jobs(limit: 2_147_483_647, include_terminal: false, summary: :basic) do
+      job_ids =
+        jobs
+        |> Enum.filter(&active_job?/1)
+        |> Enum.map(& &1["job_id"])
+
+      results =
+        job_ids
+        |> Task.async_stream(&cancel/1,
+          max_concurrency: @cancel_all_max_concurrency,
+          ordered: true,
+          timeout: @cluster_job_control_timeout_ms,
+          on_timeout: :kill_task
+        )
+        |> Enum.zip(job_ids)
+        |> Enum.map(fn {result, job_id} -> cancel_all_result(job_id, result) end)
+
+      cancelled_count = Enum.count(results, &(&1["status"] == "cancelled"))
+
+      {:ok,
+       %{
+         "cancelled_count" => cancelled_count,
+         "failed_count" => length(results) - cancelled_count,
+         "results" => results
+       }}
+    end
+  end
+
   defp force_cancel_orphaned_job(job_id, original_error) do
     case RedisStore.fetch_job(job_id) do
       {:ok, %{"status" => status} = job} when status in ["pending", "running", "paused"] ->
@@ -421,6 +455,30 @@ defmodule MirrorNeuron do
   defp cleanup_job_sandboxes(job_id) do
     Runtime.cleanup_job_sandboxes(job_id)
   end
+
+  defp active_job?(%{"job_id" => job_id, "status" => status})
+       when is_binary(job_id) and job_id != "",
+       do: status in @active_job_statuses
+
+  defp active_job?(_job), do: false
+
+  defp cancel_all_result(job_id, {:ok, {:ok, "cancelled"}}),
+    do: %{"job_id" => job_id, "status" => "cancelled"}
+
+  defp cancel_all_result(job_id, {:ok, {:ok, status}}),
+    do: %{"job_id" => job_id, "status" => to_string(status)}
+
+  defp cancel_all_result(job_id, {:ok, {:error, reason}}),
+    do: %{"job_id" => job_id, "status" => "failed", "error" => Runtime.error_message(reason)}
+
+  defp cancel_all_result(job_id, {:exit, :timeout}),
+    do: %{"job_id" => job_id, "status" => "failed", "error" => "cancellation timed out"}
+
+  defp cancel_all_result(job_id, {:exit, reason}),
+    do: %{"job_id" => job_id, "status" => "failed", "error" => inspect(reason)}
+
+  defp cancel_all_result(job_id, other),
+    do: %{"job_id" => job_id, "status" => "failed", "error" => inspect(other)}
 
   def cleanup_jobs(opts \\ []) do
     if control_node?() do
@@ -492,9 +550,10 @@ defmodule MirrorNeuron do
               {:ok, node} ->
                 _ = Node.connect(node)
 
-                case :rpc.call(node, module, function, args, 15_000) do
-                  {:badrpc, _reason} ->
-                    {:cont, job_not_running_result(job_id)}
+                case :rpc.call(node, module, function, args, @cluster_job_control_timeout_ms) do
+                  {:badrpc, reason} ->
+                    {:halt,
+                     {:error, {:cluster_job_control_unavailable, job_id, node_name, reason}}}
 
                   {:error, reason} = error ->
                     if job_not_running_error?(reason) do

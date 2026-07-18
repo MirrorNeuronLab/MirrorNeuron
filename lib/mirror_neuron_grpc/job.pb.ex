@@ -117,6 +117,29 @@ defmodule Mirrorneuron.Job.V1.CancelJobResponse do
   field(:version, 3, type: :uint32)
 end
 
+defmodule Mirrorneuron.Job.V1.CancelAllJobsRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.CancelAllJobsRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:version, 1, type: :uint32)
+end
+
+defmodule Mirrorneuron.Job.V1.CancelAllJobsResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.CancelAllJobsResponse",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:result_json, 1, type: :string, json_name: "resultJson")
+  field(:version, 2, type: :uint32)
+end
+
 defmodule Mirrorneuron.Job.V1.PauseJobRequest do
   @moduledoc false
 
@@ -563,6 +586,12 @@ defmodule Mirrorneuron.Job.V1.JobService.Service do
   rpc(:ListJobs, Mirrorneuron.Job.V1.ListJobsRequest, Mirrorneuron.Job.V1.ListJobsResponse)
 
   rpc(:CancelJob, Mirrorneuron.Job.V1.CancelJobRequest, Mirrorneuron.Job.V1.CancelJobResponse)
+
+  rpc(
+    :CancelAllJobs,
+    Mirrorneuron.Job.V1.CancelAllJobsRequest,
+    Mirrorneuron.Job.V1.CancelAllJobsResponse
+  )
 
   rpc(:PauseJob, Mirrorneuron.Job.V1.PauseJobRequest, Mirrorneuron.Job.V1.PauseJobResponse)
 

@@ -276,6 +276,15 @@ defmodule MirrorNeuron.Grpc.Handlers.Node do
             2_000
           )
 
+        _ =
+          NodeAdapter.rpc_call(
+            remote_node,
+            MirrorNeuron.Cluster.Manager,
+            :add_node,
+            [Atom.to_string(NodeAdapter.self())],
+            5_000
+          )
+
         :ok
 
       {:error, _reason} ->

@@ -50,6 +50,8 @@ defmodule MirrorNeuron.Cluster.Manager do
         "scheduling_eligible" => true
       })
 
+      MirrorNeuron.Runtime.HordeCluster.refresh()
+
       {:ok, %{name: node_name, status: "connected"}}
     else
       false -> {:error, "failed to connect to #{node_name}"}
@@ -67,6 +69,7 @@ defmodule MirrorNeuron.Cluster.Manager do
         })
 
         _ = NodeAdapter.disconnect(atom_name)
+        MirrorNeuron.Runtime.HordeCluster.refresh()
         {:ok, %{name: node_name, status: "disconnected"}}
 
       {:error, reason} ->

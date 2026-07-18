@@ -4236,35 +4236,20 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   defp command(args), do: command(args, redis_reconnect_attempts(), redis_reconnect_backoff_ms())
 
-  def redis_command_from_peer(args) when is_list(args) do
-    safe_command(MirrorNeuron.Redis.Connection, args)
-  end
-
-  def redis_pipeline_from_peer(commands) when is_list(commands) do
-    safe_pipeline(MirrorNeuron.Redis.Connection, commands)
-  end
-
-  defp command(args, attempts_left, backoff_ms) do
-    case maybe_forward_command(args) do
-      :local ->
-        command_local(args, attempts_left, backoff_ms)
-
-      {:forwarded, result} ->
-        result
-    end
-  end
+  defp command(args, attempts_left, backoff_ms),
+    do: command_local(args, attempts_left, backoff_ms)
 
   defp command_local(args, attempts_left, backoff_ms) do
     case safe_command(MirrorNeuron.Redis.Connection, args) do
       {:error, reason} = error ->
         cond do
-          readonly_error?(reason) ->
-            forward_or_error(:redis_command_from_peer, [args], error)
-
-          attempts_left > 0 and reconnectable_error?(reason) ->
+          reconnectable_error?(reason) and attempts_left > 0 ->
             _ = MirrorNeuron.Redis.reconnect()
             Process.sleep(backoff_ms)
             command_local(args, attempts_left - 1, next_reconnect_backoff(backoff_ms))
+
+          readonly_error?(reason) ->
+            {:error, {:redis_primary_unavailable, reason}}
 
           true ->
             error
@@ -4273,58 +4258,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       other ->
         other
     end
-  end
-
-  defp maybe_forward_command(args) do
-    case forwarding_primary_node() do
-      {:ok, node} ->
-        case safe_node_rpc_call(node, __MODULE__, :redis_command_from_peer, [args], 5_000) do
-          {:badrpc, _reason} -> :local
-          result -> {:forwarded, result}
-        end
-
-      :local ->
-        :local
-    end
-  end
-
-  defp forward_or_error(function, args, fallback) do
-    case primary_redis_node() do
-      nil ->
-        fallback
-
-      node ->
-        case safe_node_rpc_call(node, __MODULE__, function, args, 5_000) do
-          {:badrpc, _reason} -> fallback
-          result -> result
-        end
-    end
-  end
-
-  defp forwarding_primary_node do
-    enabled? =
-      "MN_REDIS_FORWARD_PRIMARY"
-      |> System.get_env("false")
-      |> String.downcase()
-      |> Kernel.in(["1", "true", "yes", "on"])
-
-    if enabled? do
-      case primary_redis_node() do
-        nil -> :local
-        node -> {:ok, node}
-      end
-    else
-      :local
-    end
-  end
-
-  defp primary_redis_node do
-    Enum.find(NodeAdapter.list(), fn node ->
-      case safe_node_rpc_call(node, MirrorNeuron.Grpc.NetworkOnly, :enabled?, [], 1_000) do
-        false -> true
-        _ -> false
-      end
-    end)
   end
 
   defp readonly_error?(%Redix.Error{message: message}) when is_binary(message) do
@@ -4372,33 +4305,26 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   defp pipeline(commands),
     do: pipeline(commands, redis_reconnect_attempts(), redis_reconnect_backoff_ms())
 
-  defp pipeline(commands, attempts_left, backoff_ms) do
-    case maybe_forward_pipeline(commands) do
-      :local ->
-        pipeline_local(commands, attempts_left, backoff_ms)
-
-      {:forwarded, result} ->
-        result
-    end
-  end
+  defp pipeline(commands, attempts_left, backoff_ms),
+    do: pipeline_local(commands, attempts_left, backoff_ms)
 
   defp pipeline_local(commands, attempts_left, backoff_ms) do
     case safe_pipeline(MirrorNeuron.Redis.Connection, commands) do
       {:ok, results} ->
         case readonly_error_in_results(results) do
           nil -> {:ok, results}
-          reason -> forward_or_error(:redis_pipeline_from_peer, [commands], {:error, reason})
+          reason -> retry_or_primary_unavailable(commands, attempts_left, backoff_ms, reason)
         end
 
       {:error, reason} = error ->
         cond do
-          readonly_error?(reason) ->
-            forward_or_error(:redis_pipeline_from_peer, [commands], error)
-
-          attempts_left > 0 and reconnectable_error?(reason) ->
+          reconnectable_error?(reason) and attempts_left > 0 ->
             _ = MirrorNeuron.Redis.reconnect()
             Process.sleep(backoff_ms)
             pipeline_local(commands, attempts_left - 1, next_reconnect_backoff(backoff_ms))
+
+          readonly_error?(reason) ->
+            {:error, {:redis_primary_unavailable, reason}}
 
           true ->
             error
@@ -4412,18 +4338,15 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   defp readonly_error_in_results(_results), do: nil
 
-  defp maybe_forward_pipeline(commands) do
-    case forwarding_primary_node() do
-      {:ok, node} ->
-        case safe_node_rpc_call(node, __MODULE__, :redis_pipeline_from_peer, [commands], 5_000) do
-          {:badrpc, _reason} -> :local
-          result -> {:forwarded, result}
-        end
-
-      :local ->
-        :local
-    end
+  defp retry_or_primary_unavailable(commands, attempts_left, backoff_ms, _reason)
+       when attempts_left > 0 do
+    _ = MirrorNeuron.Redis.reconnect()
+    Process.sleep(backoff_ms)
+    pipeline_local(commands, attempts_left - 1, next_reconnect_backoff(backoff_ms))
   end
+
+  defp retry_or_primary_unavailable(_commands, _attempts_left, _backoff_ms, reason),
+    do: {:error, {:redis_primary_unavailable, reason}}
 
   defp safe_pipeline(connection, commands) do
     Redix.pipeline(connection, commands)
@@ -4436,14 +4359,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
     :exit, reason ->
       {:error, {:redix_exit, reason}}
-  end
-
-  defp safe_node_rpc_call(node, module, function, args, timeout) do
-    NodeAdapter.rpc_call(node, module, function, args, timeout)
-  rescue
-    exception -> {:badrpc, {exception.__struct__, Exception.message(exception)}}
-  catch
-    kind, reason -> {:badrpc, {kind, reason}}
   end
 
   defp parse_transaction_results(["OK" | queued_and_exec]) do

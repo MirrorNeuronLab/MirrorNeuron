@@ -17,6 +17,8 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
   }
 
   alias Mirrorneuron.Job.V1.{
+    CancelAllJobsRequest,
+    CancelAllJobsResponse,
     CancelJobRequest,
     ClearJobsRequest,
     ClearJobsResponse,
@@ -635,6 +637,21 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert Exception.message(error) =~ "not running" or Exception.message(error) =~ "not found"
   end
 
+  test "cancel_all_jobs returns a versioned result for the active-job snapshot" do
+    if redis_available?() do
+      response = JobServer.cancel_all_jobs(%CancelAllJobsRequest{}, nil)
+
+      assert %CancelAllJobsResponse{version: 1, result_json: result_json} = response
+
+      assert %{"cancelled_count" => cancelled, "failed_count" => failed, "results" => results} =
+               Jason.decode!(result_json)
+
+      assert is_integer(cancelled)
+      assert is_integer(failed)
+      assert is_list(results)
+    end
+  end
+
   test "network-only mode rejects deployment RPCs" do
     System.put_env("MN_NETWORK_ONLY", "true")
 
@@ -1079,6 +1096,9 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
     assert_receive {:rpc_call, ^remote_node, ClusterServer, :connect_peer, ["mirror_neuron@test"],
                     2_000}
+
+    assert_receive {:rpc_call, ^remote_node, MirrorNeuron.Cluster.Manager, :add_node,
+                    ["mirror_neuron@test"], 5_000}
 
     assert_receive {:services_registered, services}
     assert [%{"name" => "docker-model-runner", "node" => ^node_name} = service] = services

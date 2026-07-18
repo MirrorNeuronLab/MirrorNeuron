@@ -49,6 +49,13 @@ defmodule MirrorNeuron.Runtime do
   def error_message({:runtime_lookup_unavailable, job_id, reason}),
     do: "runtime metadata was unavailable while looking up job #{job_id}: #{inspect(reason)}"
 
+  def error_message({:cluster_job_control_unavailable, job_id, node_name, reason}),
+    do:
+      "cluster job control was unavailable for job #{job_id} on #{node_name}: #{inspect(reason)}"
+
+  def error_message({:redis_primary_unavailable, reason}),
+    do: "Redis primary was unavailable: #{inspect(reason)}"
+
   def error_message({:job_call_timeout, job_id, timeout_ms}),
     do: "timed out calling job #{job_id} after #{timeout_ms}ms"
 

@@ -47,6 +47,8 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
   }
 
   alias Mirrorneuron.Job.V1.{
+    CancelAllJobsRequest,
+    CancelAllJobsResponse,
     CancelJobRequest,
     CancelJobResponse,
     ClearJobsRequest,
@@ -117,6 +119,13 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
         reply(:cancel_job, request, stream, %CancelJobResponse{
           job_id: request.job_id,
           status: "cancelled",
+          version: 1
+        })
+
+    def cancel_all_jobs(request, stream),
+      do:
+        reply(:cancel_all_jobs, request, stream, %CancelAllJobsResponse{
+          result_json: "{\"cancelled_count\":0,\"failed_count\":0,\"results\":[]}",
           version: 1
         })
 
@@ -648,6 +657,14 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
         function: :cancel_job,
         request: %CancelJobRequest{job_id: "job-1"},
         response: CancelJobResponse
+      },
+      %{
+        service: :job,
+        command: :CancelAllJobs,
+        server: JobServer,
+        function: :cancel_all_jobs,
+        request: %CancelAllJobsRequest{},
+        response: CancelAllJobsResponse
       },
       %{
         service: :job,

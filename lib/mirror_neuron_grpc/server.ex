@@ -6,6 +6,7 @@ defmodule MirrorNeuron.Grpc.JobServer do
         get_job: :GetJob,
         list_jobs: :ListJobs,
         cancel_job: :CancelJob,
+        cancel_all_jobs: :CancelAllJobs,
         pause_job: :PauseJob,
         resume_job: :ResumeJob,
         export_job_backup: :ExportJobBackup,

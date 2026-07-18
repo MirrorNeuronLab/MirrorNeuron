@@ -17,6 +17,19 @@ defmodule MirrorNeuron.Runtime.HordeCluster do
 
   def initial_members(horde), do: horde_members(horde, [Node.self()])
 
+  @doc false
+  def refresh do
+    if Process.whereis(__MODULE__), do: GenServer.cast(__MODULE__, :refresh)
+
+    :ok
+  end
+
+  @doc false
+  def configured_nodes do
+    (env_configured_nodes() ++ persisted_configured_nodes())
+    |> Enum.uniq()
+  end
+
   def horde_members(horde, nodes) do
     nodes
     |> Enum.uniq()
@@ -51,6 +64,14 @@ defmodule MirrorNeuron.Runtime.HordeCluster do
   end
 
   @impl true
+  def handle_info({event, _node}, %{enabled: true} = state)
+      when event in [:nodeup, :nodedown] do
+    {:noreply, schedule_refresh(state)}
+  end
+
+  def handle_info({event, _node}, state) when event in [:nodeup, :nodedown],
+    do: {:noreply, state}
+
   def handle_info({:refresh, token}, %{enabled: true, refresh_token: token} = state) do
     state = clear_refresh_timer(state)
     refresh_members()
@@ -66,15 +87,15 @@ defmodule MirrorNeuron.Runtime.HordeCluster do
 
   def handle_info(:refresh, state), do: {:noreply, state}
 
-  def handle_info({event, _node}, %{enabled: true} = state)
-      when event in [:nodeup, :nodedown] do
+  def handle_info(_message, state), do: {:noreply, state}
+
+  @impl true
+  def handle_cast(:refresh, %{enabled: true} = state) do
+    refresh_members()
     {:noreply, schedule_refresh(state)}
   end
 
-  def handle_info({event, _node}, state) when event in [:nodeup, :nodedown],
-    do: {:noreply, state}
-
-  def handle_info(_message, state), do: {:noreply, state}
+  def handle_cast(:refresh, state), do: {:noreply, state}
 
   @impl true
   def terminate(_reason, state) do
@@ -138,16 +159,32 @@ defmodule MirrorNeuron.Runtime.HordeCluster do
   defp clear_refresh_timer(state),
     do: %{state | refresh_timer_ref: nil, refresh_token: nil}
 
-  defp configured_nodes do
+  defp env_configured_nodes do
     "MN_CLUSTER_NODES"
     |> System.get_env("")
     |> String.split(",", trim: true)
-    |> Enum.flat_map(fn raw ->
-      case MirrorNeuron.SafeAccess.node_name_to_atom(String.trim(raw)) do
-        {:ok, node} -> [node]
-        {:error, _reason} -> []
-      end
+    |> Enum.flat_map(&node_name_to_atom/1)
+  end
+
+  defp persisted_configured_nodes do
+    MirrorNeuron.Cluster.NodeState.list()
+    |> Enum.flat_map(fn
+      %{"node" => node_name, "status" => status}
+      when status in ["healthy", "joining"] ->
+        node_name_to_atom(node_name)
+
+      _state ->
+        []
     end)
+  rescue
+    _ -> []
+  end
+
+  defp node_name_to_atom(raw) do
+    case MirrorNeuron.SafeAccess.node_name_to_atom(String.trim(to_string(raw))) do
+      {:ok, node} -> [node]
+      {:error, _reason} -> []
+    end
   end
 
   defp configured_set(nodes) do

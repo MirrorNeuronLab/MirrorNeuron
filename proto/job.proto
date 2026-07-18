@@ -6,6 +6,7 @@ service JobService {
   rpc GetJob (GetJobRequest) returns (GetJobResponse);
   rpc ListJobs (ListJobsRequest) returns (ListJobsResponse);
   rpc CancelJob (CancelJobRequest) returns (CancelJobResponse);
+  rpc CancelAllJobs (CancelAllJobsRequest) returns (CancelAllJobsResponse);
   rpc PauseJob (PauseJobRequest) returns (PauseJobResponse);
   rpc ResumeJob (ResumeJobRequest) returns (ResumeJobResponse);
   rpc ExportJobBackup (ExportJobBackupRequest) returns (ExportJobBackupResponse);
@@ -74,6 +75,15 @@ message CancelJobResponse {
   string job_id = 1;
   string status = 2;
   uint32 version = 3;
+}
+
+message CancelAllJobsRequest {
+  uint32 version = 1;
+}
+
+message CancelAllJobsResponse {
+  string result_json = 1;
+  uint32 version = 2;
 }
 
 message PauseJobRequest {

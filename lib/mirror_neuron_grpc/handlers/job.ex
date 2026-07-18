@@ -10,6 +10,7 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     GetJobResponse,
     ListJobsResponse,
     CancelJobResponse,
+    CancelAllJobsResponse,
     PauseJobResponse,
     ResumeJobResponse,
     ExportJobBackupResponse,
@@ -116,6 +117,21 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
 
       _ ->
         %CancelJobResponse{job_id: job_id, status: "cancelled", version: @interface_version}
+    end
+  end
+
+  def cancel_all_jobs(_request, _stream) do
+    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("CancelAllJobs")
+
+    case MirrorNeuron.cancel_all() do
+      {:ok, result} ->
+        %CancelAllJobsResponse{
+          result_json: Support.versioned_json(result),
+          version: @interface_version
+        }
+
+      {:error, reason} ->
+        Support.raise_runtime_error!(reason)
     end
   end
 

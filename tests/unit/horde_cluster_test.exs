@@ -3,6 +3,49 @@ defmodule MirrorNeuron.Runtime.HordeClusterTest do
 
   alias MirrorNeuron.Runtime.HordeCluster
 
+  defmodule NodeStateStoreStub do
+    def reset, do: :persistent_term.put({__MODULE__, :states}, [])
+    def put_states(states), do: :persistent_term.put({__MODULE__, :states}, states)
+    def list_node_states, do: {:ok, :persistent_term.get({__MODULE__, :states}, [])}
+  end
+
+  setup do
+    old_store = Application.get_env(:mirror_neuron, :node_state_store)
+    old_cluster_nodes = System.get_env("MN_CLUSTER_NODES")
+
+    NodeStateStoreStub.reset()
+    Application.put_env(:mirror_neuron, :node_state_store, NodeStateStoreStub)
+    System.delete_env("MN_CLUSTER_NODES")
+
+    on_exit(fn ->
+      NodeStateStoreStub.reset()
+
+      if old_store,
+        do: Application.put_env(:mirror_neuron, :node_state_store, old_store),
+        else: Application.delete_env(:mirror_neuron, :node_state_store)
+
+      if old_cluster_nodes,
+        do: System.put_env("MN_CLUSTER_NODES", old_cluster_nodes),
+        else: System.delete_env("MN_CLUSTER_NODES")
+    end)
+  end
+
+  test "configured_nodes merges durable healthy peers with environment seeds" do
+    System.put_env("MN_CLUSTER_NODES", "mn1@192.168.6.28")
+
+    NodeStateStoreStub.put_states([
+      %{"node" => "mn2@192.168.4.173", "status" => "healthy"},
+      %{"node" => "mn3@192.168.4.174", "status" => "joining"},
+      %{"node" => "mn4@192.168.4.175", "status" => "disconnected"}
+    ])
+
+    assert HordeCluster.configured_nodes() == [
+             :"mn1@192.168.6.28",
+             :"mn2@192.168.4.173",
+             :"mn3@192.168.4.174"
+           ]
+  end
+
   test "member_nodes keeps runtime peers and excludes transient probe nodes" do
     self_node = :"mirror_neuron@192.168.6.28"
 
