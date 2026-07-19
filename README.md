@@ -550,7 +550,8 @@ present. Production does not require any `.env` file.
 | `MN_CORE_HOST` | Host/IP used by the gRPC listener; defaults to loopback-style local binding. |
 | `MN_GRPC_PORT` | gRPC service port. |
 | `MN_GRPC_AUTH_TOKEN` | Single client-identity token for protected gRPC calls, including destructive operations. There are no operator/admin scopes. |
-| `MN_LITELLM_MAX_CONCURRENT_REQUESTS` | Node-local inference requests admitted concurrently by the shared LiteLLM FIFO queue; defaults to 1 for stable local decoding on memory-constrained nodes. |
+| `MN_LITELLM_MAX_CONCURRENT_REQUESTS` | Node-local chat/completion requests admitted concurrently by the LiteLLM completion FIFO; defaults to 1 for stable local decoding on memory-constrained nodes. |
+| `MN_LITELLM_MAX_CONCURRENT_EMBEDDINGS` | Node-local embedding requests admitted concurrently by a separate LiteLLM FIFO; defaults to 1 so short RAG calls cannot be starved behind long completions. |
 | `MN_LITELLM_MAX_QUEUED_REQUESTS` | Maximum LiteLLM inference requests waiting for a slot; defaults to 64. |
 | `MN_LITELLM_QUEUE_TIMEOUT_SECONDS` | Maximum time an inference request waits in the LiteLLM queue; defaults to 1800. |
 | `MN_LITELLM_MAX_SLOT_SECONDS` | Safety deadline after which a leaked LiteLLM execution slot is released; defaults to 3600. |
