@@ -67,6 +67,15 @@ defmodule MirrorNeuron.Persistence.DiskCheckpointTest do
            end)
   end
 
+  test "removes orphaned checkpoint directories without reporting an error", %{job_id: job_id} do
+    encoded_job_id = Base.url_encode64(job_id, padding: false)
+    orphan_path = Path.join(DiskCheckpoint.root(), encoded_job_id)
+
+    assert :ok = File.mkdir_p(Path.join(orphan_path, "agents"))
+    assert {:ok, %{checkpoints: _checkpoints, errors: []}} = DiskCheckpoint.list_jobs()
+    refute File.exists?(orphan_path)
+  end
+
   test "job locks serialize concurrent checkpoint transitions", %{job_id: job_id} do
     parent = self()
 

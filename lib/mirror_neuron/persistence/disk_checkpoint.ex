@@ -113,9 +113,12 @@ defmodule MirrorNeuron.Persistence.DiskCheckpoint do
         |> Enum.sort()
         |> Enum.reduce(%{checkpoints: [], errors: []}, fn path, acc ->
           with_encoded_job_lock(Path.basename(path), fn ->
-            case load_checkpoint_path(path) do
+            case load_or_discard_orphan_checkpoint(path) do
               {:ok, checkpoint} ->
                 Map.update!(acc, :checkpoints, &[checkpoint | &1])
+
+              :orphan ->
+                acc
 
               {:error, reason} ->
                 if File.exists?(path) do
@@ -187,6 +190,31 @@ defmodule MirrorNeuron.Persistence.DiskCheckpoint do
       nil -> {:error, :missing_job_id}
       "" -> {:error, :missing_job_id}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp load_or_discard_orphan_checkpoint(path) do
+    job_path = Path.join(path, @job_file)
+
+    case File.stat(job_path) do
+      {:ok, %File.Stat{type: :regular}} ->
+        load_checkpoint_path(path)
+
+      {:ok, _other} ->
+        {:error, :invalid_checkpoint}
+
+      {:error, :enoent} ->
+        case File.rm_rf(path) do
+          {:ok, _files} ->
+            sync_directory(Path.dirname(path))
+            :orphan
+
+          {:error, reason, file} ->
+            {:error, {file, reason}}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

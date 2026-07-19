@@ -3412,6 +3412,69 @@ defmodule MirrorNeuron.RuntimeTest do
     RedisStore.delete_job(job_id)
   end
 
+  test "agent startup and heartbeats do not wait for a busy disk checkpoint lock" do
+    job_id = "agent-startup-checkpoint-lock-#{System.unique_integer([:positive])}"
+    agent_id = "startup_agent"
+
+    assert {:ok, _job} =
+             RedisStore.persist_job(job_id, %{
+               "job_id" => job_id,
+               "graph_id" => "agent-startup-checkpoint-lock",
+               "status" => "pending",
+               "updated_at" => Runtime.timestamp()
+             })
+
+    parent = self()
+
+    holder =
+      Task.async(fn ->
+        DiskCheckpoint.with_job_lock(job_id, fn ->
+          send(parent, :checkpoint_lock_held)
+
+          receive do
+            :release_checkpoint_lock -> :ok
+          end
+        end)
+      end)
+
+    assert_receive :checkpoint_lock_held
+
+    node = %{
+      node_id: agent_id,
+      agent_type: "module",
+      role: "root",
+      config: %{"module" => ExplicitCheckpointAgent}
+    }
+
+    runtime_context = %{
+      graph_id: "agent-startup-checkpoint-lock",
+      job_name: "agent-startup-checkpoint-lock",
+      entrypoints: [agent_id],
+      placement_policy: "local",
+      recovery_policy: "local_restart",
+      submitted_at: Runtime.timestamp(),
+      manifest_version: "1.0"
+    }
+
+    worker =
+      Task.async(fn ->
+        AgentWorker.start_link({job_id, node, [], [], parent, runtime_context})
+      end)
+
+    assert {:ok, {:ok, pid}} = Task.yield(worker, 1_000)
+
+    send(pid, :heartbeat)
+    assert %{"agent_id" => ^agent_id} = GenServer.call(pid, :pressure_snapshot, 1_000)
+
+    assert {:ok, %{"agent_id" => ^agent_id}} = RedisStore.fetch_agent(job_id, agent_id)
+
+    GenServer.stop(pid)
+    send(holder.pid, :release_checkpoint_lock)
+    assert :ok = Task.await(holder, 2_000)
+    assert {:ok, []} = DiskCheckpoint.load_agents(job_id)
+    RedisStore.delete_job(job_id)
+  end
+
   test "restarts a missing agent and replays its inflight message" do
     {:ok, counter_pid} = start_supervised(CrashOnceCounter)
 

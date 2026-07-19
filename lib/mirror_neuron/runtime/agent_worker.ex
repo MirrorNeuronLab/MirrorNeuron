@@ -110,7 +110,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
         }
 
         state = schedule_heartbeat(state)
-        persist_snapshot(state)
+        persist_snapshot(state, persist_disk?: false)
         {:ok, state, {:continue, :recover}}
 
       {:error, reason} ->
@@ -161,7 +161,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   end
 
   def handle_cast(:delivery_available, %{paused?: true} = state) do
-    persist_snapshot(state)
+    persist_snapshot(state, persist_disk?: false)
     {:noreply, state}
   end
 
@@ -177,14 +177,14 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   @impl true
   def handle_info({:heartbeat, token}, %{heartbeat_token: token} = state) do
     state = clear_heartbeat_timer(state)
-    persist_snapshot(state)
+    persist_snapshot(state, persist_disk?: false)
     {:noreply, schedule_heartbeat(state)}
   end
 
   def handle_info({:heartbeat, _stale_token}, state), do: {:noreply, state}
 
   def handle_info(:heartbeat, state) do
-    persist_snapshot(state)
+    persist_snapshot(state, persist_disk?: false)
     {:noreply, state}
   end
 
@@ -439,8 +439,6 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
 
         case execute_actions(actions, message, next_state) do
           :ok ->
-            persist_snapshot(next_state)
-
             case maybe_report_workflow_message(state, message, workflow, "acked") do
               :ok ->
                 {:ok, next_state}
@@ -664,7 +662,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     end
   end
 
-  defp persist_snapshot(state) do
+  defp persist_snapshot(state, opts \\ []) do
     inspected_state = inspected_local_state(state.module, state.local_state)
     encoded_state = encoded_local_state(state.module, state.local_state)
     durable_depth = durable_delivery_depth(state)
@@ -704,7 +702,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       metadata: metadata
     }
 
-    case RedisStore.persist_agent(state.job_id, state.node.node_id, snapshot) do
+    case RedisStore.persist_agent(state.job_id, state.node.node_id, snapshot, opts) do
       {:ok, _snapshot} ->
         :ok
 

@@ -381,6 +381,32 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     RedisStore.delete_job(job_id)
   end
 
+  test "redis-only agent snapshots keep live state without a disk checkpoint write" do
+    job_id = "redis-only-agent-snapshot-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _job} =
+             RedisStore.persist_job(job_id, %{
+               "job_id" => job_id,
+               "graph_id" => "redis-only-agent-snapshot",
+               "status" => "pending",
+               "updated_at" => MirrorNeuron.Runtime.timestamp()
+             })
+
+    snapshot = %{
+      "agent_id" => "worker",
+      "current_state" => %{"phase" => "starting"},
+      "last_heartbeat_at" => MirrorNeuron.Runtime.timestamp()
+    }
+
+    assert {:ok, ^snapshot} =
+             RedisStore.persist_agent(job_id, "worker", snapshot, persist_disk?: false)
+
+    assert {:ok, ^snapshot} = RedisStore.fetch_agent(job_id, "worker")
+    assert {:ok, []} = DiskCheckpoint.load_agents(job_id)
+
+    RedisStore.delete_job(job_id)
+  end
+
   test "concurrent late snapshots cannot recreate a terminal disk checkpoint" do
     job_id = "terminal-checkpoint-race-#{System.unique_integer([:positive])}"
 

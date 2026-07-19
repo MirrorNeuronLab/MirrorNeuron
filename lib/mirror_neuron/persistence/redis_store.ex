@@ -941,11 +941,15 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
-  def persist_agent(job_id, agent_id, snapshot) do
+  @doc false
+  def persist_agent(job_id, agent_id, snapshot), do: persist_agent(job_id, agent_id, snapshot, [])
+
+  @doc false
+  def persist_agent(job_id, agent_id, snapshot, opts) when is_list(opts) do
     encoded = Jason.encode!(snapshot)
 
     with :ok <- validate_agent_lease_epoch(job_id, snapshot),
-         :ok <- persist_disk_agent(job_id, agent_id, snapshot),
+         :ok <- maybe_persist_disk_agent(job_id, agent_id, snapshot, opts),
          retention_commands <- agent_snapshot_retention_commands(job_id, agent_id),
          {:ok, results} <-
            transaction([
@@ -3553,6 +3557,14 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       {:error, reason} ->
         Logger.warning("failed to persist disk job checkpoint for #{job_id}: #{inspect(reason)}")
         :ok
+    end
+  end
+
+  defp maybe_persist_disk_agent(job_id, agent_id, snapshot, opts) do
+    if Keyword.get(opts, :persist_disk?, true) == false do
+      :ok
+    else
+      persist_disk_agent(job_id, agent_id, snapshot)
     end
   end
 
