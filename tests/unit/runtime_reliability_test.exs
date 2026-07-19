@@ -151,6 +151,19 @@ defmodule MirrorNeuron.RuntimeReliabilityTest do
         assert cancellation["target_nodes"] == [remote_node]
         assert cancellation["acknowledged_nodes"] == []
 
+        assert {:ok, [%{"job_id" => ^job_id}]} =
+                 CancellationStore.list_pending_for_node(remote_node)
+
+        guard_key = "#{System.fetch_env!("MN_REDIS_NAMESPACE")}:job:#{job_id}:guard"
+
+        assert {:ok, encoded_guard} =
+                 Redix.command(MirrorNeuron.Redis.Connection, ["GET", guard_key])
+
+        assert {:ok, %{"cancellation_fence_epoch" => fence_epoch}} =
+                 Jason.decode(encoded_guard)
+
+        assert fence_epoch >= 1
+
         stale_write = Map.put(active_job(job_id), "lease_epoch", 1)
 
         assert {:error, {:cancellation_fenced, 1, _fence_epoch}} =
@@ -169,6 +182,8 @@ defmodule MirrorNeuron.RuntimeReliabilityTest do
                  CancellationStore.acknowledge(job_id, remote_node)
 
         assert {:ok, %{"status" => "cancelled"}} = RedisStore.fetch_job(job_id)
+        assert {:ok, %{"status" => "acknowledged"}} = CancellationStore.fetch(job_id)
+        assert {:ok, []} = CancellationStore.list_pending_for_node(remote_node)
       end)
     end
   end

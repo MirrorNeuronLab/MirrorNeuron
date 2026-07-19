@@ -378,6 +378,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     with :ok <- validate_identifier("job_id", job_id) do
       encoded = Jason.encode!(job_map)
       encoded_summary = Jason.encode!(job_summary(job_id, job_map))
+      encoded_guard = Jason.encode!(job_guard(job_id, job_map))
 
       with :ok <- validate_job_lease_epoch(job_id, job_map),
            :ok <- persist_disk_job(job_id, job_map),
@@ -385,6 +386,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
              transaction([
                ["SET", key("job", job_id), encoded],
                ["SET", key("job", job_id, "summary"), encoded_summary],
+               ["SET", key("job", job_id, "guard"), encoded_guard],
                ["SADD", key(@jobs_set), job_id]
              ]),
            :ok <- expect_persist_job_results(results),
@@ -397,6 +399,30 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   def persist_job(_job_id, _job_map), do: {:error, "job must be an object"}
+
+  @doc false
+  def persist_job_projection(job_id, job_map) when is_map(job_map) do
+    with :ok <- validate_identifier("job_id", job_id) do
+      encoded_summary = Jason.encode!(job_summary(job_id, job_map))
+      encoded_guard = Jason.encode!(job_guard(job_id, job_map))
+
+      with :ok <- validate_job_lease_epoch(job_id, job_map),
+           {:ok, results} <-
+             transaction([
+               ["SET", key("job", job_id, "summary"), encoded_summary],
+               ["SET", key("job", job_id, "guard"), encoded_guard],
+               ["SADD", key(@jobs_set), job_id]
+             ]),
+           :ok <- expect_persist_job_projection_results(results),
+           :ok <- apply_job_projection_retention(job_id, job_map),
+           :ok <- wait_for_replicas() do
+        {:ok, job_map}
+      end
+    end
+  end
+
+  def persist_job_projection(_job_id, _job_map),
+    do: {:error, "job must be an object"}
 
   def persist_terminal_job(job_id, updates, defaults \\ %{})
 
@@ -947,13 +973,17 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   @doc false
   def persist_agent(job_id, agent_id, snapshot, opts) when is_list(opts) do
     encoded = Jason.encode!(snapshot)
+    encoded_summary = snapshot |> agent_monitor_record() |> Jason.encode!()
+    job_guard_result = fetch_job_guard(job_id)
 
-    with :ok <- validate_agent_lease_epoch(job_id, snapshot),
-         :ok <- maybe_persist_disk_agent(job_id, agent_id, snapshot, opts),
-         retention_commands <- agent_snapshot_retention_commands(job_id, agent_id),
+    with :ok <- validate_agent_lease_epoch(snapshot, job_guard_result),
+         :ok <- maybe_persist_disk_agent(job_id, agent_id, snapshot, opts, job_guard_result),
+         retention_commands <-
+           agent_snapshot_retention_commands(job_id, agent_id, job_guard_result),
          {:ok, results} <-
            transaction([
              ["SET", key("job", job_id, "agent", agent_id), encoded],
+             ["SET", key("job", job_id, "agent_summary", agent_id), encoded_summary],
              ["SADD", key("job", job_id, "agents"), agent_id]
              | retention_commands
            ]),
@@ -966,6 +996,14 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   def list_agents(job_id) do
     with {:ok, agent_ids} <- command(["SMEMBERS", key("job", job_id, "agents")]) do
       fetch_agents(job_id, Enum.sort(agent_ids))
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  def list_agent_summaries(job_id) do
+    with {:ok, agent_ids} <- command(["SMEMBERS", key("job", job_id, "agents")]) do
+      fetch_agent_summaries(job_id, Enum.sort(agent_ids))
     else
       {:error, reason} -> {:error, format_reason(reason)}
     end
@@ -1048,13 +1086,15 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       [
         key("job", job_id),
         key("job", job_id, "summary"),
+        key("job", job_id, "guard"),
         key("job", job_id, "events"),
         key("job", job_id, "agents"),
         key("lease", "job:#{job_id}"),
         key("lease", "job:#{job_id}", "epoch"),
         delivery_index_key(job_id)
       ] ++
-        Enum.map(agent_ids, &key("job", job_id, "agent", &1)) ++ delivery_keys
+        Enum.map(agent_ids, &key("job", job_id, "agent", &1)) ++
+        Enum.map(agent_ids, &key("job", job_id, "agent_summary", &1)) ++ delivery_keys
 
     with {:ok, results} <-
            transaction([
@@ -2094,7 +2134,8 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       "submitted_at" => field(job, "submitted_at"),
       "updated_at" => field(job, "updated_at"),
       "placement_policy" => field(job, "placement_policy"),
-      "scheduler" => field(job, "scheduler"),
+      "scheduler" => job_scheduler_summary(field(job, "scheduler")),
+      "lease_owner" => job_lease_owner(job),
       "requested_recovery_policy" => field(job, "requested_recovery_policy"),
       "recovery_policy" => field(job, "recovery_policy"),
       "reliability" => field(job, "reliability"),
@@ -2115,6 +2156,44 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       "result_ref" => field(job, "result_ref"),
       "workflow_state_ref" => field(job, "workflow_state_ref"),
       "workflow_state" => workflow_state_summary(field(job, "workflow_state"))
+    }
+  end
+
+  defp job_scheduler_summary(scheduler) when is_map(scheduler) do
+    placements = field(scheduler, "placements", [])
+
+    %{
+      "status" => field(scheduler, "status"),
+      "job_type" => field(scheduler, "job_type"),
+      "strategy" => field(scheduler, "strategy"),
+      "mode" => field(scheduler, "mode"),
+      "placement_count" => field(scheduler, "placement_count", length(placements)),
+      "nodes" =>
+        placements
+        |> Enum.map(&field(&1, "node"))
+        |> Enum.reject(&is_nil/1)
+        |> Enum.uniq()
+        |> Enum.sort()
+    }
+  end
+
+  defp job_scheduler_summary(_scheduler), do: nil
+
+  defp job_lease_owner(job) do
+    field(job, "lease_owner") ||
+      case field(job, "lease") do
+        lease when is_map(lease) -> field(lease, "owner_id")
+        _lease -> nil
+      end
+  end
+
+  defp job_guard(job_id, job) do
+    %{
+      "job_id" => field(job, "job_id") || job_id,
+      "status" => field(job, "status"),
+      "lease_epoch" => lease_epoch(job),
+      "cancellation_fence_epoch" => parse_integer(field(job, "cancellation_fence_epoch")),
+      "updated_at" => field(job, "updated_at")
     }
   end
 
@@ -3186,6 +3265,69 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
+  defp fetch_agent_summaries(_job_id, []), do: {:ok, []}
+
+  defp fetch_agent_summaries(job_id, agent_ids) do
+    keys = Enum.map(agent_ids, &key("job", job_id, "agent_summary", &1))
+
+    with {:ok, encoded_summaries} <- command(["MGET" | keys]),
+         {summaries, missing_ids} <- decode_agent_summaries(agent_ids, encoded_summaries),
+         {:ok, backfilled} <- backfill_agent_summaries(job_id, missing_ids) do
+      summaries = Map.merge(summaries, backfilled)
+      {:ok, Enum.flat_map(agent_ids, &List.wrap(Map.get(summaries, &1)))}
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  defp decode_agent_summaries(agent_ids, encoded_summaries) do
+    agent_ids
+    |> Enum.zip(encoded_summaries)
+    |> Enum.reduce({%{}, []}, fn
+      {agent_id, encoded}, {summaries, missing_ids} when is_binary(encoded) ->
+        case Jason.decode(encoded) do
+          {:ok, summary} when is_map(summary) ->
+            {Map.put(summaries, agent_id, summary), missing_ids}
+
+          _ ->
+            {summaries, [agent_id | missing_ids]}
+        end
+
+      {agent_id, _encoded}, {summaries, missing_ids} ->
+        {summaries, [agent_id | missing_ids]}
+    end)
+    |> then(fn {summaries, missing_ids} -> {summaries, Enum.reverse(missing_ids)} end)
+  end
+
+  defp backfill_agent_summaries(_job_id, []), do: {:ok, %{}}
+
+  defp backfill_agent_summaries(job_id, agent_ids) do
+    with {:ok, agents} <- fetch_agents(job_id, agent_ids) do
+      summaries =
+        Map.new(agents, fn agent ->
+          summary = agent_monitor_record(agent)
+          {Map.get(summary, "agent_id"), summary}
+        end)
+
+      commands =
+        Enum.flat_map(summaries, fn {agent_id, summary} ->
+          [["SET", key("job", job_id, "agent_summary", agent_id), Jason.encode!(summary)]] ++
+            agent_summary_retention_commands(job_id, agent_id)
+        end)
+
+      case pipeline(commands) do
+        {:ok, results} ->
+          case Enum.find(results, &match?(%Redix.Error{}, &1)) do
+            nil -> {:ok, summaries}
+            %Redix.Error{} = error -> {:error, format_reason(error)}
+          end
+
+        {:error, reason} ->
+          {:error, format_reason(reason)}
+      end
+    end
+  end
+
   defp fetch_recovery_evals([]), do: {:ok, []}
 
   defp fetch_recovery_evals(eval_ids) do
@@ -3377,44 +3519,72 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   defp sweep_recovery_eval_retention do
     ttl_seconds = recovery_eval_ttl_seconds()
 
-    case recovery_eval_index_ids() do
-      {:ok, eval_ids} ->
-        result =
-          Enum.reduce(
-            eval_ids,
-            %{
-              deleted_recovery_evals: [],
-              stale_recovery_evals: []
-            },
-            fn eval_id, acc ->
-              case fetch_recovery_eval(eval_id) do
-                {:ok, eval} when is_map(eval) ->
-                  if terminal_recovery_eval_expired?(eval, ttl_seconds) do
-                    _ = remove_stale_recovery_eval_index(eval_id)
-                    Map.update!(acc, :deleted_recovery_evals, &[eval_id | &1])
-                  else
-                    :ok = apply_recovery_eval_retention(eval_id, Map.get(eval, "status"))
-                    acc
-                  end
+    # Terminal recovery payloads already receive a Redis TTL when their status is
+    # persisted. Prune their set indexes after Redis expires the value instead of
+    # downloading every payload and renewing its TTL on every retention pass.
+    # Keeping this work in Redis also makes the network cost proportional to the
+    # number of records actually removed, rather than the total recovery history.
+    index_keys = [key("recovery", "evals") | recovery_eval_status_index_keys()]
+    complete_index = 5
+    failed_index = 6
 
-                {:error, reason} ->
-                  if missing_recovery_eval?(eval_id, reason) do
-                    _ = remove_stale_recovery_eval_index(eval_id)
-                    Map.update!(acc, :stale_recovery_evals, &[eval_id | &1])
-                  else
-                    Logger.warning(
-                      "retention could not classify recovery eval #{eval_id}; cleanup deferred: #{inspect(reason)}"
-                    )
+    script = """
+    local ids = {}
+    for _, index_key in ipairs(KEYS) do
+      for _, eval_id in ipairs(redis.call("SMEMBERS", index_key)) do
+        ids[eval_id] = true
+      end
+    end
 
-                    acc
-                  end
-              end
-            end
-          )
+    local eval_prefix = ARGV[1]
+    local ttl_seconds = tonumber(ARGV[2]) or -1
+    local deleted = {}
+    local stale = {}
 
-        deleted_recovery_evals = Enum.reverse(result.deleted_recovery_evals)
-        stale_recovery_evals = Enum.reverse(result.stale_recovery_evals)
+    for eval_id, _ in pairs(ids) do
+      local eval_key = eval_prefix .. eval_id
+      local exists = redis.call("EXISTS", eval_key) == 1
+      local terminal =
+        redis.call("SISMEMBER", KEYS[#{complete_index}], eval_id) == 1 or
+        redis.call("SISMEMBER", KEYS[#{failed_index}], eval_id) == 1
+      local deleted_now = false
 
+      if exists and terminal then
+        if ttl_seconds <= 0 then
+          redis.call("DEL", eval_key)
+          exists = false
+          deleted_now = true
+          table.insert(deleted, eval_id)
+        elseif redis.call("TTL", eval_key) == -1 then
+          redis.call("EXPIRE", eval_key, ttl_seconds)
+        end
+      end
+
+      if not exists then
+        for _, index_key in ipairs(KEYS) do
+          redis.call("SREM", index_key, eval_id)
+        end
+
+        if not deleted_now then
+          table.insert(stale, eval_id)
+        end
+      end
+    end
+
+    table.sort(deleted)
+    table.sort(stale)
+    return {deleted, stale}
+    """
+
+    command([
+      "EVAL",
+      script,
+      to_string(length(index_keys))
+      | index_keys ++ [key("recovery", "eval") <> ":", to_string(ttl_seconds)]
+    ])
+    |> case do
+      {:ok, [deleted_recovery_evals, stale_recovery_evals]}
+      when is_list(deleted_recovery_evals) and is_list(stale_recovery_evals) ->
         {:ok,
          %{
            deleted_recovery_eval_count: length(deleted_recovery_evals),
@@ -3425,6 +3595,9 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
       {:error, reason} ->
         {:error, format_reason(reason)}
+
+      other ->
+        {:error, format_reason(other)}
     end
   end
 
@@ -3522,18 +3695,21 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   defp namespaced_key_parts(_redis_key), do: []
 
   defp validate_job_lease_epoch(job_id, job_map) do
-    incoming = lease_epoch(job_map)
+    validate_persisted_lease_epoch(job_id, lease_epoch(job_map))
+  end
 
-    case existing_cancellation_fence_epoch(job_id) do
+  defp validate_persisted_lease_epoch(job_id, incoming) do
+    guard = existing_job_guard(job_id)
+    validate_lease_epoch_against_guard(guard, incoming)
+  end
+
+  defp validate_lease_epoch_against_guard(guard, incoming) do
+    case parse_integer(Map.get(guard, "cancellation_fence_epoch")) do
       fence when is_integer(fence) ->
-        if is_integer(incoming) and incoming >= fence do
-          :ok
-        else
-          {:error, {:cancellation_fenced, incoming, fence}}
-        end
+        {:error, {:cancellation_fenced, incoming, fence}}
 
       nil ->
-        case {incoming, existing_job_lease_epoch(job_id)} do
+        case {incoming, lease_epoch(guard)} do
           {nil, _existing} ->
             :ok
 
@@ -3560,17 +3736,17 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
-  defp maybe_persist_disk_agent(job_id, agent_id, snapshot, opts) do
+  defp maybe_persist_disk_agent(job_id, agent_id, snapshot, opts, job_guard_result) do
     if Keyword.get(opts, :persist_disk?, true) == false do
       :ok
     else
-      persist_disk_agent(job_id, agent_id, snapshot)
+      persist_disk_agent(job_id, agent_id, snapshot, job_guard_result)
     end
   end
 
-  defp persist_disk_agent(job_id, agent_id, snapshot) do
+  defp persist_disk_agent(job_id, agent_id, snapshot, job_guard_result) do
     DiskCheckpoint.with_job_lock(job_id, fn ->
-      case fetch_job(job_id) do
+      case job_guard_result do
         {:ok, %{"status" => status}} when status in @terminal_statuses ->
           _ = DiskCheckpoint.delete_job(job_id)
           :ok
@@ -3588,7 +3764,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   defp handle_disk_agent_failure(job_id, _agent_id, :enoent) do
-    case fetch_job(job_id) do
+    case fetch_job_guard(job_id) do
       {:ok, %{"status" => status}} when status in @terminal_statuses ->
         _ = DiskCheckpoint.delete_job(job_id)
         :ok
@@ -3644,60 +3820,56 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
-  defp validate_agent_lease_epoch(job_id, snapshot) do
-    incoming = lease_epoch(snapshot)
+  defp validate_agent_lease_epoch(snapshot, job_guard_result) do
+    guard =
+      case job_guard_result do
+        {:ok, guard} when is_map(guard) -> guard
+        _ -> %{}
+      end
 
-    case existing_cancellation_fence_epoch(job_id) do
-      fence when is_integer(fence) ->
-        if is_integer(incoming) and incoming >= fence do
-          :ok
-        else
-          {:error, {:cancellation_fenced, incoming, fence}}
-        end
+    validate_lease_epoch_against_guard(guard, lease_epoch(snapshot))
+  end
 
-      nil ->
-        case {incoming, existing_job_lease_epoch(job_id)} do
-          {nil, _existing} ->
-            :ok
-
-          {_incoming, nil} ->
-            :ok
-
-          {incoming, existing} when incoming >= existing ->
-            :ok
-
-          {incoming, existing} ->
-            {:error, {:stale_lease_epoch, incoming, existing}}
-        end
+  defp existing_job_guard(job_id) do
+    case fetch_job_guard(job_id) do
+      {:ok, guard} -> guard
+      _ -> %{}
     end
   end
 
-  defp existing_job_lease_epoch(job_id) do
-    case command(["GET", key("job", job_id)]) do
-      {:ok, nil} ->
-        nil
-
-      {:ok, encoded} ->
-        case Jason.decode(encoded) do
-          {:ok, job} -> lease_epoch(job)
-          _ -> nil
-        end
-
-      _ ->
-        nil
-    end
-  end
-
-  defp existing_cancellation_fence_epoch(job_id) do
-    case command(["GET", key("job", job_id)]) do
+  defp fetch_job_guard(job_id) do
+    case command(["GET", key("job", job_id, "guard")]) do
       {:ok, encoded} when is_binary(encoded) ->
-        case Jason.decode(encoded) do
-          {:ok, job} -> parse_integer(Map.get(job, "cancellation_fence_epoch"))
-          _ -> nil
-        end
+        Jason.decode(encoded)
 
-      _ ->
-        nil
+      {:ok, nil} ->
+        backfill_job_guard(job_id)
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
+    end
+  end
+
+  defp backfill_job_guard(job_id) do
+    with {:ok, job} <- fetch_job(job_id) do
+      guard = job_guard(job_id, job)
+
+      case command(["SET", key("job", job_id, "guard"), Jason.encode!(guard)]) do
+        {:ok, "OK"} ->
+          if terminal_status?(Map.get(guard, "status")) do
+            expire_key(key("job", job_id, "guard"), terminal_job_ttl_seconds())
+          else
+            persist_key(key("job", job_id, "guard"))
+          end
+
+          {:ok, guard}
+
+        {:error, reason} ->
+          {:error, format_reason(reason)}
+
+        other ->
+          {:error, format_reason(other)}
+      end
     end
   end
 
@@ -3744,10 +3916,19 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
+  defp apply_job_projection_retention(job_id, job_map) do
+    if terminal_status?(Map.get(job_map, "status") || Map.get(job_map, :status)) do
+      expire_terminal_job(job_id)
+    else
+      :ok
+    end
+  end
+
   defp persist_active_job(job_id) do
     [
       key("job", job_id),
       key("job", job_id, "summary"),
+      key("job", job_id, "guard"),
       key("job", job_id, "events"),
       key("job", job_id, "agents")
     ]
@@ -3762,6 +3943,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     [
       key("job", job_id),
       key("job", job_id, "summary"),
+      key("job", job_id, "guard"),
       key("job", job_id, "events"),
       key("job", job_id, "agents")
     ]
@@ -3771,6 +3953,11 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       {:ok, agent_ids} ->
         Enum.each(agent_ids, fn agent_id ->
           expire_key(key("job", job_id, "agent", agent_id), agent_snapshot_ttl_seconds())
+
+          expire_key(
+            key("job", job_id, "agent_summary", agent_id),
+            agent_snapshot_ttl_seconds()
+          )
         end)
 
       {:error, _reason} ->
@@ -3799,11 +3986,32 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     ttl_seconds = agent_snapshot_ttl_seconds()
 
     maybe_expire_key_command(key("job", job_id, "agent", agent_id), ttl_seconds) ++
+      maybe_expire_key_command(key("job", job_id, "agent_summary", agent_id), ttl_seconds) ++
       maybe_expire_key_command(key("job", job_id, "agents"), ttl_seconds)
   end
 
-  defp agent_snapshot_retention_commands(job_id, agent_id) do
-    case fetch_job(job_id) do
+  defp agent_summary_retention_commands(job_id, agent_id) do
+    case fetch_job_guard(job_id) do
+      {:ok, job} ->
+        if terminal_status?(Map.get(job, "status")) do
+          maybe_expire_key_command(
+            key("job", job_id, "agent_summary", agent_id),
+            agent_snapshot_ttl_seconds()
+          )
+        else
+          [["PERSIST", key("job", job_id, "agent_summary", agent_id)]]
+        end
+
+      {:error, _reason} ->
+        maybe_expire_key_command(
+          key("job", job_id, "agent_summary", agent_id),
+          agent_snapshot_ttl_seconds()
+        )
+    end
+  end
+
+  defp agent_snapshot_retention_commands(job_id, agent_id, job_guard_result) do
+    case job_guard_result do
       {:ok, job} ->
         if terminal_status?(Map.get(job, "status")) do
           expire_agent_snapshot_commands(job_id, agent_id)
@@ -3852,40 +4060,8 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
-  defp apply_recovery_eval_retention(eval_id, status) do
-    eval_key = key("recovery", "eval", eval_id)
-
-    if terminal_recovery_eval_status?(status) do
-      expire_key(eval_key, recovery_eval_ttl_seconds())
-    else
-      persist_key(eval_key)
-    end
-  end
-
-  defp terminal_recovery_eval_expired?(_eval, ttl_seconds) when ttl_seconds < 0, do: false
-
-  defp terminal_recovery_eval_expired?(eval, ttl_seconds) do
-    terminal_recovery_eval_status?(Map.get(eval, "status")) and
-      recovery_eval_age_seconds(eval) >= ttl_seconds
-  end
-
   defp terminal_recovery_eval_status?(status),
     do: to_string(status || "") in @terminal_recovery_eval_statuses
-
-  defp recovery_eval_age_seconds(eval) do
-    updated_at =
-      Map.get(eval, "completed_at") ||
-        Map.get(eval, "updated_at") ||
-        Map.get(eval, "created_at") ||
-        timestamp()
-
-    with true <- is_binary(updated_at),
-         {:ok, datetime, _offset} <- DateTime.from_iso8601(updated_at) do
-      DateTime.diff(DateTime.utc_now(), datetime, :second)
-    else
-      _ -> 0
-    end
-  end
 
   defp terminal_job_expired?(_job, ttl_seconds) when ttl_seconds < 0, do: false
 
@@ -4470,7 +4646,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   defp parse_transaction_results(other), do: {:error, format_reason(other)}
 
-  defp expect_persist_job_results(["OK", "OK", count]) when is_integer(count), do: :ok
+  defp expect_persist_job_results(["OK", "OK", "OK", count]) when is_integer(count), do: :ok
 
   defp expect_persist_job_results([%Redix.Error{} = error | _]),
     do: {:error, format_reason(error)}
@@ -4481,14 +4657,34 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   defp expect_persist_job_results([_set, _summary, %Redix.Error{} = error | _]),
     do: {:error, format_reason(error)}
 
+  defp expect_persist_job_results([_set, _summary, _guard, %Redix.Error{} = error | _]),
+    do: {:error, format_reason(error)}
+
   defp expect_persist_job_results(other), do: {:error, format_reason(other)}
 
-  defp expect_persist_agent_results(["OK", count | _]) when is_integer(count), do: :ok
+  defp expect_persist_job_projection_results(["OK", "OK", count]) when is_integer(count),
+    do: :ok
+
+  defp expect_persist_job_projection_results([%Redix.Error{} = error | _]),
+    do: {:error, format_reason(error)}
+
+  defp expect_persist_job_projection_results([_summary, %Redix.Error{} = error | _]),
+    do: {:error, format_reason(error)}
+
+  defp expect_persist_job_projection_results([_summary, _guard, %Redix.Error{} = error | _]),
+    do: {:error, format_reason(error)}
+
+  defp expect_persist_job_projection_results(other), do: {:error, format_reason(other)}
+
+  defp expect_persist_agent_results(["OK", "OK", count | _]) when is_integer(count), do: :ok
 
   defp expect_persist_agent_results([%Redix.Error{} = error | _]),
     do: {:error, format_reason(error)}
 
   defp expect_persist_agent_results([_set, %Redix.Error{} = error | _]),
+    do: {:error, format_reason(error)}
+
+  defp expect_persist_agent_results([_set, _summary, %Redix.Error{} = error | _]),
     do: {:error, format_reason(error)}
 
   defp expect_persist_agent_results(other), do: {:error, format_reason(other)}
@@ -4641,6 +4837,47 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   defp stringify_value(value) when is_map(value), do: stringify_map(value)
   defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
   defp stringify_value(value), do: value
+
+  defp agent_monitor_record(snapshot) do
+    snapshot = stringify_map(snapshot)
+    current_state = Map.get(snapshot, "current_state") || %{}
+    metadata = Map.get(snapshot, "metadata") || %{}
+    last_result = Map.get(current_state, "last_result")
+
+    compact_last_result =
+      if is_map(last_result) do
+        lease = Map.get(last_result, "lease") || %{}
+
+        %{
+          "sandbox_name" => Map.get(last_result, "sandbox_name"),
+          "lease" => Map.take(lease, ["lease_id", "pool", "slots"])
+        }
+      end
+
+    %{
+      "agent_id" => Map.get(snapshot, "agent_id") || Map.get(snapshot, "node_id"),
+      "node_id" => Map.get(snapshot, "node_id"),
+      "agent_type" => Map.get(snapshot, "agent_type"),
+      "assigned_node" => Map.get(snapshot, "assigned_node"),
+      "processed_messages" => Map.get(snapshot, "processed_messages", 0),
+      "mailbox_depth" => Map.get(snapshot, "mailbox_depth", 0),
+      "last_heartbeat_at" => Map.get(snapshot, "last_heartbeat_at"),
+      "current_state" => %{
+        "runs" => Map.get(current_state, "runs", 0),
+        "last_error" => compact_agent_error(Map.get(current_state, "last_error")),
+        "last_result" => compact_last_result
+      },
+      "metadata" => %{
+        "paused" => Map.get(metadata, "paused", false),
+        "backpressure" => Map.get(metadata, "backpressure") || %{}
+      }
+    }
+  end
+
+  defp compact_agent_error(error) when is_binary(error) and byte_size(error) > 8_192,
+    do: binary_part(error, 0, 8_192)
+
+  defp compact_agent_error(error), do: error
 
   defp parse_integer(value) when is_integer(value), do: value
 

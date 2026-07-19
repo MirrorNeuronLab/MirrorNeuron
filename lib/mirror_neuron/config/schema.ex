@@ -68,6 +68,7 @@ defmodule MirrorNeuron.Config.Schema do
       spec("MN_JOB_LEASE_RENEW_INTERVAL_MS", :job_lease_renew_interval_ms, :integer,
         default: 10_000
       ),
+      spec("MN_JOB_SNAPSHOT_INTERVAL_MS", :job_snapshot_interval_ms, :integer, default: 0),
       spec("MN_JOB_CALL_TIMEOUT_MS", :job_call_timeout_ms, :integer, default: 15_000),
       spec("MN_CANCEL_JOB_CALL_TIMEOUT_MS", :cancel_job_call_timeout_ms, :integer,
         default: 5_000

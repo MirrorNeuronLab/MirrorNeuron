@@ -384,7 +384,9 @@ reached, Core records `cancelling`, advances the job fence, revokes its lease,
 and returns `cancellation_pending` immediately. The owner performs local agent,
 sandbox, and checkpoint cleanup when it rejoins; the job becomes `cancelled`
 only after every recorded owner acknowledgement. Recovery, resume, scheduling,
-and drain migration do not run while a job is `cancelling`.
+and drain migration do not run while a job is `cancelling`. The reconciler uses
+one Redis-side scan of a pending-only cancellation index; acknowledgement
+removes the index entry while retaining the cancellation record for audit.
 
 ### Durable group operations
 
@@ -548,11 +550,16 @@ present. Production does not require any `.env` file.
 | `MN_CORE_HOST` | Host/IP used by the gRPC listener; defaults to loopback-style local binding. |
 | `MN_GRPC_PORT` | gRPC service port. |
 | `MN_GRPC_AUTH_TOKEN` | Single client-identity token for protected gRPC calls, including destructive operations. There are no operator/admin scopes. |
+| `MN_LITELLM_MAX_CONCURRENT_REQUESTS` | Node-local inference requests admitted concurrently by the shared LiteLLM FIFO queue; defaults to 1 for stable local decoding on memory-constrained nodes. |
+| `MN_LITELLM_MAX_QUEUED_REQUESTS` | Maximum LiteLLM inference requests waiting for a slot; defaults to 64. |
+| `MN_LITELLM_QUEUE_TIMEOUT_SECONDS` | Maximum time an inference request waits in the LiteLLM queue; defaults to 1800. |
+| `MN_LITELLM_MAX_SLOT_SECONDS` | Safety deadline after which a leaked LiteLLM execution slot is released; defaults to 3600. |
 | `MN_NODE_NAME` | Erlang node name used by release and cluster scripts. |
 | `MN_CLUSTER_NODES` | Comma-separated Erlang node names for cluster discovery. |
 | `MN_COOKIE` | Erlang distribution cookie; use a strong non-default value for distributed nodes. |
 | `MN_JOB_LEASE_DURATION_MS` | Job lease duration for fenced runtime ownership; defaults to 60000. |
 | `MN_JOB_LEASE_RENEW_INTERVAL_MS` | Job lease renewal cadence; defaults to 10000. |
+| `MN_JOB_SNAPSHOT_INTERVAL_MS` | Optional full active-job snapshot cadence in milliseconds. `0` disables periodic active snapshots (the default); compact monitor/lease projections and terminal or operator-controlled state remain durable. |
 | `MN_JOB_CALL_TIMEOUT_MS` | Timeout for runtime job control calls such as pause, resume, pressure, and external message submit; defaults to 15000. |
 | `MN_CANCEL_JOB_CALL_TIMEOUT_MS` | Local coordinator cancellation call timeout; unavailable remote ownership is recorded as durable `cancellation_pending` instead of waiting for this timeout. Defaults to 5000. |
 | `MN_MESSAGE_DEFAULT_TTL_SECONDS` | Default lifetime for an agent message; defaults to 86400. |

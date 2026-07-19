@@ -36,7 +36,15 @@ defmodule MirrorNeuron.Persistence.CancellationStore do
 
     local job = cjson.decode(encoded_job)
     local cancellation = cjson.decode(ARGV[1])
-    local epoch = redis.call("incr", KEYS[5])
+    local job_epoch = tonumber(job["lease_epoch"]) or 0
+    local existing_lease = job["lease"]
+    local lease_epoch = 0
+    if type(existing_lease) == "table" then
+      lease_epoch = tonumber(existing_lease["epoch"]) or 0
+    end
+    local stored_epoch = tonumber(redis.call("get", KEYS[5])) or 0
+    local epoch = math.max(job_epoch, lease_epoch, stored_epoch) + 1
+    redis.call("set", KEYS[5], epoch)
     cancellation["fence_epoch"] = epoch
     cancellation["updated_at"] = ARGV[2]
 
@@ -46,7 +54,6 @@ defmodule MirrorNeuron.Persistence.CancellationStore do
     job["lease_epoch"] = epoch
     job["updated_at"] = ARGV[2]
 
-    local existing_lease = job["lease"]
     if type(existing_lease) == "table" then
       existing_lease["epoch"] = epoch
       existing_lease["owner_id"] = cjson.null
@@ -54,7 +61,18 @@ defmodule MirrorNeuron.Persistence.CancellationStore do
     end
 
     local encoded_cancellation = cjson.encode(cancellation)
-    redis.call("set", KEYS[1], cjson.encode(job))
+    encoded_cancellation = string.gsub(
+      encoded_cancellation,
+      '"acknowledged_nodes":{}',
+      '"acknowledged_nodes":[]'
+    )
+    local updated_job = cjson.encode(job)
+    updated_job = string.gsub(
+      updated_job,
+      '"acknowledged_nodes":{}',
+      '"acknowledged_nodes":[]'
+    )
+    redis.call("set", KEYS[1], updated_job)
 
     local encoded_summary = redis.call("get", KEYS[2])
     if encoded_summary then
@@ -65,6 +83,15 @@ defmodule MirrorNeuron.Persistence.CancellationStore do
       redis.call("set", KEYS[2], cjson.encode(summary))
     end
 
+    local encoded_guard = redis.call("get", KEYS[7])
+    local guard = encoded_guard and cjson.decode(encoded_guard) or {}
+    guard["job_id"] = ARGV[3]
+    guard["status"] = "cancelling"
+    guard["lease_epoch"] = epoch
+    guard["cancellation_fence_epoch"] = epoch
+    guard["updated_at"] = ARGV[2]
+    redis.call("set", KEYS[7], cjson.encode(guard))
+
     redis.call("set", KEYS[3], encoded_cancellation)
     redis.call("sadd", KEYS[4], ARGV[3])
     redis.call("del", KEYS[6])
@@ -74,13 +101,14 @@ defmodule MirrorNeuron.Persistence.CancellationStore do
     case command([
            "EVAL",
            script,
-           "6",
+           "7",
            job_key(job_id),
            job_summary_key(job_id),
            cancellation_key(job_id),
            cancellations_key(),
            lease_epoch_key(job_id),
            lease_key(job_id),
+           job_guard_key(job_id),
            Jason.encode!(cancellation),
            now,
            job_id
@@ -102,21 +130,63 @@ defmodule MirrorNeuron.Persistence.CancellationStore do
   end
 
   def list_pending_for_node(node_name) when is_binary(node_name) do
-    with {:ok, job_ids} <- command(["SMEMBERS", cancellations_key()]) do
-      job_ids
-      |> Enum.reduce([], fn job_id, cancellations ->
-        case fetch(job_id) do
-          {:ok, cancellation} ->
-            if pending_for_node?(cancellation, node_name),
-              do: [cancellation | cancellations],
-              else: cancellations
+    script = """
+    local pending = {}
+    local job_ids = redis.call("smembers", KEYS[1])
 
-          _ ->
-            cancellations
+    for _, job_id in ipairs(job_ids) do
+      local cancellation_key = ARGV[2] .. job_id .. ARGV[3]
+      local encoded = redis.call("get", cancellation_key)
+
+      if not encoded then
+        redis.call("srem", KEYS[1], job_id)
+      else
+        local cancellation = cjson.decode(encoded)
+
+        if cancellation["status"] ~= "pending" then
+          redis.call("srem", KEYS[1], job_id)
+        else
+          local is_target = false
+          local already_acknowledged = false
+
+          for _, node in ipairs(cancellation["target_nodes"] or {}) do
+            if node == ARGV[1] then is_target = true end
+          end
+
+          for _, node in ipairs(cancellation["acknowledged_nodes"] or {}) do
+            if node == ARGV[1] then already_acknowledged = true end
+          end
+
+          if is_target and not already_acknowledged then
+            table.insert(pending, encoded)
+          end
+        end
+      end
+    end
+
+    return pending
+    """
+
+    with {:ok, encoded_cancellations} <-
+           command([
+             "EVAL",
+             script,
+             "1",
+             cancellations_key(),
+             node_name,
+             key("job") <> ":",
+             ":cancellation"
+           ]) do
+      Enum.reduce_while(encoded_cancellations, {:ok, []}, fn encoded, {:ok, cancellations} ->
+        case Jason.decode(encoded) do
+          {:ok, cancellation} -> {:cont, {:ok, [cancellation | cancellations]}}
+          {:error, reason} -> {:halt, {:error, "invalid cancellation record: #{inspect(reason)}"}}
         end
       end)
-      |> Enum.reverse()
-      |> then(&{:ok, &1})
+      |> case do
+        {:ok, cancellations} -> {:ok, Enum.reverse(cancellations)}
+        {:error, _reason} = error -> error
+      end
     end
   end
 
@@ -166,6 +236,7 @@ defmodule MirrorNeuron.Persistence.CancellationStore do
     if complete then
       cancellation["status"] = "acknowledged"
       cancellation["acknowledged_at"] = ARGV[2]
+      redis.call("srem", KEYS[4], ARGV[3])
 
       local encoded_job = redis.call("get", KEYS[2])
       if encoded_job then
@@ -184,6 +255,14 @@ defmodule MirrorNeuron.Persistence.CancellationStore do
         summary["updated_at"] = ARGV[2]
         redis.call("set", KEYS[3], cjson.encode(summary))
       end
+
+      local encoded_guard = redis.call("get", KEYS[5])
+      if encoded_guard then
+        local guard = cjson.decode(encoded_guard)
+        guard["status"] = "cancelled"
+        guard["updated_at"] = ARGV[2]
+        redis.call("set", KEYS[5], cjson.encode(guard))
+      end
     end
 
     redis.call("set", KEYS[1], cjson.encode(cancellation))
@@ -193,12 +272,15 @@ defmodule MirrorNeuron.Persistence.CancellationStore do
     case command([
            "EVAL",
            script,
-           "3",
+           "5",
            cancellation_key(job_id),
            job_key(job_id),
            job_summary_key(job_id),
+           cancellations_key(),
+           job_guard_key(job_id),
            node_name,
-           now
+           now,
+           job_id
          ]) do
       {:ok, [status, encoded]} when status in ["completed", "pending", "not_target"] ->
         with {:ok, cancellation} <- Jason.decode(encoded) do
@@ -232,12 +314,6 @@ defmodule MirrorNeuron.Persistence.CancellationStore do
     end
   end
 
-  defp pending_for_node?(cancellation, node_name) do
-    Map.get(cancellation, "status") == "pending" and
-      node_name in Map.get(cancellation, "target_nodes", []) and
-      node_name not in Map.get(cancellation, "acknowledged_nodes", [])
-  end
-
   defp blank?(value), do: not is_binary(value) or String.trim(value) == ""
 
   defp command(args) do
@@ -251,6 +327,7 @@ defmodule MirrorNeuron.Persistence.CancellationStore do
 
   defp job_key(job_id), do: key("job", job_id)
   defp job_summary_key(job_id), do: key("job", job_id, "summary")
+  defp job_guard_key(job_id), do: key("job", job_id, "guard")
   defp cancellation_key(job_id), do: key("job", job_id, "cancellation")
   defp cancellations_key, do: key("cancellations")
   defp lease_key(job_id), do: key("lease", "job:#{job_id}")

@@ -37,15 +37,23 @@ defmodule MirrorNeuron.Cluster.Reconciler do
         |> Enum.reduce(@empty_result, fn job, acc ->
           result =
             safe_job_result(job, "node reconciliation", fn ->
-              if affected_by_node?(job, node_name) do
-                with {:ok, full_job} <- fetch_reconciliation_job(job, opts) do
-                  enqueue_or_run_affected_job(full_job, node_name, opts)
-                else
-                  {:error, reason} ->
-                    failed(job, "could not load job for node reconciliation: #{inspect(reason)}")
-                end
-              else
-                skipped(job, "job is not affected by #{node_name}")
+              cond do
+                paused_for_review?(job) ->
+                  skipped(job, "job is paused for review")
+
+                affected_by_node?(job, node_name) ->
+                  with {:ok, full_job} <- fetch_reconciliation_job(job, opts) do
+                    enqueue_or_run_affected_job(full_job, node_name, opts)
+                  else
+                    {:error, reason} ->
+                      failed(
+                        job,
+                        "could not load job for node reconciliation: #{inspect(reason)}"
+                      )
+                  end
+
+                true ->
+                  skipped(job, "job is not affected by #{node_name}")
               end
             end)
 
@@ -66,6 +74,9 @@ defmodule MirrorNeuron.Cluster.Reconciler do
           cond do
             Map.get(job, "status") not in @active_statuses ->
               skipped(job, "job is #{Map.get(job, "status")}")
+
+            paused_for_review?(job) ->
+              skipped(job, "job is paused for review")
 
             not affected_by_node?(job, node_name) ->
               skipped(job, "job is not affected by #{node_name}")
@@ -96,6 +107,9 @@ defmodule MirrorNeuron.Cluster.Reconciler do
         cond do
           Map.get(job, "status") not in @active_statuses ->
             skipped(job, "job is #{Map.get(job, "status")}")
+
+          paused_for_review?(job) ->
+            skipped(job, "job is paused for review")
 
           affected_agents == [] ->
             skipped(job, "no affected agents requested")
@@ -200,35 +214,45 @@ defmodule MirrorNeuron.Cluster.Reconciler do
   end
 
   defp enqueue_or_run_orphaned_job(job, opts) do
-    case redis_store(opts).get_lease("job:#{job["job_id"]}") do
-      {:ok, nil} ->
-        with {:ok, full_job} <- fetch_reconciliation_job(job, opts) do
-          if dry_run?(opts) or Keyword.has_key?(opts, :eval) do
-            reconcile_orphaned_job(full_job, opts)
+    if paused_for_review?(job) do
+      skipped(job, "job is paused for review")
+    else
+      case redis_store(opts).get_lease("job:#{job["job_id"]}") do
+        {:ok, nil} ->
+          with {:ok, full_job} <- fetch_reconciliation_job(job, opts) do
+            if dry_run?(opts) or Keyword.has_key?(opts, :eval) do
+              reconcile_orphaned_job(full_job, opts)
+            else
+              failed_node = lease_owner(full_job)
+              reason = Keyword.get(opts, :reason, "lost job lease")
+
+              enqueue_and_process_eval(
+                full_job,
+                Keyword.fetch!(opts, :trigger),
+                failed_node,
+                [],
+                reason,
+                opts
+              )
+            end
           else
-            failed_node = lease_owner(full_job)
-            reason = Keyword.get(opts, :reason, "lost job lease")
-
-            enqueue_and_process_eval(
-              full_job,
-              Keyword.fetch!(opts, :trigger),
-              failed_node,
-              [],
-              reason,
-              opts
-            )
+            {:error, reason} ->
+              failed(job, "could not load job for orphan sweep: #{inspect(reason)}")
           end
-        else
-          {:error, reason} ->
-            failed(job, "could not load job for orphan sweep: #{inspect(reason)}")
-        end
 
-      {:ok, _lease} ->
-        skipped(job, "job lease is still active")
+        {:ok, _lease} ->
+          skipped(job, "job lease is still active")
 
-      {:error, reason} ->
-        failed(job, "could not inspect job lease: #{inspect(reason)}")
+        {:error, reason} ->
+          failed(job, "could not inspect job lease: #{inspect(reason)}")
+      end
     end
+  end
+
+  defp paused_for_review?(job) do
+    Map.get(job, "recovery_status") == "paused_for_review" or
+      get_in(job, ["recovery", "status"]) == "paused_for_review" or
+      Map.get(job, "recovery_requires_review") == true
   end
 
   defp enqueue_and_process_eval(job, trigger, failed_node, affected_agents, reason, opts) do
@@ -1428,8 +1452,7 @@ defmodule MirrorNeuron.Cluster.Reconciler do
   end
 
   defp full_job_record?(job) when is_map(job) do
-    Map.has_key?(job, "manifest") or Map.has_key?(job, :manifest) or
-      Map.has_key?(job, "manifest_ref") or Map.has_key?(job, :manifest_ref)
+    Map.has_key?(job, "manifest") or Map.has_key?(job, :manifest)
   end
 
   defp full_job_record?(_job), do: false
@@ -1448,8 +1471,16 @@ defmodule MirrorNeuron.Cluster.Reconciler do
 
   defp affected_by_node?(job, node) do
     lease_owner(job) == node or
-      Scheduler.affected_agent_ids(Map.get(job, "scheduler", %{}), node) != []
+      scheduler_affected_by_node?(Map.get(job, "scheduler", %{}), node)
   end
+
+  defp scheduler_affected_by_node?(%{"placements" => _placements} = scheduler, node),
+    do: Scheduler.affected_agent_ids(scheduler, node) != []
+
+  defp scheduler_affected_by_node?(%{"nodes" => nodes}, node) when is_list(nodes),
+    do: node in nodes
+
+  defp scheduler_affected_by_node?(_scheduler, _node), do: false
 
   defp safe_to_sweep?(job) do
     case DateTime.from_iso8601(job["updated_at"] || job["submitted_at"] || "") do

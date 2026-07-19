@@ -57,6 +57,9 @@ states are completed, failed, or cancelled. `cancelling` is a fenced,
 non-recoverable transition: durable cancellation intent revokes the old lease,
 rejects stale coordinator/agent writes, and prevents recovery, resume,
 scheduling, and drain migration until locally owned cleanup is acknowledged.
+Cancellation reconciliation scans a pending-only Redis index in one server-side
+operation. Acknowledgement removes the index entry but retains the durable
+cancellation record for audit.
 Pause, resume, cancel, backup, restore, deployment, and schedule operations
 preserve event/status coherence.
 
@@ -70,8 +73,28 @@ pending.
 Redis is the primary durable coordination store. Disk checkpoints and shared
 artifact storage supplement declared recovery paths. Recovery verifies runtime
 identity, bundle compatibility, ownership, and safe state before resuming.
+Automatic node reconciliation and orphan sweeps treat `paused_for_review` as a
+stable operator-owned state: they do not reload full agent snapshots, create a
+new recovery evaluation, or republish the same pause event on each scan.
+Periodic local recovery makes the same decision from compact job summaries and
+also skips jobs whose runner is live before loading their full state. It restores
+disk checkpoints only during startup or an explicit recovery request.
+Compact monitoring reads separately persisted agent projections containing only
+liveness, queue, error, lease, and sandbox fields; it does not download full
+recovery snapshots on each refresh. Active agent lease, cancellation, and
+retention decisions use a compact per-job guard and load it once per snapshot
+write rather than rereading the full workflow state. While a job runs, compact
+monitor and guard projections are persisted immediately. Periodic full durable
+workflow snapshots are disabled by default because a coordinator interruption
+restarts the job; operators may opt into a bounded snapshot cadence. Terminal
+and operator-controlled transitions persist the full state immediately. Terminal
+recovery evaluations receive their TTL once when they become terminal.
 Retention removes only eligible terminal/history data according to configured
-policy.
+policy, prunes expired indexes server-side, and never renews terminal TTLs.
+The node-local LiteLLM gateway admits inference through a bounded shared FIFO
+queue so parallel worker containers cannot start enough simultaneous local
+model decoders to starve Core lease and coordination work. Queue admission,
+wait, release, timeout, and saturation are emitted as structured events.
 
 ## Cluster and Resources
 
@@ -89,7 +112,9 @@ actionable failure; it does not bypass requirements.
 Runner policy selects host-local, Docker, or OpenShell execution according to
 the executable manifest/profile. Core stages bounded inputs, passes explicit
 environment/config, captures a structured result, registers durable artifacts,
-and cleans up only owned resources.
+and cleans up only owned resources. DockerWorker command environments include
+the runtime-owned `MN_EXECUTION_NODE` value for the Core node actually invoking
+the command; manifest environment cannot override that placement identity.
 
 Isolation and network policies are least privilege. Blueprint-specific binaries,
 packages, domains, ports, and private IP allowances remain in blueprint/runtime

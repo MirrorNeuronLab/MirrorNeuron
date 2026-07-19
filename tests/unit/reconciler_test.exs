@@ -33,7 +33,8 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
       jobs =
         :persistent_term.get({__MODULE__, :jobs}, [])
         |> Enum.map(fn job ->
-          Map.take(job, [
+          job
+          |> Map.take([
             "job_id",
             "status",
             "job_type",
@@ -51,10 +52,25 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
             "recovery_requires_review",
             "recovery_reason"
           ])
+          |> Map.update("scheduler", nil, &scheduler_summary/1)
         end)
 
       {:ok, jobs}
     end
+
+    defp scheduler_summary(%{"placements" => placements} = scheduler) do
+      scheduler
+      |> Map.take(["status", "job_type", "strategy", "mode", "placement_count"])
+      |> Map.put(
+        "nodes",
+        placements
+        |> Enum.map(&Map.get(&1, "node"))
+        |> Enum.reject(&is_nil/1)
+        |> Enum.uniq()
+      )
+    end
+
+    defp scheduler_summary(_scheduler), do: nil
 
     def fetch_job(job_id) do
       if :persistent_term.get({__MODULE__, :raise_fetch, job_id}, false) do
@@ -664,6 +680,72 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
     assert second.skipped == 1
     assert {:ok, []} = RedisStoreStub.list_recovery_evals()
     refute_received {:eval_persisted, _, _}
+  end
+
+  test "repeated orphan sweeps do not reread or reevaluate jobs paused for review" do
+    job_id = unique_job_id("paused-review-job")
+
+    job =
+      running_job(job_id)
+      |> Map.merge(%{
+        "status" => "paused",
+        "recovery_status" => "paused_for_review",
+        "recovery_requires_review" => true
+      })
+
+    RedisStoreStub.put_jobs([job])
+    RedisStoreStub.raise_on_lease(job_id)
+    RedisStoreStub.raise_on_fetch(job_id)
+
+    on_exit(fn ->
+      RedisStoreStub.clear_raise_on_lease(job_id)
+      RedisStoreStub.clear_raise_on_fetch(job_id)
+    end)
+
+    assert {:ok, first} = Reconciler.sweep_orphaned_jobs(nil, redis_store: RedisStoreStub)
+    assert {:ok, second} = Reconciler.sweep_orphaned_jobs(nil, redis_store: RedisStoreStub)
+
+    for result <- [first, second] do
+      assert result.checked == 1
+      assert result.skipped == 1
+
+      assert [%{job_id: ^job_id, action: :skipped, reason: "job is paused for review"}] =
+               result.jobs
+    end
+
+    assert {:ok, []} = RedisStoreStub.list_recovery_evals()
+    refute_received {:eval_persisted, _, _}
+  end
+
+  test "node reconciliation does not load paused-for-review job snapshots" do
+    job_id = unique_job_id("paused-node-job")
+
+    job =
+      running_job(job_id)
+      |> Map.merge(%{
+        "status" => "paused",
+        "recovery_status" => "paused_for_review",
+        "recovery_requires_review" => true
+      })
+
+    RedisStoreStub.put_jobs([job])
+    RedisStoreStub.raise_on_fetch(job_id)
+    on_exit(fn -> RedisStoreStub.clear_raise_on_fetch(job_id) end)
+
+    assert {:ok, result} =
+             Reconciler.reconcile_node("small@lab",
+               redis_store: RedisStoreStub,
+               event_bus: EventBusStub
+             )
+
+    assert result.checked == 1
+    assert result.skipped == 1
+
+    assert [%{job_id: ^job_id, action: :skipped, reason: "job is paused for review"}] =
+             result.jobs
+
+    refute_received {:job_persisted, ^job_id, _, _}
+    refute_received {:event_published, ^job_id, _}
   end
 
   test "orphan sweep isolates per-job lease exceptions and continues" do

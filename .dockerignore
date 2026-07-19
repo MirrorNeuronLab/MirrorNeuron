@@ -1,0 +1,9 @@
+.git
+.github
+_build
+deps
+cover
+doc
+tmp
+test-results
+*.log

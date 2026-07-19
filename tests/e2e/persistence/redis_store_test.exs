@@ -407,6 +407,99 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     RedisStore.delete_job(job_id)
   end
 
+  test "job guards keep lifecycle checks independent of large workflow state", %{
+    namespace: namespace
+  } do
+    job_id = "compact-job-guard-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _job} =
+             RedisStore.persist_job(job_id, %{
+               "job_id" => job_id,
+               "status" => "running",
+               "lease_epoch" => 7,
+               "updated_at" => "2026-07-19T12:00:00Z",
+               "workflow_state" => %{"payload" => String.duplicate("x", 500_000)}
+             })
+
+    full_key = redis_key(namespace, ["job", job_id])
+    guard_key = redis_key(namespace, ["job", job_id, "guard"])
+
+    assert {:ok, encoded_guard} =
+             Redix.command(MirrorNeuron.Redis.Connection, ["GET", guard_key])
+
+    assert {:ok,
+            %{
+              "job_id" => ^job_id,
+              "status" => "running",
+              "lease_epoch" => 7,
+              "updated_at" => "2026-07-19T12:00:00Z"
+            }} = Jason.decode(encoded_guard)
+
+    assert {:ok, full_bytes} = Redix.command(MirrorNeuron.Redis.Connection, ["STRLEN", full_key])
+    assert byte_size(encoded_guard) < div(full_bytes, 100)
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "job projections update monitoring without rewriting the durable snapshot", %{
+    namespace: namespace
+  } do
+    job_id = "job-projection-#{System.unique_integer([:positive])}"
+
+    durable = %{
+      "job_id" => job_id,
+      "status" => "running",
+      "lease_epoch" => 3,
+      "lease" => %{"owner_id" => "runtime@lab", "epoch" => 3},
+      "updated_at" => "2026-07-19T12:00:00Z",
+      "scheduler" => %{
+        "status" => "scheduled",
+        "job_type" => "batch",
+        "placement_count" => 2,
+        "placements" => [
+          %{
+            "agent_id" => "first",
+            "node" => "runtime@lab",
+            "diagnostics" => String.duplicate("x", 50_000)
+          },
+          %{"agent_id" => "second", "node" => "runtime@lab"}
+        ]
+      },
+      "workflow_state" => %{"durable_marker" => "first"}
+    }
+
+    projection =
+      durable
+      |> Map.put("updated_at", "2026-07-19T12:00:30Z")
+      |> Map.put("workflow_state", %{"durable_marker" => "projected-only"})
+
+    assert {:ok, ^durable} = RedisStore.persist_job(job_id, durable)
+    assert {:ok, ^projection} = RedisStore.persist_job_projection(job_id, projection)
+    assert {:ok, ^durable} = RedisStore.fetch_job(job_id)
+
+    assert {:ok, summaries} = RedisStore.list_job_summaries()
+
+    summary = Enum.find(summaries, &(&1["job_id"] == job_id))
+    assert %{"updated_at" => "2026-07-19T12:00:30Z"} = summary
+    assert summary["lease_owner"] == "runtime@lab"
+    assert summary["scheduler"]["nodes"] == ["runtime@lab"]
+    assert summary["scheduler"]["placement_count"] == 2
+    refute Map.has_key?(summary["scheduler"], "placements")
+
+    summary_key = redis_key(namespace, ["job", job_id, "summary"])
+
+    assert {:ok, encoded_summary} =
+             Redix.command(MirrorNeuron.Redis.Connection, ["GET", summary_key])
+
+    assert byte_size(encoded_summary) < 5_000
+
+    guard_key = redis_key(namespace, ["job", job_id, "guard"])
+    assert {:ok, encoded_guard} = Redix.command(MirrorNeuron.Redis.Connection, ["GET", guard_key])
+    assert {:ok, %{"updated_at" => "2026-07-19T12:00:30Z"}} = Jason.decode(encoded_guard)
+
+    RedisStore.delete_job(job_id)
+  end
+
   test "concurrent late snapshots cannot recreate a terminal disk checkpoint" do
     job_id = "terminal-checkpoint-race-#{System.unique_integer([:positive])}"
 
@@ -482,6 +575,63 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert {:ok, agents_ttl} = Redix.command(MirrorNeuron.Redis.Connection, ["TTL", agents_key])
     assert agent_ttl in 1..120
     assert agents_ttl > 0
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "agent monitor summaries avoid rereading large recovery snapshots", %{
+    namespace: namespace
+  } do
+    job_id = "compact-agent-summary-#{System.unique_integer([:positive])}"
+    agent_id = "worker"
+
+    assert {:ok, _job} =
+             RedisStore.persist_job(job_id, %{
+               "job_id" => job_id,
+               "graph_id" => "compact_agent_summary",
+               "status" => "running",
+               "updated_at" => MirrorNeuron.Runtime.timestamp()
+             })
+
+    assert {:ok, _agent} =
+             RedisStore.persist_agent(job_id, agent_id, %{
+               "agent_id" => agent_id,
+               "node_id" => agent_id,
+               "agent_type" => "executor",
+               "assigned_node" => "runtime@lab",
+               "processed_messages" => 3,
+               "mailbox_depth" => 0,
+               "last_heartbeat_at" => MirrorNeuron.Runtime.timestamp(),
+               "current_state" => %{
+                 "runs" => 3,
+                 "last_error" => nil,
+                 "last_result" => %{
+                   "sandbox_name" => "sandbox-1",
+                   "lease" => %{"lease_id" => "lease-1", "pool" => "default", "slots" => 1}
+                 },
+                 "recovery_payload" => String.duplicate("x", 200_000)
+               },
+               "metadata" => %{
+                 "paused" => false,
+                 "backpressure" => %{"queue_depth" => 0},
+                 "recovery_state" => String.duplicate("y", 200_000)
+               }
+             })
+
+    assert {:ok, [summary]} = RedisStore.list_agent_summaries(job_id)
+    assert summary["agent_id"] == agent_id
+    assert summary["current_state"]["last_result"]["sandbox_name"] == "sandbox-1"
+    refute Map.has_key?(summary["current_state"], "recovery_payload")
+    refute Map.has_key?(summary["metadata"], "recovery_state")
+
+    full_key = redis_key(namespace, ["job", job_id, "agent", agent_id])
+    summary_key = redis_key(namespace, ["job", job_id, "agent_summary", agent_id])
+    assert {:ok, full_bytes} = Redix.command(MirrorNeuron.Redis.Connection, ["STRLEN", full_key])
+
+    assert {:ok, summary_bytes} =
+             Redix.command(MirrorNeuron.Redis.Connection, ["STRLEN", summary_key])
+
+    assert summary_bytes < div(full_bytes, 100)
 
     RedisStore.delete_job(job_id)
   end
@@ -1464,6 +1614,23 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
                "TTL",
                redis_key(namespace, ["recovery", "eval", pending_id])
              ])
+  end
+
+  test "retention sweep does not renew terminal recovery eval ttl", %{namespace: namespace} do
+    System.put_env("MN_RECOVERY_EVAL_TTL_SECONDS", "120")
+    eval_id = "ttl-not-renewed-eval-#{System.unique_integer([:positive])}"
+    eval_key = redis_key(namespace, ["recovery", "eval", eval_id])
+
+    assert {:ok, _eval} =
+             RedisStore.persist_recovery_eval(eval_id, %{
+               "job_id" => "job-a",
+               "status" => "complete"
+             })
+
+    assert {:ok, 1} = Redix.command(MirrorNeuron.Redis.Connection, ["EXPIRE", eval_key, "30"])
+    assert {:ok, _result} = RedisStore.sweep_retention()
+    assert {:ok, ttl} = Redix.command(MirrorNeuron.Redis.Connection, ["TTL", eval_key])
+    assert ttl in 1..30
   end
 
   test "retention sweep removes expired recovery evals and stale index ids",

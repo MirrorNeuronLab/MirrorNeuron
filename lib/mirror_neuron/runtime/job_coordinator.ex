@@ -22,6 +22,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   }
 
   @default_health_check_interval_ms 2_000
+  @default_job_snapshot_interval_ms 0
+  @job_snapshot_timer_key {__MODULE__, :job_snapshot_timer}
+  @job_snapshot_last_persisted_key {__MODULE__, :job_snapshot_last_persisted_at_ms}
 
   def start_link({job_id, manifest, opts}) do
     GenServer.start_link(__MODULE__, {job_id, manifest, opts}, name: Naming.via_job(job_id))
@@ -88,6 +91,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
           @default_health_check_interval_ms
         ),
       reliability: reliability_from(opts, existing_job),
+      recovery_fields: recovery_fields_from(existing_job),
       pending_workflow_completion: pending_workflow_completion_from(existing_job)
     }
 
@@ -681,9 +685,26 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   def handle_info(:health_check, state), do: {:noreply, clear_health_check_timer(state)}
 
+  def handle_info({:persist_job_snapshot, token}, state) do
+    case Process.get(@job_snapshot_timer_key) do
+      %{token: ^token} ->
+        Process.delete(@job_snapshot_timer_key)
+
+        if state.status == "running" and job_snapshot_interval_ms() > 0 do
+          persist_durable_job_snapshot(state)
+        end
+
+        {:noreply, state}
+
+      _stale ->
+        {:noreply, state}
+    end
+  end
+
   @impl true
   def terminate(_reason, state) do
     state
+    |> cancel_job_snapshot_timer()
     |> cancel_health_check_timer()
     |> cancel_coordinator_delivery_timer()
     |> cancel_policy_timers()
@@ -3165,54 +3186,131 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp persist_job(state) do
+    job_map = job_snapshot(state)
+
+    if durable_job_snapshot_due?(state) do
+      persist_durable_job_snapshot(state, job_map)
+    else
+      persist_job_projection(state, job_map)
+      schedule_job_snapshot_timer()
+    end
+  end
+
+  defp job_snapshot(state) do
     lease = Keyword.get(state.opts, :job_lease)
 
-    job_map =
-      %{
-        job_id: state.job_id,
-        graph_id: state.manifest.graph_id,
-        job_name: state.manifest.job_name,
-        required_context_engine: Map.get(state.manifest, :required_context_engine, false),
-        status: state.status,
-        submitted_at: Map.get(state, :submitted_at, Runtime.timestamp()),
-        updated_at: Runtime.timestamp(),
-        root_agent_ids: state.manifest.entrypoints,
-        placement_policy: Map.get(state.manifest.policies, "placement_policy", "local"),
-        job_type: scheduler_plan(state)["job_type"],
-        scheduler: scheduler_plan(state),
-        requested_recovery_policy: requested_recovery_policy(state),
-        recovery_policy: effective_recovery_policy(state),
-        reliability_degraded: reliability_degraded?(state),
-        reliability: reliability_map(state),
-        restart_policy: job_restart_policy(state),
-        reschedule_policy: job_reschedule_policy(state),
-        policy_state: state.policy_state,
-        workflow_state:
-          WorkflowLedger.persistable_snapshot(
-            state.workflow_state,
-            MirrorNeuron.Manifest.to_map(state.manifest)
-          ),
-        pending_workflow_completion: state.pending_workflow_completion,
-        deployment: deployment_job_fields(state),
-        result: state.result,
-        result_ref: state.result_ref,
-        workflow_state_ref: state.workflow_state_ref,
-        topology: MirrorNeuron.Manifest.topology(state.manifest),
-        runtime_topology: runtime_topology(state),
-        manifest: MirrorNeuron.Manifest.to_map(state.manifest),
-        manifest_ref: manifest_ref(state)
-      }
-      |> maybe_put_lease(lease)
-      |> Map.merge(existing_recovery_fields(state.job_id))
+    %{
+      job_id: state.job_id,
+      graph_id: state.manifest.graph_id,
+      job_name: state.manifest.job_name,
+      required_context_engine: Map.get(state.manifest, :required_context_engine, false),
+      status: state.status,
+      submitted_at: Map.get(state, :submitted_at, Runtime.timestamp()),
+      updated_at: Runtime.timestamp(),
+      root_agent_ids: state.manifest.entrypoints,
+      placement_policy: Map.get(state.manifest.policies, "placement_policy", "local"),
+      job_type: scheduler_plan(state)["job_type"],
+      scheduler: scheduler_plan(state),
+      requested_recovery_policy: requested_recovery_policy(state),
+      recovery_policy: effective_recovery_policy(state),
+      reliability_degraded: reliability_degraded?(state),
+      reliability: reliability_map(state),
+      restart_policy: job_restart_policy(state),
+      reschedule_policy: job_reschedule_policy(state),
+      policy_state: state.policy_state,
+      workflow_state:
+        WorkflowLedger.persistable_snapshot(
+          state.workflow_state,
+          MirrorNeuron.Manifest.to_map(state.manifest)
+        ),
+      pending_workflow_completion: state.pending_workflow_completion,
+      deployment: deployment_job_fields(state),
+      result: state.result,
+      result_ref: state.result_ref,
+      workflow_state_ref: state.workflow_state_ref,
+      topology: MirrorNeuron.Manifest.topology(state.manifest),
+      runtime_topology: runtime_topology(state),
+      manifest: MirrorNeuron.Manifest.to_map(state.manifest),
+      manifest_ref: manifest_ref(state)
+    }
+    |> maybe_put_lease(lease)
+    |> Map.merge(Map.get(state, :recovery_fields, %{}))
+  end
+
+  defp persist_durable_job_snapshot(state),
+    do: persist_durable_job_snapshot(state, job_snapshot(state))
+
+  defp persist_durable_job_snapshot(state, job_map) do
+    cancel_job_snapshot_timer()
 
     case RedisStore.persist_job(state.job_id, job_map) do
       {:ok, _job} ->
+        Process.put(@job_snapshot_last_persisted_key, monotonic_ms())
         :ok
 
       {:error, reason} ->
         Logger.warning("failed to persist job #{state.job_id}: #{inspect(reason)}")
     end
   end
+
+  defp persist_job_projection(state, job_map) do
+    case RedisStore.persist_job_projection(state.job_id, job_map) do
+      {:ok, _job} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("failed to persist job projection #{state.job_id}: #{inspect(reason)}")
+    end
+  end
+
+  defp durable_job_snapshot_due?(state) do
+    interval_ms = job_snapshot_interval_ms()
+    last_persisted_at_ms = Process.get(@job_snapshot_last_persisted_key)
+
+    state.status != "running" or
+      (interval_ms > 0 and
+         (is_nil(last_persisted_at_ms) or
+            monotonic_ms() - last_persisted_at_ms >= interval_ms))
+  end
+
+  defp schedule_job_snapshot_timer do
+    interval_ms = job_snapshot_interval_ms()
+
+    if interval_ms > 0 and is_nil(Process.get(@job_snapshot_timer_key)) do
+      last_persisted_at_ms = Process.get(@job_snapshot_last_persisted_key, monotonic_ms())
+      elapsed_ms = max(monotonic_ms() - last_persisted_at_ms, 0)
+      delay_ms = max(interval_ms - elapsed_ms, 1)
+      token = make_ref()
+      timer_ref = Process.send_after(self(), {:persist_job_snapshot, token}, delay_ms)
+      Process.put(@job_snapshot_timer_key, %{ref: timer_ref, token: token})
+    end
+
+    :ok
+  end
+
+  defp cancel_job_snapshot_timer(state) when is_map(state) do
+    cancel_job_snapshot_timer()
+    state
+  end
+
+  defp cancel_job_snapshot_timer do
+    case Process.delete(@job_snapshot_timer_key) do
+      %{ref: timer_ref} -> Process.cancel_timer(timer_ref)
+      _none -> :ok
+    end
+
+    :ok
+  end
+
+  defp job_snapshot_interval_ms do
+    Application.get_env(
+      :mirror_neuron,
+      :job_snapshot_interval_ms,
+      @default_job_snapshot_interval_ms
+    )
+  end
+
+  defp monotonic_ms, do: System.monotonic_time(:millisecond)
 
   defp refresh_disk_checkpoint(state) do
     case RedisStore.refresh_disk_checkpoint(state.job_id) do
@@ -3227,6 +3325,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp persist_job_with_recovery(state, reason) do
+    cancel_job_snapshot_timer()
+
     recovery = %{
       "status" => "paused_for_review",
       "reason" => reason,
@@ -3278,6 +3378,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
     case RedisStore.persist_job(state.job_id, job_map) do
       {:ok, _job} ->
+        Process.put(@job_snapshot_last_persisted_key, monotonic_ms())
         :ok
 
       {:error, persist_reason} ->
@@ -3309,24 +3410,20 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     :ok
   end
 
-  defp existing_recovery_fields(job_id) do
-    case RedisStore.fetch_job(job_id) do
-      {:ok, job} ->
-        job
-        |> Map.take([
-          "recovery",
-          "recovery_status",
-          "recovery_reason",
-          "recovery_requires_review",
-          "restore_provenance"
-        ])
-        |> Enum.reject(fn {_key, value} -> is_nil(value) end)
-        |> Map.new()
-
-      _ ->
-        %{}
-    end
+  defp recovery_fields_from(job) when is_map(job) do
+    job
+    |> Map.take([
+      "recovery",
+      "recovery_status",
+      "recovery_reason",
+      "recovery_requires_review",
+      "restore_provenance"
+    ])
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
   end
+
+  defp recovery_fields_from(_job), do: %{}
 
   defp agent_runtime_context(state) do
     lease = Keyword.get(state.opts, :job_lease)

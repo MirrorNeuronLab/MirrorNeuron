@@ -27,7 +27,9 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
   end
 
   def recover_unfinished_jobs(opts \\ []) do
-    restore_disk_checkpoints()
+    if Keyword.get(opts, :restore_disk?, true) do
+      restore_disk_checkpoints()
+    end
 
     if Keyword.get(opts, :repair_indexes?, true) do
       maybe_repair_recovery_indexes()
@@ -39,9 +41,18 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
       |> Enum.reduce(%{checked: 0, recovered: 0, paused: 0, skipped: 0, failed: 0, jobs: []}, fn
         job, acc ->
           result =
-            case fetch_and_recover_job(job, opts) do
-              {:ok, value} -> value
-              {:error, reason} -> %{job_id: job["job_id"], action: :failed, reason: reason}
+            cond do
+              paused_for_review?(job) and not Keyword.get(opts, :manual_resume, false) ->
+                %{job_id: job["job_id"], action: :skipped, reason: "job is paused for review"}
+
+              job_runner_alive?(job["job_id"]) ->
+                %{job_id: job["job_id"], action: :already_running, reason: "job runner is live"}
+
+              true ->
+                case fetch_and_recover_job(job, opts) do
+                  {:ok, value} -> value
+                  {:error, reason} -> %{job_id: job["job_id"], action: :failed, reason: reason}
+                end
             end
 
           acc
@@ -249,7 +260,8 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
     _ =
       recover_unfinished_jobs(
         reason: "startup_or_periodic_scan",
-        repair_indexes?: state.repair_indexes_on_next_scan
+        repair_indexes?: state.repair_indexes_on_next_scan,
+        restore_disk?: state.repair_indexes_on_next_scan
       )
 
     %{state | repair_indexes_on_next_scan: false}

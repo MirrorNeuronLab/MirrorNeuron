@@ -234,6 +234,21 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     runtime_env = Map.merge(System.get_env(), env)
 
     cond do
+      managed_runtime_model?(runtime_env) ->
+        emit_runner_event(opts, "docker_worker_model_prepare_deferred", %{
+          "category" => "system",
+          "message" =>
+            "Runtime model #{model} will be selected and prepared on first LLM call from worker on #{Node.self()}",
+          "status" => "deferred",
+          "runner" => "docker_worker",
+          "model" => model,
+          "logical_model" => model,
+          "execution_node" => to_string(Node.self()),
+          "preparation" => "lazy_first_use"
+        })
+
+        :ok
+
       model_endpoint_prepared?(model, runtime_env) ->
         :ok
 
@@ -257,6 +272,9 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     error ->
       {:error, "failed to check Docker Model Runner model #{model}: #{Exception.message(error)}"}
   end
+
+  defp managed_runtime_model?(env),
+    do: env |> Map.get("MN_RUNTIME_MODEL_MANAGED") |> truthy?()
 
   defp model_endpoint_prepared?(model, env) do
     endpoints = Map.get(env, "MN_MODEL_ENDPOINTS_JSON", "")
@@ -617,6 +635,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     base
     |> Map.merge(MirrorNeuron.ResourceSpec.allocation_env(allocation))
     |> Map.merge(extra_env(config))
+    |> Map.put("MN_EXECUTION_NODE", to_string(Node.self()))
   end
 
   defp shared_container?(config, opts) do

@@ -134,6 +134,10 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     assert args =~ "exec\n"
     assert args =~ "cp\n"
     assert args =~ "--name\n"
+
+    assert "MN_EXECUTION_NODE=#{Node.self()}" in run_call or
+             Enum.any?(calls, &("MN_EXECUTION_NODE=#{Node.self()}" in &1))
+
     refute args =~ "--rm\n"
     refute "-p" in run_call
     refute "--publish" in run_call
@@ -233,6 +237,83 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
              )
 
     assert result["stdout"] =~ "worker output"
+
+    calls = docker_calls(args_log)
+    assert Enum.any?(calls, &(List.first(&1) == "run"))
+    refute Enum.any?(calls, &(List.first(&1) == "model"))
+  end
+
+  test "lets the managed SDK prepare a model lazily and forwards model-node events", %{
+    tmp_dir: tmp_dir
+  } do
+    fake_docker = Path.join(tmp_dir, "fake-docker-managed-model")
+    args_log = Path.join(tmp_dir, "managed-model-args.log")
+
+    File.write!(fake_docker, """
+    #!/usr/bin/env bash
+    printf '%s\\n' "$@" >> #{args_log}
+    printf -- '---\\n' >> #{args_log}
+    if [ "$1" = "model" ]; then
+      exit 9
+    fi
+    if [ "$1" = "run" ]; then
+      echo '__MN_EVENT__{"type":"runtime_model_install_started","payload":{"category":"system","message":"Installing gemma4:e2b on mirror_neuron@10.0.4.27.","model":"gemma4:e2b","node":"mirror_neuron@10.0.4.27","status":"started"}}'
+      echo '__MN_EVENT__{"type":"runtime_model_ready","payload":{"category":"system","message":"Runtime model gemma4:e2b is ready on mirror_neuron@10.0.4.27.","model":"gemma4:e2b","node":"mirror_neuron@10.0.4.27","status":"installed"}}'
+      echo "worker output"
+      exit 0
+    fi
+    exit 0
+    """)
+
+    File.chmod!(fake_docker, 0o755)
+    System.put_env("MN_DOCKER_BIN", fake_docker)
+    parent = self()
+    execution_node = to_string(Node.self())
+
+    assert {:ok, result} =
+             DockerWorker.run(
+               %{},
+               %{
+                 "image" => "example/worker:latest",
+                 "command" => ["sh", "-lc", "echo worker output"],
+                 "docker_bin" => fake_docker,
+                 "reuse_shared_container" => false,
+                 "environment" => %{
+                   "MN_LLM_PROVIDER" => "docker_model_runner",
+                   "MN_LLM_MODEL" => "default",
+                   "MN_RUNTIME_MODEL_MANAGED" => "1"
+                 }
+               },
+               job_id: "job-managed-model",
+               agent_id: "worker",
+               event_callback: fn event_type, payload ->
+                 send(parent, {:docker_event, event_type, payload})
+               end
+             )
+
+    assert result["stdout"] =~ "worker output"
+
+    assert_receive {:docker_event, "docker_worker_model_prepare_deferred",
+                    %{
+                      "model" => "default",
+                      "execution_node" => ^execution_node,
+                      "preparation" => "lazy_first_use"
+                    }}
+
+    assert_receive {:docker_event, "runtime_model_install_started",
+                    %{
+                      "model" => "gemma4:e2b",
+                      "node" => "mirror_neuron@10.0.4.27",
+                      "message" => "Installing gemma4:e2b on mirror_neuron@10.0.4.27."
+                    }}
+
+    assert_receive {:docker_event, "runtime_model_ready",
+                    %{
+                      "model" => "gemma4:e2b",
+                      "node" => "mirror_neuron@10.0.4.27"
+                    }}
+
+    refute_received {:docker_event, "docker_worker_model_not_prepared", _payload}
 
     calls = docker_calls(args_log)
     assert Enum.any?(calls, &(List.first(&1) == "run"))

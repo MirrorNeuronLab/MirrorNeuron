@@ -30,7 +30,7 @@ defmodule MirrorNeuron.Runtime.LocalRecoveryTest do
       restore_system_env("MN_CHECKPOINT_ROOT", old_checkpoint_root)
     end)
 
-    :ok
+    {:ok, namespace: namespace}
   end
 
   test "a disk snapshot without an agent id cannot crash the recovery scan" do
@@ -64,6 +64,89 @@ defmodule MirrorNeuron.Runtime.LocalRecoveryTest do
 
     assert {:ok, %{"job_id" => ^job_id, "status" => "paused"}} =
              RedisStore.fetch_job(job_id)
+  end
+
+  test "periodic scan skips paused review summaries without loading full jobs", %{
+    namespace: namespace
+  } do
+    job_id = "paused-summary-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _job} =
+             RedisStore.persist_job(job_id, %{
+               "job_id" => job_id,
+               "graph_id" => "paused_summary",
+               "status" => "paused",
+               "recovery_status" => "paused_for_review",
+               "recovery_requires_review" => true,
+               "updated_at" => Runtime.timestamp()
+             })
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "DEL",
+               "#{namespace}:job:#{job_id}"
+             ])
+
+    assert {:ok, %{checked: 1, skipped: 1, failed: 0}} =
+             LocalRecovery.recover_unfinished_jobs(
+               repair_indexes?: false,
+               restore_disk?: false
+             )
+  end
+
+  test "periodic scan skips live job runners without loading full jobs", %{
+    namespace: namespace
+  } do
+    job_id = "live-runner-summary-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _job} =
+             RedisStore.persist_job(job_id, %{
+               "job_id" => job_id,
+               "graph_id" => "live_runner_summary",
+               "status" => "running",
+               "updated_at" => Runtime.timestamp()
+             })
+
+    assert {:ok, _pid} =
+             Horde.Registry.register(
+               MirrorNeuron.DistributedRegistry,
+               {:job_runner, job_id},
+               %{}
+             )
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "DEL",
+               "#{namespace}:job:#{job_id}"
+             ])
+
+    assert {:ok, %{checked: 1, skipped: 1, failed: 0}} =
+             LocalRecovery.recover_unfinished_jobs(
+               repair_indexes?: false,
+               restore_disk?: false
+             )
+  end
+
+  test "periodic scan does not restore disk checkpoints after startup" do
+    job_id = "startup-only-disk-#{System.unique_integer([:positive])}"
+
+    assert :ok =
+             DiskCheckpoint.persist_job(job_id, %{
+               "job_id" => job_id,
+               "graph_id" => "startup_only_disk",
+               "status" => "paused",
+               "recovery_status" => "paused_for_review",
+               "recovery_requires_review" => true,
+               "updated_at" => Runtime.timestamp()
+             })
+
+    assert {:ok, %{checked: 0, failed: 0}} =
+             LocalRecovery.recover_unfinished_jobs(
+               repair_indexes?: false,
+               restore_disk?: false
+             )
+
+    assert {:error, _reason} = RedisStore.fetch_job(job_id)
   end
 
   defp cleanup_namespace(namespace) do

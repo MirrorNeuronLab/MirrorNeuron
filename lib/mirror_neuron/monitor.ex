@@ -87,8 +87,13 @@ defmodule MirrorNeuron.Monitor do
         do: fn -> {:ok, []} end,
         else: fn -> RedisStore.read_events(job_id, event_start, -1) end
 
+    agent_fetch =
+      if Keyword.get(opts, :compact, false),
+        do: &RedisStore.list_agent_summaries/1,
+        else: &RedisStore.list_agents/1
+
     with {:ok, job} <- job_fetch.(job_id),
-         {:ok, agents} <- RedisStore.list_agents(job_id),
+         {:ok, agents} <- agent_fetch.(job_id),
          {:ok, events} <- event_fetch.() do
       agent_summaries = Enum.map(agents, &summarize_agent/1)
       sandboxes = sandbox_summaries(events, agent_summaries)
