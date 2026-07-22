@@ -259,7 +259,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
             {:error,
              %{
                "error" => "host local command timed out",
-               "timeout_ms" => max(timeout || 0, 0),
+               "timeout_ms" => max(timeout, 0),
                "stdout" => chunks |> Enum.reverse() |> IO.iodata_to_binary()
              }}
 
@@ -1289,8 +1289,6 @@ defmodule MirrorNeuron.Runner.HostLocal do
       not String.contains?(path, "/../") and
       path not in ["", "."]
   end
-
-  defp safe_relative_path?(_path), do: false
 
   defp truncate_setup_output(output) do
     max_bytes = 4_000

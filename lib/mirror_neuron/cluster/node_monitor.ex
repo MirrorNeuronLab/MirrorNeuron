@@ -445,9 +445,6 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
     end
   end
 
-  defp normalize_positive_integer(value, _default) when is_integer(value) and value > 0,
-    do: value
-
   defp normalize_positive_integer(value, default) when is_binary(value) do
     case Integer.parse(value) do
       {parsed, ""} when parsed > 0 -> parsed
@@ -455,19 +452,12 @@ defmodule MirrorNeuron.Cluster.NodeMonitor do
     end
   end
 
-  defp normalize_positive_integer(_value, default), do: default
-
-  defp normalize_non_negative_integer(value, _default) when is_integer(value) and value >= 0,
-    do: value
-
   defp normalize_non_negative_integer(value, default) when is_binary(value) do
     case Integer.parse(value) do
       {parsed, ""} when parsed >= 0 -> parsed
       _ -> default
     end
   end
-
-  defp normalize_non_negative_integer(_value, default), do: default
 
   defp iso_after(delay_ms) do
     DateTime.utc_now()

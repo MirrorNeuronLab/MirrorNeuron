@@ -397,100 +397,6 @@ defmodule MirrorNeuron.BlueprintValidation do
     }
   end
 
-  defp structured_command_report(output, rule) do
-    case decode_command_json(output) do
-      {:ok, %{} = decoded} ->
-        issues =
-          cond do
-            is_list(map_get(decoded, "issues")) ->
-              map_get(decoded, "issues")
-
-            is_list(map_get(decoded, "errors")) ->
-              map_get(decoded, "errors")
-
-            map_get(decoded, "code") || map_get(decoded, "message") || map_get(decoded, "detail") ->
-              [decoded]
-
-            true ->
-              []
-          end
-          |> Enum.map(&normalize_command_issue(&1, rule))
-
-        {map_get(decoded, "ok"), issues}
-
-      _ ->
-        {nil, []}
-    end
-  end
-
-  defp normalize_command_issue(%{} = raw, rule) do
-    raw
-    |> Map.put_new("rule", rule_ref(rule))
-    |> Map.put_new("source", "validator")
-    |> Map.put_new("path", map_get(rule, "path") || map_get(rule, "input") || "")
-    |> normalize_issue()
-  end
-
-  defp normalize_command_issue(raw, rule) do
-    issue("validator.command_failed", to_string(raw),
-      source: "validator",
-      path: map_get(rule, "path") || map_get(rule, "input") || "",
-      rule: rule_ref(rule)
-    )
-  end
-
-  defp decode_command_json(output) when is_binary(output) do
-    output
-    |> String.split("\n")
-    |> Enum.map(&String.trim/1)
-    |> Enum.find_value(:error, fn line ->
-      if String.starts_with?(line, "{") do
-        case Jason.decode(line) do
-          {:ok, decoded} -> {:ok, decoded}
-          _ -> nil
-        end
-      end
-    end)
-  end
-
-  defp decode_command_json(_output), do: :error
-
-  defp normalize_command(command) when is_list(command) do
-    if command != [] and Enum.all?(command, &(is_binary(&1) and &1 != "")) do
-      {:ok, command}
-    else
-      {:error, "command validation requires a non-empty command list"}
-    end
-  end
-
-  defp normalize_command(command) when is_binary(command) and command != "" do
-    {:ok, shell_words(command)}
-  end
-
-  defp normalize_command(_command), do: {:error, "command validation requires a command"}
-
-  defp shell_words(command), do: String.split(command)
-
-  defp executable_path(executable, root_path) do
-    if String.contains?(executable, "/") do
-      Path.expand(executable, root_path)
-    else
-      executable
-    end
-  end
-
-  defp validation_env(rule, manifest) do
-    base_env = manifest_environment(manifest)
-
-    rule
-    |> map_get("env")
-    |> map_value()
-    |> Enum.reduce(base_env, fn {key, value}, acc ->
-      Map.put(acc, to_string(key), resolve_env_template(to_string(value), base_env))
-    end)
-    |> Enum.map(fn {key, value} -> {key, value} end)
-  end
-
   defp manifest_environment(manifest) do
     manifest.nodes
     |> List.wrap()
@@ -504,9 +410,6 @@ defmodule MirrorNeuron.BlueprintValidation do
       end
     end)
   end
-
-  defp resolve_env_template("$" <> name, env), do: Map.get(env, name, "")
-  defp resolve_env_template(value, _env), do: value
 
   defp config_map(manifest) do
     manifest
@@ -741,8 +644,6 @@ defmodule MirrorNeuron.BlueprintValidation do
     end)
   end
 
-  defp path_get(_value, _path), do: nil
-
   defp redact_value(nil, _path), do: nil
   defp redact_value(value, _path) when is_number(value) or is_boolean(value), do: value
 
@@ -859,9 +760,6 @@ defmodule MirrorNeuron.BlueprintValidation do
   defp regex_options(rule) do
     if map_get(rule, "ignore_case") == false, do: "", else: "i"
   end
-
-  defp timeout_ms(nil), do: 30_000
-  defp timeout_ms(value), do: max(trunc(number_or_zero(value) * 1000), 1)
 
   defp rule_name(rule),
     do: map_get(rule, "name") || map_get(rule, "id") || "input validation rule"

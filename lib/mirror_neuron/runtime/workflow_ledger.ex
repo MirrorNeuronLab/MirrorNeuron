@@ -1256,8 +1256,6 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
       StagedArtifact.ref?(Map.get(step, "last_message_ref"))
   end
 
-  defp last_message_present?(_step), do: false
-
   defp step_last_message(step) when is_map(step) do
     case Map.get(step, "last_message") do
       message when is_map(message) -> message
@@ -1273,8 +1271,6 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
       output -> StagedArtifact.resolve_output!(output)
     end
   end
-
-  defp step_output(_step), do: nil
 
   defp resolve_reference(reference) do
     if StagedArtifact.ref?(reference), do: StagedArtifact.resolve!(reference), else: nil

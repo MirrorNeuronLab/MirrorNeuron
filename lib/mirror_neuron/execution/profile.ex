@@ -260,8 +260,6 @@ defmodule MirrorNeuron.Execution.Profile do
     end
   end
 
-  defp hardware_gpu?, do: node_gpu?()
-
   defp warmup_command?(profile) do
     command =
       Map.get(profile, "warmup_command") || get_in(profile, ["openshell", "warmup_command"])
@@ -345,8 +343,6 @@ defmodule MirrorNeuron.Execution.Profile do
     |> Enum.map(&String.trim/1)
     |> Enum.reject(&(&1 == ""))
   end
-
-  defp split_csv(_value), do: []
 
   defp truthy?(value) when value in [true, "true", "TRUE", "True", "1", 1, "yes", "on"],
     do: true

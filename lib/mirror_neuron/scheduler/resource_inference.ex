@@ -55,10 +55,6 @@ defmodule MirrorNeuron.Scheduler.ResourceInference do
     end
   end
 
-  defp map_get(map, key) when is_map(map) and is_atom(key) do
-    Map.get(map, key) || Map.get(map, Atom.to_string(key))
-  end
-
   defp map_get(_map, _key), do: nil
 
   defp existing_atom_value(map, key) do

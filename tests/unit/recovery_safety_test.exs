@@ -4,94 +4,57 @@ defmodule MirrorNeuron.Runtime.RecoverySafetyTest do
   alias MirrorNeuron.Manifest
   alias MirrorNeuron.Runtime.RecoverySafety
 
-  test "malformed checkpoint metadata requires manual inspection instead of raising" do
+  test "agent observations never participate in clean-restart eligibility" do
     manifest = %Manifest{nodes: [%{node_id: "worker", agent_type: "router", config: %{}}]}
     job = %{"status" => "running", "recovery_policy" => "local_restart"}
 
-    agent = %{
+    corrupt_legacy_observation = %{
       "agent_id" => "worker",
-      "processed_messages" => 0,
-      "mailbox_depth" => 0,
-      "pending_messages" => [],
-      "metadata" => "corrupt"
+      "metadata" => %{"recovery_state" => "not-base64"},
+      "inflight_message" => %{"legacy" => true}
     }
 
-    assert {:blocked, reason} = RecoverySafety.decision(job, manifest, [agent])
-    assert reason =~ "checkpoints are corrupt"
+    assert {:auto, reason} =
+             RecoverySafety.decision(job, manifest, [corrupt_legacy_observation])
+
+    assert reason =~ "clean job attempt"
   end
 
-  test "well-formed checkpoint remains eligible for automatic recovery" do
-    manifest = %Manifest{nodes: [%{node_id: "worker", agent_type: "router", config: %{}}]}
-    job = %{"status" => "running", "recovery_policy" => "local_restart"}
-
-    recovery_state = %{count: 1} |> :erlang.term_to_binary() |> Base.encode64()
-
-    agent = %{
-      "agent_id" => "worker",
-      "processed_messages" => 1,
-      "mailbox_depth" => 0,
-      "pending_messages" => [],
-      "inflight_message" => nil,
-      "metadata" => %{"recovery_state" => recovery_state}
-    }
-
-    assert {:auto, _reason} = RecoverySafety.decision(job, manifest, [agent])
-  end
-
-  test "failed checkpoint without replayable work is blocked" do
-    manifest = %Manifest{nodes: [%{node_id: "worker", agent_type: "executor", config: %{}}]}
-    job = %{"status" => "running", "recovery_policy" => "local_restart"}
-
-    recovery_state = %{last_error: "resource unavailable"} |> encode_checkpoint()
-
-    agent = %{
-      "agent_id" => "worker",
-      "agent_type" => "executor",
-      "current_state" => %{"last_error" => "resource unavailable"},
-      "processed_messages" => 0,
-      "mailbox_depth" => 0,
-      "pending_messages" => [],
-      "inflight_message" => nil,
-      "metadata" => %{"recovery_state" => recovery_state}
-    }
-
-    assert {:blocked, reason} = RecoverySafety.decision(job, manifest, [agent])
-    assert reason =~ "no replayable message"
-  end
-
-  test "failed checkpoint with a persisted restart action remains recoverable" do
-    manifest = %Manifest{nodes: [%{node_id: "worker", agent_type: "executor", config: %{}}]}
-
-    job = %{
-      "status" => "running",
-      "recovery_policy" => "local_restart",
-      "policy_state" => %{
-        "agents" => %{
-          "worker" => %{
-            "next_action" => "restart",
-            "next_eligible_at" => DateTime.utc_now() |> DateTime.to_iso8601()
-          }
-        }
+  test "retry-safe executor permits an automatic clean attempt" do
+    manifest =
+      %Manifest{
+        nodes: [
+          %{node_id: "worker", agent_type: "executor", config: %{"safe_to_retry" => true}}
+        ]
       }
-    }
 
-    recovery_state = %{last_error: "resource unavailable"} |> encode_checkpoint()
+    job = %{"status" => "running", "recovery_policy" => "local_restart"}
 
-    agent = %{
-      "agent_id" => "worker",
-      "agent_type" => "executor",
-      "current_state" => %{"last_error" => "resource unavailable"},
-      "processed_messages" => 0,
-      "mailbox_depth" => 0,
-      "pending_messages" => [],
-      "inflight_message" => nil,
-      "metadata" => %{"recovery_state" => recovery_state}
-    }
-
-    assert {:auto, _reason} = RecoverySafety.decision(job, manifest, [agent])
+    assert {:auto, _reason} = RecoverySafety.decision(job, manifest)
   end
 
-  defp encode_checkpoint(state) do
-    state |> :erlang.term_to_binary() |> Base.encode64()
+  test "effectful node without a retry declaration requires operator approval" do
+    manifest = %Manifest{nodes: [%{node_id: "worker", agent_type: "executor", config: %{}}]}
+    job = %{"status" => "running", "recovery_policy" => "local_restart"}
+
+    assert {:manual, reason} = RecoverySafety.decision(job, manifest)
+    assert reason =~ "worker"
+    assert reason =~ "do not declare retry safety"
+  end
+
+  test "manual recovery policy remains paused until approval" do
+    manifest = %Manifest{nodes: [%{node_id: "worker", agent_type: "router", config: %{}}]}
+    job = %{"status" => "running", "recovery_policy" => "manual_recover"}
+
+    assert {:manual, reason} = RecoverySafety.decision(job, manifest)
+    assert reason =~ "manual restart approval"
+  end
+
+  test "manual approval authorizes a clean attempt without restoring state" do
+    manifest = %Manifest{nodes: [%{node_id: "worker", agent_type: "executor", config: %{}}]}
+    job = %{"status" => "paused", "recovery_policy" => "manual_recover"}
+
+    assert {:auto, reason} = RecoverySafety.decision(job, manifest, [], manual_resume: true)
+    assert reason =~ "operator authorized"
   end
 end

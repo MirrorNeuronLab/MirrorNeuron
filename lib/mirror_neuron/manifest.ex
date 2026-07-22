@@ -368,8 +368,6 @@ defmodule MirrorNeuron.Manifest do
     end
   end
 
-  defp binding_entrypoints(_binding, nodes), do: default_workflow_entrypoints(nodes)
-
   defp default_workflow_entrypoints(nodes) do
     nodes
     |> Enum.filter(&(Map.get(&1, "role") in ["root", "root_coordinator"]))
@@ -1010,8 +1008,6 @@ defmodule MirrorNeuron.Manifest do
     |> Enum.reject(fn {key, _value} -> MapSet.member?(@known_top_level_keys, key) end)
     |> Enum.into(%{}, fn {key, value} -> {key, json_safe(value)} end)
   end
-
-  defp extension_fields(_raw), do: %{}
 
   defp normalize_type(nil), do: "batch"
   defp normalize_type(value) when is_binary(value), do: String.downcase(value)

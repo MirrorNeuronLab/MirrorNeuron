@@ -199,7 +199,6 @@ defmodule MirrorNeuron.Runtime do
           {:error, "failed to start job runner: #{inspect(reason)}"}
       end
     else
-      :ok -> {:error, "failed to persist initial job"}
       {:error, reason} -> {:error, reason}
     end
   end

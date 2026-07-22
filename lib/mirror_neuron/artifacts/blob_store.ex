@@ -127,7 +127,7 @@ defmodule MirrorNeuron.Artifacts.BlobStore do
 
     digest =
       path
-      |> File.stream!([], @chunk_size)
+      |> File.stream!(@chunk_size, [])
       |> Enum.reduce(context, fn chunk, acc -> :crypto.hash_update(acc, chunk) end)
       |> :crypto.hash_final()
       |> Base.encode16(case: :lower)

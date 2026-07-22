@@ -70,25 +70,27 @@ unfinished work is resumed after a Core restart. A request is successful when
 durable cancellation intent has been committed even when remote cleanup remains
 pending.
 
-Redis is the primary durable coordination store. Disk checkpoints and shared
-artifact storage supplement declared recovery paths. Recovery verifies runtime
-identity, bundle compatibility, ownership, and safe state before resuming.
+Redis is the sole durable coordination store. Shared artifact storage retains
+declared artifacts, but local disk checkpoints are not a recovery source.
+Recovery verifies runtime identity, bundle compatibility, ownership, and
+manifest-declared retry safety before starting a clean job attempt.
 Automatic node reconciliation and orphan sweeps treat `paused_for_review` as a
-stable operator-owned state: they do not reload full agent snapshots, create a
-new recovery evaluation, or republish the same pause event on each scan.
+stable operator-owned state: they do not create a new recovery evaluation or
+republish the same pause event on each scan.
 Periodic local recovery makes the same decision from compact job summaries and
-also skips jobs whose runner is live before loading their full state. It restores
-disk checkpoints only during startup or an explicit recovery request.
+also skips jobs whose runner is live before loading their full state.
 Compact monitoring reads separately persisted agent projections containing only
-liveness, queue, error, lease, and sandbox fields; it does not download full
-recovery snapshots on each refresh. Active agent lease, cancellation, and
-retention decisions use a compact per-job guard and load it once per snapshot
-write rather than rereading the full workflow state. While a job runs, compact
-monitor and guard projections are persisted immediately. Periodic full durable
-workflow snapshots are disabled by default because a coordinator interruption
-restarts the job; operators may opt into a bounded snapshot cadence. Terminal
-and operator-controlled transitions persist the full state immediately. Terminal
-recovery evaluations receive their TTL once when they become terminal.
+liveness, queue pressure, error, lease, and sandbox fields; local agent state,
+inflight payloads, pending payload copies, and recovery encodings are never
+persisted. Active lease, cancellation, and retention decisions use a compact
+per-job guard. A job control record retains its manifest, status, bundle
+reference, attempt, retry budget, lease epoch, and terminal result. Agent,
+coordinator, node, or host loss advances the fenced lease epoch, clears
+attempt-owned observations and deliveries, resets the workflow ledger, and
+seeds manifest inputs into a new attempt. Effectful executor and module nodes
+must declare retry safety or an idempotency key before automatic redo; otherwise
+the job pauses for operator approval. Terminal recovery evaluations receive
+their TTL once when they become terminal.
 Retention removes only eligible terminal/history data according to configured
 policy, prunes expired indexes server-side, and never renews terminal TTLs.
 The node-local LiteLLM gateway admits inference through a bounded shared FIFO

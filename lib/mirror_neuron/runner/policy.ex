@@ -70,8 +70,6 @@ defmodule MirrorNeuron.Runner.Policy do
     end)
   end
 
-  defp declares_forwards?(_config), do: false
-
   defp maybe_error(errors, true, message), do: [message | errors]
   defp maybe_error(errors, false, _message), do: errors
 end

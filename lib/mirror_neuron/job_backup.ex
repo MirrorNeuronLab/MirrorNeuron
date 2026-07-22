@@ -5,9 +5,9 @@ defmodule MirrorNeuron.JobBackup do
   alias MirrorNeuron.{Config, JobBundle, JobId, Manifest}
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
-  alias MirrorNeuron.Runtime.LocalRecovery
 
   @schema_version "mn.backup.v1"
+  @restore_pause_reason "job was restored from a backup and must remain paused"
   @stale_runtime_fields [
     "lease",
     "lease_epoch",
@@ -20,22 +20,20 @@ defmodule MirrorNeuron.JobBackup do
     "active_services"
   ]
 
-  @agent_stale_runtime_fields [
-    "assigned_node",
-    "lease",
-    "lease_epoch",
-    "lease_owner",
-    "pid",
-    "owner_pid",
-    "node_owner"
+  @resumable_runtime_fields [
+    "workflow_state",
+    "workflow_state_ref",
+    "pending_workflow_completion",
+    "policy_state"
   ]
 
   def export_job(job_id) when is_binary(job_id) and job_id != "" do
     with {:ok, job} <- RedisStore.fetch_job(job_id),
          :ok <- ensure_paused(job),
-         {:ok, agents} <- RedisStore.list_agents(job_id),
          {:ok, events} <- RedisStore.read_events(job_id),
          {:ok, bundle_files} <- export_bundle_files(job) do
+      job = Map.drop(job, @resumable_runtime_fields)
+
       backup = %{
         "schema_version" => @schema_version,
         "created_at" => Runtime.timestamp(),
@@ -48,7 +46,6 @@ defmodule MirrorNeuron.JobBackup do
         },
         "sections" => %{
           "runtime/job.json" => true,
-          "runtime/agents.json" => true,
           "runtime/events.jsonl" => true,
           "bundle/manifest.json" => Map.has_key?(bundle_files, "manifest.json"),
           "bundle/payloads" => true,
@@ -57,7 +54,6 @@ defmodule MirrorNeuron.JobBackup do
         },
         "runtime" => %{
           "job" => job,
-          "agents" => agents,
           "events" => events
         },
         "bundle" => %{
@@ -375,13 +371,13 @@ defmodule MirrorNeuron.JobBackup do
          manifest_ref,
          provenance
        ) do
-    agents = Map.get(runtime, "agents", [])
     events = Map.get(runtime, "events", [])
 
     restored_job =
       runtime["job"]
       |> rewrite_ids(old_job_id, new_job_id, source_run_id(provenance), run_id)
       |> Map.drop(@stale_runtime_fields)
+      |> Map.drop(@resumable_runtime_fields)
       |> Map.put("job_id", new_job_id)
       |> Map.put("graph_id", manifest.graph_id)
       |> Map.put("job_name", manifest.job_name)
@@ -395,55 +391,21 @@ defmodule MirrorNeuron.JobBackup do
       |> Map.put("restore_provenance", provenance)
       |> Map.put("recovery", %{
         "status" => "restored_from_backup",
-        "reason" => "restored from backup and left paused",
+        "reason" => @restore_pause_reason,
         "requires_review" => true,
         "can_resume" => true,
         "updated_at" => Runtime.timestamp()
       })
       |> Map.put("recovery_status", "restored_from_backup")
-      |> Map.put("recovery_reason", "restored from backup and left paused")
+      |> Map.put("recovery_reason", @restore_pause_reason)
       |> Map.put("recovery_requires_review", true)
 
     with {:ok, _job} <- RedisStore.persist_job(new_job_id, restored_job),
-         :ok <-
-           persist_restored_agents(
-             agents,
-             old_job_id,
-             new_job_id,
-             source_run_id(provenance),
-             run_id
-           ),
          {:ok, _events} <-
            persist_restored_events(events, old_job_id, new_job_id, run_id, provenance) do
       {:ok, restored_job}
     end
   end
-
-  defp persist_restored_agents(agents, old_job_id, new_job_id, old_run_id, run_id)
-       when is_list(agents) do
-    Enum.reduce_while(agents, :ok, fn agent, :ok ->
-      restored =
-        agent
-        |> rewrite_ids(old_job_id, new_job_id, old_run_id, run_id)
-        |> Map.drop(@agent_stale_runtime_fields)
-        |> Map.put("parent_job_id", new_job_id)
-        |> drop_agent_metadata_leases()
-
-      case restored["agent_id"] || restored["node_id"] do
-        agent_id when is_binary(agent_id) and agent_id != "" ->
-          case RedisStore.persist_agent(new_job_id, agent_id, restored) do
-            {:ok, _snapshot} -> {:cont, :ok}
-            {:error, reason} -> {:halt, {:error, reason}}
-          end
-
-        _ ->
-          {:halt, {:error, "restored agent snapshot is missing agent_id"}}
-      end
-    end)
-  end
-
-  defp persist_restored_agents(_agents, _old_job_id, _new_job_id, _old_run_id, _run_id),
-    do: {:error, "runtime/agents.json must be a list"}
 
   defp persist_restored_events(events, old_job_id, new_job_id, run_id, provenance)
        when is_list(events) do
@@ -467,12 +429,12 @@ defmodule MirrorNeuron.JobBackup do
     do: {:error, "runtime/events.jsonl must contain events"}
 
   defp start_paused_recovery(new_job_id) do
-    LocalRecovery.recover_job(new_job_id,
-      manual_resume: true,
-      ignore_lease: true,
-      force_paused: true,
-      force_paused_reason: "job was restored from a backup and must remain paused"
-    )
+    {:ok,
+     %{
+       job_id: new_job_id,
+       action: :paused_for_review,
+       reason: @restore_pause_reason
+     }}
   end
 
   defp provenance(backup, old_job, old_job_id, new_job_id, blueprint_id, run_id) do
@@ -549,12 +511,6 @@ defmodule MirrorNeuron.JobBackup do
   end
 
   defp rewrite_exact(value, _replacements), do: value
-
-  defp drop_agent_metadata_leases(%{"metadata" => metadata} = snapshot) when is_map(metadata) do
-    put_in(snapshot, ["metadata"], Map.drop(metadata, ["lease_epoch", "lease_owner"]))
-  end
-
-  defp drop_agent_metadata_leases(snapshot), do: snapshot
 
   defp safe_relative_path(path) when is_binary(path) do
     cond do

@@ -564,8 +564,6 @@ defmodule MirrorNeuron.Monitor do
       get_in(value, ["result", "_mn_staged_artifact"])
   end
 
-  defp event_payload_candidate(_value), do: nil
-
   defp maybe_put_staged_ref(map, key, reference) when is_map(reference) do
     if Map.get(reference, "version") == "mn.staged_artifact/v1" do
       Map.put_new(map, key, reference)
@@ -607,12 +605,15 @@ defmodule MirrorNeuron.Monitor do
   defp summarize_agent(agent) do
     current_state = Map.get(agent, "current_state", %{})
     agent_type = Map.get(agent, "agent_type")
-    lease = get_in(current_state, ["last_result", "lease"]) || %{}
-    last_result = get_in(current_state, ["last_result"]) || %{}
-    last_error = Map.get(current_state, "last_error")
+    legacy_result = get_in(current_state, ["last_result"]) || %{}
+    lease = Map.get(agent, "lease") || Map.get(legacy_result, "lease") || %{}
+    sandbox = Map.get(agent, "sandbox") || %{}
+    last_error = Map.get(agent, "last_error") || Map.get(current_state, "last_error")
     processed_messages = Map.get(agent, "processed_messages", 0)
     mailbox_depth = Map.get(agent, "mailbox_depth", 0)
     paused? = get_in(agent, ["metadata", "paused"]) || false
+    sandbox_name = Map.get(sandbox, "name") || Map.get(legacy_result, "sandbox_name")
+    sandbox_status = Map.get(sandbox, "status")
 
     %{
       "agent_id" => Map.get(agent, "agent_id") || Map.get(agent, "node_id"),
@@ -623,11 +624,11 @@ defmodule MirrorNeuron.Monitor do
       "paused?" => paused?,
       "last_heartbeat_at" => Map.get(agent, "last_heartbeat_at"),
       "live?" => agent_live?(agent),
-      "status" => agent_status(agent_type, paused?, current_state, last_error, mailbox_depth),
-      "running?" => running_agent?(agent_type, current_state, last_error),
+      "status" => agent_status(agent_type, paused?, sandbox_status, last_error, mailbox_depth),
+      "running?" => running_agent?(agent_type, sandbox_status, last_error),
       "last_error" => last_error,
       "backpressure" => get_in(agent, ["metadata", "backpressure"]) || %{},
-      "sandbox_name" => Map.get(last_result, "sandbox_name"),
+      "sandbox_name" => sandbox_name,
       "lease" => %{
         "lease_id" => Map.get(lease, "lease_id"),
         "pool" => Map.get(lease, "pool"),
@@ -722,29 +723,26 @@ defmodule MirrorNeuron.Monitor do
     |> Enum.sort_by(&{&1["agent_id"], &1["sandbox_name"]})
   end
 
-  defp running_agent?("executor", current_state, nil) do
-    runs = Map.get(current_state, "runs", 0)
-    last_result = Map.get(current_state, "last_result")
-    runs == 0 or is_nil(last_result)
-  end
+  defp running_agent?("executor", status, nil),
+    do: status in [nil, "pending", "starting", "running"]
 
-  defp running_agent?(_agent_type, _current_state, _last_error), do: false
+  defp running_agent?(_agent_type, _sandbox_status, _last_error), do: false
 
-  defp agent_status(_agent_type, true, _current_state, _last_error, _mailbox_depth), do: "paused"
+  defp agent_status(_agent_type, true, _sandbox_status, _last_error, _mailbox_depth), do: "paused"
 
-  defp agent_status("executor", false, _current_state, last_error, _mailbox_depth)
+  defp agent_status("executor", false, _sandbox_status, last_error, _mailbox_depth)
        when is_binary(last_error) and last_error != "",
        do: "error"
 
-  defp agent_status("executor", false, current_state, _last_error, mailbox_depth) do
+  defp agent_status("executor", false, sandbox_status, _last_error, mailbox_depth) do
     cond do
       mailbox_depth > 0 -> "queued"
-      is_map(Map.get(current_state, "last_result")) -> "completed"
+      sandbox_status in ["completed", "failed", "cancelled"] -> sandbox_status
       true -> "running"
     end
   end
 
-  defp agent_status(_agent_type, false, _current_state, _last_error, mailbox_depth) do
+  defp agent_status(_agent_type, false, _sandbox_status, _last_error, mailbox_depth) do
     if mailbox_depth > 0, do: "busy", else: "ready"
   end
 

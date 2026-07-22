@@ -4,13 +4,11 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
 
   alias MirrorNeuron.Bundle.Archive
   alias MirrorNeuron.JobBundle
-  alias MirrorNeuron.Persistence.{DiskCheckpoint, RedisStore}
+  alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.{EventBus, JobRunner, RecoverySafety}
 
   @active_statuses ["pending", "running", "paused"]
-  @terminal_statuses ["completed", "failed", "cancelled"]
-  @nonrecoverable_statuses @terminal_statuses ++ ["cancelling"]
   @default_startup_scan_delay_ms 500
   @default_scan_interval_ms 5_000
 
@@ -27,10 +25,6 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
   end
 
   def recover_unfinished_jobs(opts \\ []) do
-    if Keyword.get(opts, :restore_disk?, true) do
-      restore_disk_checkpoints()
-    end
-
     if Keyword.get(opts, :repair_indexes?, true) do
       maybe_repair_recovery_indexes()
     end
@@ -63,123 +57,6 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
       |> Map.update!(:jobs, &Enum.reverse/1)
       |> then(&{:ok, &1})
     end
-  end
-
-  defp restore_disk_checkpoints do
-    case DiskCheckpoint.list_jobs() do
-      {:ok, %{checkpoints: checkpoints, errors: errors}} ->
-        Enum.each(errors, fn {path, reason} ->
-          Logger.warning("could not read disk checkpoint #{path}: #{inspect(reason)}")
-        end)
-
-        Enum.each(checkpoints, &restore_disk_checkpoint/1)
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("could not scan disk checkpoints: #{inspect(reason)}")
-        :ok
-    end
-  end
-
-  defp restore_disk_checkpoint(%{job: %{"job_id" => job_id} = disk_job, agents: agents}) do
-    cond do
-      disk_job["status"] in @nonrecoverable_statuses ->
-        _ = DiskCheckpoint.delete_job(job_id)
-
-      true ->
-        case RedisStore.fetch_job(job_id) do
-          {:ok, %{"status" => status}} when status in @nonrecoverable_statuses ->
-            _ = DiskCheckpoint.delete_job(job_id)
-
-          {:ok, redis_job} ->
-            maybe_restore_job(job_id, disk_job, redis_job)
-            restore_disk_agents(job_id, agents)
-
-          {:error, reason} ->
-            if not_found?(reason) do
-              maybe_restore_job(job_id, disk_job, nil)
-              restore_disk_agents(job_id, agents)
-            else
-              Logger.warning(
-                "could not compare disk checkpoint for #{job_id} with Redis: #{inspect(reason)}"
-              )
-            end
-        end
-    end
-  end
-
-  defp restore_disk_checkpoint(_checkpoint), do: :ok
-
-  defp maybe_restore_job(job_id, disk_job, nil) do
-    case RedisStore.persist_job(job_id, disk_job) do
-      {:ok, _job} -> :ok
-      {:error, reason} -> log_restore_failure(job_id, "job", reason)
-    end
-  end
-
-  defp maybe_restore_job(job_id, disk_job, redis_job) do
-    if newer?(disk_job["updated_at"], redis_job["updated_at"]) do
-      maybe_restore_job(job_id, disk_job, nil)
-    else
-      :ok
-    end
-  end
-
-  defp restore_disk_agents(job_id, agents) do
-    Enum.each(agents, fn agent ->
-      case recovery_agent_id(agent) do
-        {:ok, agent_id} ->
-          restore_disk_agent(job_id, agent_id, agent)
-
-        :error ->
-          Logger.warning(
-            "ignoring disk agent checkpoint without an agent_id or node_id for #{job_id}"
-          )
-      end
-    end)
-  end
-
-  defp restore_disk_agent(job_id, agent_id, agent) do
-    case RedisStore.fetch_agent(job_id, agent_id) do
-      {:ok, redis_agent} ->
-        if newer?(agent["last_heartbeat_at"], redis_agent["last_heartbeat_at"]) do
-          persist_restored_agent(job_id, agent_id, agent)
-        end
-
-      {:error, reason} ->
-        if not_found?(reason) do
-          persist_restored_agent(job_id, agent_id, agent)
-        else
-          log_restore_failure(job_id, "agent #{agent_id}", reason)
-        end
-    end
-  end
-
-  defp recovery_agent_id(agent) do
-    case agent["agent_id"] || agent["node_id"] do
-      agent_id when is_binary(agent_id) and agent_id != "" -> {:ok, agent_id}
-      _agent_id -> :error
-    end
-  end
-
-  defp persist_restored_agent(job_id, agent_id, agent) do
-    case RedisStore.persist_agent(job_id, agent_id, agent) do
-      {:ok, _agent} -> :ok
-      {:error, reason} -> log_restore_failure(job_id, "agent #{agent_id}", reason)
-    end
-  end
-
-  defp newer?(left, right) when is_binary(left) and is_binary(right), do: left > right
-  defp newer?(left, _right) when is_binary(left), do: true
-  defp newer?(_left, _right), do: false
-
-  defp not_found?(reason) when is_binary(reason), do: String.contains?(reason, "was not found")
-  defp not_found?(_reason), do: false
-
-  defp log_restore_failure(job_id, checkpoint, reason) do
-    Logger.warning(
-      "could not restore disk #{checkpoint} checkpoint for #{job_id}: #{inspect(reason)}"
-    )
   end
 
   defp fetch_and_recover_job(%{"job_id" => job_id}, opts) when is_binary(job_id) do
@@ -260,8 +137,7 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
     _ =
       recover_unfinished_jobs(
         reason: "startup_or_periodic_scan",
-        repair_indexes?: state.repair_indexes_on_next_scan,
-        restore_disk?: state.repair_indexes_on_next_scan
+        repair_indexes?: state.repair_indexes_on_next_scan
       )
 
     %{state | repair_indexes_on_next_scan: false}
@@ -338,9 +214,8 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
   defp do_recover_job(job, opts) do
     job_id = job["job_id"]
 
-    with {:ok, bundle} <- load_recovery_bundle(job),
-         {:ok, agents} <- RedisStore.list_agents(job_id) do
-      case recovery_decision(job, bundle.manifest, agents, opts) do
+    with {:ok, bundle} <- load_recovery_bundle(job) do
+      case recovery_decision(job, bundle.manifest, opts) do
         {:auto, reason} ->
           mark_recovery(
             job,
@@ -349,7 +224,13 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
             auto_resume_mark_options(job)
           )
 
-          start_recovered_job(job, bundle, :local_recovery_auto_resumed, reason)
+          start_recovered_job(
+            job,
+            bundle,
+            :local_recovery_auto_resumed,
+            reason,
+            Keyword.get(opts, :manual_resume, false)
+          )
 
         {:manual, reason} ->
           mark_recovery(job, "paused_for_review", reason,
@@ -357,23 +238,14 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
             status: "paused"
           )
 
-          start_recovered_job(job, bundle, :local_recovery_paused_for_review, reason)
-          |> normalize_manual_result()
-
-        {:blocked, reason} ->
-          mark_recovery(job, "paused_for_review", reason,
-            requires_review?: true,
-            status: "paused"
-          )
-
           EventBus.publish(job_id, %{
             type: :local_recovery_paused_for_review,
+            mode: "clean_restart",
             reason: reason,
-            blocked: true,
             timestamp: Runtime.timestamp()
           })
 
-          {:ok, %{job_id: job_id, action: :paused_for_review, reason: reason, blocked: true}}
+          {:ok, %{job_id: job_id, action: :paused_for_review, reason: reason}}
       end
     else
       {:error, reason} ->
@@ -393,13 +265,8 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
     end
   end
 
-  defp normalize_manual_result({:ok, %{action: :started} = result}),
-    do: {:ok, %{result | action: :paused_for_review}}
-
-  defp normalize_manual_result(other), do: other
-
-  defp recovery_decision(job, manifest, agents, opts) do
-    RecoverySafety.decision(job, manifest, agents, opts)
+  defp recovery_decision(job, manifest, opts) do
+    RecoverySafety.decision(job, manifest, [], opts)
   end
 
   defp recoverable_job_status?(%{"status" => status} = job) do
@@ -436,13 +303,16 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
     end
   end
 
-  defp start_recovered_job(job, bundle, event_type, reason) do
+  defp start_recovered_job(job, bundle, event_type, reason, manual_resume?) do
     job_id = job["job_id"]
 
     opts =
       [
         job_bundle: bundle,
         local_recovery: true,
+        clean_restart: true,
+        manual_resume: manual_resume?,
+        restart_reason: reason,
         preferred_start_node: to_string(Node.self()),
         requested_recovery_policy: job["requested_recovery_policy"],
         recovery_policy: job["recovery_policy"],
@@ -458,6 +328,7 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
 
         EventBus.publish(job_id, %{
           type: event_type,
+          mode: "clean_restart",
           reason: reason,
           timestamp: Runtime.timestamp()
         })
@@ -516,6 +387,7 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
 
     recovery = %{
       "status" => status,
+      "mode" => "clean_restart",
       "reason" => reason,
       "requires_review" => requires_review?,
       "can_resume" => requires_review?,
@@ -527,7 +399,8 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
         "recovery" => recovery,
         "recovery_status" => status,
         "recovery_reason" => reason,
-        "recovery_requires_review" => requires_review?
+        "recovery_requires_review" => requires_review?,
+        "recovery_mode" => "clean_restart"
       }
       |> maybe_put_status(Keyword.get(opts, :status))
       |> maybe_clear_result(Keyword.get(opts, :clear_result?, false))

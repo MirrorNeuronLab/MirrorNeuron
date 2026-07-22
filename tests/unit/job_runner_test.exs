@@ -114,6 +114,14 @@ defmodule MirrorNeuron.Runtime.JobRunnerTest do
                }
              })
 
+    assert {:ok, _job} =
+             RedisStore.persist_job(job_id, %{
+               "job_id" => job_id,
+               "status" => "pending",
+               "attempt" => 0,
+               "updated_at" => MirrorNeuron.Runtime.timestamp()
+             })
+
     assert {:stop, {:already_started, _pid}} = JobRunner.init({job_id, bundle.manifest, []})
     assert {:ok, nil} = RedisStore.get_lease("job:#{job_id}")
 

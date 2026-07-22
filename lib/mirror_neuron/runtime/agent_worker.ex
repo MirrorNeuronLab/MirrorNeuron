@@ -10,25 +10,12 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.Backpressure
   alias MirrorNeuron.Runtime.Delivery
+  alias MirrorNeuron.Runtime.EventBus
   alias MirrorNeuron.Runtime.Naming
   alias MirrorNeuron.Runtime.RouteCondition
   alias MirrorNeuron.Scheduler
 
   @default_heartbeat_interval_ms 30_000
-  @default_snapshot_pending_limit 100
-  @runtime_metadata_keys [
-    "paused",
-    "outbound_edges",
-    "heartbeat_interval_ms",
-    "recovery_state",
-    "backpressure",
-    "pending_messages_truncated",
-    "pending_message_count",
-    "lease_epoch",
-    "lease_owner",
-    "execution_profile"
-  ]
-
   def child_spec(
         {job_id, node, outbound_edges, inbound_edges, coordinator, runtime_context,
          recovery_snapshot}
@@ -69,18 +56,15 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   @impl true
   def init(
         {job_id, node, outbound_edges, inbound_edges, coordinator, runtime_context,
-         recovery_snapshot}
+         _recovery_snapshot}
       ) do
-    recovery_snapshot = recovery_snapshot || load_recovery_snapshot(job_id, node.node_id)
     module = AgentRegistry.fetch!(node.agent_type)
 
     runtime_context = materialize_runtime_bundle_context(runtime_context)
     node = inject_runtime_paths(node, runtime_context)
 
-    case initialize_local_state(module, node, recovery_snapshot) do
+    case module.init(node) do
       {:ok, local_state} ->
-        pending_messages = recovered_replay_messages(recovery_snapshot)
-
         state = %{
           job_id: job_id,
           node: node,
@@ -90,10 +74,10 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
           inbound_edges: inbound_edges,
           runtime_context: runtime_context,
           coordinator: coordinator,
-          paused?: recovered_paused?(recovery_snapshot),
-          pending: :queue.from_list(pending_messages),
-          mailbox_depth: length(pending_messages),
-          processed_messages: recovered_processed_messages(recovery_snapshot),
+          paused?: false,
+          pending: :queue.new(),
+          mailbox_depth: 0,
+          processed_messages: 0,
           inflight_message: nil,
           heartbeat_interval_ms: heartbeat_interval_ms(),
           heartbeat_timer_ref: nil,
@@ -103,15 +87,13 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
           next_delivery_reclaim_at_ms: 0,
           delivery_timer_ref: nil,
           delivery_token: nil,
-          reclaim_deliveries?: not is_nil(recovery_snapshot),
-          recovered_snapshot: recovery_snapshot,
-          checkpoint_metadata: custom_checkpoint_metadata(recovery_snapshot),
+          reclaim_deliveries?: false,
           pressure_snapshot: nil
         }
 
         state = schedule_heartbeat(state)
-        persist_snapshot(state, persist_disk?: false)
-        {:ok, state, {:continue, :recover}}
+        persist_observation(state)
+        {:ok, state, {:continue, :start}}
 
       {:error, reason} ->
         {:stop, reason}
@@ -119,22 +101,8 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   end
 
   @impl true
-  def handle_continue(:recover, state) do
-    recovered_state =
-      case maybe_recover_actions(state) do
-        {:ok, next_state} ->
-          next_state
-
-        {:error, reason, next_state} ->
-          send(state.coordinator, {:agent_failed, state.node.node_id, reason})
-          next_state
-      end
-
-    case requeue_recovered_messages(recovered_state) do
-      {:ok, next_state} -> {:noreply, schedule_delivery_poll(next_state, 0)}
-      {:error, reason, next_state} -> {:stop, reason, next_state}
-    end
-  end
+  def handle_continue(:start, state),
+    do: {:noreply, schedule_delivery_poll(state, 0)}
 
   @impl true
   def handle_cast(:pause, state) do
@@ -143,13 +111,13 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       |> cancel_delivery_timer()
       |> Map.put(:paused?, true)
 
-    persist_snapshot(next_state)
+    persist_observation(next_state)
     {:noreply, next_state}
   end
 
   def handle_cast(:resume, state) do
     next_state = %{state | paused?: false}
-    persist_snapshot(next_state)
+    persist_observation(next_state)
     {:noreply, schedule_delivery_poll(next_state, 0)}
   end
 
@@ -161,7 +129,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   end
 
   def handle_cast(:delivery_available, %{paused?: true} = state) do
-    persist_snapshot(state, persist_disk?: false)
+    persist_observation(state)
     {:noreply, state}
   end
 
@@ -177,14 +145,14 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   @impl true
   def handle_info({:heartbeat, token}, %{heartbeat_token: token} = state) do
     state = clear_heartbeat_timer(state)
-    persist_snapshot(state, persist_disk?: false)
+    persist_observation(state)
     {:noreply, schedule_heartbeat(state)}
   end
 
   def handle_info({:heartbeat, _stale_token}, state), do: {:noreply, state}
 
   def handle_info(:heartbeat, state) do
-    persist_snapshot(state, persist_disk?: false)
+    persist_observation(state)
     {:noreply, state}
   end
 
@@ -210,24 +178,6 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     cancel_heartbeat_timer(state)
     cancel_delivery_timer(state)
     :ok
-  end
-
-  defp requeue_recovered_messages(state) do
-    state.pending
-    |> :queue.to_list()
-    |> Enum.reduce_while(:ok, fn message, :ok ->
-      case Delivery.recover(state.job_id, state.node.node_id, message) do
-        :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      :ok ->
-        {:ok, %{state | pending: :queue.new(), mailbox_depth: 0, inflight_message: nil}}
-
-      {:error, reason} ->
-        {:error, {:failed_to_requeue_recovered_messages, reason}, state}
-    end
   end
 
   defp poll_deliveries(state) do
@@ -316,7 +266,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
                delivery
              ) do
           :ok ->
-            persist_snapshot(next_state)
+            persist_observation(next_state)
 
             send(state.coordinator, {
               :agent_event,
@@ -389,7 +339,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
 
   defp process_message_result(message, state) do
     state = %{state | inflight_message: message}
-    persist_snapshot(state)
+    persist_observation(state)
 
     workflow = workflow_context(message, state)
 
@@ -412,15 +362,19 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     }
 
     with :ok <- maybe_report_workflow_message(state, message, workflow, "received") do
-      send(
-        state.coordinator,
-        {:agent_event, state.node.node_id, :agent_message_received, Message.summary(message)}
-      )
+      EventBus.publish(state.job_id, %{
+        type: :agent_message_received,
+        agent_id: state.node.node_id,
+        payload: Message.summary(message),
+        attempt: state.runtime_context[:attempt],
+        lease_epoch: state.runtime_context[:lease_epoch],
+        timestamp: Runtime.timestamp()
+      })
 
       handle_agent_message(message, state, context, workflow)
     else
       {:error, reason} ->
-        persist_snapshot(state)
+        persist_observation(state)
         {:error, {:coordinator_report_failed, reason}, state}
     end
   end
@@ -435,7 +389,6 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
               processed_messages: state.processed_messages + 1,
               inflight_message: nil
           }
-          |> merge_checkpoint_metadata(actions)
 
         case execute_actions(actions, message, next_state) do
           :ok ->
@@ -445,19 +398,19 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
 
               {:error, reason} ->
                 failed_state = %{state | inflight_message: message}
-                persist_snapshot(failed_state)
+                persist_observation(failed_state)
                 {:error, {:coordinator_report_failed, reason}, failed_state}
             end
 
           {:error, reason} ->
             failed_state = %{state | inflight_message: message}
-            persist_snapshot(failed_state)
+            persist_observation(failed_state)
             {:error, {:output_delivery_failed, reason}, failed_state}
         end
 
       {:error, reason, new_local_state} ->
         failed_state = %{state | local_state: new_local_state, inflight_message: message}
-        persist_snapshot(failed_state)
+        persist_observation(failed_state)
         {:error, reason, failed_state}
     end
   end
@@ -569,7 +522,17 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     normalized = Message.normalize!(message, job_id: state.job_id, from: state.node.node_id)
     to_node = Message.to(normalized)
     message_id = deterministic_output_id(state, incoming, to_node, action_index)
-    normalized = put_in(normalized, ["envelope", "message_id"], message_id)
+
+    normalized =
+      normalized
+      |> put_in(["envelope", "message_id"], message_id)
+      |> Map.update(
+        "headers",
+        with_attempt_epoch(Message.headers(normalized), state),
+        fn headers ->
+          with_attempt_epoch(headers || %{}, state)
+        end
+      )
 
     result =
       Runtime.deliver(state.job_id, to_node, normalized, target_backpressure_opts(state, to_node))
@@ -662,57 +625,87 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     end
   end
 
-  defp persist_snapshot(state, opts \\ []) do
-    inspected_state = inspected_local_state(state.module, state.local_state)
-    encoded_state = encoded_local_state(state.module, state.local_state)
+  defp persist_observation(state) do
     durable_depth = durable_delivery_depth(state)
 
     pressure = pressure_snapshot(state, durable_depth)
+    observation = execution_observation(state.local_state)
 
-    metadata =
-      Map.merge(state.checkpoint_metadata, %{
-        "paused" => state.paused?,
-        "outbound_edges" => Enum.map(state.outbound_edges, & &1.to_node),
-        "heartbeat_interval_ms" => state.heartbeat_interval_ms,
-        "recovery_state" => encoded_state,
-        "backpressure" => pressure,
-        "pending_messages_truncated" => pending_messages_truncated?(state),
-        "pending_message_count" => durable_depth,
-        "lease_epoch" => state.runtime_context[:lease_epoch],
-        "lease_owner" => state.runtime_context[:lease_owner],
-        "execution_profile" =>
-          get_in(state.runtime_context, [:execution_profiles, state.node.node_id]) ||
-            get_in(state.node, [:config, "execution_profile"])
-      })
+    metadata = %{
+      "paused" => state.paused?,
+      "backpressure" => pressure,
+      "pending_message_count" => durable_depth,
+      "lease_epoch" => state.runtime_context[:lease_epoch],
+      "lease_owner" => state.runtime_context[:lease_owner],
+      "execution_profile" =>
+        get_in(state.runtime_context, [:execution_profiles, state.node.node_id]) ||
+          get_in(state.node, [:config, "execution_profile"])
+    }
 
-    snapshot = %{
+    observation = %{
       agent_id: state.node.node_id,
       node_id: state.node.node_id,
       agent_type: state.node.agent_type,
       type: Map.get(state.node, :type, "generic"),
       role: state.node.role,
-      current_state: inspected_state,
-      mailbox_depth: durable_depth,
       processed_messages: state.processed_messages,
+      mailbox_depth: durable_depth,
       assigned_node: to_string(Node.self()),
-      inflight_message: state.inflight_message,
-      pending_messages: pending_messages_for_snapshot(state),
       last_heartbeat_at: Runtime.timestamp(),
       parent_job_id: state.job_id,
+      last_error: observation.last_error,
+      sandbox: observation.sandbox,
+      lease: observation.lease,
       metadata: metadata
     }
 
-    case RedisStore.persist_agent(state.job_id, state.node.node_id, snapshot, opts) do
-      {:ok, _snapshot} ->
+    case RedisStore.persist_agent(state.job_id, state.node.node_id, observation) do
+      {:ok, _observation} ->
         :ok
 
       {:error, reason} ->
         Logger.warning(
-          "failed to persist agent snapshot for #{state.job_id}/#{state.node.node_id}: #{inspect(reason)}"
+          "failed to persist agent observation for #{state.job_id}/#{state.node.node_id}: #{inspect(reason)}"
         )
     end
 
     send(state.coordinator, {:agent_pressure, state.node.node_id, pressure})
+  end
+
+  defp execution_observation(local_state) when is_map(local_state) do
+    last_error = Map.get(local_state, :last_error) || Map.get(local_state, "last_error")
+    last_result = Map.get(local_state, :last_result) || Map.get(local_state, "last_result")
+
+    if is_map(last_result) do
+      lease = Map.get(last_result, :lease) || Map.get(last_result, "lease") || %{}
+
+      %{
+        last_error: compact_observation_error(last_error),
+        sandbox: %{
+          "name" => Map.get(last_result, :sandbox_name) || Map.get(last_result, "sandbox_name"),
+          "status" => Map.get(last_result, :status) || Map.get(last_result, "status")
+        },
+        lease: Map.take(stringify_observation_map(lease), ["lease_id", "pool", "slots"])
+      }
+    else
+      %{last_error: compact_observation_error(last_error), sandbox: nil, lease: %{}}
+    end
+  end
+
+  defp execution_observation(_local_state),
+    do: %{last_error: nil, sandbox: nil, lease: %{}}
+
+  defp compact_observation_error(nil), do: nil
+
+  defp compact_observation_error(error) do
+    encoded =
+      if is_binary(error), do: error, else: inspect(error, limit: 50, printable_limit: 8_192)
+
+    if byte_size(encoded) > 8_192, do: binary_part(encoded, 0, 8_192), else: encoded
+  end
+
+  defp stringify_observation_map(map) when is_map(map) do
+    Map.new(map, fn {key, value} -> {to_string(key), value} end)
   end
 
   defp durable_delivery_depth(state) do
@@ -769,37 +762,6 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     })
   end
 
-  defp merge_checkpoint_metadata(state, actions) do
-    metadata =
-      Enum.reduce(actions, %{}, fn
-        {:checkpoint, snapshot}, acc when is_map(snapshot) ->
-          Map.merge(acc, custom_checkpoint_metadata(snapshot))
-
-        _action, acc ->
-          acc
-      end)
-
-    if map_size(metadata) == 0 do
-      state
-    else
-      %{state | checkpoint_metadata: Map.merge(state.checkpoint_metadata, metadata)}
-    end
-  end
-
-  defp custom_checkpoint_metadata(%{"metadata" => metadata}) when is_map(metadata) do
-    metadata
-    |> stringify_keys()
-    |> Map.drop(@runtime_metadata_keys)
-  end
-
-  defp custom_checkpoint_metadata(%{metadata: metadata}) when is_map(metadata) do
-    metadata
-    |> stringify_keys()
-    |> Map.drop(@runtime_metadata_keys)
-  end
-
-  defp custom_checkpoint_metadata(_snapshot), do: %{}
-
   defp stringify_keys(map) do
     Map.new(map, fn {key, value} -> {to_string(key), value} end)
   end
@@ -832,7 +794,9 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       |> Map.put("kind", kind)
       |> Map.put("agent_id", state.node.node_id)
 
-    case Delivery.report(state.job_id, state.node.node_id, report_id, body) do
+    case Delivery.report(state.job_id, state.node.node_id, report_id, body,
+           attempt_epoch: state.runtime_context[:lease_epoch]
+         ) do
       :ok ->
         GenServer.cast(state.coordinator, :coordinator_delivery_available)
         :ok
@@ -848,37 +812,6 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     |> then(&:crypto.hash(:sha256, &1))
     |> Base.url_encode64(padding: false)
   end
-
-  defp stringify_local_state(map) when is_map(map) do
-    Enum.into(map, %{}, fn {key, value} ->
-      key = if is_atom(key), do: Atom.to_string(key), else: key
-      {key, stringify_local_state(value)}
-    end)
-  end
-
-  defp stringify_local_state(list) when is_list(list),
-    do: Enum.map(list, &stringify_local_state/1)
-
-  defp stringify_local_state(value), do: value
-
-  defp initialize_local_state(module, node, %{"metadata" => metadata})
-       when is_map(metadata) do
-    case Map.fetch(metadata, "recovery_state") do
-      {:ok, encoded} when is_binary(encoded) ->
-        case decode_local_state(encoded) do
-          {:ok, local_state} ->
-            restore_local_state(module, local_state)
-
-          :error ->
-            {:error, "corrupt recovery_state checkpoint"}
-        end
-
-      _ ->
-        module.init(node)
-    end
-  end
-
-  defp initialize_local_state(module, node, _snapshot), do: module.init(node)
 
   defp inject_runtime_paths(node, runtime_context) do
     allocation = Scheduler.allocation(runtime_context[:scheduler], node.node_id)
@@ -981,66 +914,6 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
 
   defp put_runtime_environment(config, _runtime_env), do: config
 
-  defp maybe_recover_actions(%{recovered_snapshot: nil} = state), do: {:ok, state}
-
-  defp maybe_recover_actions(state) do
-    if function_exported?(state.module, :recover, 2) do
-      context = %{
-        job_id: state.job_id,
-        node: state.node,
-        coordinator: state.coordinator,
-        outbound_edges: state.outbound_edges,
-        inbound_edges: state.inbound_edges,
-        bundle_root: state.runtime_context[:bundle_root],
-        manifest_path: state.runtime_context[:manifest_path],
-        payloads_path: state.runtime_context[:payloads_path],
-        artifact_refs: state.runtime_context[:artifact_refs] || [],
-        template_type: Map.get(state.node, :type, "generic")
-      }
-
-      case state.module.recover(state.local_state, context) do
-        {:ok, new_local_state, actions} ->
-          next_state = %{state | local_state: new_local_state, recovered_snapshot: nil}
-          recovery_message = build_recovery_message(next_state)
-
-          case execute_actions(actions, recovery_message, next_state) do
-            :ok ->
-              persist_snapshot(next_state)
-              {:ok, next_state}
-
-            {:error, reason} ->
-              {:error, {:recovery_output_delivery_failed, reason}, next_state}
-          end
-
-        {:error, reason, new_local_state} ->
-          {:error, reason, %{state | local_state: new_local_state, recovered_snapshot: nil}}
-      end
-    else
-      {:ok, %{state | recovered_snapshot: nil}}
-    end
-  end
-
-  defp load_recovery_snapshot(job_id, agent_id) do
-    case RedisStore.fetch_agent(job_id, agent_id) do
-      {:ok, snapshot} -> snapshot
-      {:error, _reason} -> nil
-    end
-  end
-
-  defp recovered_replay_messages(snapshot) do
-    [Map.get(snapshot || %{}, "inflight_message")]
-    |> Enum.reject(&is_nil/1)
-    |> Kernel.++(Map.get(snapshot || %{}, "pending_messages", []))
-  end
-
-  defp recovered_processed_messages(%{"processed_messages" => count}) when is_integer(count),
-    do: count
-
-  defp recovered_processed_messages(_snapshot), do: 0
-
-  defp recovered_paused?(%{"metadata" => %{"paused" => paused}}), do: paused == true
-  defp recovered_paused?(_snapshot), do: false
-
   defp heartbeat_interval_ms do
     Application.get_env(
       :mirror_neuron,
@@ -1077,87 +950,13 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   defp clear_heartbeat_timer(state),
     do: %{state | heartbeat_timer_ref: nil, heartbeat_token: nil}
 
-  defp pending_messages_for_snapshot(state) do
-    state.pending
-    |> :queue.to_list()
-    |> Enum.take(snapshot_pending_limit(state))
-  end
-
-  defp pending_messages_truncated?(state) do
-    state.mailbox_depth > snapshot_pending_limit(state)
-  end
-
-  defp snapshot_pending_limit(state) do
-    configured =
-      config_integer(
-        "MN_AGENT_SNAPSHOT_PENDING_LIMIT",
-        :agent_snapshot_pending_limit,
-        @default_snapshot_pending_limit
-      )
-      |> max(1)
-
-    max(configured, Backpressure.config(state.node).max_queue_depth)
-  end
-
-  defp encode_local_state(local_state) do
-    local_state
-    |> :erlang.term_to_binary()
-    |> Base.encode64()
-  end
-
-  defp encoded_local_state(module, local_state) do
-    module.snapshot_state(local_state)
-    |> encode_local_state()
-  end
-
-  defp decode_local_state(nil), do: :error
-
-  defp decode_local_state(encoded) when is_binary(encoded) do
-    with {:ok, binary} <- Base.decode64(encoded) do
-      {:ok, :erlang.binary_to_term(binary, [:safe])}
-    else
-      _ -> :error
-    end
-  rescue
-    _ -> :error
-  end
-
-  defp build_recovery_message(state) do
-    Message.new(
-      state.job_id,
-      state.node.node_id,
-      state.node.node_id,
-      "recovery",
-      %{},
-      class: "control",
-      correlation_id: unique_id()
-    )
-  end
-
-  defp inspected_local_state(module, local_state) do
-    local_state
-    |> module.inspect_state()
-    |> stringify_local_state()
-  end
-
-  defp restore_local_state(module, snapshot) do
-    module.restore_state(snapshot)
-  rescue
-    error -> {:error, error}
-  end
-
-  defp unique_id do
-    6
-    |> :crypto.strong_rand_bytes()
-    |> Base.url_encode64(padding: false)
-  end
-
   defp build_message(state, incoming, to_node, message_type, payload, opts) do
     headers =
       incoming
       |> Message.headers()
       |> workflow_headers_for_target(state, incoming, to_node)
       |> Map.merge(Keyword.get(opts, :headers, %{}))
+      |> with_attempt_epoch(state)
 
     Message.new(
       state.job_id,
@@ -1183,6 +982,13 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
           )
         end)
     )
+  end
+
+  defp with_attempt_epoch(headers, state) when is_map(headers) do
+    case state.runtime_context[:lease_epoch] do
+      epoch when is_integer(epoch) -> Map.put(headers, "mn.attempt_epoch", epoch)
+      _epoch -> headers
+    end
   end
 
   defp deterministic_output_id(state, incoming, to_node, delivery_key) do
@@ -1280,21 +1086,5 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     state.runtime_context
     |> Map.get(:backpressure_by_agent, %{})
     |> Map.get(to_node, [])
-  end
-
-  defp config_integer(env_name, key, default) do
-    case System.get_env(env_name) do
-      nil ->
-        Application.get_env(:mirror_neuron, key, default)
-
-      "" ->
-        Application.get_env(:mirror_neuron, key, default)
-
-      value ->
-        case Integer.parse(value) do
-          {parsed, ""} -> parsed
-          _ -> default
-        end
-    end
   end
 end

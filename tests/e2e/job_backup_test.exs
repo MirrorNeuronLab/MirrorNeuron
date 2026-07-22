@@ -44,7 +44,7 @@ defmodule MirrorNeuron.JobBackupTest do
     {:ok, tmp_dir: tmp_dir}
   end
 
-  test "export rejects running jobs and includes raw runtime and bundle", %{tmp_dir: tmp_dir} do
+  test "export keeps definitions and events without resumable process state", %{tmp_dir: tmp_dir} do
     {:ok, job_id, _bundle} = seed_backup_job(tmp_dir, "paused")
     {:ok, running_job_id, _bundle} = seed_backup_job(tmp_dir, "running")
 
@@ -54,7 +54,10 @@ defmodule MirrorNeuron.JobBackupTest do
     assert {:ok, backup, bundle_files} = JobBackup.export_job(job_id)
     assert backup["schema_version"] == "mn.backup.v1"
     assert backup["runtime"]["job"]["job_id"] == job_id
-    assert [%{"agent_id" => "node1"}] = backup["runtime"]["agents"]
+    refute Map.has_key?(backup["runtime"], "agents")
+    refute Map.has_key?(backup["sections"], "runtime/agents.json")
+    refute Map.has_key?(backup["runtime"]["job"], "workflow_state")
+    refute Map.has_key?(backup["runtime"]["job"], "policy_state")
     assert [%{"type" => "job_paused"}] = backup["runtime"]["events"]
     assert is_binary(bundle_files["manifest.json"])
     exported_manifest = Jason.decode!(bundle_files["manifest.json"])
@@ -135,7 +138,7 @@ defmodule MirrorNeuron.JobBackupTest do
     assert {:ok, restored_job} = RedisStore.fetch_job(new_job_id)
     assert restored_job["status"] == "paused"
     assert restored_job["lease_owner"] != "old-node"
-    assert restored_job["recovery_status"] == "paused_for_review"
+    assert restored_job["recovery_status"] == "restored_from_backup"
     assert restored_job["recovery_requires_review"] == true
     assert get_in(restored_job, ["recovery", "can_resume"]) == true
 
@@ -157,11 +160,9 @@ defmodule MirrorNeuron.JobBackupTest do
 
     assert get_in(restored_job, ["restore_provenance", "source", "job_id"]) == source_job_id
 
-    assert {:ok, [agent]} = RedisStore.list_agents(new_job_id)
-    assert agent["parent_job_id"] == new_job_id
-    assert agent["assigned_node"] != "old-node"
-    refute Map.has_key?(agent["metadata"], "lease_owner")
-    refute Map.has_key?(agent["metadata"], "lease_epoch")
+    assert {:ok, []} = RedisStore.list_agents(new_job_id)
+    refute Map.has_key?(restored_job, "workflow_state")
+    refute Map.has_key?(restored_job, "policy_state")
 
     assert {:ok, events} = RedisStore.read_events(new_job_id)
 
@@ -194,7 +195,9 @@ defmodule MirrorNeuron.JobBackupTest do
                "topology" => Manifest.topology(bundle.manifest),
                "lease_owner" => "old-node",
                "lease_epoch" => 1,
-               "lease" => %{"owner_id" => "old-node", "epoch" => 1}
+               "lease" => %{"owner_id" => "old-node", "epoch" => 1},
+               "workflow_state" => %{"step" => "partially-complete"},
+               "policy_state" => %{"agents" => %{"node1" => %{"next_action" => "restart"}}}
              })
 
     assert {:ok, _agent} =
@@ -204,8 +207,6 @@ defmodule MirrorNeuron.JobBackupTest do
                "agent_type" => "router",
                "processed_messages" => 0,
                "mailbox_depth" => 0,
-               "pending_messages" => [],
-               "inflight_message" => nil,
                "assigned_node" => "old-node",
                "parent_job_id" => job_id,
                "metadata" => %{

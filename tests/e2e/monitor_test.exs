@@ -92,7 +92,6 @@ defmodule MirrorNeuron.MonitorTest do
       "assigned_node" => "mn2@192.168.4.35",
       "processed_messages" => 3,
       "mailbox_depth" => 0,
-      "current_state" => %{},
       "metadata" => %{"paused" => false}
     })
 
@@ -102,13 +101,8 @@ defmodule MirrorNeuron.MonitorTest do
       "assigned_node" => "mn1@192.168.4.29",
       "processed_messages" => 1,
       "mailbox_depth" => 0,
-      "current_state" => %{
-        "runs" => 1,
-        "last_result" => %{
-          "sandbox_name" => "mirror-neuron-job-llm",
-          "lease" => %{"pool" => "default", "lease_id" => "lease-2", "slots" => 1}
-        }
-      },
+      "sandbox" => %{"name" => "mirror-neuron-job-llm", "status" => "completed"},
+      "lease" => %{"pool" => "default", "lease_id" => "lease-2", "slots" => 1},
       "metadata" => %{"paused" => false}
     })
 

@@ -632,123 +632,19 @@ defmodule MirrorNeuron.Cluster.Reconciler do
   end
 
   defp recover_agents_or_fallback(job, failed_node, affected_agents, reason, opts) do
-    job_id = job["job_id"]
-
-    case coordinator_pid(job_id, opts) do
-      {:ok, pid} ->
-        recover_agents(job, failed_node, affected_agents, reason, pid, opts)
-
-      :not_found ->
-        case redis_store(opts).get_lease("job:#{job_id}") do
-          {:ok, nil} ->
-            recover_whole_job(job, failed_node, "job coordinator is unavailable", opts)
-
-          {:ok, _lease} ->
-            pause_for_review(
-              job,
-              "job coordinator is unavailable while the job lease is still active",
-              failed_node,
-              affected_agents,
-              opts
-            )
-
-          {:error, lease_reason} ->
-            failed(job, "could not inspect job lease: #{inspect(lease_reason)}")
-        end
-    end
-  end
-
-  defp recover_agents(job, failed_node, affected_agents, reason, coordinator, opts) do
-    job_id = job["job_id"]
-
-    with {:ok, bundle} <- load_recovery_bundle(job, opts),
-         {:ok, agents} <- redis_store(opts).list_agents(job_id),
-         {:auto, _safety_reason} <-
-           RecoverySafety.decision(job, bundle.manifest, agents, agent_ids: affected_agents),
-         :ok <- ensure_reschedule_policy_allows(job, affected_agents, opts),
-         {:ok, partial_plan} <-
-           recovery_scheduler_plan(
-             bundle.manifest,
-             scheduler_opts(opts,
-               exclude_nodes: List.wrap(failed_node),
-               ignore_job_ids: [job_id],
-               only_agent_ids: affected_agents
-             )
-           ),
-         :ok <- validate_recovery_plan(partial_plan, failed_node, opts) do
-      scheduler_plan = Scheduler.merge_plan(Map.get(job, "scheduler", %{}), partial_plan)
-
-      if dry_run?(opts) do
-        recovered(job, "would reschedule agents", %{
-          mode: "agents",
-          affected_agents: affected_agents,
-          scheduler: scheduler_plan
-        })
-      else
-        :ok = record_reschedule_policy_attempt(job, affected_agents, reason, opts)
-        mark_recovery(job, "rescheduling", reason, failed_node, affected_agents, opts)
-
-        case GenServer.call(
-               coordinator,
-               {:reschedule_agents, affected_agents, scheduler_plan, reason},
-               60_000
-             ) do
-          {:ok, payload} ->
-            mark_recovery(job, "rescheduled", reason, failed_node, affected_agents, opts)
-
-            publish(job_id, opts, %{
-              type: :job_agents_rescheduled,
-              reason: reason,
-              failed_node: failed_node,
-              affected_agents: affected_agents,
-              timestamp: Runtime.timestamp()
-            })
-
-            recovered(job, "agents rescheduled", Map.merge(%{mode: "agents"}, payload))
-
-          {:error, reschedule_reason} ->
-            pause_for_review(
-              job,
-              "agent reschedule failed: #{inspect(reschedule_reason)}",
-              failed_node,
-              affected_agents,
-              opts
-            )
-        end
-      end
-    else
-      {:manual, safety_reason} ->
-        pause_for_review(job, safety_reason, failed_node, affected_agents, opts)
-
-      {:blocked, safety_reason} ->
-        pause_for_review(job, safety_reason, failed_node, affected_agents, opts)
-
-      {:placement_blocked, placement_reason} ->
-        block_recovery(job, placement_reason, failed_node, affected_agents, opts)
-
-      {:policy_blocked, policy_reason} ->
-        pause_for_review(job, policy_reason, failed_node, affected_agents, opts)
-
-      {:error, reason} ->
-        pause_for_review(job, inspect(reason), failed_node, affected_agents, opts)
-    end
-  catch
-    :exit, reason ->
-      pause_for_review(
-        job,
-        "agent reschedule call failed: #{inspect(reason)}",
-        failed_node,
-        affected_agents,
-        opts
-      )
+    recover_whole_job(
+      job,
+      failed_node,
+      "#{reason}; restarting the whole job attempt after losing #{Enum.join(affected_agents, ", ")}",
+      opts
+    )
   end
 
   defp recover_whole_job(job, failed_node, reason, opts) do
     job_id = job["job_id"]
 
     with {:ok, bundle} <- load_recovery_bundle(job, opts),
-         {:ok, agents} <- redis_store(opts).list_agents(job_id),
-         {:auto, _safety_reason} <- RecoverySafety.decision(job, bundle.manifest, agents),
+         {:auto, _safety_reason} <- RecoverySafety.decision(job, bundle.manifest, []),
          :ok <- ensure_reschedule_policy_allows(job, whole_job_policy_agents(job), opts),
          {:ok, scheduler_plan} <-
            recovery_scheduler_plan(
@@ -764,11 +660,12 @@ defmodule MirrorNeuron.Cluster.Reconciler do
       else
         :ok = record_reschedule_policy_attempt(job, whole_job_policy_agents(job), reason, opts)
         mark_recovery(job, "rescheduling", reason, failed_node, [], opts)
-        stop_existing_coordinator_for_drain(job_id, opts)
+        stop_existing_coordinator(job_id, opts)
         release_job_lease(job_id, job, opts)
 
         start_opts =
           opts
+          |> Keyword.put(:restart_reason, reason)
           |> Keyword.put(:preferred_start_node, preferred_start_node(scheduler_plan, failed_node))
 
         case start_job_runner(job_id, bundle, job, scheduler_plan, start_opts) do
@@ -777,6 +674,7 @@ defmodule MirrorNeuron.Cluster.Reconciler do
 
             publish(job_id, opts, %{
               type: :job_rescheduled,
+              mode: "clean_restart",
               reason: reason,
               failed_node: failed_node,
               timestamp: Runtime.timestamp()
@@ -1117,9 +1015,7 @@ defmodule MirrorNeuron.Cluster.Reconciler do
   end
 
   defp start_job_runner(job_id, bundle, job, scheduler_plan, opts) do
-    if Keyword.get(opts, :trigger) == "node_drain" do
-      wait_for_existing_runner_stopped(job_id, opts)
-    end
+    wait_for_existing_runner_stopped(job_id, opts)
 
     runner =
       Keyword.get(opts, :start_job_runner, fn start_job_id, start_bundle, start_opts ->
@@ -1136,7 +1032,8 @@ defmodule MirrorNeuron.Cluster.Reconciler do
         recovery_policy: job["recovery_policy"],
         reliability: job["reliability"],
         scheduler_plan: scheduler_plan,
-        preferred_start_node: Keyword.get(opts, :preferred_start_node)
+        preferred_start_node: Keyword.get(opts, :preferred_start_node),
+        restart_reason: Keyword.get(opts, :restart_reason)
       ]
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)
 
@@ -1180,15 +1077,13 @@ defmodule MirrorNeuron.Cluster.Reconciler do
     end
   end
 
-  defp stop_existing_coordinator_for_drain(job_id, opts) do
-    if Keyword.get(opts, :trigger) == "node_drain" do
-      case coordinator_pid(job_id, opts) do
-        {:ok, pid} ->
-          GenServer.stop(pid, :normal, 10_000)
+  defp stop_existing_coordinator(job_id, opts) do
+    case coordinator_pid(job_id, opts) do
+      {:ok, pid} ->
+        GenServer.stop(pid, :normal, 10_000)
 
-        :not_found ->
-          :ok
-      end
+      :not_found ->
+        :ok
     end
 
     :ok
@@ -1203,7 +1098,11 @@ defmodule MirrorNeuron.Cluster.Reconciler do
   end
 
   defp do_wait_for_existing_runner_stopped(job_id, deadline) do
-    case Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:job, job_id}) do
+    registrations =
+      Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:job, job_id}) ++
+        Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:job_runner, job_id})
+
+    case registrations do
       [] ->
         :ok
 
@@ -1455,8 +1354,6 @@ defmodule MirrorNeuron.Cluster.Reconciler do
     Map.has_key?(job, "manifest") or Map.has_key?(job, :manifest)
   end
 
-  defp full_job_record?(_job), do: false
-
   defp filter_only_job_ids(jobs, nil), do: jobs
 
   defp filter_only_job_ids(jobs, job_ids) do
@@ -1647,7 +1544,6 @@ defmodule MirrorNeuron.Cluster.Reconciler do
   defp integer_value(_value, default), do: default
 
   defp format_reason(reason) when is_binary(reason), do: reason
-  defp format_reason(reason), do: inspect(reason)
 
   defp stringify_result(result) when is_map(result) do
     Enum.into(result, %{}, fn {key, value} -> {to_string(key), stringify_result(value)} end)

@@ -342,8 +342,6 @@ defmodule MirrorNeuron.ServicePreflight do
     end)
   end
 
-  defp stringify_map(_value), do: %{}
-
   defp stringify_value(value) when is_map(value), do: stringify_map(value)
   defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
   defp stringify_value(value), do: value

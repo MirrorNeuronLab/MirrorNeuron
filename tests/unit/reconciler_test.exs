@@ -187,7 +187,7 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
     :ok
   end
 
-  test "reschedules affected agents when coordinator is alive" do
+  test "restarts a clean job attempt when an affected agent's node is lost" do
     {:ok, bundle} = JobBundle.load(manifest())
     job = running_job("agent-job")
     RedisStoreStub.put_jobs([job])
@@ -200,12 +200,16 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
                event_bus: EventBusStub,
                bundle_loader: fn _job -> {:ok, bundle} end,
                lookup_coordinator: fn "agent-job" -> {:ok, coordinator} end,
+               start_job_runner: job_starter(self()),
                scheduler_opts: [nodes: [small_node(), large_node()], jobs: [job]]
              )
 
     assert result.recovered == 1
-    assert_receive {:coordinator_rescheduled, ["worker"], scheduler_plan, _reason}
+    assert_receive {:job_started, "agent-job", opts}
+    scheduler_plan = opts[:scheduler_plan]
     assert [%{"agent_id" => "worker", "node" => "large@lab"}] = scheduler_plan["placements"]
+    assert opts[:restart_reason] =~ "restarting the whole job attempt"
+    refute_received {:coordinator_rescheduled, _, _, _}
     assert_receive {:job_persisted, "agent-job", %{"policy_state" => policy_state}, _}
     assert get_in(policy_state, ["agents", "worker", "reschedule_attempts"]) == 1
     assert_receive {:job_persisted, "agent-job", %{"recovery_status" => "rescheduling"}, _}
@@ -236,11 +240,13 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
                redis_store: RedisStoreStub,
                event_bus: EventBusStub,
                lookup_coordinator: fn "shared-cas-job" -> {:ok, coordinator} end,
+               start_job_runner: job_starter(self()),
                scheduler_opts: [nodes: [small_node(), large_node()], jobs: [job]]
              )
 
     assert result.recovered == 1
-    assert_receive {:coordinator_rescheduled, ["worker"], scheduler_plan, _reason}
+    assert_receive {:job_started, "shared-cas-job", opts}
+    scheduler_plan = opts[:scheduler_plan]
     assert [%{"agent_id" => "worker", "node" => "large@lab"}] = scheduler_plan["placements"]
   end
 
@@ -373,7 +379,7 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
     assert [%{job_id: ^job_id, action: :skipped}] = result.jobs
   end
 
-  test "pauses cluster recoverable job when affected snapshot is missing" do
+  test "restarts cluster recoverable job without an agent snapshot" do
     {:ok, bundle} = JobBundle.load(manifest())
     job = running_job("missing-snapshot")
     RedisStoreStub.put_jobs([job])
@@ -386,13 +392,14 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
                event_bus: EventBusStub,
                bundle_loader: fn _job -> {:ok, bundle} end,
                lookup_coordinator: fn "missing-snapshot" -> {:ok, coordinator} end,
+               start_job_runner: job_starter(self()),
                scheduler_opts: [nodes: [small_node(), large_node()], jobs: [job]]
              )
 
-    assert result.paused == 1
-    assert_receive {:job_persisted, "missing-snapshot", updates, _}
-    assert updates["status"] == "paused"
-    assert updates["recovery_reason"] =~ "missing"
+    assert result.recovered == 1
+    assert_receive {:job_started, "missing-snapshot", opts}
+    assert opts[:preferred_start_node] == "large@lab"
+    refute_received {:job_persisted, "missing-snapshot", %{"status" => "paused"}, _}
   end
 
   test "blocks recovery eval when no alternate placement exists" do
@@ -485,6 +492,7 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
                event_bus: EventBusStub,
                bundle_loader: fn _job -> {:ok, bundle} end,
                lookup_coordinator: fn "drain-policy-skip" -> {:ok, coordinator} end,
+               start_job_runner: job_starter(self()),
                scheduler_opts: [nodes: [small_node(), large_node()], jobs: [job]],
                trigger: "node_drain",
                skip_reschedule_policy: true,
@@ -492,7 +500,8 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
              )
 
     assert result.recovered == 1
-    assert_receive {:coordinator_rescheduled, ["worker"], scheduler_plan, _reason}
+    assert_receive {:job_started, "drain-policy-skip", opts}
+    scheduler_plan = opts[:scheduler_plan]
     assert [%{"agent_id" => "worker", "node" => "large@lab"}] = scheduler_plan["placements"]
 
     assert_receive {:job_persisted, "drain-policy-skip", %{"recovery_status" => "rescheduling"},
@@ -542,7 +551,7 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
     assert opts[:scheduler_plan]["placements"] |> hd() |> Map.get("node") == "large@lab"
   end
 
-  test "internal reschedule_agents recovers a specific agent after restart exhaustion" do
+  test "internal reschedule_agents starts a clean attempt after restart exhaustion" do
     {:ok, bundle} = JobBundle.load(manifest())
     job = running_job("restart-exhausted")
     RedisStoreStub.put_jobs([job])
@@ -555,13 +564,15 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
                event_bus: EventBusStub,
                bundle_loader: fn _job -> {:ok, bundle} end,
                lookup_coordinator: fn "restart-exhausted" -> {:ok, coordinator} end,
+               start_job_runner: job_starter(self()),
                scheduler_opts: [nodes: [small_node(), large_node()], jobs: [job]],
                reason: "restart attempts exhausted"
              )
 
     assert result.recovered == 1
-    assert_receive {:coordinator_rescheduled, ["worker"], scheduler_plan, reason}
-    assert reason == "restart attempts exhausted"
+    assert_receive {:job_started, "restart-exhausted", opts}
+    scheduler_plan = opts[:scheduler_plan]
+    assert opts[:restart_reason] =~ "restart attempts exhausted"
     assert [%{"agent_id" => "worker", "node" => "large@lab"}] = scheduler_plan["placements"]
     assert {:ok, [eval]} = RedisStoreStub.list_recovery_evals()
     assert eval["trigger"] == "restart_exhausted"
@@ -852,11 +863,13 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
                force: true,
                bundle_loader: fn _job -> {:ok, bundle} end,
                lookup_coordinator: fn "grace-recover-job" -> {:ok, coordinator} end,
+               start_job_runner: job_starter(self()),
                scheduler_opts: [nodes: [small_node(), large_node()], jobs: [job]]
              )
 
     assert recovered_result.recovered == 1
-    assert_receive {:coordinator_rescheduled, ["worker"], _scheduler_plan, _reason}
+    assert_receive {:job_started, "grace-recover-job", opts}
+    assert opts[:preferred_start_node] == "large@lab"
 
     assert {:ok, [%{"eval_id" => ^eval_id, "status" => "complete"}]} =
              RedisStoreStub.list_recovery_evals()
@@ -887,13 +900,15 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
                event_bus: EventBusStub,
                bundle_loader: fn _job -> {:ok, bundle} end,
                lookup_coordinator: fn "wake-job" -> {:ok, coordinator} end,
+               start_job_runner: job_starter(self()),
                scheduler_opts: [nodes: [small_node(), large_node()], jobs: [job]],
                retry_base_ms: 10,
                reason: "node joined"
              )
 
     assert wake_result.recovered == 1
-    assert_receive {:coordinator_rescheduled, ["worker"], scheduler_plan, _reason}
+    assert_receive {:job_started, "wake-job", opts}
+    scheduler_plan = opts[:scheduler_plan]
     assert [%{"agent_id" => "worker", "node" => "large@lab"}] = scheduler_plan["placements"]
     assert {:ok, [eval]} = RedisStoreStub.list_recovery_evals()
     assert eval["status"] == "complete"
@@ -947,6 +962,7 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
                event_bus: EventBusStub,
                bundle_loader: fn _job -> {:ok, bundle} end,
                lookup_coordinator: fn "gpu-wake-job" -> {:ok, coordinator} end,
+               start_job_runner: job_starter(self()),
                scheduler_opts: [
                  nodes: [small_node(), gpu_rejoin_node("gpu-new@lab")],
                  jobs: [job]
@@ -956,8 +972,9 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
              )
 
     assert wake_result.recovered == 1
-    assert_receive {:coordinator_rescheduled, ["worker"], scheduler_plan, reason}
-    assert reason == "node gpu-old@lab is unavailable"
+    assert_receive {:job_started, "gpu-wake-job", opts}
+    scheduler_plan = opts[:scheduler_plan]
+    assert opts[:restart_reason] =~ "node gpu-old@lab is unavailable"
     assert [%{"agent_id" => "worker", "node" => "gpu-new@lab"}] = scheduler_plan["placements"]
 
     assert {:ok, [eval]} = RedisStoreStub.list_recovery_evals()
@@ -994,6 +1011,13 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
         ]
       }
     }
+  end
+
+  defp job_starter(parent) do
+    fn job_id, _bundle, opts ->
+      send(parent, {:job_started, job_id, opts})
+      :ok
+    end
   end
 
   defp unique_job_id(prefix), do: "#{prefix}-#{System.unique_integer([:positive])}"

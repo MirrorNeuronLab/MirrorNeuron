@@ -3,7 +3,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   alias MirrorNeuron.Cluster.NodeAdapter
   alias MirrorNeuron.Config
   alias MirrorNeuron.JobId
-  alias MirrorNeuron.Persistence.DiskCheckpoint
 
   require Logger
 
@@ -374,6 +373,39 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
+  @doc false
+  def clear_job_attempt_state(job_id) do
+    with {:ok, agent_ids} <- command(["SMEMBERS", key("job", job_id, "agents")]),
+         {:ok, delivery_keys} <- command(["SMEMBERS", delivery_index_key(job_id)]),
+         {:ok, delivery_receipts} <- scan_keys(key("job", job_id, "delivery", "*", "*")),
+         keys <-
+           [key("job", job_id, "agents"), delivery_index_key(job_id)] ++
+             Enum.flat_map(agent_ids, fn agent_id ->
+               [
+                 key("job", job_id, "agent", agent_id),
+                 key("job", job_id, "agent_summary", agent_id)
+               ]
+             end) ++ delivery_keys ++ delivery_receipts,
+         {:ok, results} <- transaction([["DEL" | Enum.uniq(keys)]]),
+         :ok <- expect_no_redis_errors(results),
+         :ok <- wait_for_replicas() do
+      :ok
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
+    end
+  end
+
+  @doc false
+  def validate_job_attempt_epoch(job_id, epoch) when is_integer(epoch) do
+    validate_persisted_lease_epoch(job_id, epoch)
+  end
+
+  def validate_job_attempt_epoch(_job_id, nil), do: :ok
+
+  def validate_job_attempt_epoch(_job_id, epoch),
+    do: {:error, {:invalid_attempt_epoch, epoch}}
+
   def persist_job(job_id, job_map) when is_map(job_map) do
     with :ok <- validate_identifier("job_id", job_id) do
       encoded = Jason.encode!(job_map)
@@ -381,7 +413,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       encoded_guard = Jason.encode!(job_guard(job_id, job_map))
 
       with :ok <- validate_job_lease_epoch(job_id, job_map),
-           :ok <- persist_disk_job(job_id, job_map),
            {:ok, results} <-
              transaction([
                ["SET", key("job", job_id), encoded],
@@ -391,8 +422,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
              ]),
            :ok <- expect_persist_job_results(results),
            :ok <- apply_job_retention(job_id, job_map),
-           :ok <- wait_for_replicas(),
-           :ok <- cleanup_terminal_disk_checkpoint(job_id, job_map) do
+           :ok <- wait_for_replicas() do
         {:ok, job_map}
       end
     end
@@ -972,12 +1002,12 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   @doc false
   def persist_agent(job_id, agent_id, snapshot, opts) when is_list(opts) do
+    snapshot = agent_monitor_record(snapshot)
     encoded = Jason.encode!(snapshot)
-    encoded_summary = snapshot |> agent_monitor_record() |> Jason.encode!()
+    encoded_summary = Jason.encode!(snapshot)
     job_guard_result = fetch_job_guard(job_id)
 
     with :ok <- validate_agent_lease_epoch(snapshot, job_guard_result),
-         :ok <- maybe_persist_disk_agent(job_id, agent_id, snapshot, opts, job_guard_result),
          retention_commands <-
            agent_snapshot_retention_commands(job_id, agent_id, job_guard_result),
          {:ok, results} <-
@@ -1021,23 +1051,23 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     with {:ok, redis_keys} <- scan_keys(key("job", "*")),
          {:ok, indexed_job_ids} <- raw_job_ids(),
          {:ok, job_repair} <- repair_job_index(redis_keys, indexed_job_ids),
-         {:ok, agent_repair} <- repair_agent_indexes(redis_keys, indexed_job_ids),
          {:ok, eval_repair} <- repair_recovery_eval_indexes(),
          :ok <- wait_for_replicas() do
-      {:ok, job_repair |> Map.merge(agent_repair) |> Map.merge(eval_repair)}
+      {:ok,
+       job_repair
+       |> Map.put(:repaired_agents, 0)
+       |> Map.put(:removed_stale_agents, 0)
+       |> Map.merge(eval_repair)}
     end
   end
 
-  def delete_job(job_id) do
-    DiskCheckpoint.with_job_lock(job_id, fn -> do_delete_job(job_id) end)
-  end
+  def delete_job(job_id), do: do_delete_job(job_id)
 
   defp do_delete_job(job_id) do
     with {:ok, job_map} <- job_for_cleanup(job_id),
          :ok <- delete_service_instances(job_id: job_id),
          :ok <- cleanup_shared_storage(job_id, job_map),
          :ok <- JobStore.cleanup_job(job_id),
-         :ok <- DiskCheckpoint.delete_job(job_id),
          {:ok, agent_ids} <- command(["SMEMBERS", key("job", job_id, "agents")]),
          {:ok, delivery_keys} <- command(["SMEMBERS", delivery_index_key(job_id)]),
          {:ok, delivery_receipts} <-
@@ -1107,24 +1137,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     else
       {:error, reason} -> {:error, format_reason(reason)}
       other -> {:error, format_reason(other)}
-    end
-  end
-
-  def refresh_disk_checkpoint(job_id) do
-    DiskCheckpoint.with_job_lock(job_id, fn -> do_refresh_disk_checkpoint(job_id) end)
-  end
-
-  defp do_refresh_disk_checkpoint(job_id) do
-    with {:ok, job} <- fetch_job(job_id),
-         {:ok, agents} <- list_agents(job_id),
-         :ok <- DiskCheckpoint.persist_job(job_id, job),
-         :ok <- persist_disk_agents(job_id, agents),
-         :ok <-
-           DiskCheckpoint.prune_agents(
-             job_id,
-             Enum.map(agents, &(Map.get(&1, "agent_id") || Map.get(&1, "node_id")))
-           ) do
-      :ok
     end
   end
 
@@ -2130,6 +2142,10 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       "graph_id" => field(job, "graph_id"),
       "job_name" => field(job, "job_name"),
       "status" => field(job, "status"),
+      "attempt" => field(job, "attempt", 0),
+      "attempt_started_at" => field(job, "attempt_started_at"),
+      "restart_reason" => field(job, "restart_reason"),
+      "recovery_mode" => field(job, "recovery_mode"),
       "job_type" => field(job, "job_type"),
       "submitted_at" => field(job, "submitted_at"),
       "updated_at" => field(job, "updated_at"),
@@ -2191,6 +2207,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     %{
       "job_id" => field(job, "job_id") || job_id,
       "status" => field(job, "status"),
+      "attempt" => field(job, "attempt", 0),
       "lease_epoch" => lease_epoch(job),
       "cancellation_fence_epoch" => parse_integer(field(job, "cancellation_fence_epoch")),
       "updated_at" => field(job, "updated_at")
@@ -3414,61 +3431,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     {:ok, %{repaired_jobs: repaired_jobs, removed_stale_jobs: removed_stale_jobs}}
   end
 
-  defp repair_agent_indexes(redis_keys, indexed_job_ids) do
-    agent_refs =
-      redis_keys
-      |> Enum.flat_map(&agent_ref_from_key/1)
-      |> Enum.uniq()
-
-    job_ids =
-      (indexed_job_ids ++
-         Enum.map(agent_refs, &elem(&1, 0)) ++
-         Enum.flat_map(redis_keys, &root_job_id_from_key/1) ++
-         Enum.flat_map(redis_keys, &agent_index_job_id_from_key/1))
-      |> Enum.uniq()
-
-    repaired_agents =
-      agent_refs
-      |> Enum.filter(fn {job_id, agent_id} ->
-        json_key_status(key("job", job_id, "agent", agent_id)) == :valid
-      end)
-      |> Enum.count(fn {job_id, agent_id} ->
-        case command(["SISMEMBER", key("job", job_id, "agents"), agent_id]) do
-          {:ok, 1} ->
-            false
-
-          {:ok, 0} ->
-            case command(["SADD", key("job", job_id, "agents"), agent_id]) do
-              {:ok, count} when is_integer(count) -> count > 0
-              _ -> false
-            end
-
-          _ ->
-            false
-        end
-      end)
-
-    removed_stale_agents =
-      job_ids
-      |> Enum.flat_map(fn job_id ->
-        case command(["SMEMBERS", key("job", job_id, "agents")]) do
-          {:ok, agent_ids} -> Enum.map(agent_ids, &{job_id, &1})
-          _ -> []
-        end
-      end)
-      |> Enum.filter(fn {job_id, agent_id} ->
-        json_key_status(key("job", job_id, "agent", agent_id)) in [:missing, :corrupt]
-      end)
-      |> Enum.count(fn {job_id, agent_id} ->
-        case command(["SREM", key("job", job_id, "agents"), agent_id]) do
-          {:ok, count} when is_integer(count) -> count > 0
-          _ -> false
-        end
-      end)
-
-    {:ok, %{repaired_agents: repaired_agents, removed_stale_agents: removed_stale_agents}}
-  end
-
   defp repair_recovery_eval_indexes do
     case recovery_eval_index_ids() do
       {:ok, eval_ids} ->
@@ -3666,20 +3628,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
-  defp agent_ref_from_key(redis_key) do
-    case namespaced_key_parts(redis_key) do
-      ["job", job_id, "agent", agent_id] -> [{job_id, agent_id}]
-      _ -> []
-    end
-  end
-
-  defp agent_index_job_id_from_key(redis_key) do
-    case namespaced_key_parts(redis_key) do
-      ["job", job_id, "agents"] -> [job_id]
-      _ -> []
-    end
-  end
-
   defp namespaced_key_parts(redis_key) when is_binary(redis_key) do
     prefix = namespace() <> ":"
 
@@ -3722,101 +3670,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
           {incoming, existing} ->
             {:error, {:stale_lease_epoch, incoming, existing}}
         end
-    end
-  end
-
-  defp persist_disk_job(job_id, job_map) do
-    case DiskCheckpoint.persist_job(job_id, job_map) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("failed to persist disk job checkpoint for #{job_id}: #{inspect(reason)}")
-        :ok
-    end
-  end
-
-  defp maybe_persist_disk_agent(job_id, agent_id, snapshot, opts, job_guard_result) do
-    if Keyword.get(opts, :persist_disk?, true) == false do
-      :ok
-    else
-      persist_disk_agent(job_id, agent_id, snapshot, job_guard_result)
-    end
-  end
-
-  defp persist_disk_agent(job_id, agent_id, snapshot, job_guard_result) do
-    DiskCheckpoint.with_job_lock(job_id, fn ->
-      case job_guard_result do
-        {:ok, %{"status" => status}} when status in @terminal_statuses ->
-          _ = DiskCheckpoint.delete_job(job_id)
-          :ok
-
-        _ ->
-          case DiskCheckpoint.persist_agent(job_id, agent_id, snapshot) do
-            :ok ->
-              :ok
-
-            {:error, reason} ->
-              handle_disk_agent_failure(job_id, agent_id, reason)
-          end
-      end
-    end)
-  end
-
-  defp handle_disk_agent_failure(job_id, _agent_id, :enoent) do
-    case fetch_job_guard(job_id) do
-      {:ok, %{"status" => status}} when status in @terminal_statuses ->
-        _ = DiskCheckpoint.delete_job(job_id)
-        :ok
-
-      {:error, reason} when is_binary(reason) ->
-        if String.contains?(reason, "was not found") do
-          :ok
-        else
-          Logger.warning("failed to persist disk agent checkpoint for #{job_id}: :enoent")
-          :ok
-        end
-
-      _ ->
-        Logger.warning("failed to persist disk agent checkpoint for #{job_id}: :enoent")
-        :ok
-    end
-  end
-
-  defp handle_disk_agent_failure(job_id, agent_id, reason) do
-    Logger.warning(
-      "failed to persist disk agent checkpoint for #{job_id}/#{agent_id}: #{inspect(reason)}"
-    )
-
-    :ok
-  end
-
-  defp persist_disk_agents(job_id, agents) do
-    Enum.reduce_while(agents, :ok, fn agent, :ok ->
-      agent_id = Map.get(agent, "agent_id") || Map.get(agent, "node_id")
-
-      case DiskCheckpoint.persist_agent(job_id, agent_id, agent) do
-        :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-  end
-
-  defp cleanup_terminal_disk_checkpoint(job_id, job_map) do
-    if terminal_status?(Map.get(job_map, "status") || Map.get(job_map, :status)) do
-      case DiskCheckpoint.delete_job(job_id) do
-        :ok ->
-          :ok
-
-        {:error, reason} ->
-          Logger.warning(
-            "failed to clean terminal disk checkpoint for #{job_id}: #{inspect(reason)}"
-          )
-
-          :ok
-      end
-    else
-      :ok
     end
   end
 
@@ -4840,36 +4693,29 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   defp agent_monitor_record(snapshot) do
     snapshot = stringify_map(snapshot)
-    current_state = Map.get(snapshot, "current_state") || %{}
     metadata = Map.get(snapshot, "metadata") || %{}
-    last_result = Map.get(current_state, "last_result")
-
-    compact_last_result =
-      if is_map(last_result) do
-        lease = Map.get(last_result, "lease") || %{}
-
-        %{
-          "sandbox_name" => Map.get(last_result, "sandbox_name"),
-          "lease" => Map.take(lease, ["lease_id", "pool", "slots"])
-        }
-      end
 
     %{
       "agent_id" => Map.get(snapshot, "agent_id") || Map.get(snapshot, "node_id"),
       "node_id" => Map.get(snapshot, "node_id"),
       "agent_type" => Map.get(snapshot, "agent_type"),
+      "type" => Map.get(snapshot, "type"),
+      "role" => Map.get(snapshot, "role"),
       "assigned_node" => Map.get(snapshot, "assigned_node"),
+      "parent_job_id" => Map.get(snapshot, "parent_job_id"),
       "processed_messages" => Map.get(snapshot, "processed_messages", 0),
       "mailbox_depth" => Map.get(snapshot, "mailbox_depth", 0),
       "last_heartbeat_at" => Map.get(snapshot, "last_heartbeat_at"),
-      "current_state" => %{
-        "runs" => Map.get(current_state, "runs", 0),
-        "last_error" => compact_agent_error(Map.get(current_state, "last_error")),
-        "last_result" => compact_last_result
-      },
+      "last_error" => compact_agent_error(Map.get(snapshot, "last_error")),
+      "sandbox" => Map.get(snapshot, "sandbox"),
+      "lease" => Map.get(snapshot, "lease") || %{},
       "metadata" => %{
         "paused" => Map.get(metadata, "paused", false),
-        "backpressure" => Map.get(metadata, "backpressure") || %{}
+        "backpressure" => Map.get(metadata, "backpressure") || %{},
+        "lease_epoch" => Map.get(metadata, "lease_epoch") || Map.get(snapshot, "lease_epoch"),
+        "lease_owner" => Map.get(metadata, "lease_owner") || Map.get(snapshot, "lease_owner"),
+        "pending_message_count" => Map.get(metadata, "pending_message_count", 0),
+        "execution_profile" => Map.get(metadata, "execution_profile")
       }
     }
   end

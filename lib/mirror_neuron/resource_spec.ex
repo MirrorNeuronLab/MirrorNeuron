@@ -648,8 +648,6 @@ defmodule MirrorNeuron.ResourceSpec do
     end)
   end
 
-  defp first_number(_map, _keys), do: nil
-
   defp number_value(value) when is_integer(value), do: value
   defp number_value(value) when is_float(value), do: value
 

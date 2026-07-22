@@ -509,9 +509,6 @@ defmodule MirrorNeuron.Config do
 
   defp blank?(value), do: value in [nil, ""]
 
-  defp parse_float(value, _env_name) when is_float(value), do: value
-  defp parse_float(value, _env_name) when is_integer(value), do: value / 1
-
   defp parse_float(value, env_name) when is_binary(value) do
     case Float.parse(value) do
       {float, ""} ->
@@ -521,7 +518,4 @@ defmodule MirrorNeuron.Config do
         raise ArgumentError, "#{env_name} must be a number, got #{inspect(value)}"
     end
   end
-
-  defp parse_float(value, env_name),
-    do: raise(ArgumentError, "#{env_name} must be a number, got #{inspect(value)}")
 end

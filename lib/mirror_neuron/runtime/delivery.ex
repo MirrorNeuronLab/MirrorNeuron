@@ -34,6 +34,7 @@ defmodule MirrorNeuron.Runtime.Delivery do
 
   def enqueue(job_id, agent_id, message) do
     normalized = normalize_message(job_id, agent_id, message)
+    attempt_epoch = normalized |> Message.headers() |> Map.get("mn.attempt_epoch")
     ttl_ms = get_in(normalized, ["envelope", "ttl_ms"])
     now_ms = System.system_time(:millisecond)
 
@@ -46,7 +47,9 @@ defmodule MirrorNeuron.Runtime.Delivery do
       max_pending_job: max_pending_per_job()
     ]
 
-    RedisStore.enqueue_delivery(job_id, agent_id, normalized, opts)
+    with :ok <- RedisStore.validate_job_attempt_epoch(job_id, attempt_epoch) do
+      RedisStore.enqueue_delivery(job_id, agent_id, normalized, opts)
+    end
   rescue
     error in ArgumentError -> {:error, Exception.message(error)}
   end
@@ -61,7 +64,13 @@ defmodule MirrorNeuron.Runtime.Delivery do
     end
   end
 
-  def report(job_id, agent_id, report_id, body) do
+  def report(job_id, agent_id, report_id, body, opts \\ []) do
+    headers =
+      case Keyword.get(opts, :attempt_epoch) do
+        epoch when is_integer(epoch) -> %{"mn.attempt_epoch" => epoch}
+        _epoch -> %{}
+      end
+
     job_id
     |> Message.new(
       agent_id,
@@ -70,7 +79,8 @@ defmodule MirrorNeuron.Runtime.Delivery do
       body,
       message_id: report_id,
       correlation_id: report_id,
-      class: "control"
+      class: "control",
+      headers: headers
     )
     |> then(&enqueue(job_id, @coordinator_agent_id, &1))
     |> accepted()

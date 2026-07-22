@@ -22,9 +22,6 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   }
 
   @default_health_check_interval_ms 2_000
-  @default_job_snapshot_interval_ms 0
-  @job_snapshot_timer_key {__MODULE__, :job_snapshot_timer}
-  @job_snapshot_last_persisted_key {__MODULE__, :job_snapshot_last_persisted_at_ms}
 
   def start_link({job_id, manifest, opts}) do
     GenServer.start_link(__MODULE__, {job_id, manifest, opts}, name: Naming.via_job(job_id))
@@ -40,9 +37,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         _ -> nil
       end
 
-    status = if existing_job, do: existing_job["status"], else: "pending"
+    status = "running"
     submitted_at = if existing_job, do: existing_job["submitted_at"], else: Runtime.timestamp()
-    result = if existing_job, do: existing_job["result"], else: nil
     scheduler_plan = scheduler_plan_from(manifest, opts)
     runtime_topology = build_runtime_topology(manifest, scheduler_plan)
 
@@ -52,9 +48,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       bundle: bundle,
       opts: opts,
       status: status,
-      result: result,
-      result_ref: existing_job && existing_job["result_ref"],
-      workflow_state_ref: existing_job && existing_job["workflow_state_ref"],
+      result: nil,
+      result_ref: nil,
+      workflow_state_ref: nil,
       submitted_at: submitted_at,
       agent_ids: runtime_topology.agent_ids,
       runtime_nodes: runtime_topology.nodes,
@@ -67,11 +63,11 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       outbound_edges_by_node: Enum.group_by(runtime_topology.edges, & &1.from_node),
       inbound_edges_by_node: Enum.group_by(runtime_topology.edges, & &1.to_node),
       downstream_by_node: build_downstream_index(runtime_topology.edges),
-      completed_agents: completed_agents_from(existing_job),
-      completed_system_targets: completed_system_targets_from(existing_job),
+      completed_agents: MapSet.new(),
+      completed_system_targets: MapSet.new(),
       pressure: %{},
-      policy_state: policy_state_from(existing_job),
-      workflow_state: WorkflowLedger.new(manifest, runtime_topology.nodes, existing_job, job_id),
+      policy_state: %{"agents" => %{}},
+      workflow_state: WorkflowLedger.new(manifest, runtime_topology.nodes, nil, job_id),
       pending_policy_timers: %{},
       recovery_tasks: %{},
       health_check_timer_ref: nil,
@@ -92,66 +88,31 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         ),
       reliability: reliability_from(opts, existing_job),
       recovery_fields: recovery_fields_from(existing_job),
-      pending_workflow_completion: pending_workflow_completion_from(existing_job)
+      pending_workflow_completion: nil,
+      attempt: Keyword.get(opts, :attempt, Map.get(existing_job || %{}, "attempt", 1)),
+      attempt_started_at:
+        Keyword.get(
+          opts,
+          :attempt_started_at,
+          Map.get(existing_job || %{}, "attempt_started_at", Runtime.timestamp())
+        ),
+      restart_reason:
+        Keyword.get(
+          opts,
+          :restart_reason,
+          Map.get(existing_job || %{}, "restart_reason", "initial_start")
+        ),
+      attempt_history: Map.get(existing_job || %{}, "attempt_history", []),
+      restart_budget: Map.get(existing_job || %{}, "restart_budget"),
+      attempt_not_before: Map.get(existing_job || %{}, "attempt_not_before")
     }
 
-    if status == "pending" do
-      persist_job(state)
-      EventBus.publish(job_id, %{type: :job_pending, timestamp: Runtime.timestamp()})
-      {:ok, state, {:continue, :bootstrap}}
-    else
-      EventBus.publish(job_id, %{type: :job_recovery_started, timestamp: Runtime.timestamp()})
-      {:ok, state, {:continue, :recover}}
-    end
+    {:ok, state, {:continue, :bootstrap}}
   end
 
   @impl true
   def handle_continue(:recover, state) do
-    terminate_agent_workers(state)
-
-    with :ok <- wait_for_agents_stopped(state, 5_000),
-         {:ok, recovery_state} <- restore_policy_timers(state),
-         {:ok, next_state} <- recover_missing_agents(recovery_state),
-         :ok <- register_job_services(next_state) do
-      persist_job(next_state)
-      refresh_disk_checkpoint(next_state)
-
-      EventBus.publish(state.job_id, %{
-        type: :job_recovered,
-        status: next_state.status,
-        timestamp: Runtime.timestamp()
-      })
-
-      publish_workflow_events(next_state, [])
-      {:noreply, schedule_runtime_timers(next_state)}
-    else
-      {:paused_for_review, paused_state} ->
-        {:noreply, paused_state}
-
-      {:error, reason} ->
-        failed_state =
-          finalize_job(
-            state,
-            "failed",
-            %{agent_id: "job_coordinator", error: reason},
-            :job_failed,
-            %{agent_id: "job_coordinator", reason: reason}
-          )
-
-        {:stop, {:shutdown, reason}, failed_state}
-
-      {:error, reason, next_state} ->
-        failed_state =
-          finalize_job(
-            next_state,
-            "failed",
-            %{agent_id: "job_coordinator", error: reason},
-            :job_failed,
-            %{agent_id: "job_coordinator", reason: reason}
-          )
-
-        {:stop, {:shutdown, reason}, failed_state}
-    end
+    handle_continue(:bootstrap, state)
   end
 
   @impl true
@@ -167,7 +128,16 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     with {:ok, boot_state} <- start_agents(state),
          {:ok, next_state, workflow_events} <- complete_bootstrap(boot_state) do
       persist_job(next_state)
-      EventBus.publish(state.job_id, %{type: :job_running, timestamp: Runtime.timestamp()})
+
+      EventBus.publish(state.job_id, %{
+        type: :job_running,
+        mode: "clean_restart",
+        attempt: next_state.attempt,
+        attempt_started_at: next_state.attempt_started_at,
+        restart_reason: next_state.restart_reason,
+        timestamp: Runtime.timestamp()
+      })
+
       publish_workflow_events(next_state, workflow_events)
       {:noreply, schedule_runtime_timers(next_state)}
     else
@@ -229,18 +199,11 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     {workflow_state, workflow_events} = WorkflowLedger.resume(state.workflow_state)
     running_state = %{state | status: "running", workflow_state: workflow_state}
 
-    case recover_missing_agents(running_state) do
-      {:ok, recovered_state} ->
-        broadcast_agent_control(recovered_state, :resume)
-        persist_job(recovered_state)
-        refresh_disk_checkpoint(recovered_state)
-        EventBus.publish(state.job_id, %{type: :job_resumed, timestamp: Runtime.timestamp()})
-        publish_workflow_events(recovered_state, workflow_events)
-        {:reply, {:ok, "resumed"}, schedule_runtime_timers(recovered_state)}
-
-      {:error, reason, failed_state} ->
-        {:reply, {:error, reason}, failed_state}
-    end
+    broadcast_agent_control(running_state, :resume)
+    persist_durable_job_snapshot(running_state, job_snapshot(running_state))
+    EventBus.publish(state.job_id, %{type: :job_resumed, timestamp: Runtime.timestamp()})
+    publish_workflow_events(running_state, workflow_events)
+    {:reply, {:ok, "resumed"}, schedule_runtime_timers(running_state)}
   end
 
   def handle_call(:resume, _from, %{status: "running"} = state) do
@@ -267,7 +230,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   @impl true
   def handle_call({:send_message, agent_id, message}, _from, state) do
-    envelope = build_external_message(state.job_id, agent_id, message)
+    envelope = build_external_message(state, agent_id, message)
     state = refresh_pressure(state)
 
     case external_input_pressure(state, agent_id) do
@@ -528,15 +491,14 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   def handle_info({:agent_checkpoint, agent_id, snapshot}, state) do
-    case RedisStore.persist_agent(state.job_id, agent_id, snapshot) do
-      {:ok, _snapshot} ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning(
-          "failed to persist agent checkpoint for #{state.job_id}/#{agent_id}: #{inspect(reason)}"
-        )
-    end
+    EventBus.publish(state.job_id, %{
+      type: :agent_checkpoint_ignored,
+      agent_id: agent_id,
+      mode: "clean_restart",
+      metadata:
+        if(is_map(snapshot), do: Map.get(snapshot, :metadata) || snapshot["metadata"], else: nil),
+      timestamp: Runtime.timestamp()
+    })
 
     {:noreply, state}
   end
@@ -685,26 +647,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   def handle_info(:health_check, state), do: {:noreply, clear_health_check_timer(state)}
 
-  def handle_info({:persist_job_snapshot, token}, state) do
-    case Process.get(@job_snapshot_timer_key) do
-      %{token: ^token} ->
-        Process.delete(@job_snapshot_timer_key)
-
-        if state.status == "running" and job_snapshot_interval_ms() > 0 do
-          persist_durable_job_snapshot(state)
-        end
-
-        {:noreply, state}
-
-      _stale ->
-        {:noreply, state}
-    end
-  end
-
   @impl true
   def terminate(_reason, state) do
     state
-    |> cancel_job_snapshot_timer()
     |> cancel_health_check_timer()
     |> cancel_coordinator_delivery_timer()
     |> cancel_policy_timers()
@@ -742,16 +687,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         end
 
       {:error, reason, next_state} ->
-        failed_state =
-          finalize_job(
-            next_state,
-            "failed",
-            %{agent_id: "job_coordinator", error: reason},
-            :job_failed,
-            %{agent_id: "job_coordinator", reason: reason}
-          )
-
-        {:stop, {:shutdown, reason}, failed_state}
+        restart_clean_attempt(next_state, reason)
     end
   end
 
@@ -989,27 +925,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp pending_workflow_completion(_state), do: nil
 
   defp handle_runtime_agent_failed(state, agent_id, reason) do
-    case restart_failed_agent(state, agent_id, reason) do
-      {:ok, next_state} ->
-        {:noreply, next_state}
-
-      {:error, failed_reason, next_state} ->
-        failed_state =
-          finalize_job(
-            next_state,
-            "failed",
-            %{agent_id: agent_id, error: failed_reason},
-            :job_failed,
-            %{agent_id: agent_id, reason: failed_reason}
-          )
-
-        {:stop, {:shutdown, failed_reason}, failed_state}
-    end
-  end
-
-  defp restart_failed_agent(state, agent_id, reason) do
-    terminate_agent_workers(state, [agent_id])
-    schedule_agent_restarts(state, [agent_id], inspect(reason))
+    restart_clean_attempt(state, {:agent_failed, agent_id, reason})
   end
 
   defp restart_agents_now(state, agent_ids, reason) do
@@ -1056,12 +972,33 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
           {:cont, {:ok, acc_state}}
 
         true ->
-          case schedule_agent_restarts(acc_state, [agent_id], "agent missing during health check") do
-            {:ok, next_state} -> {:cont, {:ok, next_state}}
-            {:error, reason, next_state} -> {:halt, {:error, reason, next_state}}
-          end
+          {:halt,
+           {:error, {:agent_missing, agent_id, "agent missing during health check"}, acc_state}}
       end
     end)
+  end
+
+  defp restart_clean_attempt(state, reason) do
+    restart_reason = inspect(reason)
+    next_state = %{state | restart_reason: restart_reason}
+
+    _ =
+      RedisStore.persist_terminal_job(state.job_id, %{
+        "status" => "running",
+        "restart_reason" => restart_reason,
+        "recovery_mode" => "clean_restart",
+        "lease_epoch" => get_in(Keyword.get(state.opts, :job_lease, %{}), ["epoch"])
+      })
+
+    EventBus.publish(state.job_id, %{
+      type: :job_clean_restart_scheduled,
+      mode: "clean_restart",
+      attempt: state.attempt,
+      reason: restart_reason,
+      timestamp: Runtime.timestamp()
+    })
+
+    {:stop, {:clean_restart, reason}, next_state}
   end
 
   defp reconcile_workflow(state) do
@@ -1603,6 +1540,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
             )
 
           message = WorkflowLedger.decorate_message(state.workflow_state, agent_id, message)
+          message = put_attempt_epoch(message, state)
 
           case Runtime.deliver(state.job_id, agent_id, message) do
             :ok -> {:cont, :ok}
@@ -1695,30 +1633,6 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     do_wait_for_agents_ready(state, started_at, timeout_ms)
   end
 
-  defp recover_missing_agents(state) do
-    Enum.reduce_while(state.agent_ids, {:ok, state}, fn agent_id, {:ok, acc_state} ->
-      cond do
-        agent_completed?(acc_state, agent_id) ->
-          {:cont, {:ok, acc_state}}
-
-        pending_policy_action?(acc_state, agent_id) ->
-          {:cont, {:ok, acc_state}}
-
-        agent_ready?(acc_state, agent_id) ->
-          {:cont, {:ok, acc_state}}
-
-        workflow_agent_inactive?(acc_state, agent_id) ->
-          {:cont, {:ok, acc_state}}
-
-        true ->
-          case recover_agent(acc_state, agent_id) do
-            {:ok, next_state} -> {:cont, {:ok, next_state}}
-            {:error, reason, next_state} -> {:halt, {:error, reason, next_state}}
-          end
-      end
-    end)
-  end
-
   defp recover_agents(state, agent_ids) do
     Enum.reduce_while(agent_ids, {:ok, state}, fn agent_id, {:ok, acc_state} ->
       if agent_completed?(acc_state, agent_id) do
@@ -1753,12 +1667,6 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp recover_agent(state, agent_id) do
-    recovery_snapshot =
-      case RedisStore.fetch_agent(state.job_id, agent_id) do
-        {:ok, snapshot} -> snapshot
-        _ -> nil
-      end
-
     attempt =
       max(
         LifecyclePolicy.active_attempt_count(
@@ -1775,7 +1683,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       timestamp: Runtime.timestamp()
     })
 
-    case start_agent(state, agent_id, recovery_snapshot) do
+    case start_agent(state, agent_id, nil) do
       {:ok, _pid} ->
         finalize_agent_recovery(state, agent_id, attempt)
 
@@ -1810,20 +1718,19 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     end
   end
 
-  defp start_agent(state, agent_id, recovery_snapshot \\ nil, retry_count \\ 0) do
+  defp start_agent(state, agent_id, _recovery_snapshot \\ nil, retry_count \\ 0) do
     node =
       state.nodes_by_id
       |> Map.fetch!(agent_id)
       |> apply_execution_profile()
 
-    recovery_snapshot = align_recovery_snapshot_with_job_status(state, recovery_snapshot)
     execution_profile = Profile.profile_name(node.config)
 
     spec =
       AgentWorker.child_spec(
         {state.job_id, node, Map.get(state.outbound_edges_by_node, agent_id, []),
          Map.get(state.inbound_edges_by_node, agent_id, []), self(), agent_runtime_context(state),
-         recovery_snapshot}
+         nil}
       )
       |> Map.put(:mirror_neuron_execution_profile, execution_profile)
       |> Map.put(
@@ -1834,11 +1741,11 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     case start_agent_on_target(spec, Scheduler.target_node(scheduler_plan(state), agent_id)) do
       {:error, {:already_started, _pid}} when retry_count < 10 ->
         Process.sleep(100)
-        start_agent(state, agent_id, recovery_snapshot, retry_count + 1)
+        start_agent(state, agent_id, nil, retry_count + 1)
 
       {:error, {:target_node_unavailable, _target_node}} when retry_count < 50 ->
         Process.sleep(200)
-        start_agent(state, agent_id, recovery_snapshot, retry_count + 1)
+        start_agent(state, agent_id, nil, retry_count + 1)
 
       other ->
         other
@@ -1915,22 +1822,6 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         end
     end
   end
-
-  defp align_recovery_snapshot_with_job_status(%{status: "paused"}, nil) do
-    %{"metadata" => %{"paused" => true}}
-  end
-
-  defp align_recovery_snapshot_with_job_status(%{status: status}, snapshot)
-       when status in ["running", "paused"] and is_map(snapshot) do
-    metadata =
-      snapshot
-      |> Map.get("metadata", %{})
-      |> Map.put("paused", status == "paused")
-
-    Map.put(snapshot, "metadata", metadata)
-  end
-
-  defp align_recovery_snapshot_with_job_status(_state, snapshot), do: snapshot
 
   defp wait_for_agent_ready(state, agent_id, timeout_ms) do
     started_at = System.monotonic_time(:millisecond)
@@ -2481,18 +2372,6 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     state.deployment_context || %{}
   end
 
-  defp policy_state_from(nil), do: %{"agents" => %{}}
-
-  defp policy_state_from(job) when is_map(job) do
-    case Map.get(job, "policy_state") do
-      policy_state when is_map(policy_state) ->
-        Map.put_new(policy_state, "agents", %{})
-
-      _ ->
-        %{"agents" => %{}}
-    end
-  end
-
   defp policy_history(state, agent_id, kind) do
     get_in(state.policy_state, ["agents", agent_id, "#{kind}_history"]) || []
   end
@@ -2528,124 +2407,6 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp pending_policy_action?(state, agent_id) do
     agent_state = get_in(state.policy_state, ["agents", agent_id]) || %{}
     not is_nil(Map.get(agent_state, "next_action"))
-  end
-
-  defp restore_policy_timers(%{policy_state: %{"agents" => agents}} = state)
-       when is_map(agents) do
-    agents
-    |> Enum.sort_by(fn {agent_id, _agent_state} -> agent_id end)
-    |> Enum.reduce_while({:ok, state}, fn {agent_id, agent_state}, {:ok, acc_state} ->
-      action = if is_map(agent_state), do: Map.get(agent_state, "next_action"), else: :invalid
-
-      cond do
-        agent_id not in acc_state.agent_ids or agent_completed?(acc_state, agent_id) ->
-          {:cont, {:ok, acc_state}}
-
-        is_nil(action) ->
-          {:cont, {:ok, acc_state}}
-
-        action in ["restart", "reschedule"] ->
-          case restore_policy_timer(acc_state, agent_id, action, agent_state) do
-            {:ok, next_state} ->
-              {:cont, {:ok, next_state}}
-
-            {:error, reason} ->
-              paused_state = pause_for_policy_review(acc_state, agent_id, reason)
-
-              EventBus.publish(acc_state.job_id, %{
-                type: :job_recovery_blocked,
-                agent_id: agent_id,
-                reason: reason,
-                timestamp: Runtime.timestamp()
-              })
-
-              {:halt, {:paused_for_review, paused_state}}
-          end
-
-        true ->
-          reason =
-            "persisted recovery action for agent #{agent_id} is invalid: #{inspect(action)}"
-
-          paused_state = pause_for_policy_review(acc_state, agent_id, reason)
-
-          EventBus.publish(acc_state.job_id, %{
-            type: :job_recovery_blocked,
-            agent_id: agent_id,
-            reason: reason,
-            timestamp: Runtime.timestamp()
-          })
-
-          {:halt, {:paused_for_review, paused_state}}
-      end
-    end)
-  end
-
-  defp restore_policy_timers(state) do
-    agent_id = List.first(state.agent_ids) || "job_coordinator"
-    reason = "persisted recovery policy state is invalid"
-    paused_state = pause_for_policy_review(state, agent_id, reason)
-
-    EventBus.publish(state.job_id, %{
-      type: :job_recovery_blocked,
-      agent_id: agent_id,
-      reason: reason,
-      timestamp: Runtime.timestamp()
-    })
-
-    {:paused_for_review, paused_state}
-  end
-
-  defp restore_policy_timer(state, agent_id, action, agent_state) do
-    with {:ok, delay_ms} <- policy_timer_delay_ms(Map.get(agent_state, "next_eligible_at")) do
-      reason =
-        Map.get(agent_state, "last_reason") ||
-          "restored persisted #{action} action after runtime recovery"
-
-      next_state =
-        case action do
-          "restart" ->
-            schedule_policy_timer(
-              state,
-              {:restart, agent_id},
-              {:policy_restart, agent_id, reason},
-              delay_ms
-            )
-
-          "reschedule" ->
-            schedule_policy_timer(
-              state,
-              {:reschedule, agent_id},
-              {:policy_reschedule, [agent_id], reason},
-              delay_ms
-            )
-        end
-
-      EventBus.publish(state.job_id, %{
-        type: :agent_policy_action_restored,
-        agent_id: agent_id,
-        action: action,
-        reason: reason,
-        delay_ms: delay_ms,
-        next_eligible_at: Map.get(agent_state, "next_eligible_at"),
-        timestamp: Runtime.timestamp()
-      })
-
-      {:ok, next_state}
-    end
-  end
-
-  defp policy_timer_delay_ms(next_eligible_at) when is_binary(next_eligible_at) do
-    case DateTime.from_iso8601(next_eligible_at) do
-      {:ok, eligible_at, _offset} ->
-        {:ok, max(DateTime.diff(eligible_at, DateTime.utc_now(), :millisecond), 0)}
-
-      {:error, _reason} ->
-        {:error, "persisted recovery deadline is invalid: #{inspect(next_eligible_at)}"}
-    end
-  end
-
-  defp policy_timer_delay_ms(next_eligible_at) do
-    {:error, "persisted recovery deadline is missing: #{inspect(next_eligible_at)}"}
   end
 
   defp schedule_policy_timer(state, key, message, delay_ms) do
@@ -2691,33 +2452,6 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       |> clear_policy_timer({:reschedule, agent_id})
     end)
   end
-
-  defp completed_agents_from(nil), do: MapSet.new()
-
-  defp completed_agents_from(job) when is_map(job) do
-    job
-    |> Map.get("result", %{})
-    |> list_from_result("completed_agents")
-    |> MapSet.new()
-  end
-
-  defp completed_system_targets_from(nil), do: MapSet.new()
-
-  defp completed_system_targets_from(job) when is_map(job) do
-    job
-    |> Map.get("result", %{})
-    |> list_from_result("completed_targets")
-    |> MapSet.new()
-  end
-
-  defp list_from_result(result, key) when is_map(result) do
-    result
-    |> Map.get(key, [])
-    |> List.wrap()
-    |> Enum.map(&to_string/1)
-  end
-
-  defp list_from_result(_result, _key), do: []
 
   defp put_completed_agent(state, agent_id) do
     %{state | completed_agents: MapSet.put(state.completed_agents, agent_id)}
@@ -3173,26 +2907,38 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     next_state
   end
 
-  defp build_external_message(job_id, agent_id, message) do
+  defp build_external_message(state, agent_id, message) do
     Message.normalize!(
       message,
-      job_id: job_id,
+      job_id: state.job_id,
       from: "external",
       to: agent_id,
       type: "command",
       class: "command",
       correlation_id: unique_id()
     )
+    |> put_attempt_epoch(state)
+  end
+
+  defp put_attempt_epoch(message, state) do
+    case get_in(Keyword.get(state.opts, :job_lease, %{}), ["epoch"]) do
+      epoch when is_integer(epoch) ->
+        Map.update(message, "headers", %{"mn.attempt_epoch" => epoch}, fn headers ->
+          Map.put(headers || %{}, "mn.attempt_epoch", epoch)
+        end)
+
+      _epoch ->
+        message
+    end
   end
 
   defp persist_job(state) do
     job_map = job_snapshot(state)
 
-    if durable_job_snapshot_due?(state) do
-      persist_durable_job_snapshot(state, job_map)
-    else
+    if state.status == "running" do
       persist_job_projection(state, job_map)
-      schedule_job_snapshot_timer()
+    else
+      persist_durable_job_snapshot(state, job_map)
     end
   end
 
@@ -3205,6 +2951,13 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       job_name: state.manifest.job_name,
       required_context_engine: Map.get(state.manifest, :required_context_engine, false),
       status: state.status,
+      attempt: state.attempt,
+      attempt_started_at: state.attempt_started_at,
+      attempt_not_before: state.attempt_not_before,
+      attempt_history: state.attempt_history,
+      restart_budget: state.restart_budget,
+      restart_reason: state.restart_reason,
+      recovery_mode: "clean_restart",
       submitted_at: Map.get(state, :submitted_at, Runtime.timestamp()),
       updated_at: Runtime.timestamp(),
       root_agent_ids: state.manifest.entrypoints,
@@ -3217,13 +2970,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       reliability: reliability_map(state),
       restart_policy: job_restart_policy(state),
       reschedule_policy: job_reschedule_policy(state),
-      policy_state: state.policy_state,
-      workflow_state:
-        WorkflowLedger.persistable_snapshot(
-          state.workflow_state,
-          MirrorNeuron.Manifest.to_map(state.manifest)
-        ),
-      pending_workflow_completion: state.pending_workflow_completion,
+      policy_state: %{"agents" => %{}},
+      workflow_state: persistable_terminal_workflow(state),
+      pending_workflow_completion: nil,
       deployment: deployment_job_fields(state),
       result: state.result,
       result_ref: state.result_ref,
@@ -3237,21 +2986,22 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     |> Map.merge(Map.get(state, :recovery_fields, %{}))
   end
 
-  defp persist_durable_job_snapshot(state),
-    do: persist_durable_job_snapshot(state, job_snapshot(state))
-
   defp persist_durable_job_snapshot(state, job_map) do
-    cancel_job_snapshot_timer()
-
     case RedisStore.persist_job(state.job_id, job_map) do
       {:ok, _job} ->
-        Process.put(@job_snapshot_last_persisted_key, monotonic_ms())
         :ok
 
       {:error, reason} ->
         Logger.warning("failed to persist job #{state.job_id}: #{inspect(reason)}")
     end
   end
+
+  defp persistable_terminal_workflow(%{status: status, workflow_state: workflow_state})
+       when status in ["completed", "failed", "cancelled"] do
+    WorkflowLedger.persistable_snapshot(workflow_state, nil)
+  end
+
+  defp persistable_terminal_workflow(_state), do: nil
 
   defp persist_job_projection(state, job_map) do
     case RedisStore.persist_job_projection(state.job_id, job_map) do
@@ -3263,72 +3013,10 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     end
   end
 
-  defp durable_job_snapshot_due?(state) do
-    interval_ms = job_snapshot_interval_ms()
-    last_persisted_at_ms = Process.get(@job_snapshot_last_persisted_key)
-
-    state.status != "running" or
-      (interval_ms > 0 and
-         (is_nil(last_persisted_at_ms) or
-            monotonic_ms() - last_persisted_at_ms >= interval_ms))
-  end
-
-  defp schedule_job_snapshot_timer do
-    interval_ms = job_snapshot_interval_ms()
-
-    if interval_ms > 0 and is_nil(Process.get(@job_snapshot_timer_key)) do
-      last_persisted_at_ms = Process.get(@job_snapshot_last_persisted_key, monotonic_ms())
-      elapsed_ms = max(monotonic_ms() - last_persisted_at_ms, 0)
-      delay_ms = max(interval_ms - elapsed_ms, 1)
-      token = make_ref()
-      timer_ref = Process.send_after(self(), {:persist_job_snapshot, token}, delay_ms)
-      Process.put(@job_snapshot_timer_key, %{ref: timer_ref, token: token})
-    end
-
-    :ok
-  end
-
-  defp cancel_job_snapshot_timer(state) when is_map(state) do
-    cancel_job_snapshot_timer()
-    state
-  end
-
-  defp cancel_job_snapshot_timer do
-    case Process.delete(@job_snapshot_timer_key) do
-      %{ref: timer_ref} -> Process.cancel_timer(timer_ref)
-      _none -> :ok
-    end
-
-    :ok
-  end
-
-  defp job_snapshot_interval_ms do
-    Application.get_env(
-      :mirror_neuron,
-      :job_snapshot_interval_ms,
-      @default_job_snapshot_interval_ms
-    )
-  end
-
-  defp monotonic_ms, do: System.monotonic_time(:millisecond)
-
-  defp refresh_disk_checkpoint(state) do
-    case RedisStore.refresh_disk_checkpoint(state.job_id) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning(
-          "failed to refresh resumed disk checkpoint for #{state.job_id}: #{inspect(reason)}"
-        )
-    end
-  end
-
   defp persist_job_with_recovery(state, reason) do
-    cancel_job_snapshot_timer()
-
     recovery = %{
       "status" => "paused_for_review",
+      "mode" => "clean_restart",
       "reason" => reason,
       "requires_review" => true,
       "can_resume" => true,
@@ -3342,6 +3030,13 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         job_name: state.manifest.job_name,
         required_context_engine: Map.get(state.manifest, :required_context_engine, false),
         status: "paused",
+        attempt: state.attempt,
+        attempt_started_at: state.attempt_started_at,
+        attempt_not_before: state.attempt_not_before,
+        attempt_history: state.attempt_history,
+        restart_budget: state.restart_budget,
+        restart_reason: reason,
+        recovery_mode: "clean_restart",
         submitted_at: Map.get(state, :submitted_at, Runtime.timestamp()),
         updated_at: Runtime.timestamp(),
         root_agent_ids: state.manifest.entrypoints,
@@ -3365,20 +3060,15 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         reliability: reliability_map(state),
         restart_policy: job_restart_policy(state),
         reschedule_policy: job_reschedule_policy(state),
-        policy_state: state.policy_state,
-        workflow_state:
-          WorkflowLedger.persistable_snapshot(
-            state.workflow_state,
-            MirrorNeuron.Manifest.to_map(state.manifest)
-          ),
-        pending_workflow_completion: state.pending_workflow_completion,
+        policy_state: %{"agents" => %{}},
+        workflow_state: nil,
+        pending_workflow_completion: nil,
         deployment: deployment_job_fields(state)
       }
       |> maybe_put_lease(Keyword.get(state.opts, :job_lease))
 
     case RedisStore.persist_job(state.job_id, job_map) do
       {:ok, _job} ->
-        Process.put(@job_snapshot_last_persisted_key, monotonic_ms())
         :ok
 
       {:error, persist_reason} ->
@@ -3430,6 +3120,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     bundle_paths = runtime_bundle_paths(state)
 
     %{
+      attempt: state.attempt,
+      attempt_started_at: state.attempt_started_at,
       bundle_root: bundle_paths.bundle_root,
       manifest_path: bundle_paths.manifest_path,
       payloads_path: bundle_paths.payloads_path,
@@ -3610,12 +3302,6 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   defp normalize_reliability(reliability) when is_map(reliability), do: reliability
   defp normalize_reliability(_reliability), do: %{}
-
-  defp pending_workflow_completion_from(%{"pending_workflow_completion" => pending})
-       when is_map(pending),
-       do: pending
-
-  defp pending_workflow_completion_from(_existing_job), do: nil
 
   defp node_backpressure_opts(state, agent_id) do
     state.nodes_by_id

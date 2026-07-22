@@ -225,7 +225,7 @@ clear placement, and clear recovery behavior.
 | Workflow manifest validation | Available | Validates graph structure and supported runtime primitives. |
 | Message-driven execution | Available | Routes workflow messages between runtime nodes and agents. |
 | Built-in runtime primitives | Available | Includes `router`, `executor`, `aggregator`, `sensor`, and `module`. |
-| Durable job state | Available | Persists job metadata and agent state through Redis plus atomic disk checkpoints for host-restart recovery. |
+| Durable job state | Available | Persists compact job control, events, artifacts, delivery state, and terminal results in Redis; runtime loss starts a clean fenced attempt. |
 | Runtime monitoring | Available | Lists jobs, job details, cluster overview, metrics, and dead letters. |
 | Cluster coordination | Available | Uses Erlang distribution plus `libcluster` and Horde. |
 | Redis high-availability helpers | Available | Includes scripts and config for Redis Sentinel development workflows. |
@@ -453,28 +453,25 @@ The runtime persists both `requested_recovery_policy` and effective
 job policies are not rewritten when cluster health changes; reliability events
 are emitted instead.
 
-Active jobs are also mirrored to atomic JSON checkpoints under
-`MN_CHECKPOINT_ROOT` (by default, `MN_SHARED_STORAGE_ROOT/checkpoints`). At
-startup the local recovery scan restores missing or newer job and agent state
-from disk before evaluating unfinished jobs, so a safe `local_restart` workflow
-continues from its last persisted stage even if Redis state was lost during a
-host shutdown. Checkpoints use the Redis namespace to isolate environments.
-Successful resume replaces stale checkpoint files and prunes obsolete agent
-files. Completed, failed, cancelled, deleted, and retention-expired jobs remove
-their checkpoint directory. The current active checkpoint is intentionally
-kept after resume so another interruption remains recoverable.
+Redis is the only durable coordination source. Core does not write or restore
+agent-memory, workflow-ledger, pending-policy, or disk-checkpoint snapshots.
+`local_restart`, `cluster_recover`, and `manual_recover` remain compatible policy
+names, but they now select clean-attempt placement or approval behavior rather
+than process-state restoration.
 
 This is especially important for desktop environments, where machines sleep,
 restart, disconnect, run out of local resources, or appear and disappear from a
 private network more often than cloud workers do.
 
-If a machine sleeps long enough for a Redis-backed job lease to expire, the
-runtime treats wake-up as an ownership transition. It shuts down the stale
-runner, reacquires the job with a newer lease epoch, restores persisted restart
-or reschedule deadlines using their remaining wall-clock delay, and replays an
-in-flight message only when the agent is explicitly safe to retry. Unsafe work
-or a legacy failed checkpoint with no replayable message is paused for operator
-review instead of remaining indefinitely `running`.
+If an agent, coordinator, node, or host is lost, the runtime treats it as a job
+attempt boundary. It acquires a newer fenced lease epoch, rejects old writes,
+cleans attempt-owned deliveries and execution resources, resets local workflow
+and agent state, and seeds the manifest inputs again. Public job state exposes
+`attempt`, `attempt_started_at`, and `restart_reason`. Effectful executor and
+module nodes must declare `safe_to_retry`, `idempotent`, or a stable idempotency
+key before automatic redo. Other work pauses for operator approval; manual
+resume authorizes a clean attempt. Retry budgets and backoff are durable at the
+job-attempt level.
 
 Every agent-to-agent message, including messages whose agents happen to run on
 the same node, follows one acknowledged Redis Streams path. Enqueue is
@@ -560,7 +557,8 @@ present. Production does not require any `.env` file.
 | `MN_COOKIE` | Erlang distribution cookie; use a strong non-default value for distributed nodes. |
 | `MN_JOB_LEASE_DURATION_MS` | Job lease duration for fenced runtime ownership; defaults to 60000. |
 | `MN_JOB_LEASE_RENEW_INTERVAL_MS` | Job lease renewal cadence; defaults to 10000. |
-| `MN_JOB_SNAPSHOT_INTERVAL_MS` | Optional full active-job snapshot cadence in milliseconds. `0` disables periodic active snapshots (the default); compact monitor/lease projections and terminal or operator-controlled state remain durable. |
+| `MN_JOB_SNAPSHOT_INTERVAL_MS` | Deprecated compatibility setting; ignored because Core no longer writes resumable active-job snapshots. Removed in the next major release. |
+| `MN_AGENT_SNAPSHOT_PENDING_LIMIT` | Deprecated compatibility setting; ignored because pending payload copies are not persisted. Removed in the next major release. |
 | `MN_JOB_CALL_TIMEOUT_MS` | Timeout for runtime job control calls such as pause, resume, pressure, and external message submit; defaults to 15000. |
 | `MN_CANCEL_JOB_CALL_TIMEOUT_MS` | Local coordinator cancellation call timeout; unavailable remote ownership is recorded as durable `cancellation_pending` instead of waiting for this timeout. Defaults to 5000. |
 | `MN_MESSAGE_DEFAULT_TTL_SECONDS` | Default lifetime for an agent message; defaults to 86400. |
@@ -574,7 +572,7 @@ present. Production does not require any `.env` file.
 | `MN_MESSAGE_DELIVERY_MAX_ATTEMPTS` | Processing attempts before dead-lettering; defaults to 10. |
 | `MN_MESSAGE_DELIVERY_POLL_MS` | Redis delivery polling interval when no wake-up signal arrives; defaults to 1000. |
 | `MN_RELIABILITY_STRATEGY` | Conservative runtime strategy resolver for new jobs. |
-| `MN_CHECKPOINT_ROOT` | Persistent atomic checkpoint root used to restore active workflows after a host restart; defaults to `MN_SHARED_STORAGE_ROOT/checkpoints`. |
+| `MN_CHECKPOINT_ROOT` | Deprecated compatibility setting; ignored by runtime recovery. Local disk is not a job-state database. Removed in the next major release. |
 | `MN_NODE_RECONNECT_ATTEMPTS` | Runtime node reconnect attempts before jobs are paused for manual restart. |
 | `MN_NODE_EXECUTION_PROFILES` | Comma-separated execution profiles this runtime node may advertise after warmup. |
 | `MN_NODE_CAPABILITIES` | Comma-separated runtime capabilities such as `video-codec:h264` or `ffmpeg`. |

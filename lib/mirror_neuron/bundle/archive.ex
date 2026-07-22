@@ -178,9 +178,6 @@ defmodule MirrorNeuron.Bundle.Archive do
       {:ok, _archive_ref} ->
         :ok
 
-      {:error, {:bundle_too_large, _total_bytes, _max_bytes}} ->
-        :ok
-
       {:error, reason} ->
         Logger.warning("failed to store Redis backup for shared bundle cache: #{inspect(reason)}")
         :ok

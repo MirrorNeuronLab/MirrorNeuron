@@ -4,7 +4,14 @@ defmodule MirrorNeuron.Runtime.JobRunner do
 
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
-  alias MirrorNeuron.Runtime.{ErrorEnvelope, EventBus, JobCoordinator, LifecyclePolicy}
+
+  alias MirrorNeuron.Runtime.{
+    AttemptController,
+    ErrorEnvelope,
+    EventBus,
+    JobCoordinator
+  }
+
   alias MirrorNeuron.Runtime.Naming
 
   @active_statuses ["pending", "running", "paused"]
@@ -85,27 +92,216 @@ defmodule MirrorNeuron.Runtime.JobRunner do
   defp start_coordinator_with_lease(job_id, manifest, opts, node_name, lease) do
     opts = Keyword.put(opts, :job_lease, lease)
 
-    with :ok <- persist_lease_owner(job_id, manifest, opts, lease),
-         {:ok, pid} <- JobCoordinator.start_link({job_id, manifest, opts}) do
-      state = %{
-        job_id: job_id,
-        manifest: manifest,
-        bundle: Keyword.get(opts, :job_bundle),
-        bundle_ref: Keyword.get(opts, :bundle_ref),
-        opts: opts,
-        coordinator: pid,
-        node_name: node_name,
-        lease: lease,
-        lease_failures: 0,
-        lease_timer_ref: nil,
-        lease_timer_token: nil
-      }
+    case AttemptController.prepare(job_id, manifest, opts, lease) do
+      {:ok, attempt_job} ->
+        opts =
+          opts
+          |> Keyword.put(:attempt, attempt_job["attempt"])
+          |> Keyword.put(:restart_reason, attempt_job["restart_reason"])
 
-      {:ok, schedule_lease_renewal(state)}
-    else
+        with :ok <- cleanup_previous_attempt(job_id, attempt_job) do
+          state =
+            %{
+              job_id: job_id,
+              manifest: manifest,
+              bundle: Keyword.get(opts, :job_bundle),
+              bundle_ref: Keyword.get(opts, :bundle_ref),
+              opts: opts,
+              coordinator: nil,
+              attempt_job: attempt_job,
+              node_name: node_name,
+              lease: lease,
+              lease_failures: 0,
+              lease_timer_ref: nil,
+              lease_timer_token: nil,
+              coordinator_start_timer_ref: nil
+            }
+            |> schedule_lease_renewal()
+
+          case AttemptController.backoff_ms(attempt_job) do
+            0 ->
+              case start_attempt_coordinator(state) do
+                {:ok, _state} = started ->
+                  started
+
+                {:stop, _reason} = stopped ->
+                  release_job_lease(job_id, node_name, lease)
+                  stopped
+              end
+
+            delay_ms ->
+              timer_ref = Process.send_after(self(), :start_attempt_coordinator, delay_ms)
+
+              EventBus.publish(job_id, %{
+                type: :job_attempt_backoff_started,
+                mode: "clean_restart",
+                attempt: attempt_job["attempt"],
+                delay_ms: delay_ms,
+                restart_reason: attempt_job["restart_reason"],
+                lease_epoch: lease["epoch"],
+                timestamp: Runtime.timestamp()
+              })
+
+              {:ok, %{state | coordinator_start_timer_ref: timer_ref}}
+          end
+        else
+          {:error, reason} ->
+            release_job_lease(job_id, node_name, lease)
+            fail_runner_start(job_id, manifest, opts, lease, reason, clear_lease?: true)
+        end
+
+      {:paused, reason} ->
+        release_job_lease(job_id, node_name, lease)
+
+        EventBus.publish(job_id, %{
+          type: :job_paused_for_manual_restart,
+          mode: "clean_restart",
+          reason: reason,
+          lease_epoch: lease["epoch"],
+          timestamp: Runtime.timestamp()
+        })
+
+        {:stop, :normal}
+
+      {:exhausted, reason} ->
+        release_job_lease(job_id, node_name, lease)
+
+        EventBus.publish(job_id, %{
+          type: :job_restart_attempts_exhausted,
+          mode: "clean_restart",
+          reason: reason,
+          lease_epoch: lease["epoch"],
+          timestamp: Runtime.timestamp()
+        })
+
+        {:stop, :normal}
+
       {:error, reason} ->
         release_job_lease(job_id, node_name, lease)
         fail_runner_start(job_id, manifest, opts, lease, reason, clear_lease?: true)
+    end
+  end
+
+  defp cleanup_previous_attempt(job_id, %{"restart_reason" => restart_reason})
+       when restart_reason != "initial_start" do
+    stop_stale_attempt_workers(job_id)
+
+    case Runtime.cleanup_job_sandboxes(job_id) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("attempt sandbox cleanup was incomplete: #{inspect(reason)}")
+    end
+
+    case RedisStore.delete_service_instances(job_id: job_id) do
+      :ok ->
+        :ok
+
+      {:ok, _instances} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("attempt service cleanup was incomplete: #{inspect(reason)}")
+    end
+
+    RedisStore.clear_job_attempt_state(job_id)
+  end
+
+  defp cleanup_previous_attempt(_job_id, _job), do: :ok
+
+  defp start_attempt_coordinator(state) do
+    with {:ok, attempt_job} <- AttemptController.mark_started(state.job_id, state.attempt_job) do
+      opts = Keyword.put(state.opts, :attempt_started_at, attempt_job["attempt_started_at"])
+
+      case JobCoordinator.start_link({state.job_id, state.manifest, opts}) do
+        {:ok, pid} ->
+          EventBus.publish(state.job_id, %{
+            type: :job_attempt_started,
+            mode: "clean_restart",
+            attempt: attempt_job["attempt"],
+            attempt_started_at: attempt_job["attempt_started_at"],
+            restart_reason: attempt_job["restart_reason"],
+            lease_epoch: state.lease["epoch"],
+            timestamp: Runtime.timestamp()
+          })
+
+          {:ok,
+           %{
+             state
+             | coordinator: pid,
+               coordinator_start_timer_ref: nil,
+               attempt_job: attempt_job,
+               opts: opts
+           }}
+
+        {:error, reason} ->
+          fail_runner_start(
+            state.job_id,
+            state.manifest,
+            opts,
+            state.lease,
+            reason,
+            clear_lease?: true
+          )
+      end
+    else
+      {:error, reason} ->
+        fail_runner_start(
+          state.job_id,
+          state.manifest,
+          state.opts,
+          state.lease,
+          reason,
+          clear_lease?: true
+        )
+    end
+  end
+
+  defp stop_stale_attempt_workers(job_id) do
+    case RedisStore.list_agents(job_id) do
+      {:ok, observations} ->
+        observations
+        |> Enum.flat_map(fn observation ->
+          case observation["agent_id"] || observation["node_id"] do
+            agent_id when is_binary(agent_id) ->
+              Horde.Registry.lookup(
+                MirrorNeuron.DistributedRegistry,
+                {:agent, job_id, agent_id}
+              )
+              |> Enum.map(&elem(&1, 0))
+
+            _other ->
+              []
+          end
+        end)
+        |> Enum.uniq()
+        |> stop_and_wait_for_workers()
+
+      {:error, reason} ->
+        Logger.warning("could not enumerate stale workers for #{job_id}: #{inspect(reason)}")
+    end
+  end
+
+  defp stop_and_wait_for_workers(pids) do
+    monitors =
+      Enum.map(pids, fn pid ->
+        monitor = Process.monitor(pid)
+        Process.exit(pid, :shutdown)
+        {pid, monitor}
+      end)
+
+    deadline = System.monotonic_time(:millisecond) + 5_000
+    Enum.each(monitors, &wait_for_worker_stop(&1, deadline))
+  end
+
+  defp wait_for_worker_stop({pid, monitor}, deadline) do
+    timeout = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {:DOWN, ^monitor, :process, ^pid, _reason} -> :ok
+    after
+      timeout -> Process.demonitor(monitor, [:flush])
     end
   end
 
@@ -127,6 +323,13 @@ defmodule MirrorNeuron.Runtime.JobRunner do
   end
 
   @impl true
+  def handle_info(:start_attempt_coordinator, state) do
+    case start_attempt_coordinator(state) do
+      {:ok, next_state} -> {:noreply, next_state}
+      {:stop, reason} -> {:stop, reason, state}
+    end
+  end
+
   def handle_info({:renew_lease, token}, %{lease_timer_token: token} = state) do
     state = clear_lease_timer(state)
     renew_lease(state, true)
@@ -193,11 +396,20 @@ defmodule MirrorNeuron.Runtime.JobRunner do
 
   @impl true
   def terminate(_reason, state) do
+    cancel_coordinator_start_timer(state)
     cancel_lease_timer(state)
     stop_coordinator(state.coordinator)
     release_job_lease(state.job_id, state.node_name, state.lease)
     :ok
   end
+
+  defp cancel_coordinator_start_timer(%{coordinator_start_timer_ref: ref})
+       when is_reference(ref) do
+    Process.cancel_timer(ref)
+    :ok
+  end
+
+  defp cancel_coordinator_start_timer(_state), do: :ok
 
   defp stop_coordinator(pid) when is_pid(pid) do
     monitor = Process.monitor(pid)
@@ -326,29 +538,6 @@ defmodule MirrorNeuron.Runtime.JobRunner do
     end)
   end
 
-  defp persist_lease_owner(job_id, manifest, opts, lease) do
-    defaults = job_defaults(manifest, Keyword.get(opts, :bundle_ref), lease, opts)
-
-    updates = %{
-      "lease" => lease,
-      "lease_epoch" => lease["epoch"],
-      "lease_owner" => lease["owner_id"],
-      "status" => current_status(job_id)
-    }
-
-    case RedisStore.persist_terminal_job(job_id, updates, defaults) do
-      {:ok, _job} -> :ok
-      {:error, reason} -> {:error, {:lease_persist_failed, reason}}
-    end
-  end
-
-  defp current_status(job_id) do
-    case RedisStore.fetch_job(job_id) do
-      {:ok, %{"status" => status}} when status in ["pending", "running", "paused"] -> status
-      _ -> "pending"
-    end
-  end
-
   defp maybe_schedule_lease_renewal(state, true), do: schedule_lease_renewal(state)
   defp maybe_schedule_lease_renewal(state, false), do: state
 
@@ -415,8 +604,6 @@ defmodule MirrorNeuron.Runtime.JobRunner do
          reason,
          failure_opts \\ []
        ) do
-    reliability = reliability_from(manifest, opts)
-
     error =
       ErrorEnvelope.normalize(reason,
         component: "job_runner",
@@ -426,25 +613,12 @@ defmodule MirrorNeuron.Runtime.JobRunner do
       )
 
     defaults =
-      %{
-        "graph_id" => manifest.graph_id,
-        "job_name" => manifest.job_name,
-        "required_context_engine" => Map.get(manifest, :required_context_engine, false),
-        "root_agent_ids" => manifest.entrypoints,
-        "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
-        "job_type" => scheduler_plan(manifest, opts)["job_type"],
-        "scheduler" => scheduler_plan(manifest, opts),
-        "requested_recovery_policy" => reliability["requested_recovery_policy"],
-        "recovery_policy" => reliability["effective_recovery_policy"],
-        "reliability_degraded" => reliability["reliability_degraded"],
-        "reliability" => reliability_map(reliability),
-        "manifest" => MirrorNeuron.Manifest.to_map(manifest),
-        "manifest_ref" => manifest_ref || Runtime.bundle_ref(manifest, bundle),
-        "deployment" => stringify_map(Keyword.get(opts, :deployment_context, %{})),
-        "submitted_at" => Runtime.timestamp()
-      }
-      |> Map.merge(policy_fields(manifest, reliability, scheduler_plan(manifest, opts)))
-      |> maybe_put_lease(lease)
+      AttemptController.job_defaults(
+        manifest,
+        manifest_ref || Runtime.bundle_ref(manifest, bundle),
+        lease,
+        opts
+      )
 
     updates =
       %{
@@ -474,111 +648,4 @@ defmodule MirrorNeuron.Runtime.JobRunner do
   end
 
   defp maybe_clear_lease(updates, false), do: updates
-
-  defp job_defaults(manifest, manifest_ref, lease, opts) do
-    reliability = reliability_from(manifest, opts)
-
-    %{
-      "graph_id" => manifest.graph_id,
-      "job_name" => manifest.job_name,
-      "required_context_engine" => Map.get(manifest, :required_context_engine, false),
-      "root_agent_ids" => manifest.entrypoints,
-      "placement_policy" => Map.get(manifest.policies, "placement_policy", "local"),
-      "job_type" => scheduler_plan(manifest, opts)["job_type"],
-      "scheduler" => scheduler_plan(manifest, opts),
-      "requested_recovery_policy" => reliability["requested_recovery_policy"],
-      "recovery_policy" => reliability["effective_recovery_policy"],
-      "reliability_degraded" => reliability["reliability_degraded"],
-      "reliability" => reliability_map(reliability),
-      "manifest" => MirrorNeuron.Manifest.to_map(manifest),
-      "manifest_ref" => manifest_ref,
-      "deployment" => stringify_map(Keyword.get(opts, :deployment_context, %{})),
-      "submitted_at" => Runtime.timestamp()
-    }
-    |> Map.merge(policy_fields(manifest, reliability, scheduler_plan(manifest, opts)))
-    |> maybe_put_lease(lease)
-  end
-
-  defp maybe_put_lease(map, nil), do: map
-
-  defp maybe_put_lease(map, lease) do
-    map
-    |> Map.put("lease", lease)
-    |> Map.put("lease_epoch", lease["epoch"])
-    |> Map.put("lease_owner", lease["owner_id"])
-  end
-
-  defp reliability_from(manifest, opts) do
-    requested =
-      Keyword.get(opts, :requested_recovery_policy) ||
-        Map.get(manifest.policies, "recovery_mode", "auto")
-
-    effective =
-      Keyword.get(opts, :recovery_policy) ||
-        if(requested == "auto", do: "local_restart", else: requested)
-
-    defaults = %{
-      "mode" => "single_node",
-      "requested_recovery_policy" => requested,
-      "effective_recovery_policy" => effective,
-      "reliability_degraded" => false,
-      "degraded" => false,
-      "reason" => "fallback runtime persistence",
-      "observed_nodes" => [to_string(Node.self())],
-      "observed_at" => Runtime.timestamp()
-    }
-
-    opts
-    |> Keyword.get(:reliability, %{})
-    |> normalize_reliability()
-    |> then(&Map.merge(defaults, &1))
-  end
-
-  defp normalize_reliability(reliability) when is_map(reliability), do: reliability
-  defp normalize_reliability(_reliability), do: %{}
-
-  defp scheduler_plan(manifest, opts) do
-    Keyword.get(opts, :scheduler_plan) ||
-      %{
-        "status" => "unknown",
-        "job_type" => manifest.type || "batch",
-        "strategy" => "unknown",
-        "placements" => []
-      }
-  end
-
-  defp reliability_map(reliability) do
-    Map.take(reliability, [
-      "mode",
-      "effective_recovery_policy",
-      "degraded",
-      "reason",
-      "observed_nodes",
-      "observed_at"
-    ])
-  end
-
-  defp policy_fields(manifest, reliability, scheduler_plan) do
-    policies =
-      LifecyclePolicy.normalize(
-        manifest,
-        scheduler_plan["job_type"],
-        reliability["effective_recovery_policy"]
-      )
-
-    Map.put(policies, "policy_state", %{"agents" => %{}})
-  end
-
-  defp stringify_map(map) when is_map(map) do
-    Enum.into(map, %{}, fn {key, value} ->
-      key = if is_atom(key), do: Atom.to_string(key), else: key
-      {key, stringify_value(value)}
-    end)
-  end
-
-  defp stringify_map(_value), do: %{}
-
-  defp stringify_value(value) when is_map(value), do: stringify_map(value)
-  defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
-  defp stringify_value(value), do: value
 end

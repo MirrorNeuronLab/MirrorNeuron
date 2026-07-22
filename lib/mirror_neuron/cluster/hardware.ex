@@ -161,43 +161,10 @@ defmodule MirrorNeuron.Cluster.Hardware do
     end)
   end
 
-  defp load_average_1m do
-    configured_float("MN_NODE_CPU_LOAD_AVERAGE_1M")
-  end
-
   defp cpu_model do
     blank_to_nil(Config.optional_string("MN_NODE_CPU_MODEL", :node_cpu_model))
   rescue
     _ -> nil
-  end
-
-  defp darwin_cpu_model, do: nil
-
-  defp linux_cpu_model, do: nil
-
-  defp windows_cpu_model, do: nil
-
-  defp darwin_total_memory, do: {:error, :owned_by_sdk}
-
-  defp darwin_available_memory, do: {:error, :owned_by_sdk}
-
-  defp vm_stat_pages(output, label) do
-    output
-    |> String.split("\n")
-    |> Enum.find_value(0, fn line ->
-      if String.starts_with?(String.trim(line), label) do
-        line
-        |> String.replace(~r/[^0-9]/, "")
-        |> String.to_integer()
-      end
-    end)
-  end
-
-  defp meminfo_value(meminfo, label) do
-    case Regex.run(~r/^#{label}:\s+(\d+)\s+kB/m, meminfo) do
-      [_, value] -> {:ok, String.to_integer(value)}
-      _ -> {:error, :missing}
-    end
   end
 
   defp memory_pressure(total_bytes, available_bytes) do
@@ -473,7 +440,7 @@ defmodule MirrorNeuron.Cluster.Hardware do
       name: name,
       type: type,
       vendor: vendor || "generic",
-      driver: driver || "generic",
+      driver: driver,
       api: api,
       api_version: api_version,
       driver_version: driver_version,
@@ -634,28 +601,9 @@ defmodule MirrorNeuron.Cluster.Hardware do
     |> Enum.sort()
   end
 
-  defp linux_pci_gpu_info(_memory), do: []
-
   defp advertised_node_capabilities do
     Config.list("MN_NODE_CAPABILITIES", :node_capabilities)
   end
-
-  defp nvidia_cuda_version do
-    blank_to_nil(System.get_env("CUDA_VERSION")) ||
-      blank_to_nil(System.get_env("MN_NODE_GPU_API_VERSION"))
-  rescue
-    _ -> nil
-  end
-
-  defp rocm_version do
-    blank_to_nil(System.get_env("ROCM_VERSION")) ||
-      blank_to_nil(System.get_env("HIP_VERSION")) ||
-      blank_to_nil(System.get_env("MN_NODE_GPU_API_VERSION"))
-  rescue
-    _ -> nil
-  end
-
-  defp rocm_version_file, do: nil
 
   defp nvidia_gpu_capabilities(name) do
     normalized = String.downcase(to_string(name || ""))
@@ -753,8 +701,6 @@ defmodule MirrorNeuron.Cluster.Hardware do
     end
   end
 
-  defp docker_worker_available?(_docker_bin), do: false
-
   defp configured_integer(env) do
     case System.get_env(env) do
       value when is_binary(value) ->
@@ -800,29 +746,6 @@ defmodule MirrorNeuron.Cluster.Hardware do
 
   defp atomize_hardware(value) when is_list(value), do: Enum.map(value, &atomize_hardware/1)
   defp atomize_hardware(value), do: value
-
-  defp parse_disk_df(output) do
-    output
-    |> String.split("\n", trim: true)
-    |> Enum.drop(1)
-    |> List.first()
-    |> case do
-      nil ->
-        %{total_bytes: 0, total_mb: 0, available_bytes: 0, available_mb: 0}
-
-      line ->
-        columns = String.split(line, ~r/\s+/, trim: true)
-        total_kb = columns |> Enum.at(1) |> parse_float() || 0
-        available_kb = columns |> Enum.at(3) |> parse_float() || 0
-
-        %{
-          total_bytes: trunc(total_kb * 1024),
-          total_mb: Float.round(total_kb / 1024, 2),
-          available_bytes: trunc(available_kb * 1024),
-          available_mb: Float.round(available_kb / 1024, 2)
-        }
-    end
-  end
 
   defp parse_float(nil), do: nil
 

@@ -1,7 +1,4 @@
 temp_dir = Application.fetch_env!(:mirror_neuron, :temp_dir)
 System.put_env("MN_TEMP_DIR", temp_dir)
-checkpoint_root = Path.join(temp_dir, "checkpoints")
-File.rm_rf!(checkpoint_root)
-System.put_env("MN_CHECKPOINT_ROOT", checkpoint_root)
 File.mkdir_p!(temp_dir)
 ExUnit.start()

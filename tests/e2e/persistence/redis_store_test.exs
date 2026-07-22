@@ -5,7 +5,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
   alias MirrorNeuron.Artifacts.JobStore
   alias MirrorNeuron.JobBundle
   alias MirrorNeuron.Message
-  alias MirrorNeuron.Persistence.{DiskCheckpoint, RedisStore}
+  alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.Delivery
   alias MirrorNeuron.Runtime.EventBus
@@ -161,6 +161,43 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
 
     assert {:error, {:message_id_conflict, ^message_id, "queued"}} =
              Delivery.enqueue(job_id, agent_id, conflicting)
+
+    RedisStore.delete_job(job_id)
+  end
+
+  test "attempt epochs reject stale deliveries and cleanup isolates the new attempt" do
+    job_id = "delivery-attempt-fence-#{System.unique_integer([:positive])}"
+    agent_id = "worker"
+
+    assert {:ok, _job} =
+             RedisStore.persist_job(job_id, %{
+               "job_id" => job_id,
+               "status" => "running",
+               "attempt" => 2,
+               "lease_epoch" => 2,
+               "updated_at" => Runtime.timestamp()
+             })
+
+    stale =
+      Message.new(job_id, "old-worker", agent_id, "work", %{"value" => "old"},
+        message_id: "old-attempt-message",
+        headers: %{"mn.attempt_epoch" => 1}
+      )
+
+    assert {:error, {:stale_lease_epoch, 1, 2}} = Delivery.enqueue(job_id, agent_id, stale)
+
+    current =
+      Message.new(job_id, "new-worker", agent_id, "work", %{"value" => "new"},
+        message_id: "new-attempt-message",
+        headers: %{"mn.attempt_epoch" => 2}
+      )
+
+    assert {:ok, %{status: :queued}} = Delivery.enqueue(job_id, agent_id, current)
+    assert {:ok, 1} = RedisStore.delivery_pending_count(job_id, agent_id)
+
+    assert :ok = RedisStore.clear_job_attempt_state(job_id)
+    assert {:ok, 0} = RedisStore.delivery_pending_count(job_id, agent_id)
+    assert {:ok, []} = RedisStore.list_agents(job_id)
 
     RedisStore.delete_job(job_id)
   end
@@ -344,44 +381,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
              ])
   end
 
-  test "terminal persistence removes disk checkpoints and late agent writes do not recreate them" do
-    job_id = "terminal-checkpoint-#{System.unique_integer([:positive])}"
-
-    assert {:ok, _job} =
-             RedisStore.persist_job(job_id, %{
-               "job_id" => job_id,
-               "graph_id" => "terminal-checkpoint",
-               "status" => "running",
-               "recovery_status" => "paused_for_review",
-               "recovery_requires_review" => true,
-               "updated_at" => MirrorNeuron.Runtime.timestamp()
-             })
-
-    assert {:ok, _agent} =
-             RedisStore.persist_agent(job_id, "worker", %{
-               "agent_id" => "worker",
-               "last_heartbeat_at" => MirrorNeuron.Runtime.timestamp()
-             })
-
-    assert {:ok, %{"status" => "running"}} = DiskCheckpoint.load_job(job_id)
-
-    assert {:ok, _job} =
-             RedisStore.persist_terminal_job(job_id, %{"status" => "cancelled"})
-
-    assert {:error, :enoent} = DiskCheckpoint.load_job(job_id)
-
-    assert {:ok, _agent} =
-             RedisStore.persist_agent(job_id, "worker", %{
-               "agent_id" => "worker",
-               "last_heartbeat_at" => MirrorNeuron.Runtime.timestamp()
-             })
-
-    assert {:error, :enoent} = DiskCheckpoint.load_job(job_id)
-    assert {:ok, []} = DiskCheckpoint.load_agents(job_id)
-    RedisStore.delete_job(job_id)
-  end
-
-  test "redis-only agent snapshots keep live state without a disk checkpoint write" do
+  test "agent observations are compacted before Redis persistence" do
     job_id = "redis-only-agent-snapshot-#{System.unique_integer([:positive])}"
 
     assert {:ok, _job} =
@@ -398,11 +398,12 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
       "last_heartbeat_at" => MirrorNeuron.Runtime.timestamp()
     }
 
-    assert {:ok, ^snapshot} =
+    assert {:ok, observation} =
              RedisStore.persist_agent(job_id, "worker", snapshot, persist_disk?: false)
 
-    assert {:ok, ^snapshot} = RedisStore.fetch_agent(job_id, "worker")
-    assert {:ok, []} = DiskCheckpoint.load_agents(job_id)
+    assert observation["agent_id"] == "worker"
+    refute Map.has_key?(observation, "current_state")
+    assert {:ok, ^observation} = RedisStore.fetch_agent(job_id, "worker")
 
     RedisStore.delete_job(job_id)
   end
@@ -500,50 +501,6 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     RedisStore.delete_job(job_id)
   end
 
-  test "concurrent late snapshots cannot recreate a terminal disk checkpoint" do
-    job_id = "terminal-checkpoint-race-#{System.unique_integer([:positive])}"
-
-    assert {:ok, _job} =
-             RedisStore.persist_job(job_id, %{
-               "job_id" => job_id,
-               "graph_id" => "terminal-checkpoint-race",
-               "status" => "running",
-               "updated_at" => MirrorNeuron.Runtime.timestamp()
-             })
-
-    writers =
-      for writer <- 1..8 do
-        Task.async(fn ->
-          for sequence <- 1..8 do
-            assert {:ok, _agent} =
-                     RedisStore.persist_agent(job_id, "worker-#{writer}", %{
-                       "agent_id" => "worker-#{writer}",
-                       "sequence" => sequence,
-                       "last_heartbeat_at" => MirrorNeuron.Runtime.timestamp()
-                     })
-          end
-        end)
-      end
-
-    terminal =
-      Task.async(fn ->
-        RedisStore.persist_terminal_job(job_id, %{"status" => "cancelled"})
-      end)
-
-    Enum.each(writers, &Task.await(&1, 10_000))
-    assert {:ok, _job} = Task.await(terminal, 10_000)
-
-    assert {:ok, _agent} =
-             RedisStore.persist_agent(job_id, "late-worker", %{
-               "agent_id" => "late-worker",
-               "last_heartbeat_at" => MirrorNeuron.Runtime.timestamp()
-             })
-
-    assert {:error, :enoent} = DiskCheckpoint.load_job(job_id)
-    assert {:ok, []} = DiskCheckpoint.load_agents(job_id)
-    RedisStore.delete_job(job_id)
-  end
-
   test "active job snapshots persist until the job becomes terminal", %{namespace: namespace} do
     Application.put_env(:mirror_neuron, :agent_snapshot_ttl_seconds, 120)
     job_id = "active-snapshot-retention-#{System.unique_integer([:positive])}"
@@ -579,7 +536,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     RedisStore.delete_job(job_id)
   end
 
-  test "agent monitor summaries avoid rereading large recovery snapshots", %{
+  test "agent observations discard local state and recovery payloads", %{
     namespace: namespace
   } do
     job_id = "compact-agent-summary-#{System.unique_integer([:positive])}"
@@ -602,6 +559,9 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
                "processed_messages" => 3,
                "mailbox_depth" => 0,
                "last_heartbeat_at" => MirrorNeuron.Runtime.timestamp(),
+               "last_error" => nil,
+               "sandbox" => %{"name" => "sandbox-1", "status" => "running"},
+               "lease" => %{"lease_id" => "lease-1", "pool" => "default", "slots" => 1},
                "current_state" => %{
                  "runs" => 3,
                  "last_error" => nil,
@@ -620,9 +580,14 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
 
     assert {:ok, [summary]} = RedisStore.list_agent_summaries(job_id)
     assert summary["agent_id"] == agent_id
-    assert summary["current_state"]["last_result"]["sandbox_name"] == "sandbox-1"
-    refute Map.has_key?(summary["current_state"], "recovery_payload")
+    assert summary["sandbox"]["name"] == "sandbox-1"
+    assert summary["lease"]["lease_id"] == "lease-1"
+    refute Map.has_key?(summary, "current_state")
     refute Map.has_key?(summary["metadata"], "recovery_state")
+
+    assert {:ok, full_observation} = RedisStore.fetch_agent(job_id, agent_id)
+    refute Map.has_key?(full_observation, "current_state")
+    refute Map.has_key?(full_observation["metadata"], "recovery_state")
 
     full_key = redis_key(namespace, ["job", job_id, "agent", agent_id])
     summary_key = redis_key(namespace, ["job", job_id, "agent_summary", agent_id])
@@ -631,7 +596,8 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert {:ok, summary_bytes} =
              Redix.command(MirrorNeuron.Redis.Connection, ["STRLEN", summary_key])
 
-    assert summary_bytes < div(full_bytes, 100)
+    assert full_bytes < 2_000
+    assert summary_bytes == full_bytes
 
     RedisStore.delete_job(job_id)
   end
@@ -1731,26 +1697,16 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
              ])
   end
 
-  test "repair_recovery_indexes makes orphaned checkpoints discoverable and removes stale index entries",
+  test "repair_recovery_indexes makes job control records discoverable and removes stale jobs",
        %{namespace: namespace} do
     job_id = "repair-job-#{System.unique_integer([:positive])}"
-    agent_id = "worker"
     stale_job_id = "stale-job-#{System.unique_integer([:positive])}"
-    stale_agent_id = "missing-worker"
 
     job = %{
       "job_id" => job_id,
       "status" => "running",
       "graph_id" => "repair_index_test",
       "submitted_at" => DateTime.utc_now() |> DateTime.to_iso8601()
-    }
-
-    agent = %{
-      "agent_id" => agent_id,
-      "node_id" => agent_id,
-      "agent_type" => "executor",
-      "current_state" => %{},
-      "metadata" => %{}
     }
 
     assert {:ok, "OK"} =
@@ -1760,44 +1716,24 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
                Jason.encode!(job)
              ])
 
-    assert {:ok, "OK"} =
-             Redix.command(MirrorNeuron.Redis.Connection, [
-               "SET",
-               redis_key(namespace, ["job", job_id, "agent", agent_id]),
-               Jason.encode!(agent)
-             ])
-
     assert {:ok, 1} =
              Redix.command(MirrorNeuron.Redis.Connection, [
                "SADD",
                redis_key(namespace, ["jobs"]),
                stale_job_id
-             ])
-
-    assert {:ok, 1} =
-             Redix.command(MirrorNeuron.Redis.Connection, [
-               "SADD",
-               redis_key(namespace, ["job", job_id, "agents"]),
-               stale_agent_id
              ])
 
     assert {:ok, jobs_before} = RedisStore.list_jobs()
     refute Enum.any?(jobs_before, &(&1["job_id"] == job_id))
 
-    assert {:ok, agents_before} = RedisStore.list_agents(job_id)
-    refute Enum.any?(agents_before, &(&1["agent_id"] == agent_id))
-
     assert {:ok, result} = RedisStore.repair_recovery_indexes()
     assert result.repaired_jobs == 1
-    assert result.repaired_agents == 1
+    assert result.repaired_agents == 0
     assert result.removed_stale_jobs == 1
-    assert result.removed_stale_agents == 1
+    assert result.removed_stale_agents == 0
 
     assert {:ok, jobs_after} = RedisStore.list_jobs()
     assert Enum.any?(jobs_after, &(&1["job_id"] == job_id))
-
-    assert {:ok, agents_after} = RedisStore.list_agents(job_id)
-    assert Enum.any?(agents_after, &(&1["agent_id"] == agent_id))
 
     assert {:ok, 0} =
              Redix.command(MirrorNeuron.Redis.Connection, [
@@ -1806,20 +1742,14 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
                stale_job_id
              ])
 
-    assert {:ok, 0} =
-             Redix.command(MirrorNeuron.Redis.Connection, [
-               "SISMEMBER",
-               redis_key(namespace, ["job", job_id, "agents"]),
-               stale_agent_id
-             ])
-
     RedisStore.delete_job(job_id)
   end
 
-  test "repair_recovery_indexes removes corrupt indexed checkpoints", %{namespace: namespace} do
+  test "repair_recovery_indexes removes corrupt indexed job control records", %{
+    namespace: namespace
+  } do
     corrupt_job_id = "corrupt-job-#{System.unique_integer([:positive])}"
     job_id = "valid-job-#{System.unique_integer([:positive])}"
-    corrupt_agent_id = "corrupt-worker"
 
     job = %{
       "job_id" => job_id,
@@ -1856,43 +1786,19 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
                job_id
              ])
 
-    assert {:ok, "OK"} =
-             Redix.command(MirrorNeuron.Redis.Connection, [
-               "SET",
-               redis_key(namespace, ["job", job_id, "agent", corrupt_agent_id]),
-               "{not-json"
-             ])
-
-    assert {:ok, 1} =
-             Redix.command(MirrorNeuron.Redis.Connection, [
-               "SADD",
-               redis_key(namespace, ["job", job_id, "agents"]),
-               corrupt_agent_id
-             ])
-
     assert {:ok, result} = RedisStore.repair_recovery_indexes()
     assert result.removed_stale_jobs == 1
-    assert result.removed_stale_agents == 1
+    assert result.removed_stale_agents == 0
 
     assert {:ok, jobs} = RedisStore.list_jobs()
     refute Enum.any?(jobs, &(&1["job_id"] == corrupt_job_id))
     assert Enum.any?(jobs, &(&1["job_id"] == job_id))
-
-    assert {:ok, agents} = RedisStore.list_agents(job_id)
-    refute Enum.any?(agents, &(&1["agent_id"] == corrupt_agent_id))
 
     assert {:ok, 0} =
              Redix.command(MirrorNeuron.Redis.Connection, [
                "SISMEMBER",
                redis_key(namespace, ["jobs"]),
                corrupt_job_id
-             ])
-
-    assert {:ok, 0} =
-             Redix.command(MirrorNeuron.Redis.Connection, [
-               "SISMEMBER",
-               redis_key(namespace, ["job", job_id, "agents"]),
-               corrupt_agent_id
              ])
   end
 

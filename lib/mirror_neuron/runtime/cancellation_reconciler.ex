@@ -5,7 +5,7 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
 
   require Logger
 
-  alias MirrorNeuron.Persistence.{CancellationStore, DiskCheckpoint}
+  alias MirrorNeuron.Persistence.CancellationStore
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.EventBus
   alias MirrorNeuron.Sandbox.{DockerJobSandbox, OpenShellJobSandbox}
@@ -65,8 +65,7 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
     try do
       with :ok <- stop_local_job(job_id),
            :ok <- OpenShellJobSandbox.cleanup_job_local(job_id),
-           :ok <- DockerJobSandbox.cleanup_job_local(job_id),
-           :ok <- DiskCheckpoint.delete_job(job_id) do
+           :ok <- DockerJobSandbox.cleanup_job_local(job_id) do
         case CancellationStore.acknowledge(job_id, local_node) do
           {:ok, :completed, _cancellation} ->
             EventBus.publish(job_id, %{

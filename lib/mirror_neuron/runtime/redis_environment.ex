@@ -69,8 +69,6 @@ defmodule MirrorNeuron.Runtime.RedisEnvironment do
       (normalized_host == "redis" or String.ends_with?(normalized_host, "-redis"))
   end
 
-  defp compose_internal_redis_endpoint?(_uri), do: false
-
   defp advertised_redis_host do
     Config.optional_string("MN_NETWORK_REDIS_HOST", :network_redis_host)
   end
