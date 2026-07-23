@@ -1028,6 +1028,11 @@ defmodule MirrorNeuron.Cluster.Reconciler do
       [
         job_bundle: bundle,
         bundle_ref: job["manifest_ref"],
+        run_id: job["run_id"] || job_id,
+        stable_job_id: job["stable_job_id"],
+        job_data_dir: job["job_data_dir"],
+        job_data_access: job["job_data_access"],
+        data_generation: job["data_generation"],
         requested_recovery_policy: job["requested_recovery_policy"],
         recovery_policy: job["recovery_policy"],
         reliability: job["reliability"],

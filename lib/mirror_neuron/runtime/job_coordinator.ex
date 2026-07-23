@@ -2947,6 +2947,12 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
     %{
       job_id: state.job_id,
+      run_id: Keyword.get(state.opts, :run_id, state.job_id),
+      stable_job_id: Keyword.get(state.opts, :stable_job_id),
+      attempt_id: "#{Keyword.get(state.opts, :run_id, state.job_id)}:#{state.attempt}",
+      data_generation: Keyword.get(state.opts, :data_generation),
+      job_data_dir: Keyword.get(state.opts, :job_data_dir),
+      job_data_access: Keyword.get(state.opts, :job_data_access),
       graph_id: state.manifest.graph_id,
       job_name: state.manifest.job_name,
       required_context_engine: Map.get(state.manifest, :required_context_engine, false),
@@ -2975,6 +2981,11 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       pending_workflow_completion: nil,
       deployment: deployment_job_fields(state),
       result: state.result,
+      inputs: state.manifest.initial_inputs || %{},
+      outputs: state.result,
+      artifact_references:
+        [state.result_ref, state.workflow_state_ref]
+        |> Enum.reject(&is_nil/1),
       result_ref: state.result_ref,
       workflow_state_ref: state.workflow_state_ref,
       topology: MirrorNeuron.Manifest.topology(state.manifest),
@@ -3026,6 +3037,12 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     job_map =
       %{
         job_id: state.job_id,
+        run_id: Keyword.get(state.opts, :run_id, state.job_id),
+        stable_job_id: Keyword.get(state.opts, :stable_job_id),
+        attempt_id: "#{Keyword.get(state.opts, :run_id, state.job_id)}:#{state.attempt}",
+        data_generation: Keyword.get(state.opts, :data_generation),
+        job_data_dir: Keyword.get(state.opts, :job_data_dir),
+        job_data_access: Keyword.get(state.opts, :job_data_access),
         graph_id: state.manifest.graph_id,
         job_name: state.manifest.job_name,
         required_context_engine: Map.get(state.manifest, :required_context_engine, false),
@@ -3047,6 +3064,11 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         recovery_policy: effective_recovery_policy(state),
         reliability_degraded: reliability_degraded?(state),
         result: state.result,
+        inputs: state.manifest.initial_inputs || %{},
+        outputs: state.result,
+        artifact_references:
+          [state.result_ref, state.workflow_state_ref]
+          |> Enum.reject(&is_nil/1),
         result_ref: state.result_ref,
         workflow_state_ref: state.workflow_state_ref,
         topology: MirrorNeuron.Manifest.topology(state.manifest),
@@ -3144,7 +3166,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       policy_state: state.policy_state,
       deployment: deployment_job_fields(state),
       submitted_at: state.submitted_at,
-      runtime_env: MirrorNeuron.Runtime.RedisEnvironment.agent_env(),
+      runtime_env: runtime_environment(state),
       manifest_version: state.manifest.manifest_version,
       lease_epoch: lease && lease["epoch"],
       lease_owner: lease && lease["owner_id"],
@@ -3159,6 +3181,22 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
           {node.node_id, Profile.profile_name(node.config)}
         end)
     }
+  end
+
+  defp runtime_environment(state) do
+    run_id = Keyword.get(state.opts, :run_id, state.job_id)
+
+    MirrorNeuron.Runtime.RedisEnvironment.agent_env()
+    |> Map.merge(%{
+      "MN_JOB_ID" => Keyword.get(state.opts, :stable_job_id, state.job_id),
+      "MN_RUN_ID" => run_id,
+      "MN_ATTEMPT_ID" => "#{run_id}:#{state.attempt}",
+      "MN_JOB_DATA_DIR" => Keyword.get(state.opts, :job_data_dir),
+      "MN_JOB_DATA_ACCESS" => Keyword.get(state.opts, :job_data_access),
+      "MN_JOB_DATA_GENERATION" => to_string(Keyword.get(state.opts, :data_generation, 1))
+    })
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
   end
 
   defp manifest_ref(state) do

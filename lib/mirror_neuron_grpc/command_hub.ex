@@ -88,6 +88,21 @@ defmodule MirrorNeuron.Grpc.CommandPolicy do
   @moduledoc false
 
   @network_only_denied MapSet.new([
+                         {:job_v2, :CreateJob},
+                         {:job_v2, :GetJob},
+                         {:job_v2, :ListJobs},
+                         {:job_v2, :UpdateJob},
+                         {:job_v2, :ArchiveJob},
+                         {:job_v2, :ResetJobData},
+                         {:job_v2, :DeleteJob},
+                         {:job_v2, :StartRun},
+                         {:job_v2, :ListRuns},
+                         {:job_v2, :GetRun},
+                         {:job_v2, :PauseRun},
+                         {:job_v2, :ResumeRun},
+                         {:job_v2, :CancelRun},
+                         {:job_v2, :DeleteRun},
+                         {:job_v2, :CreateJobSchedule},
                          {:job, :SubmitJob},
                          {:job, :GetJob},
                          {:job, :ListJobs},
@@ -141,6 +156,14 @@ defmodule MirrorNeuron.Grpc.CommandPolicy do
                               ])
 
   @identity_auth_required MapSet.new([
+                            {:job_v2, :UpdateJob},
+                            {:job_v2, :ArchiveJob},
+                            {:job_v2, :ResetJobData},
+                            {:job_v2, :DeleteJob},
+                            {:job_v2, :PauseRun},
+                            {:job_v2, :ResumeRun},
+                            {:job_v2, :CancelRun},
+                            {:job_v2, :DeleteRun},
                             {:job, :PauseJob},
                             {:job, :ResumeJob},
                             {:job, :ExportJobBackup},
@@ -202,6 +225,28 @@ defmodule MirrorNeuron.Grpc.CommandHub do
   require Logger
 
   @default_modules %{}
+                   |> Map.merge(
+                     Map.new(
+                       [
+                         :CreateJob,
+                         :GetJob,
+                         :ListJobs,
+                         :UpdateJob,
+                         :ArchiveJob,
+                         :ResetJobData,
+                         :DeleteJob,
+                         :StartRun,
+                         :ListRuns,
+                         :GetRun,
+                         :PauseRun,
+                         :ResumeRun,
+                         :CancelRun,
+                         :DeleteRun,
+                         :CreateJobSchedule
+                       ],
+                       &{{:job_v2, &1}, MirrorNeuron.Grpc.Handlers.JobV2}
+                     )
+                   )
                    |> Map.merge(
                      Map.new(
                        [

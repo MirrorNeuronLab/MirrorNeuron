@@ -362,6 +362,12 @@ MirrorNeuron.plan_manifest("path/to/manifest.json")
 MirrorNeuron.run_manifest("path/to/manifest.json")
 ```
 
+For repeatable work, use the v2 stable-job model: one `job_id` owns the
+configuration and shared data, while every manual or scheduled execution gets
+a distinct `run_id`. Retries retain their run and receive a new attempt. See
+[STABLE_JOBS.md](STABLE_JOBS.md) for the full identity, storage, lifecycle,
+migration, and safety contract.
+
 ### Inspect jobs and events
 
 ```elixir
@@ -557,6 +563,7 @@ present. Production does not require any `.env` file.
 | `MN_COOKIE` | Erlang distribution cookie; use a strong non-default value for distributed nodes. |
 | `MN_JOB_LEASE_DURATION_MS` | Job lease duration for fenced runtime ownership; defaults to 60000. |
 | `MN_JOB_LEASE_RENEW_INTERVAL_MS` | Job lease renewal cadence; defaults to 10000. |
+| `MN_JOB_DATA_ROOT` | Root for persistent stable-job data; defaults to `$MN_HOME/job-data`. Each job is a validated direct child. |
 | `MN_JOB_SNAPSHOT_INTERVAL_MS` | Deprecated compatibility setting; ignored because Core no longer writes resumable active-job snapshots. Removed in the next major release. |
 | `MN_AGENT_SNAPSHOT_PENDING_LIMIT` | Deprecated compatibility setting; ignored because pending payload copies are not persisted. Removed in the next major release. |
 | `MN_JOB_CALL_TIMEOUT_MS` | Timeout for runtime job control calls such as pause, resume, pressure, and external message submit; defaults to 15000. |
@@ -633,6 +640,7 @@ cannot be discovered locally.
 MirrorNeuron Core includes protobuf definitions and generated Elixir modules for:
 
 - `proto/job.proto`
+- `proto/job_v2.proto`
 - `proto/cluster.proto`
 - `proto/observability.proto`
 - `proto/operations.proto`
@@ -643,6 +651,13 @@ to `MN_CORE_HOST` and listens on `MN_GRPC_PORT`.
 Protected RPCs use one client identity from the `authorization` metadata header.
 `JobService.ClearJobs` uses the same identity as every other protected call;
 there are no operator/admin token scopes or credentials embedded in requests.
+
+`mirrorneuron.job.v2.JobService` owns stable definitions and their one-to-many
+runs. Its stable job operations never reuse a run ID as a job ID; execution
+control and deletion always target `run_id`. The original job service remains a
+temporary execution-oriented compatibility surface for historical clients.
+V2 responses keep expanded manifests and histories in durable storage and
+return bounded lifecycle metadata plus bundle/artifact references.
 
 `ClusterService.NetworkHandshake` is used by cluster join flows to verify the
 join token and keep network-facing nodes scoped to cluster/resource inspection

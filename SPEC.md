@@ -28,8 +28,16 @@ are compatibility-sensitive.
 
 ## Runtime Model
 
-A submitted bundle is loaded, normalized, validated, checked for services and
-requirements, admitted to resources, and started under per-job supervision.
+A stable job definition owns a validated bundle, resolved configuration,
+schedules, storage declarations, owner node, lifecycle state, data generation,
+and persistent `job_id`. Each intentional execution creates a distinct
+`run_id`; retry and recovery attempts retain that run and use an independent
+attempt identity. Public stable-job responses are bounded projections: they
+carry a durable bundle reference and lifecycle/configuration metadata, never
+the embedded expanded manifest, private runtime paths, or the full run-ID
+history. A submitted bundle is loaded, normalized, validated, checked
+for services and requirements, admitted to resources, and started under
+per-run supervision.
 Runtime nodes are long-lived OTP processes. Generic built-ins and templates
 route messages and invoke configured runner behavior.
 
@@ -52,7 +60,12 @@ messages follow the declared failure/dead-letter path.
 
 ## Lifecycle and Persistence
 
-Job and agent lifecycle transitions are validated and persisted. Terminal job
+Stable-job, run, and agent lifecycle transitions are validated and persisted.
+Persistent shared data is derived as `$MN_HOME/job-data/<job-id>` and is never
+owned by run retention or cleanup. Run state, submissions, sandboxes, logs, and
+artifacts are run-scoped. Archive retains job data; reset advances the data
+generation; confirmed job deletion waits for or rejects active runs before
+removing the definition and data. Terminal run
 states are completed, failed, or cancelled. `cancelling` is a fenced,
 non-recoverable transition: durable cancellation intent revokes the old lease,
 rejects stale coordinator/agent writes, and prevents recovery, resume,
@@ -141,6 +154,12 @@ message/event shapes, lifecycle transitions, persistence keys/formats, default
 delivery policy, runner policy, or configuration precedence. They require a
 versioned migration/compatibility path and tests. Additive optional fields are
 compatible only when omitted behavior remains unchanged.
+
+The v2 stable-job API is authoritative for new definitions. The v1 job API is
+execution-oriented: its historical job identifier maps to `run_id`. Historical
+terminal records remain readable without rewriting them. Runtime environment
+code must not interpret `MN_JOB_ID` as a run identity; it uses `MN_RUN_ID` and
+`MN_ATTEMPT_ID` explicitly. See `STABLE_JOBS.md` for the complete contract.
 
 ## Acceptance
 

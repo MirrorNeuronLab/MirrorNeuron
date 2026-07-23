@@ -7,6 +7,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   require Logger
 
   @jobs_set "jobs"
+  @job_definitions_set "job-definitions"
   @deployments_set "deployments"
   @schedules_set "schedules"
   @schedule_due_zset "schedule:due"
@@ -515,6 +516,107 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   def list_job_summaries do
     with {:ok, job_ids} <- list_job_ids() do
       fetch_job_summaries(job_ids)
+    end
+  end
+
+  @doc """
+  Persists a stable job definition independently from execution records.
+
+  Execution records intentionally remain under `job:<run_id>` for the v1
+  compatibility surface. Stable definitions use `job-definition:<job_id>` so
+  the two identities can never overwrite one another during migration.
+  """
+  def persist_job_definition(job_id, definition) when is_map(definition) do
+    with :ok <- validate_identifier("job_id", job_id) do
+      definition =
+        definition
+        |> stringify_map()
+        |> Map.put("job_id", job_id)
+        |> Map.put_new("created_at", timestamp())
+        |> Map.put("updated_at", timestamp())
+
+      with {:ok, results} <-
+             transaction([
+               ["SET", key("job-definition", job_id), Jason.encode!(definition)],
+               ["SADD", key(@job_definitions_set), job_id]
+             ]),
+           :ok <- expect_no_redis_errors(results),
+           :ok <- wait_for_replicas() do
+        {:ok, definition}
+      else
+        {:error, reason} -> {:error, format_reason(reason)}
+        other -> {:error, format_reason(other)}
+      end
+    end
+  end
+
+  def persist_job_definition(_job_id, _definition),
+    do: {:error, "job definition must be an object"}
+
+  def fetch_job_definition(job_id) do
+    with :ok <- validate_identifier("job_id", job_id) do
+      case command(["GET", key("job-definition", job_id)]) do
+        {:ok, nil} -> {:error, "job #{job_id} was not found"}
+        {:ok, contents} -> Jason.decode(contents)
+        {:error, reason} -> {:error, format_reason(reason)}
+      end
+    end
+  end
+
+  def job_definition_exists?(job_id) do
+    with :ok <- validate_identifier("job_id", job_id) do
+      case command(["EXISTS", key("job-definition", job_id)]) do
+        {:ok, 0} -> {:ok, false}
+        {:ok, "0"} -> {:ok, false}
+        {:ok, _count} -> {:ok, true}
+        {:error, reason} -> {:error, format_reason(reason)}
+      end
+    end
+  end
+
+  def execution_exists?(run_id) do
+    with :ok <- validate_identifier("run_id", run_id) do
+      case command(["EXISTS", key("job", run_id)]) do
+        {:ok, 0} -> {:ok, false}
+        {:ok, "0"} -> {:ok, false}
+        {:ok, _count} -> {:ok, true}
+        {:error, reason} -> {:error, format_reason(reason)}
+      end
+    end
+  end
+
+  def list_job_definitions do
+    with {:ok, job_ids} <- command(["SMEMBERS", key(@job_definitions_set)]) do
+      job_ids
+      |> Enum.sort()
+      |> Enum.reduce_while({:ok, []}, fn job_id, {:ok, definitions} ->
+        case fetch_job_definition(job_id) do
+          {:ok, definition} -> {:cont, {:ok, [definition | definitions]}}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+      |> case do
+        {:ok, definitions} -> {:ok, Enum.reverse(definitions)}
+        error -> error
+      end
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  def delete_job_definition(job_id) do
+    with :ok <- validate_identifier("job_id", job_id),
+         {:ok, results} <-
+           transaction([
+             ["DEL", key("job-definition", job_id)],
+             ["SREM", key(@job_definitions_set), job_id]
+           ]),
+         :ok <- expect_no_redis_errors(results),
+         :ok <- wait_for_replicas() do
+      :ok
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
     end
   end
 

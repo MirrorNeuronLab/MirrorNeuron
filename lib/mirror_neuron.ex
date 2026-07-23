@@ -46,6 +46,22 @@ defmodule MirrorNeuron do
     end
   end
 
+  @doc "Creates a durable job definition without starting an execution."
+  def create_job(input, opts \\ []), do: MirrorNeuron.Runtime.StableJob.create(input, opts)
+
+  def get_job(job_id), do: MirrorNeuron.Runtime.StableJob.get(job_id)
+  def list_stable_jobs(opts \\ []), do: MirrorNeuron.Runtime.StableJob.list(opts)
+  def update_job(job_id, attrs), do: MirrorNeuron.Runtime.StableJob.update(job_id, attrs)
+  def archive_job(job_id), do: MirrorNeuron.Runtime.StableJob.archive(job_id)
+  def reset_job_data(job_id), do: MirrorNeuron.Runtime.StableJob.reset_data(job_id)
+
+  def delete_stable_job(job_id, opts \\ []),
+    do: MirrorNeuron.Runtime.StableJob.delete(job_id, opts)
+
+  def start_run(job_id, opts \\ []), do: MirrorNeuron.Runtime.StableJob.start_run(job_id, opts)
+  def list_runs(job_id), do: MirrorNeuron.Runtime.StableJob.list_runs(job_id)
+  def delete_run(run_id, opts \\ []), do: MirrorNeuron.Runtime.StableJob.delete_run(run_id, opts)
+
   def deploy_manifest(input, opts \\ []) do
     if control_node?() do
       Control.call(__MODULE__, :deploy_manifest, [input, opts])
@@ -123,6 +139,14 @@ defmodule MirrorNeuron do
       Control.call(__MODULE__, :create_schedule, [input, schedule, opts])
     else
       MirrorNeuron.Runtime.ScheduleDispatcher.create_schedule(input, schedule, opts)
+    end
+  end
+
+  def create_job_schedule(job_id, schedule \\ %{}, opts \\ []) do
+    if control_node?() do
+      Control.call(__MODULE__, :create_job_schedule, [job_id, schedule, opts])
+    else
+      MirrorNeuron.Runtime.ScheduleDispatcher.create_job_schedule(job_id, schedule, opts)
     end
   end
 

@@ -1,0 +1,82 @@
+syntax = "proto3";
+package mirrorneuron.job.v2;
+
+// Stable configured jobs and their one-to-many execution runs.
+service JobService {
+  rpc CreateJob (CreateJobRequest) returns (JsonResponse);
+  rpc GetJob (JobRequest) returns (JsonResponse);
+  rpc ListJobs (ListJobsRequest) returns (JsonResponse);
+  rpc UpdateJob (UpdateJobRequest) returns (JsonResponse);
+  rpc ArchiveJob (JobRequest) returns (JsonResponse);
+  rpc ResetJobData (JobRequest) returns (JsonResponse);
+  rpc DeleteJob (DeleteJobRequest) returns (JsonResponse);
+  rpc StartRun (StartRunRequest) returns (JsonResponse);
+  rpc ListRuns (JobRequest) returns (JsonResponse);
+  rpc GetRun (RunRequest) returns (JsonResponse);
+  rpc PauseRun (RunRequest) returns (JsonResponse);
+  rpc ResumeRun (RunRequest) returns (JsonResponse);
+  rpc CancelRun (RunRequest) returns (JsonResponse);
+  rpc DeleteRun (DeleteRunRequest) returns (JsonResponse);
+  rpc CreateJobSchedule (CreateJobScheduleRequest) returns (JsonResponse);
+}
+
+message CreateJobRequest {
+  string manifest_json = 1;
+  map<string, bytes> payloads = 2;
+  string job_id = 3;
+  string resolved_configuration_json = 4;
+  string storage_json = 5;
+  uint32 version = 6;
+}
+
+message JobRequest {
+  string job_id = 1;
+  uint32 version = 2;
+}
+
+message ListJobsRequest {
+  bool include_archived = 1;
+  uint32 version = 2;
+}
+
+message UpdateJobRequest {
+  string job_id = 1;
+  string attrs_json = 2;
+  uint32 version = 3;
+}
+
+message DeleteJobRequest {
+  string job_id = 1;
+  bool confirmed = 2;
+  uint32 version = 3;
+}
+
+message StartRunRequest {
+  string job_id = 1;
+  string run_id = 2;
+  string inputs_json = 3;
+  uint32 version = 4;
+}
+
+message RunRequest {
+  string run_id = 1;
+  uint32 version = 2;
+}
+
+message DeleteRunRequest {
+  string run_id = 1;
+  bool confirmed = 2;
+  uint32 version = 3;
+}
+
+message CreateJobScheduleRequest {
+  string job_id = 1;
+  string schedule_json = 2;
+  string source_json = 3;
+  uint32 version = 4;
+}
+
+message JsonResponse {
+  string result_json = 1;
+  uint32 version = 2;
+}

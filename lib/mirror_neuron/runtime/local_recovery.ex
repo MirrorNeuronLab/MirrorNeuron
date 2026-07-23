@@ -314,6 +314,11 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
         manual_resume: manual_resume?,
         restart_reason: reason,
         preferred_start_node: to_string(Node.self()),
+        run_id: job["run_id"] || job_id,
+        stable_job_id: job["stable_job_id"],
+        job_data_dir: job["job_data_dir"],
+        job_data_access: job["job_data_access"],
+        data_generation: job["data_generation"],
         requested_recovery_policy: job["requested_recovery_policy"],
         recovery_policy: job["recovery_policy"],
         reliability: job["reliability"]

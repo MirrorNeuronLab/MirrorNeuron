@@ -134,6 +134,7 @@ defmodule MirrorNeuron.Config.Schema do
       spec("MN_CHECKPOINT_ROOT", :checkpoint_root, :path, default: {:checkpoint_root}),
       spec("MN_BLOB_STORE_ROOT", :blob_store_root, :path, default: {:home, ".mn/blobs"}),
       spec("MN_JOB_ARTIFACT_ROOT", :job_artifact_root, :path, default: {:job_artifact_root}),
+      spec("MN_JOB_DATA_ROOT", :job_data_root, :path, default: {:job_data_root}),
       spec("MN_SHARED_STORAGE_ROOT", :shared_storage_root, :path, default: {:home, ".mn/shared"}),
       spec("MN_HOST_SHARED_STORAGE_ROOT", :host_shared_storage_root, :path),
       spec("MN_RUNTIME_SHARED_STORAGE_ROOT", :runtime_shared_storage_root, :path),
@@ -179,6 +180,9 @@ defmodule MirrorNeuron.Config.Schema do
   def value!(%{env: "MN_JOB_ARTIFACT_ROOT"} = spec),
     do: parse_value(spec, job_artifact_root_default())
 
+  def value!(%{env: "MN_JOB_DATA_ROOT"} = spec),
+    do: parse_value(spec, job_data_root_default())
+
   def value!(%{env: "MN_RUNTIME_SHARED_STORAGE_ROOT"} = spec), do: parse_value(spec, nil)
 
   def value!(spec), do: parse_value(spec, default_value(Map.get(spec, :default)))
@@ -189,6 +193,10 @@ defmodule MirrorNeuron.Config.Schema do
       "" -> value!(spec_by_env("MN_SHARED_STORAGE_ROOT"))
       _value -> value!(spec_by_env("MN_RUNTIME_SHARED_STORAGE_ROOT"))
     end
+  end
+
+  def job_data_root_default do
+    Path.join(value!(spec_by_env("MN_HOME")), "job-data")
   end
 
   def sensitive?(env_name) do

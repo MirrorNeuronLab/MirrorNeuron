@@ -931,6 +931,12 @@ defmodule MirrorNeuron.Runtime do
     job_map =
       %{
         "job_id" => job_id,
+        "run_id" => Keyword.get(opts, :run_id, job_id),
+        "stable_job_id" => Keyword.get(opts, :stable_job_id),
+        "attempt_id" => "#{Keyword.get(opts, :run_id, job_id)}:1",
+        "job_data_dir" => Keyword.get(opts, :job_data_dir),
+        "job_data_access" => Keyword.get(opts, :job_data_access),
+        "data_generation" => Keyword.get(opts, :data_generation),
         "graph_id" => manifest.graph_id,
         "job_name" => manifest.job_name,
         "type" => manifest.type,

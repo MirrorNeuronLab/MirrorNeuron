@@ -98,6 +98,34 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     RedisStore.delete_job(job_id)
   end
 
+  test "stable job definitions never collide with run records" do
+    stable_job_id = "job-stable-#{System.unique_integer([:positive])}"
+    run_id = "run-#{System.unique_integer([:positive])}"
+
+    assert {:ok, definition} =
+             RedisStore.persist_job_definition(stable_job_id, %{
+               "status" => "active",
+               "run_ids" => [run_id],
+               "data_generation" => 1
+             })
+
+    assert definition["job_id"] == stable_job_id
+
+    assert {:ok, _run} =
+             RedisStore.persist_job(run_id, %{"job_id" => run_id, "status" => "pending"})
+
+    assert {:ok, fetched_definition} = RedisStore.fetch_job_definition(stable_job_id)
+    assert fetched_definition["run_ids"] == [run_id]
+    assert {:ok, fetched_run} = RedisStore.fetch_job(run_id)
+    assert fetched_run["job_id"] == run_id
+    assert {:ok, definitions} = RedisStore.list_job_definitions()
+    assert Enum.any?(definitions, &(&1["job_id"] == stable_job_id))
+
+    assert :ok = RedisStore.delete_job_definition(stable_job_id)
+    assert {:ok, _run} = RedisStore.fetch_job(run_id)
+    assert :ok = RedisStore.delete_job(run_id)
+  end
+
   test "durable delivery records are idempotent, acknowledged, deleted, and expiring", %{
     namespace: namespace
   } do

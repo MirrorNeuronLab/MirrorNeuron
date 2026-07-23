@@ -38,6 +38,32 @@ defmodule MirrorNeuron.Grpc.JobServer do
   end
 end
 
+defmodule MirrorNeuron.Grpc.JobV2Server do
+  use GRPC.Server, service: Mirrorneuron.Job.V2.JobService.Service
+
+  for {function, command} <- [
+        create_job: :CreateJob,
+        get_job: :GetJob,
+        list_jobs: :ListJobs,
+        update_job: :UpdateJob,
+        archive_job: :ArchiveJob,
+        reset_job_data: :ResetJobData,
+        delete_job: :DeleteJob,
+        start_run: :StartRun,
+        list_runs: :ListRuns,
+        get_run: :GetRun,
+        pause_run: :PauseRun,
+        resume_run: :ResumeRun,
+        cancel_run: :CancelRun,
+        delete_run: :DeleteRun,
+        create_job_schedule: :CreateJobSchedule
+      ] do
+    def unquote(function)(request, stream) do
+      MirrorNeuron.Grpc.CommandHub.dispatch(:job_v2, unquote(command), request, stream)
+    end
+  end
+end
+
 defmodule MirrorNeuron.Grpc.ClusterServer do
   use GRPC.Server, service: Mirrorneuron.Cluster.V1.ClusterService.Service
 
@@ -107,6 +133,7 @@ defmodule MirrorNeuron.Grpc.Endpoint do
   intercept(GRPC.Server.Interceptors.Logger)
 
   run(MirrorNeuron.Grpc.JobServer)
+  run(MirrorNeuron.Grpc.JobV2Server)
   run(MirrorNeuron.Grpc.ClusterServer)
   run(MirrorNeuron.Grpc.ObservabilityServer)
   run(MirrorNeuron.Grpc.OperationsServer)

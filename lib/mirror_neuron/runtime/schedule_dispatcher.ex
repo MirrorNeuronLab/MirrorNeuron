@@ -8,6 +8,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
   alias MirrorNeuron.Manifest
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
+  alias MirrorNeuron.Runtime.StableJob
   alias MirrorNeuron.Scheduler
   alias MirrorNeuron.Runtime.ErrorEnvelope
   alias MirrorNeuron.Runtime.SchedulePolicy
@@ -40,6 +41,45 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     end
   end
 
+  @doc "Creates a v2 schedule whose target is a stable job, not a prior run."
+  def create_job_schedule(job_id, schedule_attrs \\ %{}, opts \\ []) do
+    with {:ok, definition} <- StableJob.get(job_id),
+         :ok <- ensure_stable_job_active(definition),
+         {:ok, manifest} <- Manifest.load(definition["manifest"]),
+         {:ok, bundle} <- load_definition_bundle(definition, manifest),
+         {:ok, schedule} <- normalize_schedule(bundle, schedule_attrs, opts),
+         {:ok, schedule} <- maybe_attach_resource_availability(schedule, manifest) do
+      schedule_id = Keyword.get(opts, :schedule_id) || generate_schedule_id()
+
+      record =
+        schedule
+        |> Map.put("schedule_id", schedule_id)
+        |> Map.put("job_id", job_id)
+        |> Map.put("owner_node", definition["owner_node"])
+        |> Map.put("manifest", definition["manifest"])
+        |> Map.put("bundle_ref", definition["bundle_ref"])
+        |> Map.put("source", stringify(Keyword.get(opts, :source, %{})))
+        |> Map.put("dispatches", [])
+        |> Map.put("active_run_ids", [])
+        |> Map.put("active_job_ids", [])
+        |> Map.put("counters", %{"dispatched" => 0, "missed" => 0, "failed" => 0})
+
+      with {:ok, persisted} <- RedisStore.persist_schedule(schedule_id, record) do
+        case StableJob.attach_schedule(job_id, schedule_id) do
+          {:ok, _definition} ->
+            {:ok, persisted}
+
+          {:error, reason} ->
+            _ = RedisStore.delete_schedule(schedule_id)
+            {:error, reason}
+        end
+      end
+    end
+  end
+
+  defp ensure_stable_job_active(%{"status" => "active"}), do: :ok
+  defp ensure_stable_job_active(_definition), do: {:error, :job_not_active}
+
   def update_schedule(schedule_id, attrs, opts \\ []) do
     mutate_schedule(schedule_id, fn existing ->
       with {:ok, normalized} <-
@@ -55,6 +95,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
              "bundle_ref",
              "source",
              "dispatches",
+             "active_run_ids",
              "active_job_ids",
              "counters",
              "created_at"
@@ -232,6 +273,14 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
   end
 
   defp dispatch_with_lease(schedule, instance) do
+    if schedule_owner?(schedule) do
+      do_dispatch_with_lease(schedule, instance)
+    else
+      %{checked: 1, dispatched: 0, skipped: 1, failed: 0, missed: 0, blocked: 0}
+    end
+  end
+
+  defp do_dispatch_with_lease(schedule, instance) do
     lease_name = "schedule:#{schedule["schedule_id"]}:#{dispatch_token(schedule, instance)}"
     owner = "#{Node.self()}:#{System.unique_integer([:positive])}"
 
@@ -264,19 +313,20 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     end
   end
 
+  defp schedule_owner?(%{"owner_node" => owner}) when is_binary(owner) and owner != "" do
+    owner == to_string(MirrorNeuron.Cluster.NodeAdapter.self())
+  end
+
+  defp schedule_owner?(_schedule), do: true
+
   defp dispatch_child(schedule, instance, lease, state_lock) do
     dispatch_id = generate_dispatch_id()
     metadata = schedule_dispatch_metadata(schedule, instance, dispatch_id, lease)
 
-    with {:ok, bundle_or_manifest} <- load_dispatch_bundle(schedule, metadata),
-         {:ok, job_id, _pid} <-
-           Runtime.start_job(
-             dispatch_manifest(bundle_or_manifest),
-             dispatch_opts(bundle_or_manifest)
-           ) do
+    with {:ok, run_id, _pid} <- start_scheduled_run(schedule, metadata) do
       log_schedule_update_failure(
         schedule["schedule_id"],
-        update_after_dispatch(schedule, dispatch_id, job_id, instance, metadata, state_lock)
+        update_after_dispatch(schedule, dispatch_id, run_id, instance, metadata, state_lock)
       )
 
       %{checked: 1, dispatched: 1, skipped: 0, failed: 0, missed: 0, blocked: 0}
@@ -288,6 +338,23 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
         )
 
         %{checked: 1, dispatched: 0, skipped: 0, failed: 1, missed: 0, blocked: 0}
+    end
+  end
+
+  defp start_scheduled_run(%{"job_id" => job_id}, metadata)
+       when is_binary(job_id) and job_id != "" do
+    StableJob.start_run(job_id,
+      schedule_metadata: metadata,
+      inputs: Map.get(metadata, "payload", %{})
+    )
+  end
+
+  defp start_scheduled_run(schedule, metadata) do
+    with {:ok, bundle_or_manifest} <- load_dispatch_bundle(schedule, metadata) do
+      Runtime.start_job(
+        dispatch_manifest(bundle_or_manifest),
+        dispatch_opts(bundle_or_manifest)
+      )
     end
   end
 
@@ -339,14 +406,15 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     |> Map.new()
   end
 
-  defp update_after_dispatch(schedule, dispatch_id, job_id, instance, metadata, state_lock) do
+  defp update_after_dispatch(schedule, dispatch_id, run_id, instance, metadata, state_lock) do
     now = Runtime.timestamp()
     window_end_at = window_end_at(schedule, now)
 
     dispatch =
       %{
         "dispatch_id" => dispatch_id,
-        "job_id" => job_id,
+        "job_id" => schedule["job_id"] || run_id,
+        "run_id" => run_id,
         "status" => "submitted",
         "scheduled_for" => instance["scheduled_for"],
         "reason" => instance["reason"],
@@ -361,10 +429,20 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
       current
       |> prune_inactive_job_ids()
       |> prepend_dispatch(dispatch)
-      |> Map.update("active_job_ids", [job_id], &Enum.uniq([job_id | &1]))
+      |> Map.update("active_run_ids", [run_id], &Enum.uniq([run_id | &1]))
+      |> Map.update("active_job_ids", [run_id], &Enum.uniq([run_id | &1]))
       |> increment_counter("dispatched")
       |> maybe_complete_one_shot()
     end)
+  end
+
+  defp load_definition_bundle(definition, manifest) do
+    fingerprint = get_in(definition, ["bundle_ref", "bundle_fingerprint"])
+
+    case Archive.load(fingerprint) do
+      {:ok, %JobBundle{} = bundle} -> {:ok, bundle}
+      {:error, _reason} -> {:ok, %JobBundle{manifest: manifest}}
+    end
   end
 
   defp update_after_dispatch_failure(schedule, dispatch_id, instance, reason, state_lock) do
@@ -480,8 +558,8 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
   end
 
   defp close_window({schedule, dispatch}) do
-    job_id = dispatch["job_id"]
-    _ = if is_binary(job_id), do: MirrorNeuron.cancel(job_id), else: :ok
+    run_id = dispatch["run_id"] || dispatch["job_id"]
+    _ = if is_binary(run_id), do: MirrorNeuron.cancel(run_id), else: :ok
 
     log_schedule_update_failure(
       schedule["schedule_id"],
@@ -499,7 +577,8 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
 
         current
         |> Map.put("dispatches", updated_dispatches)
-        |> Map.update("active_job_ids", [], &List.delete(&1, job_id))
+        |> Map.update("active_run_ids", [], &List.delete(&1, run_id))
+        |> Map.update("active_job_ids", [], &List.delete(&1, run_id))
       end)
     )
 

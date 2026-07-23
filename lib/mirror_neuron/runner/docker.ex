@@ -469,6 +469,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
       |> put_gpu_args(config, opts)
       |> Kernel.++(["-v", "#{Path.expand(base_dir)}:#{@default_container_workdir}:rw"])
       |> put_shared_storage_mount(config)
+      |> put_job_data_mount(config)
       |> put_payload_mount(opts)
       |> put_allocation_volumes(config, opts)
       |> Kernel.++(["-w", container_workdir])
@@ -730,7 +731,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
   defp put_shared_storage_mount(args, config) do
     env = extra_env(config)
 
-    case runtime_shared_storage_root(env) do
+    case if(stable_job_run?(env), do: nil, else: runtime_shared_storage_root(env)) do
       nil ->
         args
 
@@ -738,6 +739,33 @@ defmodule MirrorNeuron.Runner.DockerWorker do
         source_root = host_shared_storage_root()
         File.mkdir_p(source_root)
         args ++ ["-v", "#{source_root}:#{target_root}:rw"]
+    end
+  end
+
+  defp stable_job_run?(env) do
+    job_id = Map.get(env, "MN_JOB_ID")
+    run_id = Map.get(env, "MN_RUN_ID")
+
+    is_binary(job_id) and job_id != "" and is_binary(run_id) and run_id != "" and
+      job_id != run_id
+  end
+
+  defp put_job_data_mount(args, config) do
+    env = extra_env(config)
+    job_id = Map.get(env, "MN_JOB_ID")
+
+    with target when is_binary(target) and target != "" <- Map.get(env, "MN_JOB_DATA_DIR"),
+         {:ok, source} <- MirrorNeuron.JobData.path(job_id),
+         true <- Path.expand(target) == source do
+      mode =
+        if Map.get(env, "MN_JOB_DATA_ACCESS") in ["read", "read_only", "ro"],
+          do: "ro",
+          else: "rw"
+
+      File.mkdir_p!(source)
+      args ++ ["-v", "#{source}:#{target}:#{mode}"]
+    else
+      _ -> args
     end
   end
 

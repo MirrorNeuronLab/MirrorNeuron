@@ -189,7 +189,17 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
 
   test "restarts a clean job attempt when an affected agent's node is lost" do
     {:ok, bundle} = JobBundle.load(manifest())
-    job = running_job("agent-job")
+
+    job =
+      running_job("agent-job")
+      |> Map.merge(%{
+        "run_id" => "agent-job",
+        "stable_job_id" => "stable-agent-job",
+        "job_data_dir" => "/var/lib/mirror-neuron/job-data/stable-agent-job",
+        "job_data_access" => "read_write",
+        "data_generation" => 3
+      })
+
     RedisStoreStub.put_jobs([job])
     RedisStoreStub.put_agents("agent-job", [agent_snapshot("worker")])
     {:ok, coordinator} = CoordinatorStub.start_link(self())
@@ -209,6 +219,11 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
     scheduler_plan = opts[:scheduler_plan]
     assert [%{"agent_id" => "worker", "node" => "large@lab"}] = scheduler_plan["placements"]
     assert opts[:restart_reason] =~ "restarting the whole job attempt"
+    assert opts[:run_id] == "agent-job"
+    assert opts[:stable_job_id] == "stable-agent-job"
+    assert opts[:job_data_dir] == "/var/lib/mirror-neuron/job-data/stable-agent-job"
+    assert opts[:job_data_access] == "read_write"
+    assert opts[:data_generation] == 3
     refute_received {:coordinator_rescheduled, _, _, _}
     assert_receive {:job_persisted, "agent-job", %{"policy_state" => policy_state}, _}
     assert get_in(policy_state, ["agents", "worker", "reschedule_attempts"]) == 1
