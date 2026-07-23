@@ -3178,6 +3178,7 @@ defmodule MirrorNeuron.RuntimeTest do
     wait_until(fn -> running_status?(job_id) end, 2_000)
 
     wait_until(fn -> worker_pid(job_id) end, 2_000)
+    wait_until(fn -> attempt_started?(job_id, 1) end, 2_000)
 
     assert {:ok, before_restart} = MirrorNeuron.inspect_job(job_id)
 
@@ -3245,6 +3246,7 @@ defmodule MirrorNeuron.RuntimeTest do
     wait_until(fn -> running_status?(job_id) end, 2_000)
 
     wait_until(fn -> worker_pid(job_id) end, 3_000)
+    wait_until(fn -> attempt_started?(job_id, 1) end, 2_000)
 
     [{first_pid, _}] =
       Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:agent, job_id, "worker"})
@@ -3254,7 +3256,9 @@ defmodule MirrorNeuron.RuntimeTest do
     wait_until(
       fn ->
         with {:ok, restarted} <- MirrorNeuron.inspect_job(job_id) do
-          restarted["attempt"] == 2 and worker_pid(job_id)
+          restarted["attempt"] == 2 and
+            worker_pid(job_id) and
+            attempt_started?(job_id, 2)
         else
           _ -> false
         end
@@ -3520,6 +3524,18 @@ defmodule MirrorNeuron.RuntimeTest do
       [{_pid, _}],
       Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:agent, job_id, "worker"})
     )
+  end
+
+  defp attempt_started?(job_id, attempt) do
+    case MirrorNeuron.events(job_id) do
+      {:ok, events} ->
+        Enum.any?(events, fn event ->
+          event["type"] == "job_attempt_started" and event["attempt"] == attempt
+        end)
+
+      _ ->
+        false
+    end
   end
 
   defp job_coordinator_registered?(job_id) do

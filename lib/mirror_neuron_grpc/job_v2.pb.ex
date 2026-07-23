@@ -122,6 +122,21 @@ defmodule Mirrorneuron.Job.V2.DeleteRunRequest do
   field(:version, 3, type: :uint32)
 end
 
+defmodule Mirrorneuron.Job.V2.SendRunInputRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v2.SendRunInputRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:run_id, 1, type: :string, json_name: "runId")
+  field(:input_id, 2, type: :string, json_name: "inputId")
+  field(:payload_json, 3, type: :string, json_name: "payloadJson")
+  field(:idempotency_key, 4, type: :string, json_name: "idempotencyKey")
+  field(:version, 5, type: :uint32)
+end
+
 defmodule Mirrorneuron.Job.V2.CreateJobScheduleRequest do
   @moduledoc false
 
@@ -180,6 +195,12 @@ defmodule Mirrorneuron.Job.V2.JobService.Service do
   rpc(:CancelRun, Mirrorneuron.Job.V2.RunRequest, Mirrorneuron.Job.V2.JsonResponse)
 
   rpc(:DeleteRun, Mirrorneuron.Job.V2.DeleteRunRequest, Mirrorneuron.Job.V2.JsonResponse)
+
+  rpc(
+    :SendRunInput,
+    Mirrorneuron.Job.V2.SendRunInputRequest,
+    Mirrorneuron.Job.V2.JsonResponse
+  )
 
   rpc(
     :CreateJobSchedule,

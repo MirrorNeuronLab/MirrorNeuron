@@ -658,6 +658,10 @@ control and deletion always target `run_id`. The original job service remains a
 temporary execution-oriented compatibility surface for historical clients.
 V2 responses keep expanded manifests and histories in durable storage and
 return bounded lifecycle metadata plus bundle/artifact references.
+`JobService.SendRunInput` accepts an authenticated, idempotent command for an
+active run. Core resolves the public input ID through the run's immutable
+manifest, validates its JSON schema and declared entrypoint route, and uses the
+normal backpressure-aware message plane; callers cannot name agents or streams.
 
 `ClusterService.NetworkHandshake` is used by cluster join flows to verify the
 join token and keep network-facing nodes scoped to cluster/resource inspection

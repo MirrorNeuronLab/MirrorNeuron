@@ -3,6 +3,8 @@ defmodule MirrorNeuron.Grpc.Handlers.JobV2 do
 
   alias MirrorNeuron.Grpc.Handlers.Support
   alias MirrorNeuron.Grpc.JobV2Projection
+  alias MirrorNeuron.Grpc.Validation
+  alias MirrorNeuron.Runtime.LiveInput
   alias Mirrorneuron.Job.V2.JsonResponse
 
   @interface_version 2
@@ -104,6 +106,26 @@ defmodule MirrorNeuron.Grpc.Handlers.JobV2 do
     end
   end
 
+  def send_run_input(request, _stream) do
+    with :ok <- validate_live_input_size(request.payload_json),
+         {:ok, payload} <- Validation.decode_json_map(request.payload_json),
+         {:ok, accepted} <-
+           LiveInput.send(
+             request.run_id,
+             request.input_id,
+             payload,
+             request.idempotency_key
+           ) do
+      response(accepted)
+    else
+      {:error, reason} when is_binary(reason) ->
+        respond({:error, {:invalid_live_input, reason}})
+
+      error ->
+        respond(error)
+    end
+  end
+
   def create_job_schedule(request, _stream) do
     schedule = Support.decode_json_map(request.schedule_json)
     source = Support.decode_json_map(request.source_json)
@@ -143,6 +165,15 @@ defmodule MirrorNeuron.Grpc.Handlers.JobV2 do
   end
 
   defp respond(other), do: response(other)
+
+  defp validate_live_input_size(payload_json) when is_binary(payload_json) do
+    if byte_size(payload_json) <= LiveInput.max_payload_bytes(),
+      do: :ok,
+      else: {:error, {:invalid_live_input, "payload exceeds the live-input size limit"}}
+  end
+
+  defp validate_live_input_size(_payload_json),
+    do: {:error, {:invalid_live_input, "payload must be valid JSON"}}
 
   defp response(value) do
     %JsonResponse{

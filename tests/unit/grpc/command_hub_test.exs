@@ -485,6 +485,12 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
              network_join_auth_required: false
            }
 
+    assert CommandPolicy.policies(:job_v2, :SendRunInput) == %{
+             network_only_denied: true,
+             identity_auth_required: true,
+             network_join_auth_required: false
+           }
+
     assert CommandPolicy.policies(:cluster, :NetworkHandshake) == %{
              network_only_denied: false,
              identity_auth_required: false,

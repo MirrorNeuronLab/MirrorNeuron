@@ -136,6 +136,8 @@ defmodule MirrorNeuron.Grpc.Handlers.Support do
   defp runtime_error_status({:agent_unavailable, _details}), do: GRPC.Status.unavailable()
   defp runtime_error_status({:backpressure, _details}), do: GRPC.Status.resource_exhausted()
   defp runtime_error_status({:retry_later, _details}), do: GRPC.Status.resource_exhausted()
+  defp runtime_error_status({:invalid_live_input, _reason}), do: GRPC.Status.invalid_argument()
+  defp runtime_error_status({:inactive_run, _status}), do: GRPC.Status.failed_precondition()
 
   defp runtime_error_status(reason) do
     message = reason |> MirrorNeuron.Runtime.error_message() |> String.downcase()

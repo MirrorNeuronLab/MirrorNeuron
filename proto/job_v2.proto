@@ -17,6 +17,7 @@ service JobService {
   rpc ResumeRun (RunRequest) returns (JsonResponse);
   rpc CancelRun (RunRequest) returns (JsonResponse);
   rpc DeleteRun (DeleteRunRequest) returns (JsonResponse);
+  rpc SendRunInput (SendRunInputRequest) returns (JsonResponse);
   rpc CreateJobSchedule (CreateJobScheduleRequest) returns (JsonResponse);
 }
 
@@ -67,6 +68,14 @@ message DeleteRunRequest {
   string run_id = 1;
   bool confirmed = 2;
   uint32 version = 3;
+}
+
+message SendRunInputRequest {
+  string run_id = 1;
+  string input_id = 2;
+  string payload_json = 3;
+  string idempotency_key = 4;
+  uint32 version = 5;
 }
 
 message CreateJobScheduleRequest {

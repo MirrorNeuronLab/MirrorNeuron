@@ -100,6 +100,9 @@ defmodule MirrorNeuron.Runtime do
     "agent #{agent_id} for job #{job_id} is applying backpressure#{retry_suffix}"
   end
 
+  def error_message({:invalid_live_input, reason}), do: to_string(reason)
+  def error_message({:inactive_run, status}), do: "run is inactive (status: #{status})"
+
   def error_message(reason) when is_binary(reason), do: reason
   def error_message(reason) when is_atom(reason), do: Atom.to_string(reason)
   def error_message(reason), do: inspect(reason)

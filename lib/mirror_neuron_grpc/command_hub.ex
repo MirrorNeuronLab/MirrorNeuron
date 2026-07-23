@@ -102,6 +102,7 @@ defmodule MirrorNeuron.Grpc.CommandPolicy do
                          {:job_v2, :ResumeRun},
                          {:job_v2, :CancelRun},
                          {:job_v2, :DeleteRun},
+                         {:job_v2, :SendRunInput},
                          {:job_v2, :CreateJobSchedule},
                          {:job, :SubmitJob},
                          {:job, :GetJob},
@@ -164,6 +165,7 @@ defmodule MirrorNeuron.Grpc.CommandPolicy do
                             {:job_v2, :ResumeRun},
                             {:job_v2, :CancelRun},
                             {:job_v2, :DeleteRun},
+                            {:job_v2, :SendRunInput},
                             {:job, :PauseJob},
                             {:job, :ResumeJob},
                             {:job, :ExportJobBackup},
@@ -242,6 +244,7 @@ defmodule MirrorNeuron.Grpc.CommandHub do
                          :ResumeRun,
                          :CancelRun,
                          :DeleteRun,
+                         :SendRunInput,
                          :CreateJobSchedule
                        ],
                        &{{:job_v2, &1}, MirrorNeuron.Grpc.Handlers.JobV2}
