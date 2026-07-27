@@ -34,8 +34,15 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     {state, [], [{:redeliver, "step_a", "step_a", retry_message}]} =
       WorkflowLedger.reconcile(state, "2026-06-02T16:00:04.000Z")
 
+    refute Message.id(retry_message) == Message.id(decorated)
     assert retry_message["headers"]["mn.workflow.attempt_id"] == "step_a:attempt:2"
     assert retry_message["headers"]["mn.workflow.attempt"] == 2
+
+    assert String.ends_with?(
+             retry_message["headers"]["mn.workflow.idempotency_key"],
+             ":step_a:2:#{Message.id(retry_message)}"
+           )
+
     assert get_in(state, ["steps", "step_a", "status"]) == "queued"
 
     {state, [second_started]} =
@@ -49,6 +56,9 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     assert second_started.attempt == 2
     assert get_in(state, ["steps", "step_a", "attempt_count"]) == 2
 
+    assert get_in(state, ["steps", "step_a", "current_attempt", "idempotency_key"]) ==
+             retry_message["headers"]["mn.workflow.idempotency_key"]
+
     {state, events, actions} = WorkflowLedger.reconcile(state, "2026-06-02T16:00:06.000Z")
 
     failed_event = Enum.find(events, &(&1.type == :workflow_step_failed))
@@ -58,6 +68,29 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     assert {:fail_job, "step_a", _reason} = List.last(actions)
     assert get_in(state, ["steps", "step_a", "status"]) == "failed"
     assert get_in(state, ["steps", "step_a", "terminal_error", "schema_version"]) == "mn.error.v1"
+  end
+
+  test "marks an enqueue failure terminal instead of leaving the workflow queued" do
+    {state, []} = WorkflowLedger.new(manifest(), runtime_nodes()) |> WorkflowLedger.job_running()
+    message = Message.new("job-1", "runtime", "step_a", "init", %{"value" => "start"})
+
+    {state, events} =
+      WorkflowLedger.mark_delivery_failed(
+        state,
+        message,
+        "step_a",
+        {:message_id_conflict, Message.id(message), "acked"},
+        "2026-06-02T16:00:00.000Z"
+      )
+
+    assert Enum.map(events, & &1.type) == [
+             :workflow_message_dead_lettered,
+             :workflow_step_failed
+           ]
+
+    assert get_in(state, ["steps", "step_a", "status"]) == "failed"
+    assert get_in(state, ["steps", "step_a", "ended_at"]) == "2026-06-02T16:00:00.000Z"
+    assert get_in(state, ["messages", Message.id(message), "status"]) == "failed"
   end
 
   test "resolves optional steps as partial after retry exhaustion" do

@@ -1050,7 +1050,11 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
                 failed_state = %{ready_state | workflow_state: workflow_state}
                 publish_workflow_events(failed_state, events)
-                {:cont, {:ok, failed_state}}
+
+                failure_reason =
+                  "workflow message delivery failed: #{inspect(reason)}"
+
+                {:halt, {:fail_job, step_id, failure_reason, failed_state}}
             end
 
           {:error, reason, failed_state} ->

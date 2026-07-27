@@ -416,12 +416,32 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   end
 
   def mark_delivery_failed(state, message, step_id, reason, now \\ Runtime.timestamp()) do
+    step = get_step(state, step_id)
+    terminal_reason = "workflow message delivery failed: #{stringify(reason)}"
+    error = step_error(terminal_reason, step)
+
+    failed_step =
+      step
+      |> Map.merge(%{
+        "status" => "failed",
+        "current_attempt" => nil,
+        "deadline_at" => nil,
+        "heartbeat_deadline_at" => nil,
+        "retry_at" => nil,
+        "ended_at" => now,
+        "last_event_at" => now,
+        "terminal_reason" => terminal_reason,
+        "terminal_error" => error,
+        "last_error" => error
+      })
+
     state =
       state
+      |> put_step(failed_step)
       |> put_message_status(message, step_id, "failed", now, %{"reason" => stringify(reason)})
       |> put_updated_at(now)
 
-    event = %{
+    dead_letter_event = %{
       type: :workflow_message_dead_lettered,
       step: step_id,
       message_id: safe_message_id(message),
@@ -429,7 +449,14 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
       timestamp: now
     }
 
-    {state, [event]}
+    failure_event =
+      workflow_event(:workflow_step_failed, failed_step, %{
+        "reason" => terminal_reason,
+        "error" => error,
+        "status" => "failed"
+      })
+
+    {state, [dead_letter_event, failure_event]}
   end
 
   defp reconcile_step(state, %{"status" => "running"} = step, now) do
@@ -1321,8 +1348,19 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   defp retry_message(state, step, now) do
     case step_last_message(step) do
       message when is_map(message) ->
-        metadata = attempt_metadata(state, step, message, now)
-        decorated = decorate_message(state, primary_agent_id(step), message, metadata.headers)
+        attempt_number = Map.get(step, "attempt_count", 0) + 1
+
+        retry_message =
+          put_in(
+            message,
+            ["envelope", "message_id"],
+            workflow_attempt_message_id(state, step, message, attempt_number)
+          )
+
+        metadata = attempt_metadata(state, step, retry_message, now)
+
+        decorated =
+          decorate_message(state, primary_agent_id(step), retry_message, metadata.headers)
 
         step =
           step
@@ -1984,6 +2022,19 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   end
 
   defp attempt_id(step_id, attempt), do: "#{step_id}:attempt:#{attempt}"
+
+  defp workflow_attempt_message_id(state, step, message, attempt_number) do
+    [
+      "workflow_attempt",
+      run_id(state),
+      step["id"],
+      safe_message_id(message),
+      attempt_number
+    ]
+    |> Enum.join(":")
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.url_encode64(padding: false)
+  end
 
   defp safe_message_id(message) do
     Message.id(message)
