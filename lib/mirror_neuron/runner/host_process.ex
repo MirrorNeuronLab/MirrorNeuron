@@ -3,11 +3,59 @@ defmodule MirrorNeuron.Runner.HostProcess do
 
   @term_grace_ms 500
   @kill_grace_ms 100
+  @python_supervisor_script [
+                              "import os",
+                              "import signal",
+                              "import sys",
+                              "import time",
+                              "command = sys.argv[1:]",
+                              "child = os.fork()",
+                              "if child == 0:",
+                              "    os.setsid()",
+                              "    os.execv(command[0], command)",
+                              "def exit_for_status(status):",
+                              "    code = os.waitstatus_to_exitcode(status)",
+                              "    os._exit(code if code >= 0 else 128 + abs(code))",
+                              "def stop(signum, _frame):",
+                              "    try:",
+                              "        os.killpg(child, signum)",
+                              "    except ProcessLookupError:",
+                              "        os._exit(128 + signum)",
+                              "    deadline = time.monotonic() + 0.35",
+                              "    while time.monotonic() < deadline:",
+                              "        try:",
+                              "            pid, status = os.waitpid(child, os.WNOHANG)",
+                              "        except ChildProcessError:",
+                              "            os._exit(128 + signum)",
+                              "        if pid == child:",
+                              "            exit_for_status(status)",
+                              "        time.sleep(0.01)",
+                              "    try:",
+                              "        os.killpg(child, signal.SIGKILL)",
+                              "    except ProcessLookupError:",
+                              "        pass",
+                              "    try:",
+                              "        _, status = os.waitpid(child, 0)",
+                              "        exit_for_status(status)",
+                              "    except ChildProcessError:",
+                              "        os._exit(128 + signum)",
+                              "for selected in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):",
+                              "    signal.signal(selected, stop)",
+                              "_, status = os.waitpid(child, 0)",
+                              "exit_for_status(status)"
+                            ]
+                            |> Enum.join("\n")
 
   def isolate(executable, args) when is_binary(executable) and is_list(args) do
-    case System.find_executable("setsid") do
-      nil -> {executable, args, false}
-      setsid -> {setsid, [executable | args], true}
+    case System.find_executable("python3") do
+      python when is_binary(python) ->
+        {python, ["-c", @python_supervisor_script, executable | args], false}
+
+      nil ->
+        case System.find_executable("setsid") do
+          nil -> {executable, args, false}
+          setsid -> {setsid, [executable | args], true}
+        end
     end
   end
 
