@@ -6,7 +6,7 @@ defmodule MirrorNeuron.JobBackup do
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
 
-  @schema_version "mn.backup.v1"
+  @schema_version "mn.backup.v2"
   @restore_pause_reason "job was restored from a backup and must remain paused"
   @stale_runtime_fields [
     "lease",

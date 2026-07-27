@@ -75,6 +75,10 @@ operation. Acknowledgement removes the index entry but retains the durable
 cancellation record for audit.
 Pause, resume, cancel, backup, restore, deployment, and schedule operations
 preserve event/status coherence.
+Job backup and restore use the breaking `mn.backup.v2` contract. Core owns the
+durable runtime snapshot and bundle map; adapters may add verified
+content-addressed payload blobs, wheels, images, and compatibility metadata for
+air-gapped transport. Core does not implement or accept `mn.backup.v1`.
 
 Fixed server-defined group-operation kinds persist their immutable target
 snapshot, item states, counters, errors, timestamps, and replayable progress

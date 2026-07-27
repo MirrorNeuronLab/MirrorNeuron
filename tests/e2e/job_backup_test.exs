@@ -52,7 +52,7 @@ defmodule MirrorNeuron.JobBackupTest do
     assert reason =~ "must be paused"
 
     assert {:ok, backup, bundle_files} = JobBackup.export_job(job_id)
-    assert backup["schema_version"] == "mn.backup.v1"
+    assert backup["schema_version"] == "mn.backup.v2"
     assert backup["runtime"]["job"]["job_id"] == job_id
     refute Map.has_key?(backup["runtime"], "agents")
     refute Map.has_key?(backup["sections"], "runtime/agents.json")
