@@ -127,7 +127,10 @@ actionable failure; it does not bypass requirements.
 Runner policy selects host-local, Docker, or OpenShell execution according to
 the executable manifest/profile. Core stages bounded inputs, passes explicit
 environment/config, captures a structured result, registers durable artifacts,
-and cleans up only owned resources. DockerWorker command environments include
+and cleans up only owned resources. HostLocal commands run in an owned process
+group when the host supports it; cancellation, owner termination, timeout, and
+missed-beacon failure terminate that command before releasing the runner.
+DockerWorker command environments include
 the runtime-owned `MN_EXECUTION_NODE` value for the Core node actually invoking
 the command; manifest environment cannot override that placement identity.
 

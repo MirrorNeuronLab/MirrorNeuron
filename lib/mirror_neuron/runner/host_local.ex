@@ -1,6 +1,7 @@
 defmodule MirrorNeuron.Runner.HostLocal do
   alias MirrorNeuron.Message
   alias MirrorNeuron.Config
+  alias MirrorNeuron.Runner.HostProcess
 
   @result_start "__MN_RESULT_START__"
   @result_end "__MN_RESULT_END__"
@@ -195,20 +196,53 @@ defmodule MirrorNeuron.Runner.HostLocal do
   end
 
   defp run_command([command | args], env, workdir, config, opts, message) do
+    owner = self()
+    result_ref = make_ref()
+
+    {runner, monitor_ref} =
+      spawn_monitor(fn ->
+        result =
+          execute_command(
+            owner,
+            command,
+            args,
+            env,
+            workdir,
+            config,
+            opts,
+            message
+          )
+
+        send(owner, {result_ref, result})
+      end)
+
+    receive do
+      {^result_ref, result} ->
+        Process.demonitor(monitor_ref, [:flush])
+        result
+
+      {:DOWN, ^monitor_ref, :process, ^runner, _reason} ->
+        {:error, "host local command process stopped before returning a result"}
+    end
+  end
+
+  defp execute_command(owner, command, args, env, workdir, config, opts, message) do
     executable = System.find_executable(command) || command
+    {port_executable, port_args, process_group?} = HostProcess.isolate(executable, args)
     max_output_bytes = max_output_bytes(config)
     timeout_ms = timeout_ms(config)
     deadline = if timeout_ms, do: System.monotonic_time(:millisecond) + timeout_ms
     beacon_state = beacon_state(config, opts, message)
+    owner_ref = Process.monitor(owner)
 
     port =
       Port.open(
-        {:spawn_executable, String.to_charlist(executable)},
+        {:spawn_executable, String.to_charlist(port_executable)},
         [
           :binary,
           :exit_status,
           :stderr_to_stdout,
-          {:args, Enum.map(args, &String.to_charlist/1)},
+          {:args, Enum.map(port_args, &String.to_charlist/1)},
           {:cd, String.to_charlist(workdir)},
           {:env,
            Enum.map(env, fn {key, value} ->
@@ -218,13 +252,34 @@ defmodule MirrorNeuron.Runner.HostLocal do
       )
 
     beacon_state = emit_runtime_beacon(beacon_state, "started")
-    collect_port_output(port, [], 0, max_output_bytes, deadline, beacon_state)
+
+    collect_port_output(
+      port,
+      [],
+      0,
+      max_output_bytes,
+      deadline,
+      beacon_state,
+      owner,
+      owner_ref,
+      process_group?
+    )
   rescue
     error in ErlangError ->
       {:error, "failed to invoke #{command}: #{Exception.message(error)}"}
   end
 
-  defp collect_port_output(port, chunks, bytes, max_output_bytes, deadline, beacon_state) do
+  defp collect_port_output(
+         port,
+         chunks,
+         bytes,
+         max_output_bytes,
+         deadline,
+         beacon_state,
+         owner,
+         owner_ref,
+         process_group?
+       ) do
     timeout = receive_timeout(deadline, beacon_state)
 
     receive do
@@ -240,7 +295,10 @@ defmodule MirrorNeuron.Runner.HostLocal do
           next_bytes,
           max_output_bytes,
           deadline,
-          next_beacon_state
+          next_beacon_state,
+          owner,
+          owner_ref,
+          process_group?
         )
 
       {^port, {:exit_status, exit_code}} ->
@@ -248,13 +306,17 @@ defmodule MirrorNeuron.Runner.HostLocal do
         {next_chunks, _next_bytes} = append_output(chunks, bytes, tail, max_output_bytes)
         _ = emit_runtime_beacon(next_beacon_state, "completed")
         {:ok, next_chunks |> Enum.reverse() |> IO.iodata_to_binary(), exit_code}
+
+      {:DOWN, ^owner_ref, :process, ^owner, _reason} ->
+        HostProcess.terminate(port, process_group?)
+        {:error, "host local command owner terminated"}
     after
       timeout ->
         now = now_ms()
 
         cond do
           deadline && now >= deadline ->
-            Port.close(port)
+            HostProcess.terminate(port, process_group?)
 
             {:error,
              %{
@@ -264,7 +326,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
              }}
 
           beacon_missed?(beacon_state, now) ->
-            Port.close(port)
+            HostProcess.terminate(port, process_group?)
             missed_payload = beacon_payload(beacon_state, "missed", "agent", now)
             emit_beacon_event(beacon_state, :agent_beacon_missed, missed_payload)
 
@@ -285,7 +347,10 @@ defmodule MirrorNeuron.Runner.HostLocal do
               bytes,
               max_output_bytes,
               deadline,
-              next_beacon_state
+              next_beacon_state,
+              owner,
+              owner_ref,
+              process_group?
             )
         end
     end

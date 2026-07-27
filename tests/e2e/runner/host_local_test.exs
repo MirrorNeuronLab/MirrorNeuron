@@ -386,6 +386,65 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
     File.rm_rf!(tmp_dir)
   end
 
+  test "terminates the owned command when the runner owner exits" do
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "mirror_neuron_host_local_owner_exit_test_#{System.unique_integer([:positive])}"
+      )
+
+    bundle_dir = Path.join(tmp_dir, "job_bundle")
+    payloads_dir = Path.join(bundle_dir, "payloads")
+    upload_dir = Path.join(payloads_dir, "bundle")
+    pid_path = Path.join(tmp_dir, "command.pid")
+
+    try do
+      File.mkdir_p!(Path.join(upload_dir, "scripts"))
+
+      File.write!(
+        Path.join(upload_dir, "scripts/wait.py"),
+        """
+        import os
+        import time
+        from pathlib import Path
+
+        Path(os.environ["PID_FILE"]).write_text(str(os.getpid()))
+        time.sleep(60)
+        """
+      )
+
+      config = %{
+        "upload_path" => "bundle",
+        "upload_as" => "bundle",
+        "workdir" => "/sandbox/job/bundle",
+        "command" => ["python3.11", "scripts/wait.py"],
+        "environment" => %{"PID_FILE" => pid_path}
+      }
+
+      task =
+        Task.async(fn ->
+          HostLocal.run(
+            %{},
+            config,
+            job_id: "job-owner-exit",
+            agent_id: "owner-exit-worker",
+            bundle_root: bundle_dir,
+            payloads_path: payloads_dir
+          )
+        end)
+
+      assert wait_until(fn -> File.exists?(pid_path) end)
+      pid = pid_path |> File.read!() |> String.trim() |> String.to_integer()
+      assert os_process_alive?(pid)
+
+      assert nil == Task.shutdown(task, :brutal_kill)
+      assert wait_until(fn -> not os_process_alive?(pid) end)
+    after
+      terminate_recorded_process(pid_path)
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
   test "emits runtime liveness beacons while host command is alive" do
     tmp_dir =
       Path.join(
@@ -671,6 +730,42 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
   end
 
   defp normalized_path(path), do: String.replace_prefix(path, "/private/var/", "/var/")
+
+  defp wait_until(predicate, attempts \\ 100)
+
+  defp wait_until(predicate, attempts) when attempts > 0 do
+    if predicate.() do
+      true
+    else
+      Process.sleep(10)
+      wait_until(predicate, attempts - 1)
+    end
+  end
+
+  defp wait_until(_predicate, 0), do: false
+
+  defp os_process_alive?(pid) do
+    case System.find_executable("kill") do
+      nil ->
+        false
+
+      executable ->
+        {_output, status} =
+          System.cmd(executable, ["-0", Integer.to_string(pid)], stderr_to_stdout: true)
+
+        status == 0
+    end
+  end
+
+  defp terminate_recorded_process(pid_path) do
+    with true <- File.exists?(pid_path),
+         {pid, ""} <- pid_path |> File.read!() |> String.trim() |> Integer.parse(),
+         executable when is_binary(executable) <- System.find_executable("kill") do
+      _ = System.cmd(executable, ["-KILL", Integer.to_string(pid)], stderr_to_stdout: true)
+    end
+
+    :ok
+  end
 
   defp restore_env(name, nil), do: System.delete_env(name)
   defp restore_env(name, value), do: System.put_env(name, value)
