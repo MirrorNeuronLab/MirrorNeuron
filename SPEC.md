@@ -130,6 +130,10 @@ environment/config, captures a structured result, registers durable artifacts,
 and cleans up only owned resources. HostLocal commands run in an owned process
 group when the host supports it; cancellation, owner termination, timeout, and
 missed-beacon failure terminate that command before releasing the runner.
+HostLocal commands receive a loopback `MN_GRPC_TARGET` derived from Core's
+internal gRPC listen port so bind and externally advertised addresses are never
+mistaken for client destinations; an explicit manifest environment override
+remains authoritative.
 DockerWorker command environments include
 the runtime-owned `MN_EXECUTION_NODE` value for the Core node actually invoking
 the command; manifest environment cannot override that placement identity.

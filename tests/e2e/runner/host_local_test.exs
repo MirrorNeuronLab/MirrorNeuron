@@ -159,6 +159,81 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
     File.rm_rf!(tmp_dir)
   end
 
+  test "provides the internal Core gRPC target while preserving an explicit override" do
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "mirror_neuron_host_local_grpc_target_test_#{System.unique_integer([:positive])}"
+      )
+
+    bundle_dir = Path.join(tmp_dir, "job_bundle")
+    payloads_dir = Path.join(bundle_dir, "payloads")
+    upload_dir = Path.join(payloads_dir, "bundle")
+    old_core_host = System.get_env("MN_CORE_HOST")
+    old_grpc_port = System.get_env("MN_GRPC_PORT")
+    old_grpc_target = System.get_env("MN_GRPC_TARGET")
+
+    try do
+      File.mkdir_p!(Path.join(upload_dir, "scripts"))
+
+      File.write!(
+        Path.join(upload_dir, "scripts/read_grpc_target.py"),
+        """
+        import json
+        import os
+        print(json.dumps({"target": os.environ["MN_GRPC_TARGET"]}))
+        """
+      )
+
+      System.put_env("MN_CORE_HOST", "0.0.0.0")
+      System.put_env("MN_GRPC_PORT", "50123")
+      System.delete_env("MN_GRPC_TARGET")
+
+      config = %{
+        "upload_path" => "bundle",
+        "upload_as" => "bundle",
+        "workdir" => "/sandbox/job/bundle",
+        "command" => ["python3.11", "scripts/read_grpc_target.py"]
+      }
+
+      assert {:ok, result} =
+               HostLocal.run(
+                 %{},
+                 config,
+                 job_id: "job-host-local-grpc-target",
+                 agent_id: "grpc-target-worker",
+                 bundle_root: bundle_dir,
+                 payloads_path: payloads_dir
+               )
+
+      assert Jason.decode!(String.trim(result["stdout"])) == %{
+               "target" => "127.0.0.1:50123"
+             }
+
+      explicit_config =
+        Map.put(config, "environment", %{"MN_GRPC_TARGET" => "core.internal:55555"})
+
+      assert {:ok, explicit_result} =
+               HostLocal.run(
+                 %{},
+                 explicit_config,
+                 job_id: "job-host-local-explicit-grpc-target",
+                 agent_id: "explicit-grpc-target-worker",
+                 bundle_root: bundle_dir,
+                 payloads_path: payloads_dir
+               )
+
+      assert Jason.decode!(String.trim(explicit_result["stdout"])) == %{
+               "target" => "core.internal:55555"
+             }
+    after
+      restore_env("MN_CORE_HOST", old_core_host)
+      restore_env("MN_GRPC_PORT", old_grpc_port)
+      restore_env("MN_GRPC_TARGET", old_grpc_target)
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
   test "runs the default no-command heredoc through the capture wrapper" do
     tmp_dir =
       Path.join(

@@ -395,6 +395,9 @@ one Redis-side scan of a pending-only cancellation index; acknowledgement
 removes the index entry while retaining the cancellation record for audit.
 Before acknowledging, the owning runtime also terminates every registered
 HostLocal command for the job and waits for the owned process groups to exit.
+HostLocal payloads receive Core's internal loopback gRPC client target; a
+manifest may explicitly override that target when it owns a different reachable
+control endpoint.
 
 ### Durable group operations
 

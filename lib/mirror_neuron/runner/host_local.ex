@@ -1490,6 +1490,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
       "MN_AGENT_TEMPLATE" => Keyword.get(opts, :template_type, "generic"),
       "MN_JOB_ID" => to_string(Keyword.get(opts, :job_id, "")),
       "MN_AGENT_ID" => to_string(Keyword.get(opts, :agent_id, "")),
+      "MN_GRPC_TARGET" => "127.0.0.1:#{Config.integer("MN_GRPC_PORT", :grpc_port)}",
       "MN_WORKDIR" => workdir
     }
     |> Map.merge(workflow_env(message))
