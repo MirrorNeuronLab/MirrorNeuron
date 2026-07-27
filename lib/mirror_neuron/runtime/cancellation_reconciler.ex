@@ -6,6 +6,7 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
   require Logger
 
   alias MirrorNeuron.Persistence.CancellationStore
+  alias MirrorNeuron.Runner.HostLocal
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.EventBus
   alias MirrorNeuron.Sandbox.{DockerJobSandbox, OpenShellJobSandbox}
@@ -63,7 +64,8 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
     # A stale coordinator is allowed to receive the cancellation and stop, but
     # cannot persist a write after the request fence has advanced.
     try do
-      with :ok <- stop_local_job(job_id),
+      with :ok <- HostLocal.terminate_job(job_id),
+           :ok <- stop_local_job(job_id),
            :ok <- OpenShellJobSandbox.cleanup_job_local(job_id),
            :ok <- DockerJobSandbox.cleanup_job_local(job_id) do
         case CancellationStore.acknowledge(job_id, local_node) do

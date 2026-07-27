@@ -393,6 +393,8 @@ only after every recorded owner acknowledgement. Recovery, resume, scheduling,
 and drain migration do not run while a job is `cancelling`. The reconciler uses
 one Redis-side scan of a pending-only cancellation index; acknowledgement
 removes the index entry while retaining the cancellation record for audit.
+Before acknowledging, the owning runtime also terminates every registered
+HostLocal command for the job and waits for the owned process groups to exit.
 
 ### Durable group operations
 

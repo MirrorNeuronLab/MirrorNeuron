@@ -3,6 +3,16 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
 
   alias MirrorNeuron.Runner.HostLocal
 
+  setup_all do
+    if is_nil(Process.whereis(MirrorNeuron.Runner.HostProcessRegistry)) do
+      start_supervised!(
+        {Registry, keys: :duplicate, name: MirrorNeuron.Runner.HostProcessRegistry}
+      )
+    end
+
+    :ok
+  end
+
   test "list_all_files includes hidden runtime payload directories" do
     tmp_dir =
       Path.join(
@@ -438,6 +448,67 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
       assert os_process_alive?(pid)
 
       assert nil == Task.shutdown(task, :brutal_kill)
+      assert wait_until(fn -> not os_process_alive?(pid) end)
+    after
+      terminate_recorded_process(pid_path)
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "terminates a running command when its job is cancelled" do
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "mirror_neuron_host_local_job_cancel_test_#{System.unique_integer([:positive])}"
+      )
+
+    bundle_dir = Path.join(tmp_dir, "job_bundle")
+    payloads_dir = Path.join(bundle_dir, "payloads")
+    upload_dir = Path.join(payloads_dir, "bundle")
+    pid_path = Path.join(tmp_dir, "command.pid")
+    job_id = "job-host-local-cancel"
+
+    try do
+      File.mkdir_p!(Path.join(upload_dir, "scripts"))
+
+      File.write!(
+        Path.join(upload_dir, "scripts/wait.py"),
+        """
+        import os
+        import time
+        from pathlib import Path
+
+        Path(os.environ["PID_FILE"]).write_text(str(os.getpid()))
+        time.sleep(60)
+        """
+      )
+
+      config = %{
+        "upload_path" => "bundle",
+        "upload_as" => "bundle",
+        "workdir" => "/sandbox/job/bundle",
+        "command" => ["python3.11", "scripts/wait.py"],
+        "environment" => %{"PID_FILE" => pid_path}
+      }
+
+      task =
+        Task.async(fn ->
+          HostLocal.run(
+            %{},
+            config,
+            job_id: job_id,
+            agent_id: "cancelled-worker",
+            bundle_root: bundle_dir,
+            payloads_path: payloads_dir
+          )
+        end)
+
+      assert wait_until(fn -> File.exists?(pid_path) end)
+      pid = pid_path |> File.read!() |> String.trim() |> String.to_integer()
+      assert os_process_alive?(pid)
+
+      assert :ok = HostLocal.terminate_job(job_id)
+      assert {:error, "host local command cancelled"} = Task.await(task)
       assert wait_until(fn -> not os_process_alive?(pid) end)
     after
       terminate_recorded_process(pid_path)

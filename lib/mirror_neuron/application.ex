@@ -51,6 +51,7 @@ defmodule MirrorNeuron.Application do
               MirrorNeuron.Cluster.Leader,
               MirrorNeuron.Runtime.ReliabilityObserver,
               MirrorNeuron.Execution.LeaseManager,
+              {Registry, keys: :duplicate, name: MirrorNeuron.Runner.HostProcessRegistry},
               {Registry, keys: :unique, name: MirrorNeuron.Sandbox.Registry},
               {DynamicSupervisor,
                strategy: :one_for_one, name: MirrorNeuron.Sandbox.JobSandboxSupervisor},

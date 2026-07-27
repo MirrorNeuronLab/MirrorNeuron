@@ -8,6 +8,25 @@ defmodule MirrorNeuron.Runner.HostLocal do
   @beacon_prefix "__MN_AGENT_BEACON__"
   @default_beacon_interval_ms 15_000
   @default_beacon_timeout_ms 45_000
+  @host_process_registry MirrorNeuron.Runner.HostProcessRegistry
+  @cancellation_timeout_ms 2_000
+
+  def terminate_job(job_id) when is_binary(job_id) do
+    if Process.whereis(@host_process_registry) do
+      runners =
+        @host_process_registry
+        |> Registry.lookup(job_id)
+        |> Enum.map(fn {pid, _metadata} -> {pid, Process.monitor(pid)} end)
+
+      Enum.each(runners, fn {pid, _monitor_ref} ->
+        send(pid, {:terminate_host_job, job_id})
+      end)
+
+      await_terminated_runners(runners, cancellation_deadline())
+    else
+      :ok
+    end
+  end
 
   def run(payload, config, opts \\ []) do
     runner_name = build_runner_name(config, opts)
@@ -234,6 +253,9 @@ defmodule MirrorNeuron.Runner.HostLocal do
     deadline = if timeout_ms, do: System.monotonic_time(:millisecond) + timeout_ms
     beacon_state = beacon_state(config, opts, message)
     owner_ref = Process.monitor(owner)
+    job_id = Keyword.get(opts, :job_id)
+
+    :ok = register_host_process(job_id)
 
     port =
       Port.open(
@@ -262,7 +284,8 @@ defmodule MirrorNeuron.Runner.HostLocal do
       beacon_state,
       owner,
       owner_ref,
-      process_group?
+      process_group?,
+      job_id
     )
   rescue
     error in ErlangError ->
@@ -278,7 +301,8 @@ defmodule MirrorNeuron.Runner.HostLocal do
          beacon_state,
          owner,
          owner_ref,
-         process_group?
+         process_group?,
+         job_id
        ) do
     timeout = receive_timeout(deadline, beacon_state)
 
@@ -298,7 +322,8 @@ defmodule MirrorNeuron.Runner.HostLocal do
           next_beacon_state,
           owner,
           owner_ref,
-          process_group?
+          process_group?,
+          job_id
         )
 
       {^port, {:exit_status, exit_code}} ->
@@ -310,6 +335,10 @@ defmodule MirrorNeuron.Runner.HostLocal do
       {:DOWN, ^owner_ref, :process, ^owner, _reason} ->
         HostProcess.terminate(port, process_group?)
         {:error, "host local command owner terminated"}
+
+      {:terminate_host_job, ^job_id} when is_binary(job_id) ->
+        HostProcess.terminate(port, process_group?)
+        {:error, "host local command cancelled"}
     after
       timeout ->
         now = now_ms()
@@ -350,9 +379,42 @@ defmodule MirrorNeuron.Runner.HostLocal do
               next_beacon_state,
               owner,
               owner_ref,
-              process_group?
+              process_group?,
+              job_id
             )
         end
+    end
+  end
+
+  defp cancellation_deadline do
+    System.monotonic_time(:millisecond) + @cancellation_timeout_ms
+  end
+
+  defp register_host_process(job_id) when is_binary(job_id) and job_id != "" do
+    if Process.whereis(@host_process_registry) do
+      {:ok, _value} = Registry.register(@host_process_registry, job_id, nil)
+    end
+
+    :ok
+  end
+
+  defp register_host_process(_job_id), do: :ok
+
+  defp await_terminated_runners([], _deadline), do: :ok
+
+  defp await_terminated_runners([{pid, monitor_ref} | rest], deadline) do
+    timeout = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {:DOWN, ^monitor_ref, :process, ^pid, _reason} ->
+        await_terminated_runners(rest, deadline)
+    after
+      timeout ->
+        Enum.each([{pid, monitor_ref} | rest], fn {_runner, ref} ->
+          Process.demonitor(ref, [:flush])
+        end)
+
+        {:error, {:host_local_cleanup_timeout, pid}}
     end
   end
 
