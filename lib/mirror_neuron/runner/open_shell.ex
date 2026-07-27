@@ -1,6 +1,7 @@
 defmodule MirrorNeuron.Runner.OpenShell do
   alias MirrorNeuron.Config
   alias MirrorNeuron.Message
+  alias MirrorNeuron.Runner.OpenShellSharedStorage
   alias MirrorNeuron.Sandbox.OpenShellJobSandbox
 
   @result_start "__MN_RESULT_START__"
@@ -42,32 +43,99 @@ defmodule MirrorNeuron.Runner.OpenShell do
   defp run_in_shared_sandbox(payload, config, opts) do
     executable = sandbox_cli(config)
 
-    with {:ok, sandbox} <- OpenShellJobSandbox.ensure(Keyword.fetch!(opts, :job_id), config),
-         {:ok, staged_dir} <- stage_workspace(payload, config, opts) do
+    with {:ok, sandbox} <- OpenShellJobSandbox.ensure(Keyword.fetch!(opts, :job_id), config) do
       remote_dir = build_shared_remote_dir(config, opts)
 
-      try do
-        with {:ok, :uploaded} <-
-               upload_workspace(
-                 executable,
-                 sandbox["sandbox_name"],
-                 staged_dir,
-                 remote_dir
-               ),
-             {:ok, command} <- build_command(config, remote_dir, opts),
-             {:ok, output, ssh_exit_code} <-
-               run_ssh_command(config, sandbox["sandbox_name"], sandbox["ssh_host"], command),
-             {:ok, result} <-
-               extract_result(output, sandbox["sandbox_name"], remote_dir, ssh_exit_code) do
-          if result["exit_code"] == 0 do
-            {:ok, result}
-          else
-            {:error, result}
+      prepared_config = Map.put(config, "sandbox_name", sandbox["sandbox_name"])
+
+      with {:ok, shared_storage} <-
+             OpenShellSharedStorage.plan(payload, prepared_config, remote_dir, opts),
+           {:ok, staged_dir} <-
+             stage_workspace(
+               shared_storage.payload,
+               shared_storage.config,
+               shared_storage.opts
+             ) do
+        try do
+          with {:ok, :uploaded} <-
+                 upload_workspace(
+                   executable,
+                   sandbox["sandbox_name"],
+                   staged_dir,
+                   remote_dir
+                 ),
+               :ok <- OpenShellSharedStorage.upload(shared_storage, executable),
+               {:ok, command} <-
+                 build_command(shared_storage.config, remote_dir, shared_storage.opts),
+               {:ok, output, ssh_exit_code} <-
+                 run_ssh_command(
+                   shared_storage.config,
+                   sandbox["sandbox_name"],
+                   sandbox["ssh_host"],
+                   command
+                 ) do
+            with :ok <- OpenShellSharedStorage.download(shared_storage, executable),
+                 :ok <-
+                   cleanup_shared_storage(
+                     shared_storage,
+                     shared_storage.config,
+                     sandbox
+                   ),
+                 {:ok, result} <-
+                   extract_result(
+                     output,
+                     sandbox["sandbox_name"],
+                     remote_dir,
+                     ssh_exit_code
+                   ) do
+              if result["exit_code"] == 0 do
+                {:ok, result}
+              else
+                {:error, result}
+              end
+            end
           end
+        after
+          File.rm_rf(staged_dir)
         end
-      after
-        File.rm_rf(staged_dir)
       end
+    end
+  end
+
+  defp cleanup_shared_storage(
+         %OpenShellSharedStorage{enabled: false},
+         _config,
+         _sandbox
+       ),
+       do: :ok
+
+  defp cleanup_shared_storage(
+         %OpenShellSharedStorage{remote_root: remote_root},
+         config,
+         sandbox
+       ) do
+    command = ["rm -rf -- #{shell_escape(remote_root)}"]
+
+    case run_ssh_command(
+           config,
+           sandbox["sandbox_name"],
+           sandbox["ssh_host"],
+           command
+         ) do
+      {:ok, _output, 0} ->
+        :ok
+
+      {:ok, output, exit_code} ->
+        {:error,
+         %{
+           "error" => "failed to clean OpenShell shared-storage mirror",
+           "remote_root" => remote_root,
+           "exit_code" => exit_code,
+           "logs" => output
+         }}
+
+      {:error, _reason} = error ->
+        error
     end
   end
 

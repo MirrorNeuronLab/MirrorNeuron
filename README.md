@@ -513,6 +513,13 @@ MN_NODE_CAPABILITIES=video-codec:h264,ffmpeg \
 mix run --no-halt
 ```
 
+OpenShell SDK workers that consume the workflow's durable run store should set
+`sync_shared_storage=true`. Core copies the job-scoped `inputs` and `outputs`
+directories into an invocation-owned sandbox path, rewrites shared-storage
+references for that invocation, and copies `outputs` back before returning the
+runner result. The source root must be inside the configured runtime shared
+storage root.
+
 ```json
 {
   "node_id": "video_guardian",

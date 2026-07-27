@@ -22,6 +22,7 @@ defmodule MirrorNeuron.Execution.Profile do
     "persistent_workspace",
     "cleanup_remote_dir",
     "sandbox_upload_path",
+    "sync_shared_storage",
     "shared_workspace_safe",
     "warmup_command",
     "warmup_timeout_ms",

@@ -137,6 +137,11 @@ remains authoritative.
 DockerWorker command environments include
 the runtime-owned `MN_EXECUTION_NODE` value for the Core node actually invoking
 the command; manifest environment cannot override that placement identity.
+An OpenShell worker may explicitly set `sync_shared_storage=true`. Core then
+mirrors only the job-scoped `inputs` and `outputs` directories into an
+invocation-owned sandbox path, rewrites references rooted at
+`MN_JOB_SHARED_STORAGE_ROOT`, and synchronizes `outputs` back before accepting
+the worker result.
 
 Isolation and network policies are least privilege. Blueprint-specific binaries,
 packages, domains, ports, and private IP allowances remain in blueprint/runtime
