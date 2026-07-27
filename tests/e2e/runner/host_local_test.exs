@@ -467,9 +467,16 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
     upload_dir = Path.join(payloads_dir, "bundle")
     pid_path = Path.join(tmp_dir, "command.pid")
     job_id = "job-host-local-cancel"
+    python = System.find_executable("python3") || System.find_executable("python3.11")
+    original_path = System.get_env("PATH")
+    assert is_binary(python)
 
     try do
       File.mkdir_p!(Path.join(upload_dir, "scripts"))
+      signal_bin = Path.join(tmp_dir, "signal-bin")
+      File.mkdir_p!(signal_bin)
+      File.ln_s!(python, Path.join(signal_bin, "python3"))
+      System.put_env("PATH", signal_bin)
 
       File.write!(
         Path.join(upload_dir, "scripts/wait.py"),
@@ -487,7 +494,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
         "upload_path" => "bundle",
         "upload_as" => "bundle",
         "workdir" => "/sandbox/job/bundle",
-        "command" => ["python3.11", "scripts/wait.py"],
+        "command" => [python, "scripts/wait.py"],
         "environment" => %{"PID_FILE" => pid_path}
       }
 
@@ -505,12 +512,13 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
 
       assert wait_until(fn -> File.exists?(pid_path) end)
       pid = pid_path |> File.read!() |> String.trim() |> String.to_integer()
-      assert os_process_alive?(pid)
+      assert python_process_alive?(python, pid)
 
       assert :ok = HostLocal.terminate_job(job_id)
       assert {:error, "host local command cancelled"} = Task.await(task)
-      assert wait_until(fn -> not os_process_alive?(pid) end)
+      assert wait_until(fn -> not python_process_alive?(python, pid) end)
     after
+      if original_path, do: System.put_env("PATH", original_path), else: System.delete_env("PATH")
       terminate_recorded_process(pid_path)
       File.rm_rf!(tmp_dir)
     end
@@ -826,6 +834,17 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
 
         status == 0
     end
+  end
+
+  defp python_process_alive?(python, pid) do
+    {_output, status} =
+      System.cmd(
+        python,
+        ["-c", "import os,sys; os.kill(int(sys.argv[1]), 0)", Integer.to_string(pid)],
+        stderr_to_stdout: true
+      )
+
+    status == 0
   end
 
   defp terminate_recorded_process(pid_path) do

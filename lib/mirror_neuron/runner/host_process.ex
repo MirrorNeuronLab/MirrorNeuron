@@ -60,32 +60,38 @@ defmodule MirrorNeuron.Runner.HostProcess do
 
   defp signal_with_python(target, signal, process_group?) do
     with executable when is_binary(executable) <- System.find_executable("python3") do
-      script = """
-      import os
-      import signal
-      import sys
+      script =
+        "import os,signal,sys; target=int(sys.argv[1]); " <>
+          "selected=getattr(signal,'SIG'+sys.argv[2]); " <>
+          "os.killpg(abs(target),selected) if sys.argv[3]=='group' " <>
+          "else os.kill(target,selected)"
 
-      target = int(sys.argv[1])
-      selected = getattr(signal, "SIG" + sys.argv[2])
-      if sys.argv[3] == "group":
-          os.killpg(abs(target), selected)
-      else:
-          os.kill(target, selected)
-      """
+      case run_python_signal(executable, script, target, signal, process_group?) do
+        {_output, 0} ->
+          :ok
 
-      _ =
-        System.cmd(
-          executable,
-          [
-            "-c",
-            script,
-            Integer.to_string(target),
-            signal,
-            if(process_group?, do: "group", else: "process")
-          ],
-          stderr_to_stdout: true
-        )
+        {_output, _status} when process_group? ->
+          _ = run_python_signal(executable, script, abs(target), signal, false)
+          :ok
+
+        {_output, _status} ->
+          :ok
+      end
     end
+  end
+
+  defp run_python_signal(executable, script, target, signal, process_group?) do
+    System.cmd(
+      executable,
+      [
+        "-c",
+        script,
+        Integer.to_string(target),
+        signal,
+        if(process_group?, do: "group", else: "process")
+      ],
+      stderr_to_stdout: true
+    )
   end
 
   defp await_exit(port, timeout_ms) do
