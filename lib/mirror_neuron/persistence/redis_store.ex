@@ -50,6 +50,35 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     "wake_reason"
   ]
 
+  @doc """
+  Return the opaque identity and writable-primary state of the Redis plane.
+
+  The identity is created once in the configured namespace and replicated by
+  Redis. A process connected directly to a replica can read the identity, but
+  is never reported as a writable runtime endpoint.
+  """
+  def coordination_store_status do
+    identity_key = key("coordination-store", "identity")
+
+    with {:ok, role_reply} <- command(["ROLE"]),
+         role <- redis_role(role_reply),
+         {:ok, identity} <- coordination_store_identity(identity_key, role) do
+      writable_primary = role == "master"
+
+      {:ok,
+       %{
+         "identity" => identity,
+         "namespace" => namespace(),
+         "role" => role,
+         "writable_primary" => writable_primary,
+         "healthy" => identity != "" and writable_primary
+       }}
+    else
+      {:error, reason} ->
+        {:error, {:coordination_store_unavailable, reason}}
+    end
+  end
+
   @doc false
   def enqueue_delivery(job_id, agent_id, message, opts) do
     message_id = MirrorNeuron.Message.id(message)
@@ -4449,6 +4478,39 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   defp delivery_job_count_key(job_id), do: key("job", job_id, "delivery_count")
   defp delivery_index_key(job_id), do: key("job", job_id, "delivery_keys")
+
+  defp coordination_store_identity(identity_key, "master") do
+    candidate =
+      24
+      |> :crypto.strong_rand_bytes()
+      |> Base.url_encode64(padding: false)
+
+    with {:ok, _result} <- command(["SET", identity_key, candidate, "NX"]),
+         {:ok, identity} when is_binary(identity) and identity != "" <-
+           command(["GET", identity_key]),
+         {:ok, "OK"} <- command(["SET", identity_key, identity, "XX"]) do
+      {:ok, identity}
+    else
+      {:ok, nil} -> {:error, :coordination_store_identity_missing}
+      {:ok, other} -> {:error, {:invalid_coordination_store_identity, other}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp coordination_store_identity(identity_key, role)
+       when role in ["slave", "replica"] do
+    case command(["GET", identity_key]) do
+      {:ok, identity} when is_binary(identity) and identity != "" -> {:ok, identity}
+      {:ok, _missing} -> {:error, :coordination_store_identity_missing}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp coordination_store_identity(_identity_key, role),
+    do: {:error, {:unsupported_redis_role, role}}
+
+  defp redis_role([role | _]) when is_binary(role), do: String.downcase(role)
+  defp redis_role(other), do: "unknown:#{inspect(other)}"
 
   defp command(args), do: command(args, redis_reconnect_attempts(), redis_reconnect_backoff_ms())
 

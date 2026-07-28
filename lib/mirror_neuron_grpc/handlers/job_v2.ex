@@ -35,9 +35,19 @@ defmodule MirrorNeuron.Grpc.Handlers.JobV2 do
   end
 
   def update_job(request, _stream) do
-    request.job_id
-    |> MirrorNeuron.update_job(Support.decode_json_map(request.attrs_json))
-    |> respond_definition(:summary)
+    attrs = Support.decode_json_map(request.attrs_json)
+
+    result =
+      if String.trim(request.manifest_json || "") == "" do
+        MirrorNeuron.update_job(request.job_id, attrs)
+      else
+        request
+        |> with_json_bundle(fn tmp_dir ->
+          MirrorNeuron.update_job_bundle(request.job_id, tmp_dir, attrs)
+        end)
+      end
+
+    respond_definition(result, :summary)
   end
 
   def archive_job(request, _stream) do

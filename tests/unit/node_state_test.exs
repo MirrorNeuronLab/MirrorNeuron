@@ -70,15 +70,30 @@ defmodule MirrorNeuron.Cluster.NodeStateTest do
     defp nodes, do: :persistent_term.get({__MODULE__, :nodes}, MapSet.new())
   end
 
+  defmodule CoordinationStoreStub do
+    def coordination_store_status do
+      {:ok,
+       %{
+         "identity" => "test-store",
+         "role" => "master",
+         "writable_primary" => true,
+         "healthy" => true
+       }}
+    end
+  end
+
   setup do
     old_store = Application.get_env(:mirror_neuron, :node_state_store)
+    old_coordination_store = Application.get_env(:mirror_neuron, :coordination_store)
 
     NodeStateStoreStub.reset()
     Application.put_env(:mirror_neuron, :node_state_store, NodeStateStoreStub)
+    Application.put_env(:mirror_neuron, :coordination_store, CoordinationStoreStub)
 
     on_exit(fn ->
       NodeStateStoreStub.reset()
       restore_env(:node_state_store, old_store)
+      restore_env(:coordination_store, old_coordination_store)
     end)
 
     :ok

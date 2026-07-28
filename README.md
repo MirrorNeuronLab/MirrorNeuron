@@ -368,6 +368,12 @@ a distinct `run_id`. Retries retain their run and receive a new attempt. See
 [STABLE_JOBS.md](STABLE_JOBS.md) for the full identity, storage, lifecycle,
 migration, and safety contract.
 
+Inactive definitions can atomically replace their executable bundle when the
+graph and blueprint identities are unchanged. The replacement preserves job
+data, schedules, and run history. Starting a stored job changes only run and
+attempt identity plus run-output paths; definition-scoped submission,
+container, and input resources stay unchanged.
+
 ### Inspect jobs and events
 
 ```elixir
@@ -561,6 +567,7 @@ present. Production does not require any `.env` file.
 | --- | --- |
 | `MN_REDIS_URL` | Redis connection URL for persisted runtime data. |
 | `MN_REDIS_NAMESPACE` | Prefix/namespace for stored MirrorNeuron runtime data. |
+| `MN_BLUEPRINT_PYTHON_ENVS_DIR` | Node-local HostLocal Python environment cache; defaults to `$MN_HOME/cache/blueprint-python-envs`. Do not place derived environments in synchronized shared storage. |
 | `MN_RECOVERY_EVAL_TTL_SECONDS` | Retention for terminal recovery eval diagnostics; defaults to 86400. |
 | `MN_CORE_HOST` | Host/IP used by the gRPC listener; defaults to loopback-style local binding. |
 | `MN_GRPC_PORT` | gRPC service port. |
@@ -591,7 +598,7 @@ present. Production does not require any `.env` file.
 | `MN_MESSAGE_DELIVERY_MAX_ATTEMPTS` | Processing attempts before dead-lettering; defaults to 10. |
 | `MN_MESSAGE_DELIVERY_POLL_MS` | Redis delivery polling interval when no wake-up signal arrives; defaults to 1000. |
 | `MN_RELIABILITY_STRATEGY` | Conservative runtime strategy resolver for new jobs. |
-| `MN_CHECKPOINT_ROOT` | Deprecated compatibility setting; ignored by runtime recovery. Local disk is not a job-state database. Removed in the next major release. |
+| `MN_CHECKPOINT_ROOT` | Deprecated local checkpoint/cleanup root; defaults to `$MN_HOME/checkpoints` and is ignored as a recovery authority. Redis is the job-state database. |
 | `MN_NODE_RECONNECT_ATTEMPTS` | Runtime node reconnect attempts before jobs are paused for manual restart. |
 | `MN_NODE_EXECUTION_PROFILES` | Comma-separated execution profiles this runtime node may advertise after warmup. |
 | `MN_NODE_CAPABILITIES` | Comma-separated runtime capabilities such as `video-codec:h264` or `ffmpeg`. |
@@ -644,6 +651,10 @@ started or peer-configured. The sidecar is LAN-only: on every start it disables
 Syncthing relays, global discovery, and NAT traversal while keeping local
 discovery enabled. Configure peer devices with LAN or VPN addresses when they
 cannot be discovered locally.
+Filesystem watching remains enabled and the fallback rescan interval defaults
+to 3600 seconds (`MN_SYNCTHING_RESCAN_INTERVAL_SECONDS`). Managed ignores keep
+derived Python environments, staged Python sources, and local checkpoints out
+of the replicated shared-data set.
 
 ---
 
@@ -670,6 +681,9 @@ control and deletion always target `run_id`. The original job service remains a
 temporary execution-oriented compatibility surface for historical clients.
 V2 responses keep expanded manifests and histories in durable storage and
 return bounded lifecycle metadata plus bundle/artifact references.
+`UpdateJobRequest` may include `manifest_json` and `payloads` to atomically
+replace an inactive definition's executable bundle without changing its graph
+or blueprint identity.
 `JobService.SendRunInput` accepts an authenticated, idempotent command for an
 active run. Core resolves the public input ID through the run's immutable
 manifest, validates its JSON schema and declared entrypoint route, and uses the

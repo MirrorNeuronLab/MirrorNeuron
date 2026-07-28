@@ -57,6 +57,19 @@ defmodule Mirrorneuron.Job.V2.ListJobsRequest do
   field(:version, 2, type: :uint32)
 end
 
+defmodule Mirrorneuron.Job.V2.UpdateJobRequest.PayloadsEntry do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v2.UpdateJobRequest.PayloadsEntry",
+    map: true,
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:key, 1, type: :string)
+  field(:value, 2, type: :bytes)
+end
+
 defmodule Mirrorneuron.Job.V2.UpdateJobRequest do
   @moduledoc false
 
@@ -68,6 +81,13 @@ defmodule Mirrorneuron.Job.V2.UpdateJobRequest do
   field(:job_id, 1, type: :string, json_name: "jobId")
   field(:attrs_json, 2, type: :string, json_name: "attrsJson")
   field(:version, 3, type: :uint32)
+  field(:manifest_json, 4, type: :string, json_name: "manifestJson")
+
+  field(:payloads, 5,
+    repeated: true,
+    type: Mirrorneuron.Job.V2.UpdateJobRequest.PayloadsEntry,
+    map: true
+  )
 end
 
 defmodule Mirrorneuron.Job.V2.DeleteJobRequest do

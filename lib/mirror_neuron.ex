@@ -52,6 +52,10 @@ defmodule MirrorNeuron do
   def get_job(job_id), do: MirrorNeuron.Runtime.StableJob.get(job_id)
   def list_stable_jobs(opts \\ []), do: MirrorNeuron.Runtime.StableJob.list(opts)
   def update_job(job_id, attrs), do: MirrorNeuron.Runtime.StableJob.update(job_id, attrs)
+
+  def update_job_bundle(job_id, input, attrs \\ %{}),
+    do: MirrorNeuron.Runtime.StableJob.replace_bundle(job_id, input, attrs)
+
   def archive_job(job_id), do: MirrorNeuron.Runtime.StableJob.archive(job_id)
   def reset_job_data(job_id), do: MirrorNeuron.Runtime.StableJob.reset_data(job_id)
 

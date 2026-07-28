@@ -14,7 +14,10 @@ defmodule MirrorNeuron.ConfigTest do
     "MN_NETWORK_ONLY",
     "MN_NETWORK_JOIN_TOKEN",
     "MN_GRPC_AUTH_TOKEN",
-    "MN_COOKIE"
+    "MN_COOKIE",
+    "MN_CHECKPOINT_ROOT",
+    "MN_BLUEPRINT_PYTHON_ENVS_DIR",
+    "MN_SYNCTHING_RESCAN_INTERVAL_SECONDS"
   ]
 
   setup do
@@ -146,6 +149,16 @@ defmodule MirrorNeuron.ConfigTest do
 
     assert Schema.spec_by_env("MN_API_PORT").key == :api_port
     assert Config.integer("MN_API_PORT", :api_port) == 8_081
+  end
+
+  test "node-local caches and checkpoints are the unset defaults" do
+    assert Schema.value!(Schema.spec_by_env("MN_BLUEPRINT_PYTHON_ENVS_DIR")) ==
+             Path.join(System.user_home!(), ".mn/cache/blueprint-python-envs")
+
+    assert Schema.value!(Schema.spec_by_env("MN_CHECKPOINT_ROOT")) ==
+             Path.join(System.user_home!(), ".mn/checkpoints")
+
+    assert Schema.value!(Schema.spec_by_env("MN_SYNCTHING_RESCAN_INTERVAL_SECONDS")) == 3_600
   end
 
   test "executable resolves commands installed in common user bin directories" do

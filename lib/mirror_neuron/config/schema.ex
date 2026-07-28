@@ -117,7 +117,9 @@ defmodule MirrorNeuron.Config.Schema do
       spec("MN_DOCKER_WORKER_ENABLED", :docker_worker_enabled, :boolean),
       spec("MN_DOCKER_WORKER_NETWORK", :docker_worker_network, :string),
       spec("MN_DOCKER_WORKER_BUILDKIT", :docker_worker_buildkit, :boolean),
-      spec("MN_BLUEPRINT_PYTHON_ENVS_DIR", :blueprint_python_envs_dir, :path),
+      spec("MN_BLUEPRINT_PYTHON_ENVS_DIR", :blueprint_python_envs_dir, :path,
+        default: {:home, ".mn/cache/blueprint-python-envs"}
+      ),
       spec(
         "MN_BLUEPRINT_PYTHON_ENV_SETUP_TIMEOUT_MS",
         :blueprint_python_env_setup_timeout_ms,
@@ -131,7 +133,7 @@ defmodule MirrorNeuron.Config.Schema do
       spec("MN_MAX_ARTIFACT_BYTES", :max_artifact_bytes, :integer, default: 1_048_576),
       spec("MN_MAX_FAN_OUT", :max_fan_out, :integer),
       spec("MN_TEMP_DIR", :temp_dir, :path, default: @default_temp_dir),
-      spec("MN_CHECKPOINT_ROOT", :checkpoint_root, :path, default: {:checkpoint_root}),
+      spec("MN_CHECKPOINT_ROOT", :checkpoint_root, :path, default: {:home, ".mn/checkpoints"}),
       spec("MN_BLOB_STORE_ROOT", :blob_store_root, :path, default: {:home, ".mn/blobs"}),
       spec("MN_JOB_ARTIFACT_ROOT", :job_artifact_root, :path, default: {:job_artifact_root}),
       spec("MN_JOB_DATA_ROOT", :job_data_root, :path, default: {:job_data_root}),
@@ -144,6 +146,12 @@ defmodule MirrorNeuron.Config.Schema do
       spec("MN_SYNCTHING_ADVERTISE_HOST", :syncthing_advertise_host, :string, default: ""),
       spec("MN_SYNCTHING_GUI_PORT", :syncthing_gui_port, :integer, default: 58_384),
       spec("MN_SYNCTHING_SYNC_PORT", :syncthing_sync_port, :integer, default: 22_000),
+      spec(
+        "MN_SYNCTHING_RESCAN_INTERVAL_SECONDS",
+        :syncthing_rescan_interval_seconds,
+        :integer,
+        default: 3_600
+      ),
       spec("MN_SYNCTHING_FOLDER_ID", :syncthing_folder_id, :string,
         default: "mirror-neuron-shared"
       ),
@@ -285,7 +293,6 @@ defmodule MirrorNeuron.Config.Schema do
   end
 
   defp default_value({:home, path}), do: Path.join(System.user_home!(), path) |> Path.expand()
-  defp default_value({:checkpoint_root}), do: Path.join(shared_storage_root(), "checkpoints")
   defp default_value(value), do: value
 
   defp redis_url_default do

@@ -7,7 +7,8 @@ defmodule MirrorNeuron.CustomModelCapabilityAdvertisementTest do
     "MN_NODE_HARDWARE_JSON",
     "MN_NATIVE_SDK_GRPC_ADVERTISE_HOST",
     "MN_NATIVE_SDK_GRPC_ADVERTISE_PORT",
-    "MN_RUNTIME_SHARED_STORAGE_ROOT"
+    "MN_RUNTIME_SHARED_STORAGE_ROOT",
+    "MN_SYNCTHING_RESCAN_INTERVAL_SECONDS"
   ]
 
   setup do
@@ -27,6 +28,7 @@ defmodule MirrorNeuron.CustomModelCapabilityAdvertisementTest do
     System.put_env("MN_NATIVE_SDK_GRPC_ADVERTISE_HOST", "192.168.4.173")
     System.put_env("MN_NATIVE_SDK_GRPC_ADVERTISE_PORT", "55052")
     System.put_env("MN_RUNTIME_SHARED_STORAGE_ROOT", "/tmp/mn-shared")
+    System.put_env("MN_SYNCTHING_RESCAN_INTERVAL_SECONDS", "7200")
 
     System.put_env(
       "MN_NODE_HARDWARE_JSON",
@@ -45,5 +47,6 @@ defmodule MirrorNeuron.CustomModelCapabilityAdvertisementTest do
 
     assert info["native_sdk_grpc"]["target"] == "192.168.4.173:55052"
     assert info["native_sdk_grpc"]["capabilities"] == ["custom_hf_model_v1"]
+    assert info["syncthing"]["rescan_interval_seconds"] == 7_200
   end
 end

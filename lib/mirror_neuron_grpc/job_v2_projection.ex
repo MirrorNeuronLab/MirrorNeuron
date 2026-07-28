@@ -3,7 +3,7 @@ defmodule MirrorNeuron.Grpc.JobV2Projection do
 
   @summary_fields ~w(
     job_id blueprint_id graph_id job_name owner_node status data_generation
-    latest_run_id created_at updated_at bundle_ref
+    latest_run_id created_at updated_at bundle_ref retired_definition_resources
   )
   @detail_fields @summary_fields ++
                    ~w(resolved_configuration schedules schedule_ids storage)

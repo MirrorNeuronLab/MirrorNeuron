@@ -3,7 +3,6 @@ defmodule MirrorNeuron.Persistence.DiskCheckpoint do
 
   require Logger
 
-  alias MirrorNeuron.Artifacts.SharedStorage
   alias MirrorNeuron.Config
   alias MirrorNeuron.Persistence.CheckpointLock
 
@@ -44,7 +43,7 @@ defmodule MirrorNeuron.Persistence.DiskCheckpoint do
   def root do
     base_root =
       Config.optional_string("MN_CHECKPOINT_ROOT", :checkpoint_root) ||
-        Path.join(SharedStorage.root(), "checkpoints")
+        Path.join(System.user_home!(), ".mn/checkpoints")
 
     namespace = Config.string("MN_REDIS_NAMESPACE", :redis_namespace)
     Path.join(base_root, encoded_segment(namespace))

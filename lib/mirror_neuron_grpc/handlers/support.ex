@@ -138,21 +138,50 @@ defmodule MirrorNeuron.Grpc.Handlers.Support do
   defp runtime_error_status({:retry_later, _details}), do: GRPC.Status.resource_exhausted()
   defp runtime_error_status({:invalid_live_input, _reason}), do: GRPC.Status.invalid_argument()
   defp runtime_error_status({:inactive_run, _status}), do: GRPC.Status.failed_precondition()
+  defp runtime_error_status({:active_runs, _run_ids}), do: GRPC.Status.failed_precondition()
+
+  defp runtime_error_status({:job_bundle_identity_mismatch, _current, _replacement}),
+    do: GRPC.Status.failed_precondition()
 
   defp runtime_error_status(reason) do
     message = reason |> MirrorNeuron.Runtime.error_message() |> String.downcase()
 
     cond do
-      String.contains?(message, "not running") -> GRPC.Status.not_found()
-      String.contains?(message, "not found") -> GRPC.Status.not_found()
-      String.contains?(message, "timed out") -> GRPC.Status.deadline_exceeded()
-      String.contains?(message, "timeout") -> GRPC.Status.deadline_exceeded()
-      String.contains?(message, "backpressure") -> GRPC.Status.resource_exhausted()
-      String.contains?(message, "retry later") -> GRPC.Status.resource_exhausted()
-      String.contains?(message, "not paused") -> GRPC.Status.failed_precondition()
-      String.contains?(message, "terminal state") -> GRPC.Status.failed_precondition()
-      String.contains?(message, "unavailable") -> GRPC.Status.unavailable()
-      true -> GRPC.Status.internal()
+      String.contains?(message, "coordination_store_mismatch") ->
+        GRPC.Status.failed_precondition()
+
+      String.contains?(message, "single_node_manifest_spans_multiple_nodes") ->
+        GRPC.Status.failed_precondition()
+
+      String.contains?(message, "not running") ->
+        GRPC.Status.not_found()
+
+      String.contains?(message, "not found") ->
+        GRPC.Status.not_found()
+
+      String.contains?(message, "timed out") ->
+        GRPC.Status.deadline_exceeded()
+
+      String.contains?(message, "timeout") ->
+        GRPC.Status.deadline_exceeded()
+
+      String.contains?(message, "backpressure") ->
+        GRPC.Status.resource_exhausted()
+
+      String.contains?(message, "retry later") ->
+        GRPC.Status.resource_exhausted()
+
+      String.contains?(message, "not paused") ->
+        GRPC.Status.failed_precondition()
+
+      String.contains?(message, "terminal state") ->
+        GRPC.Status.failed_precondition()
+
+      String.contains?(message, "unavailable") ->
+        GRPC.Status.unavailable()
+
+      true ->
+        GRPC.Status.internal()
     end
   end
 end

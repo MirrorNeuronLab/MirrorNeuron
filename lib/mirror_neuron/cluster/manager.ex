@@ -24,6 +24,7 @@ defmodule MirrorNeuron.Cluster.Manager do
               native_sdk_grpc: native_sdk_grpc_info(node, state, hardware_info),
               status: Map.get(state, "status", "healthy"),
               scheduling_eligible: Map.get(state, "scheduling_eligible", true),
+              coordination_store: Map.get(state, "coordination_store", %{}),
               drain: Map.get(state, "drain"),
               runtime_status: Map.get(state, "runtime_status", %{}),
               connected_nodes: runtime_connected_nodes(node),

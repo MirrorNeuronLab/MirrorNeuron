@@ -14,6 +14,19 @@ defmodule MirrorNeuron.Runtime.StableJob do
   alias MirrorNeuron.Runtime
 
   @terminal_statuses ["completed", "failed", "cancelled"]
+  @definition_scoped_keys ~w(
+    submission_id submission_path host_submission_path
+    docker_worker_container_name docker_worker_compose_service
+    container_name service
+    MN_STORAGE_SUBMISSION_ID MN_JOB_SHARED_STORAGE_ROOT
+    MN_JOB_INPUT_DIR MN_JOB_OUTPUT_DIR MN_RUNS_ROOT
+  )
+  @run_identity_keys ~w(
+    run_id blueprint_run_id MN_RUN_ID MN_ATTEMPT_ID
+  )
+  @run_output_keys ~w(
+    run_dir run_path blueprint_run_dir MN_RUN_DIR
+  )
   @start_gate_ttl_ms 600_000
   @start_gate_retries 50
   @start_gate_retry_ms 100
@@ -76,13 +89,59 @@ defmodule MirrorNeuron.Runtime.StableJob do
     with_start_gate(job_id, fn ->
       with {:ok, definition} <- get(job_id),
            {:ok, normalized_attrs} <- normalize_update(definition, stringify(attrs)) do
-        updated = Map.merge(definition, Map.take(normalized_attrs, allowed))
+        updated =
+          definition
+          |> Map.merge(Map.take(normalized_attrs, allowed))
+          |> Map.put("updated_at", Runtime.timestamp())
+
         RedisStore.persist_job_definition(job_id, updated)
       end
     end)
   end
 
   def update(_job_id, _attrs), do: {:error, :invalid_job_update}
+
+  def replace_bundle(job_id, input, attrs \\ %{})
+
+  def replace_bundle(job_id, input, attrs) when is_map(attrs) do
+    allowed = ~w(resolved_configuration schedules storage job_name)
+
+    with_start_gate(job_id, fn ->
+      with {:ok, definition} <- get(job_id),
+           :ok <- ensure_active(definition),
+           :ok <- ensure_no_active_runs(definition),
+           {:ok, bundle} <- JobBundle.load(input),
+           :ok <- ensure_same_bundle_identity(definition, bundle),
+           {:ok, normalized_attrs} <- normalize_update(definition, stringify(attrs)) do
+        updated =
+          definition
+          |> Map.merge(Map.take(normalized_attrs, allowed))
+          |> Map.merge(%{
+            "blueprint_id" => blueprint_id(bundle.manifest),
+            "graph_id" => bundle.manifest.graph_id,
+            "job_name" => bundle.manifest.job_name,
+            "manifest" => Manifest.to_map(bundle.manifest),
+            "bundle_ref" => Runtime.bundle_ref(bundle.manifest, bundle),
+            "updated_at" => Runtime.timestamp()
+          })
+
+        case RedisStore.persist_job_definition(job_id, updated) do
+          {:ok, saved} ->
+            {:ok,
+             Map.put(
+               saved,
+               "retired_definition_resources",
+               definition_resource_descriptor(definition)
+             )}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+      end
+    end)
+  end
+
+  def replace_bundle(_job_id, _input, _attrs), do: {:error, :invalid_job_update}
 
   def archive(job_id) do
     with_start_gate(job_id, fn ->
@@ -302,17 +361,98 @@ defmodule MirrorNeuron.Runtime.StableJob do
 
   defp rebind_run_value(value, previous_run_id, run_id) when is_map(value) do
     Map.new(value, fn {key, child} ->
-      {key, rebind_run_value(child, previous_run_id, run_id)}
+      {key, rebind_run_child(to_string(key), child, previous_run_id, run_id)}
     end)
   end
 
   defp rebind_run_value(value, previous_run_id, run_id) when is_list(value),
     do: Enum.map(value, &rebind_run_value(&1, previous_run_id, run_id))
 
-  defp rebind_run_value(value, previous_run_id, run_id) when is_binary(value),
-    do: String.replace(value, previous_run_id, run_id)
-
   defp rebind_run_value(value, _previous_run_id, _run_id), do: value
+
+  defp rebind_run_child(key, child, _previous_run_id, _run_id)
+       when is_binary(key) and key in @definition_scoped_keys,
+       do: child
+
+  defp rebind_run_child("MN_BLUEPRINT_CONFIG_JSON", child, previous_run_id, run_id)
+       when is_binary(child) do
+    case Jason.decode(child) do
+      {:ok, config} when is_map(config) ->
+        config
+        |> rebind_blueprint_config(previous_run_id, run_id)
+        |> Jason.encode!()
+
+      _invalid ->
+        child
+    end
+  end
+
+  defp rebind_run_child("output_copy", child, previous_run_id, run_id)
+       when is_list(child) do
+    Enum.map(child, &rebind_output_copy_spec(&1, previous_run_id, run_id))
+  end
+
+  defp rebind_run_child(key, child, previous_run_id, run_id)
+       when is_binary(key) and key in @run_output_keys and is_binary(child) do
+    replace_terminal_path_segment(child, previous_run_id, run_id)
+  end
+
+  defp rebind_run_child(key, child, previous_run_id, run_id)
+       when is_binary(key) and key in @run_identity_keys and is_binary(child),
+       do: String.replace(child, previous_run_id, run_id)
+
+  defp rebind_run_child(_key, child, previous_run_id, run_id),
+    do: rebind_run_value(child, previous_run_id, run_id)
+
+  defp rebind_blueprint_config(value, previous_run_id, run_id) when is_map(value) do
+    Map.new(value, fn {key, child} ->
+      key = to_string(key)
+
+      rebound =
+        cond do
+          key in @definition_scoped_keys ->
+            child
+
+          key in @run_identity_keys and is_binary(child) ->
+            String.replace(child, previous_run_id, run_id)
+
+          key in @run_output_keys and is_binary(child) ->
+            replace_terminal_path_segment(child, previous_run_id, run_id)
+
+          true ->
+            rebind_blueprint_config(child, previous_run_id, run_id)
+        end
+
+      {key, rebound}
+    end)
+  end
+
+  defp rebind_blueprint_config(value, previous_run_id, run_id) when is_list(value),
+    do: Enum.map(value, &rebind_blueprint_config(&1, previous_run_id, run_id))
+
+  defp rebind_blueprint_config(value, _previous_run_id, _run_id), do: value
+
+  defp rebind_output_copy_spec(value, previous_run_id, run_id) when is_map(value) do
+    Map.new(value, fn {key, child} ->
+      if to_string(key) in ["source_path", "target_path"] and is_binary(child) do
+        {key, replace_terminal_path_segment(child, previous_run_id, run_id)}
+      else
+        {key, child}
+      end
+    end)
+  end
+
+  defp rebind_output_copy_spec(value, _previous_run_id, _run_id), do: value
+
+  defp replace_terminal_path_segment(value, previous_run_id, run_id) do
+    suffix = "/" <> previous_run_id
+
+    if String.ends_with?(value, suffix) do
+      String.replace_suffix(value, suffix, "/" <> run_id)
+    else
+      value
+    end
+  end
 
   defp merge_runtime_configuration(environment, definition, run_id) do
     case Map.get(environment, "MN_BLUEPRINT_CONFIG_JSON") do
@@ -515,6 +655,28 @@ defmodule MirrorNeuron.Runtime.StableJob do
 
   defp blueprint_id(manifest) do
     get_in(manifest.metadata || %{}, ["blueprint_id"]) || manifest.graph_id
+  end
+
+  defp ensure_same_bundle_identity(definition, bundle) do
+    current = {definition["graph_id"], definition["blueprint_id"]}
+    replacement = {bundle.manifest.graph_id, blueprint_id(bundle.manifest)}
+
+    if current == replacement,
+      do: :ok,
+      else: {:error, {:job_bundle_identity_mismatch, current, replacement}}
+  end
+
+  defp definition_resource_descriptor(definition) do
+    metadata = get_in(definition, ["manifest", "metadata"]) || %{}
+
+    %{
+      "metadata" =>
+        Map.take(metadata, [
+          "mn_storage",
+          "mn_docker_workers",
+          "mn_docker_worker_shared_contexts"
+        ])
+    }
   end
 
   defp stable_job_id(graph_id), do: "job_#{JobId.generate(graph_id)}"

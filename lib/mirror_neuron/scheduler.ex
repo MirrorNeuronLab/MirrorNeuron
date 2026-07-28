@@ -121,11 +121,15 @@ defmodule MirrorNeuron.Scheduler do
          {:ok, demands} <- workload_demands(manifest),
          lookup_node_state <-
            Keyword.get(opts, :lookup_node_state, not Keyword.has_key?(opts, :nodes)),
+         {:ok, coordination_store} <-
+           coordination_store_for_plan(opts, lookup_node_state),
          nodes <-
            opts
            |> Keyword.get_lazy(:nodes, &default_nodes/0)
-           |> normalize_nodes(lookup_node_state),
+           |> normalize_nodes(lookup_node_state, coordination_store)
+           |> apply_coordination_store_eligibility(coordination_store),
          nodes <- exclude_nodes(nodes, Keyword.get(opts, :exclude_nodes, [])),
+         :ok <- ensure_coordination_store(nodes, coordination_store),
          :ok <- ensure_nodes(nodes),
          blob_refs <- BlobRef.collect(Manifest.to_map(manifest)),
          usage <-
@@ -144,7 +148,8 @@ defmodule MirrorNeuron.Scheduler do
              only_agent_ids,
              service_instances,
              blob_refs
-           ) do
+           ),
+         :ok <- ensure_single_node_workflow_plan(manifest, placements) do
       {:ok,
        %{
          "status" => "planned",
@@ -385,10 +390,10 @@ defmodule MirrorNeuron.Scheduler do
     _ -> [%{"name" => to_string(Node.self()), "hardware" => Hardware.info()}]
   end
 
-  defp normalize_nodes(nodes, lookup_node_state) do
+  defp normalize_nodes(nodes, lookup_node_state, coordination_store) do
     nodes
     |> List.wrap()
-    |> Enum.map(&normalize_node(&1, lookup_node_state))
+    |> Enum.map(&normalize_node(&1, lookup_node_state, coordination_store))
     |> Enum.reject(&is_nil/1)
   end
 
@@ -402,7 +407,7 @@ defmodule MirrorNeuron.Scheduler do
     Enum.reject(nodes, &(Map.get(&1, "name") in excluded))
   end
 
-  defp normalize_node(node, lookup_node_state) when is_map(node) do
+  defp normalize_node(node, lookup_node_state, coordination_store) when is_map(node) do
     name = map_get(node, "name") || map_get(node, "node") || to_string(Node.self())
     stored = if lookup_node_state, do: stored_node_state(name), else: %{}
     hardware = map_get(node, "hardware") || map_get(stored, "hardware") || local_hardware(name)
@@ -435,6 +440,11 @@ defmodule MirrorNeuron.Scheduler do
       end
       |> eligible_value()
 
+    node_coordination_store =
+      map_get(node, "coordination_store") ||
+        map_get(stored, "coordination_store") ||
+        if(name == to_string(Node.self()), do: coordination_store, else: nil)
+
     capabilities =
       []
       |> Kernel.++(list_value(map_get(node, "capabilities")))
@@ -463,6 +473,7 @@ defmodule MirrorNeuron.Scheduler do
       "name" => name,
       "status" => status,
       "scheduling_eligible" => scheduling_eligible,
+      "coordination_store" => stringify_map(node_coordination_store || %{}),
       "drain" => map_get(node, "drain") || map_get(stored, "drain"),
       "hardware" => hardware,
       "profiles" => list_value(map_get(node, "profiles") || map_get(stored, "profiles")),
@@ -476,7 +487,7 @@ defmodule MirrorNeuron.Scheduler do
     }
   end
 
-  defp normalize_node(_node, _lookup_node_state), do: nil
+  defp normalize_node(_node, _lookup_node_state, _coordination_store), do: nil
 
   defp stored_node_state(name) do
     case NodeState.fetch(name) do
@@ -501,6 +512,113 @@ defmodule MirrorNeuron.Scheduler do
     else
       {:error, "no schedulable runtime nodes are available"}
     end
+  end
+
+  defp coordination_store_for_plan(opts, true) do
+    case Keyword.get(opts, :coordination_store) do
+      coordination_store when is_map(coordination_store) ->
+        {:ok, stringify_map(coordination_store)}
+
+      _missing ->
+        case RedisStore.coordination_store_status() do
+          {:ok, status} -> {:ok, status}
+          {:error, reason} -> {:error, "coordination_store_mismatch: #{inspect(reason)}"}
+        end
+    end
+  end
+
+  defp coordination_store_for_plan(opts, false) do
+    case Keyword.get(opts, :coordination_store) do
+      coordination_store when is_map(coordination_store) ->
+        {:ok, stringify_map(coordination_store)}
+
+      _missing ->
+        {:ok, nil}
+    end
+  end
+
+  defp apply_coordination_store_eligibility(nodes, nil), do: nodes
+
+  defp apply_coordination_store_eligibility(nodes, expected) do
+    expected_identity = map_get(expected, "identity")
+
+    Enum.map(nodes, fn node ->
+      actual = map_get(node, "coordination_store") || %{}
+
+      reason =
+        cond do
+          expected_identity in [nil, ""] ->
+            "local coordination store has no identity"
+
+          map_get(actual, "identity") != expected_identity ->
+            "coordination store identity does not match the local runtime"
+
+          map_get(actual, "writable_primary") != true ->
+            "coordination store is not a writable primary"
+
+          true ->
+            nil
+        end
+
+      if reason do
+        node
+        |> Map.put("scheduling_eligible", false)
+        |> Map.put("coordination_store_rejection", reason)
+      else
+        node
+      end
+    end)
+  end
+
+  defp ensure_coordination_store(_nodes, nil), do: :ok
+
+  defp ensure_coordination_store(nodes, expected) do
+    expected_identity = map_get(expected, "identity")
+    writable_primary = map_get(expected, "writable_primary")
+
+    cond do
+      expected_identity in [nil, ""] or writable_primary != true ->
+        {:error, "coordination_store_mismatch: local Redis is not a writable identified primary"}
+
+      Enum.any?(nodes, &is_nil(Map.get(&1, "coordination_store_rejection"))) ->
+        :ok
+
+      true ->
+        details =
+          nodes
+          |> Enum.map(
+            &"#{Map.get(&1, "name")}: #{Map.get(&1, "coordination_store_rejection", "unknown")}"
+          )
+          |> Enum.join("; ")
+
+        {:error, "coordination_store_mismatch: #{details}"}
+    end
+  end
+
+  defp ensure_single_node_workflow_plan(manifest, placements) do
+    if single_node_workflow?(manifest) do
+      placement_nodes =
+        placements
+        |> Enum.map(&Map.get(&1, "node"))
+        |> Enum.reject(&is_nil/1)
+        |> Enum.uniq()
+
+      if length(placement_nodes) <= 1 do
+        :ok
+      else
+        {:error, "single_node_manifest_spans_multiple_nodes: #{Enum.join(placement_nodes, ", ")}"}
+      end
+    else
+      :ok
+    end
+  end
+
+  defp single_node_workflow?(manifest) do
+    metadata = manifest.metadata || %{}
+    runtime = manifest.runtime || %{}
+
+    get_in(metadata, ["mn_workflow_placement", "mode"]) == "single_node" or
+      get_in(runtime, ["placement", "mode"]) == "single_node"
   end
 
   defp active_jobs do
@@ -1356,7 +1474,7 @@ defmodule MirrorNeuron.Scheduler do
         "status #{inspect(node["status"])}"
 
       Map.get(node, "scheduling_eligible", true) == false ->
-        "scheduling is disabled"
+        Map.get(node, "coordination_store_rejection") || "scheduling is disabled"
 
       true ->
         "unavailable"

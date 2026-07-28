@@ -14,7 +14,16 @@ defmodule MirrorNeuron.Runtime.StableJobTest do
                "entrypoints" => ["worker"],
                "metadata" => %{
                  "blueprint_run_id" => previous_run_id,
-                 "run_id" => previous_run_id
+                 "run_id" => previous_run_id,
+                 "mn_storage" => %{
+                   "input_source_path" => "/inputs/#{previous_run_id}",
+                   "output_copy" => [
+                     %{
+                       "source_path" => "/outputs/#{previous_run_id}",
+                       "target_path" => "/runs/#{previous_run_id}"
+                     }
+                   ]
+                 }
                },
                "flow" => %{
                  "nodes" => [
@@ -27,9 +36,14 @@ defmodule MirrorNeuron.Runtime.StableJobTest do
                        "environment" => %{
                          "MN_RUN_ID" => previous_run_id,
                          "MN_RUN_DIR" => "/runs/#{previous_run_id}",
+                         "MN_STORAGE_SUBMISSION_ID" => "definition-#{previous_run_id}",
+                         "docker_worker_container_name" => "worker-#{previous_run_id}",
                          "MN_BLUEPRINT_CONFIG_JSON" =>
                            Jason.encode!(%{
                              "identity" => %{"run_id" => previous_run_id},
+                             "submission_id" => "definition-#{previous_run_id}",
+                             "container_name" => "worker-#{previous_run_id}",
+                             "source_path" => "/runs/#{previous_run_id}",
                              "mode" => "default"
                            })
                        }
@@ -63,19 +77,35 @@ defmodule MirrorNeuron.Runtime.StableJobTest do
 
     assert get_in(prepared_map, ["metadata", "job_id"]) == "stable-job"
     assert get_in(prepared_map, ["metadata", "run_id"]) == "run-2"
+
+    assert get_in(prepared_map, ["metadata", "mn_storage", "input_source_path"]) ==
+             "/inputs/bootstrap-run"
+
+    assert get_in(prepared_map, [
+             "metadata",
+             "mn_storage",
+             "output_copy",
+             Access.at(0),
+             "source_path"
+           ]) == "/outputs/run-2"
+
     assert environment["MN_JOB_ID"] == "stable-job"
     assert environment["MN_RUN_ID"] == "run-2"
     assert environment["MN_RUN_DIR"] == "/runs/run-2"
+    assert environment["MN_STORAGE_SUBMISSION_ID"] == "definition-bootstrap-run"
+    assert environment["docker_worker_container_name"] == "worker-bootstrap-run"
     assert environment["MN_JOB_DATA_ACCESS"] == "read"
 
     assert config == %{
              "identity" => %{"job_id" => "stable-job", "run_id" => "run-2"},
+             "submission_id" => "definition-bootstrap-run",
+             "container_name" => "worker-bootstrap-run",
+             "source_path" => "/runs/bootstrap-run",
              "mode" => "safe",
              "threshold" => 2
            }
 
     assert get_in(prepared.initial_inputs, ["identity", "job_id"]) == "stable-job"
     assert get_in(prepared.initial_inputs, ["identity", "run_id"]) == "run-2"
-    refute inspect(prepared_map) =~ previous_run_id
   end
 end

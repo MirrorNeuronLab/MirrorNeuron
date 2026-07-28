@@ -49,6 +49,25 @@ defmodule MirrorNeuron.Cluster.NodeState do
           Map.merge(existing, attrs) |> Map.put("scheduling_eligible", false)
         )
 
+      {:ok, %{"coordination_store_blocked" => true} = existing} ->
+        merged = Map.merge(existing, attrs)
+
+        if get_in(merged, ["coordination_store", "healthy"]) == true do
+          mark(
+            node_name,
+            "healthy",
+            merged
+            |> Map.put("coordination_store_blocked", false)
+            |> Map.put("scheduling_eligible", true)
+          )
+        else
+          mark(
+            node_name,
+            Map.get(existing, "status", "healthy"),
+            Map.put(merged, "scheduling_eligible", false)
+          )
+        end
+
       {:ok, %{"scheduling_eligible" => false} = existing} ->
         if clears_cordon?(attrs) do
           mark(
@@ -62,6 +81,9 @@ defmodule MirrorNeuron.Cluster.NodeState do
         else
           mark(node_name, Map.get(existing, "status", "maintenance"), Map.merge(existing, attrs))
         end
+
+      {:ok, existing} when is_map(existing) ->
+        mark(node_name, "healthy", Map.merge(existing, attrs))
 
       _ ->
         mark(node_name, "healthy", attrs)
@@ -148,16 +170,26 @@ defmodule MirrorNeuron.Cluster.NodeState do
 
   def advertise_self(status \\ "healthy", attrs \\ %{}) do
     hardware = map_get(attrs, "hardware") || Hardware.info()
+    coordination_store = coordination_store_status()
+    coordination_healthy = Map.get(coordination_store, "healthy") == true
 
     attrs =
       %{"node_role" => MirrorNeuron.Application.node_role()}
       |> Map.put("hardware", hardware)
+      |> Map.put("coordination_store", coordination_store)
+      |> Map.put("coordination_store_blocked", not coordination_healthy)
       |> Map.merge(Profile.node_advertisement())
       |> Map.merge(MirrorNeuron.Artifacts.Registry.node_advertisement())
       |> Map.merge(attrs)
       |> Map.update("profiles", [], &(list_value(&1) |> Enum.uniq() |> Enum.sort()))
       |> Map.put_new("operator_disconnect", false)
-      |> Map.put_new("scheduling_eligible", true)
+      |> then(
+        &Map.put(
+          &1,
+          "scheduling_eligible",
+          coordination_healthy and map_get(&1, "scheduling_eligible") != false
+        )
+      )
       |> merge_capabilities(hardware)
 
     ModelServices.advertise_env_models(NodeAdapter.self())
@@ -169,6 +201,25 @@ defmodule MirrorNeuron.Cluster.NodeState do
       )
     else
       mark(NodeAdapter.self(), status, attrs)
+    end
+  end
+
+  defp coordination_store_status do
+    coordination_store =
+      Application.get_env(:mirror_neuron, :coordination_store, RedisStore)
+
+    case coordination_store.coordination_store_status() do
+      {:ok, status} ->
+        status
+
+      {:error, reason} ->
+        %{
+          "identity" => "",
+          "role" => "unknown",
+          "writable_primary" => false,
+          "healthy" => false,
+          "error" => inspect(reason)
+        }
     end
   end
 

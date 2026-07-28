@@ -44,6 +44,8 @@ message UpdateJobRequest {
   string job_id = 1;
   string attrs_json = 2;
   uint32 version = 3;
+  string manifest_json = 4;
+  map<string, bytes> payloads = 5;
 }
 
 message DeleteJobRequest {

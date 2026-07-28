@@ -1384,7 +1384,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
 
   defp python_environment_cache_root do
     Config.optional_string("MN_BLUEPRINT_PYTHON_ENVS_DIR", :blueprint_python_envs_dir) ||
-      Path.join(Config.string("MN_TEMP_DIR", :temp_dir), "blueprint_python_envs")
+      Path.join(System.user_home!(), ".mn/cache/blueprint-python-envs")
   end
 
   defp python_environment_setup_timeout_ms do

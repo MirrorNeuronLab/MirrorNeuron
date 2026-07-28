@@ -168,6 +168,7 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
         MirrorNeuron.Config.string("MN_RUNTIME_SHARED_STORAGE_ROOT", :runtime_shared_storage_root),
       "syncthing" => syncthing_node_info(),
       "redis_ha" => redis_ha_node_info(),
+      "coordination_store" => coordination_store_node_info(),
       "native_sdk_grpc" => native_sdk_grpc_node_info(hardware),
       "display_name" => map_value(platform, "display_name"),
       "hostname" => map_value(platform, "hostname"),
@@ -180,6 +181,22 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
       "runtime_models" => ModelServices.env_model_refs(),
       "services" => ModelServices.service_instances_for_env(System.get_env(), NodeAdapter.self())
     }
+  end
+
+  defp coordination_store_node_info do
+    case MirrorNeuron.Persistence.RedisStore.coordination_store_status() do
+      {:ok, status} ->
+        status
+
+      {:error, reason} ->
+        %{
+          "identity" => "",
+          "role" => "unknown",
+          "writable_primary" => false,
+          "healthy" => false,
+          "error" => inspect(reason)
+        }
+    end
   end
 
   defp redis_ha_node_info do
@@ -223,6 +240,11 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
         MirrorNeuron.Config.string("MN_SYNCTHING_ADVERTISE_HOST", :syncthing_advertise_host),
       "gui_port" => MirrorNeuron.Config.integer("MN_SYNCTHING_GUI_PORT", :syncthing_gui_port),
       "sync_port" => MirrorNeuron.Config.integer("MN_SYNCTHING_SYNC_PORT", :syncthing_sync_port),
+      "rescan_interval_seconds" =>
+        MirrorNeuron.Config.integer(
+          "MN_SYNCTHING_RESCAN_INTERVAL_SECONDS",
+          :syncthing_rescan_interval_seconds
+        ),
       "folder_id" => MirrorNeuron.Config.string("MN_SYNCTHING_FOLDER_ID", :syncthing_folder_id),
       "folder_path" =>
         MirrorNeuron.Config.string("MN_SYNCTHING_FOLDER_PATH", :syncthing_folder_path)
@@ -356,8 +378,7 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
   end
 
   defp redis_uri do
-    "MN_REDIS_URL"
-    |> MirrorNeuron.Config.string(:redis_url)
+    MirrorNeuron.Redis.connection_url()
     |> URI.parse()
   end
 

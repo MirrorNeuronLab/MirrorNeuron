@@ -38,6 +38,12 @@ the embedded expanded manifest, private runtime paths, or the full run-ID
 history. A submitted bundle is loaded, normalized, validated, checked
 for services and requirements, admitted to resources, and started under
 per-run supervision.
+An inactive stable job may atomically replace its executable bundle only when
+the graph and blueprint identities are unchanged. Replacement preserves job
+data, schedules, and run history. Run preparation rewrites only run/attempt
+identity and run-output locations; submission IDs, containers, input roots,
+and definition-owned resources remain immutable until a later bundle
+replacement retires them.
 Runtime nodes are long-lived OTP processes. Generic built-ins and templates
 route messages and invoke configured runner behavior.
 
@@ -125,6 +131,12 @@ call must preserve the public result of the same local operation.
 Scheduling and admission consider declared CPU, memory, GPU, services, models,
 node state, and execution profiles. Lack of an admissible placement returns an
 actionable failure; it does not bypass requirements.
+Every Redis namespace carries an opaque coordination-store identity. Runtime
+nodes advertise that identity, Redis role, and writable-primary status.
+Scheduling excludes nodes that do not match the submitting Core's writable
+primary and reports `coordination_store_mismatch` before a run enters
+`running`. A manifest declaring `runtime.placement.mode=single_node` is rejected
+if its final lowered plan spans more than one node.
 
 ## Execution and Isolation
 
