@@ -224,9 +224,10 @@ defmodule MirrorNeuron.Runtime.StableJob do
         with {:ok, definition} <- get(job_id),
              :ok <- ensure_no_active_runs(definition),
              :ok <- delete_job_schedules(job_id),
+             :ok <- delete_historical_runs(definition),
              :ok <- JobData.delete(job_id),
              :ok <- RedisStore.delete_job_definition(job_id) do
-          :ok
+          {:ok, definition_resource_descriptor(definition)}
         end
       end)
     else
@@ -595,6 +596,38 @@ defmodule MirrorNeuron.Runtime.StableJob do
       end)
     end
   end
+
+  defp delete_historical_runs(definition) do
+    definition
+    |> Map.get("run_ids", [])
+    |> Enum.uniq()
+    |> Enum.reduce_while(:ok, fn run_id, :ok ->
+      case delete_historical_run(run_id) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, {:run_cleanup_failed, run_id, reason}}}
+      end
+    end)
+  end
+
+  defp delete_historical_run(run_id) do
+    case RedisStore.fetch_job(run_id) do
+      {:ok, _run} ->
+        Runtime.clear_job(run_id)
+
+      {:error, reason} ->
+        if missing_run?(run_id, reason) do
+          with :ok <- Runtime.cleanup_job_resources(run_id, nil),
+               :ok <- RedisStore.delete_job(run_id) do
+            :ok
+          end
+        else
+          {:error, reason}
+        end
+    end
+  end
+
+  defp missing_run?(run_id, reason),
+    do: reason == "job #{run_id} was not found"
 
   defp pause_job_schedules(job_id) do
     with {:ok, schedules} <- RedisStore.list_schedules() do

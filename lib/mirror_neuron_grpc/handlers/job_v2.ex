@@ -64,8 +64,15 @@ defmodule MirrorNeuron.Grpc.Handlers.JobV2 do
 
   def delete_job(request, _stream) do
     case MirrorNeuron.delete_stable_job(request.job_id, confirmed: request.confirmed) do
-      :ok -> response(%{"job_id" => request.job_id, "status" => "deleted"})
-      error -> respond(error)
+      {:ok, retired_resources} ->
+        response(%{
+          "job_id" => request.job_id,
+          "status" => "deleted",
+          "retired_definition_resources" => retired_resources
+        })
+
+      error ->
+        respond(error)
     end
   end
 

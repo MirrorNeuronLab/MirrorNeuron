@@ -5,8 +5,9 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
   alias MirrorNeuron.Artifacts.JobStore
   alias MirrorNeuron.JobBundle
   alias MirrorNeuron.Message
-  alias MirrorNeuron.Persistence.RedisStore
+  alias MirrorNeuron.Persistence.{DiskCheckpoint, RedisStore}
   alias MirrorNeuron.Runtime
+  alias MirrorNeuron.Runtime.StableJob
   alias MirrorNeuron.Runtime.Delivery
   alias MirrorNeuron.Runtime.EventBus
   alias MirrorNeuron.ServiceRegistry
@@ -1241,6 +1242,79 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert {:error, _reason} = RedisStore.fetch_job(job_id)
     refute File.exists?(artifact_path)
     assert File.dir?(outside_submission)
+  end
+
+  test "stable job deletion removes every terminal run and its runtime resources" do
+    suffix = System.unique_integer([:positive])
+    stable_job_id = "stable-delete-#{suffix}"
+    run_ids = ["stable-delete-run-a-#{suffix}", "stable-delete-run-b-#{suffix}"]
+    old_job_data_root = System.get_env("MN_JOB_DATA_ROOT")
+    old_checkpoint_root = System.get_env("MN_CHECKPOINT_ROOT")
+    old_artifact_root = System.get_env("MN_JOB_ARTIFACT_ROOT")
+    root = Path.join(System.tmp_dir!(), "mn_stable_delete_#{suffix}")
+
+    System.put_env("MN_JOB_DATA_ROOT", Path.join(root, "job-data"))
+    System.put_env("MN_CHECKPOINT_ROOT", Path.join(root, "checkpoints"))
+    System.put_env("MN_JOB_ARTIFACT_ROOT", Path.join(root, "artifacts"))
+
+    on_exit(fn ->
+      Enum.each(run_ids, &RedisStore.delete_job/1)
+      RedisStore.delete_job_definition(stable_job_id)
+      restore_system_env("MN_JOB_DATA_ROOT", old_job_data_root)
+      restore_system_env("MN_CHECKPOINT_ROOT", old_checkpoint_root)
+      restore_system_env("MN_JOB_ARTIFACT_ROOT", old_artifact_root)
+      File.rm_rf(root)
+    end)
+
+    retired_resources = %{
+      "mn_storage" => %{"submission_id" => "#{stable_job_id}-definition"},
+      "mn_docker_workers" => %{"submission_id" => "#{stable_job_id}-definition"}
+    }
+
+    assert {:ok, _path} = MirrorNeuron.JobData.initialize(stable_job_id)
+
+    assert {:ok, _definition} =
+             RedisStore.persist_job_definition(stable_job_id, %{
+               "job_id" => stable_job_id,
+               "status" => "active",
+               "run_ids" => run_ids,
+               "manifest" => %{"metadata" => retired_resources}
+             })
+
+    for run_id <- run_ids do
+      assert {:ok, _job} =
+               RedisStore.persist_terminal_job(run_id, %{
+                 "job_id" => run_id,
+                 "stable_job_id" => stable_job_id,
+                 "status" => "completed",
+                 "manifest" => %{}
+               })
+
+      assert :ok = DiskCheckpoint.persist_job(run_id, %{"job_id" => run_id})
+      assert {:ok, artifact_path} = JobStore.ensure_job_dir(run_id)
+      File.write!(Path.join(artifact_path, "result.txt"), "terminal output")
+
+      assert {:ok, _service} =
+               ServiceRegistry.register(%{
+                 "id" => "service-#{run_id}",
+                 "name" => "terminal-service",
+                 "job_id" => run_id
+               })
+    end
+
+    assert {:ok, %{"metadata" => ^retired_resources}} =
+             StableJob.delete(stable_job_id, confirmed: true)
+
+    assert {:error, _reason} = RedisStore.fetch_job_definition(stable_job_id)
+    refute File.exists?(Path.join(MirrorNeuron.JobData.root(), stable_job_id))
+
+    for run_id <- run_ids do
+      assert {:error, _reason} = RedisStore.fetch_job(run_id)
+      assert {:error, :enoent} = DiskCheckpoint.load_job(run_id)
+      assert {:ok, artifact_path} = JobStore.job_path(run_id)
+      refute File.exists?(artifact_path)
+      assert {:ok, []} = ServiceRegistry.list(job_id: run_id)
+    end
   end
 
   test "retention retries sandbox cleanup on disconnected persisted placement nodes" do

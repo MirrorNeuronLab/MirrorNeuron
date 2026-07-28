@@ -413,7 +413,10 @@ operation with `MirrorNeuron.start_operation/2`, inspect it with
 `MirrorNeuron.operation/1`, and replay its ordered progress records with
 `MirrorNeuron.operation_events/2`. Workers complete out of order under bounded
 native OTP task concurrency (8 for cancellation/clear, 2 for reconcile/drain).
-Unfinished records are resumed after a Core restart.
+Unfinished records are resumed after a Core restart. A terminal run is marked
+cleared only after its job-owned processes, sandboxes, checkpoints, services,
+staged storage, artifacts, leases, delivery state, and Redis records have been
+removed from every recorded runtime node.
 
 ---
 

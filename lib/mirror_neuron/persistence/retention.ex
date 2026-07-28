@@ -47,7 +47,7 @@ defmodule MirrorNeuron.Persistence.Retention do
   end
 
   defp run_sweep do
-    result = RedisStore.sweep_retention(cleanup_job: &Runtime.cleanup_job_sandboxes/2)
+    result = RedisStore.sweep_retention(cleanup_job: &Runtime.cleanup_job_resources/2)
 
     case result do
       {:ok, %{deleted_count: deleted_count, stale_count: stale_count}}

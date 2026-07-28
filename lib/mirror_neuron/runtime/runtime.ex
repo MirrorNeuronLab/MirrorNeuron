@@ -2,18 +2,16 @@ defmodule MirrorNeuron.Runtime do
   require Logger
 
   alias MirrorNeuron.Bundle.Archive
-  alias MirrorNeuron.Cluster.NodeAdapter
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.ContextEnginePreflight
   alias MirrorNeuron.JobId
-  alias MirrorNeuron.SafeAccess
   alias MirrorNeuron.Scheduler
-  alias MirrorNeuron.Sandbox.{DockerJobSandbox, OpenShellJobSandbox}
 
   alias MirrorNeuron.Runtime.{
     Delivery,
     ErrorEnvelope,
     EventBus,
+    JobCleanup,
     JobRunner,
     LifecyclePolicy,
     LocalRecovery,
@@ -267,7 +265,7 @@ defmodule MirrorNeuron.Runtime do
               :ok ->
                 job_id = job["job_id"]
 
-                case cleanup_job_sandboxes(job_id, job) do
+                case cleanup_job_resources(job_id, job) do
                   :ok ->
                     case MirrorNeuron.Persistence.RedisStore.delete_job(job_id) do
                       :ok ->
@@ -306,7 +304,7 @@ defmodule MirrorNeuron.Runtime do
   def clear_job(job_id) when is_binary(job_id) do
     with {:ok, job} <- RedisStore.fetch_job(job_id),
          :ok <- prepare_job_cleanup(job, false),
-         :ok <- cleanup_job_sandboxes(job_id, job),
+         :ok <- cleanup_job_resources(job_id, job),
          :ok <- RedisStore.delete_job(job_id) do
       :ok
     end
@@ -340,18 +338,24 @@ defmodule MirrorNeuron.Runtime do
   @doc false
   def cleanup_job_sandboxes(job_id, job) when is_map(job) or is_nil(job) do
     with {:ok, agents} <- RedisStore.list_agents(job_id) do
-      failures =
-        job
-        |> sandbox_cleanup_nodes(agents)
-        |> Enum.flat_map(fn node ->
-          [
-            cleanup_sandbox_on_node(node, OpenShellJobSandbox, job_id, "OpenShell"),
-            cleanup_sandbox_on_node(node, DockerJobSandbox, job_id, "DockerWorker")
-          ]
-          |> Enum.reject(&(&1 == :ok))
-        end)
+      JobCleanup.cleanup_sandboxes(job_id, job, agents)
+    else
+      {:error, reason} -> {:error, {:agent_metadata_unavailable, reason}}
+    end
+  end
 
-      if failures == [], do: :ok, else: {:error, failures}
+  @doc false
+  def cleanup_job_resources(job_id) do
+    case RedisStore.fetch_job(job_id) do
+      {:ok, job} -> cleanup_job_resources(job_id, job)
+      {:error, reason} -> cleanup_job_resources_without_job(job_id, reason)
+    end
+  end
+
+  @doc false
+  def cleanup_job_resources(job_id, job) when is_map(job) or is_nil(job) do
+    with {:ok, agents} <- RedisStore.list_agents(job_id) do
+      JobCleanup.cleanup_runtime_resources(job_id, job, agents)
     else
       {:error, reason} -> {:error, {:agent_metadata_unavailable, reason}}
     end
@@ -365,66 +369,16 @@ defmodule MirrorNeuron.Runtime do
     end
   end
 
+  defp cleanup_job_resources_without_job(job_id, reason) do
+    if is_binary(reason) and String.contains?(reason, "was not found") do
+      cleanup_job_resources(job_id, nil)
+    else
+      {:error, {:job_metadata_unavailable, reason}}
+    end
+  end
+
   defp cancellation_blocked?(job_id) do
     match?({:ok, %{"status" => "cancelling"}}, RedisStore.fetch_job(job_id))
-  end
-
-  defp sandbox_cleanup_nodes(job, agents) do
-    connected_nodes = [NodeAdapter.self() | NodeAdapter.list()]
-
-    placement_nodes =
-      job
-      |> detail("scheduler")
-      |> detail("placements")
-      |> case do
-        placements when is_list(placements) -> Enum.map(placements, &detail(&1, "node"))
-        _other -> []
-      end
-
-    assigned_nodes = Enum.map(agents, &detail(&1, "assigned_node"))
-
-    (connected_nodes ++ placement_nodes ++ assigned_nodes)
-    |> Enum.reduce([], fn value, nodes ->
-      case cleanup_node(value) do
-        {:ok, node} -> [node | nodes]
-        :error -> nodes
-      end
-    end)
-    |> Enum.uniq()
-    |> Enum.reverse()
-  end
-
-  defp cleanup_node(node) when is_atom(node), do: {:ok, node}
-
-  defp cleanup_node(node) when is_binary(node) do
-    case SafeAccess.node_name_to_atom(node) do
-      {:ok, atom} -> {:ok, atom}
-      {:error, _reason} -> :error
-    end
-  end
-
-  defp cleanup_node(_node), do: :error
-
-  defp cleanup_sandbox_on_node(node, module, job_id, label) do
-    case safe_cleanup_sandbox_on_node(node, module, job_id) do
-      :ok ->
-        :ok
-
-      reason ->
-        Logger.warning(
-          "failed to clean up #{label} sandbox for #{job_id} on #{node}: #{inspect(reason)}"
-        )
-
-        %{node: to_string(node), sandbox: label, reason: reason}
-    end
-  end
-
-  defp safe_cleanup_sandbox_on_node(node, module, job_id) do
-    NodeAdapter.rpc_call(node, module, :cleanup_job_local, [job_id], 15_000)
-  rescue
-    exception -> {:badrpc, {exception.__struct__, Exception.message(exception)}}
-  catch
-    kind, reason -> {:badrpc, {kind, reason}}
   end
 
   def deploy_agents(job_id, agent_ids, manifest, scheduler_plan, deployment_context) do
