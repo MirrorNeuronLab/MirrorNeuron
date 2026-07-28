@@ -8,6 +8,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
   """
 
   alias MirrorNeuron.{JobBundle, JobData, JobId, Manifest}
+  alias MirrorNeuron.Artifacts.SharedStorage
   alias MirrorNeuron.Bundle.Archive
   alias MirrorNeuron.Cluster.NodeAdapter
   alias MirrorNeuron.Persistence.RedisStore
@@ -225,6 +226,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
              :ok <- ensure_no_active_runs(definition),
              :ok <- delete_job_schedules(job_id),
              :ok <- delete_historical_runs(definition),
+             :ok <- SharedStorage.cleanup_manifest(job_id, definition["manifest"]),
              :ok <- JobData.delete(job_id),
              :ok <- RedisStore.delete_job_definition(job_id) do
           {:ok, definition_resource_descriptor(definition)}

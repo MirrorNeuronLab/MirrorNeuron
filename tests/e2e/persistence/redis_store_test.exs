@@ -1193,7 +1193,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
              ])
   end
 
-  test "job deletion clears the record when shared storage belongs to another runtime" do
+  test "job deletion retains the record when shared storage cannot be removed safely" do
     job_id = "failed-resource-cleanup-#{System.unique_integer([:positive])}"
     old_shared_root = System.get_env("MN_RUNTIME_SHARED_STORAGE_ROOT")
     old_artifact_root = System.get_env("MN_JOB_ARTIFACT_ROOT")
@@ -1238,9 +1238,11 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
                }
              })
 
-    assert :ok = RedisStore.delete_job(job_id)
-    assert {:error, _reason} = RedisStore.fetch_job(job_id)
-    refute File.exists?(artifact_path)
+    assert {:error, "mn_storage.submission_path is outside shared storage root"} =
+             RedisStore.delete_job(job_id)
+
+    assert {:ok, _job} = RedisStore.fetch_job(job_id)
+    assert File.exists?(artifact_path)
     assert File.dir?(outside_submission)
   end
 
@@ -1251,11 +1253,16 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     old_job_data_root = System.get_env("MN_JOB_DATA_ROOT")
     old_checkpoint_root = System.get_env("MN_CHECKPOINT_ROOT")
     old_artifact_root = System.get_env("MN_JOB_ARTIFACT_ROOT")
+    old_shared_root = System.get_env("MN_RUNTIME_SHARED_STORAGE_ROOT")
     root = Path.join(System.tmp_dir!(), "mn_stable_delete_#{suffix}")
+    shared_root = Path.join(root, "shared")
+    definition_submission = Path.join([shared_root, "submissions", stable_job_id])
 
     System.put_env("MN_JOB_DATA_ROOT", Path.join(root, "job-data"))
     System.put_env("MN_CHECKPOINT_ROOT", Path.join(root, "checkpoints"))
     System.put_env("MN_JOB_ARTIFACT_ROOT", Path.join(root, "artifacts"))
+    System.put_env("MN_RUNTIME_SHARED_STORAGE_ROOT", shared_root)
+    File.mkdir_p!(definition_submission)
 
     on_exit(fn ->
       Enum.each(run_ids, &RedisStore.delete_job/1)
@@ -1263,11 +1270,15 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
       restore_system_env("MN_JOB_DATA_ROOT", old_job_data_root)
       restore_system_env("MN_CHECKPOINT_ROOT", old_checkpoint_root)
       restore_system_env("MN_JOB_ARTIFACT_ROOT", old_artifact_root)
+      restore_system_env("MN_RUNTIME_SHARED_STORAGE_ROOT", old_shared_root)
       File.rm_rf(root)
     end)
 
     retired_resources = %{
-      "mn_storage" => %{"submission_id" => "#{stable_job_id}-definition"},
+      "mn_storage" => %{
+        "submission_id" => "#{stable_job_id}-definition",
+        "submission_path" => definition_submission
+      },
       "mn_docker_workers" => %{"submission_id" => "#{stable_job_id}-definition"}
     }
 
@@ -1307,6 +1318,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
 
     assert {:error, _reason} = RedisStore.fetch_job_definition(stable_job_id)
     refute File.exists?(Path.join(MirrorNeuron.JobData.root(), stable_job_id))
+    refute File.exists?(definition_submission)
 
     for run_id <- run_ids do
       assert {:error, _reason} = RedisStore.fetch_job(run_id)

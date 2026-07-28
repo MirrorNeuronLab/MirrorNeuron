@@ -1209,27 +1209,8 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
-  # A job record can outlive the runtime that submitted it. In that case its
-  # shared-storage path may be valid on the former host but intentionally
-  # unsafe from this runtime. Keep the path safety check, but do not let an
-  # inaccessible artifact directory make a terminal job impossible to clear.
   defp cleanup_shared_storage(job_id, job_map) do
-    case SharedStorage.cleanup_job(job_id, job_map) do
-      :ok ->
-        :ok
-
-      {:error, reason}
-      when reason == "mn_storage.submission_path is outside shared storage root" ->
-        Logger.warning(
-          "could not clean shared submission storage for #{job_id}; " <>
-            "leaving it untouched and deleting the terminal job record: #{inspect(reason)}"
-        )
-
-        :ok
-
-      error ->
-        error
-    end
+    SharedStorage.cleanup_job(job_id, job_map)
   end
 
   defp job_for_cleanup(job_id) do
