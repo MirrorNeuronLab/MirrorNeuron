@@ -401,6 +401,12 @@ one Redis-side scan of a pending-only cancellation index; acknowledgement
 removes the index entry while retaining the cancellation record for audit.
 Before acknowledging, the owning runtime also terminates every registered
 HostLocal command for the job and waits for the owned process groups to exit.
+Operators may clear a `cancelling` job after that durable fence is committed.
+Core removes the public job and global artifacts but retains the cancellation
+record and fence as a cleanup tombstone. Stale workers cannot recreate the
+cleared job; a worker with the same node name finishes its local cleanup when
+it rejoins. The final acknowledgement releases the tombstone fence without
+recreating job events or public state.
 HostLocal payloads receive Core's internal loopback gRPC client target; a
 manifest may explicitly override that target when it owns a different reachable
 control endpoint.
@@ -413,10 +419,12 @@ operation with `MirrorNeuron.start_operation/2`, inspect it with
 `MirrorNeuron.operation/1`, and replay its ordered progress records with
 `MirrorNeuron.operation_events/2`. Workers complete out of order under bounded
 native OTP task concurrency (8 for cancellation/clear, 2 for reconcile/drain).
-Unfinished records are resumed after a Core restart. A terminal run is marked
-cleared only after its job-owned processes, sandboxes, checkpoints, services,
-staged storage, artifacts, leases, delivery state, and Redis records have been
-removed from every recorded runtime node.
+Unfinished records are resumed after a Core restart. Ordinary terminal runs are
+marked cleared only after their job-owned processes, sandboxes, checkpoints,
+services, staged storage, artifacts, leases, delivery state, and Redis records
+have been removed from every recorded runtime node. Durably fenced cancelling
+runs may be removed from public state while node-local cleanup remains recorded
+in the cancellation tombstone.
 
 ---
 

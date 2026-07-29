@@ -79,8 +79,12 @@ scheduling, and drain migration until locally owned cleanup is acknowledged.
 Terminal-run clearing removes job-owned HostLocal processes, DockerWorker and
 OpenShell sandboxes, checkpoints, services, staged storage, artifacts, leases,
 delivery state, and Redis records on every recorded runtime node before the run
-is reported as cleared. Confirmed stable-job deletion removes schedules and
-applies that cleanup to every historical run before removing
+is reported as cleared. A durably fenced `cancelling` run is the exception:
+public state and global artifacts may be cleared while an internal cancellation
+tombstone retains pending runtime nodes and the write fence. Rejoining nodes
+finish local cleanup by run ID, and the final acknowledgement releases the
+fence without recreating public job or event records. Confirmed stable-job
+deletion removes schedules and applies that cleanup to every historical run before removing
 definition-owned resources,
 job data, and the definition.
 Cancellation reconciliation scans a pending-only Redis index in one server-side

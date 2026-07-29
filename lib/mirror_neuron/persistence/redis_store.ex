@@ -1088,15 +1088,101 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   def append_event(job_id, event) do
+    cancellation_key = key("job", job_id, "cancellation")
     event_key = key("job", job_id, "events")
 
+    script = """
+    local encoded_cancellation = redis.call("get", KEYS[1])
+    if encoded_cancellation then
+      local cancellation = cjson.decode(encoded_cancellation)
+      if cancellation["public_cleared_at"] then
+        return 0
+      end
+    end
+
+    redis.call("rpush", KEYS[2], ARGV[1])
+
+    local max_count = tonumber(ARGV[2]) or 0
+    if max_count > 0 then
+      redis.call("ltrim", KEYS[2], -max_count, -1)
+    end
+
+    local ttl_seconds = tonumber(ARGV[3]) or 0
+    if ttl_seconds > 0 then
+      redis.call("expire", KEYS[2], ttl_seconds)
+    end
+
+    redis.call("publish", ARGV[4], ARGV[1])
+    return 1
+    """
+
     with {:ok, encoded} <- Jason.encode(event),
-         commands <- [["RPUSH", event_key, encoded] | event_retention_commands(event_key)],
-         {:ok, results} <- pipeline(commands),
-         :ok <- expect_first_result(results, &is_integer/1),
-         :ok <- wait_for_replicas(),
-         {:ok, _count} <- command(["PUBLISH", channel("events", job_id), encoded]) do
-      {:ok, event}
+         {:ok, result} <-
+           command([
+             "EVAL",
+             script,
+             "2",
+             cancellation_key,
+             event_key,
+             encoded,
+             to_string(event_max_count()),
+             to_string(event_ttl_seconds()),
+             channel("events", job_id)
+           ]),
+         :ok <- wait_for_replicas() do
+      case result do
+        1 -> {:ok, event}
+        0 -> {:ok, :job_cleared}
+        other -> {:error, format_reason(other)}
+      end
+    else
+      {:error, reason} -> {:error, format_reason(reason)}
+      other -> {:error, format_reason(other)}
+    end
+  end
+
+  @doc false
+  def append_event_if_job_exists(job_id, event) do
+    script = """
+    if redis.call("exists", KEYS[1]) == 0 then
+      return 0
+    end
+
+    redis.call("rpush", KEYS[2], ARGV[1])
+
+    local max_count = tonumber(ARGV[2]) or 0
+    if max_count > 0 then
+      redis.call("ltrim", KEYS[2], -max_count, -1)
+    end
+
+    local ttl_seconds = tonumber(ARGV[3]) or 0
+    if ttl_seconds > 0 then
+      redis.call("expire", KEYS[2], ttl_seconds)
+    end
+
+    redis.call("publish", ARGV[4], ARGV[1])
+    return 1
+    """
+
+    with {:ok, encoded} <- Jason.encode(event),
+         {:ok, result} <-
+           command([
+             "EVAL",
+             script,
+             "2",
+             key("job", job_id),
+             key("job", job_id, "events"),
+             encoded,
+             to_string(event_max_count()),
+             to_string(event_ttl_seconds()),
+             channel("events", job_id)
+           ]),
+         :ok <- wait_for_replicas() do
+      case result do
+        1 -> {:ok, event}
+        0 -> {:ok, :job_missing}
+        other -> {:error, format_reason(other)}
+      end
     else
       {:error, reason} -> {:error, format_reason(reason)}
       other -> {:error, format_reason(other)}
@@ -1192,9 +1278,9 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
-  def delete_job(job_id), do: do_delete_job(job_id)
+  def delete_job(job_id, opts \\ []), do: do_delete_job(job_id, opts)
 
-  defp do_delete_job(job_id) do
+  defp do_delete_job(job_id, opts) do
     with {:ok, job_map} <- job_for_cleanup(job_id),
          :ok <- delete_service_instances(job_id: job_id),
          :ok <- cleanup_shared_storage(job_id, job_map),
@@ -1204,7 +1290,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
          {:ok, delivery_receipts} <-
            scan_keys(key("job", job_id, "delivery", "*", "*")),
          :ok <-
-           delete_job_redis_keys(job_id, agent_ids, delivery_keys ++ delivery_receipts) do
+           delete_job_redis_keys(job_id, agent_ids, delivery_keys ++ delivery_receipts, opts) do
       :ok
     end
   end
@@ -1223,18 +1309,27 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
-  defp delete_job_redis_keys(job_id, agent_ids, delivery_keys) do
-    keys =
+  defp delete_job_redis_keys(job_id, agent_ids, delivery_keys, opts) do
+    job_keys =
       [
         key("job", job_id),
         key("job", job_id, "summary"),
-        key("job", job_id, "guard"),
         key("job", job_id, "events"),
         key("job", job_id, "agents"),
         key("lease", "job:#{job_id}"),
-        key("lease", "job:#{job_id}", "epoch"),
         delivery_index_key(job_id)
-      ] ++
+      ]
+
+    fence_keys =
+      if Keyword.get(opts, :preserve_cancellation_fence, false) do
+        []
+      else
+        [key("job", job_id, "guard"), key("lease", "job:#{job_id}", "epoch")]
+      end
+
+    keys =
+      job_keys ++
+        fence_keys ++
         Enum.map(agent_ids, &key("job", job_id, "agent", &1)) ++
         Enum.map(agent_ids, &key("job", job_id, "agent_summary", &1)) ++ delivery_keys
 

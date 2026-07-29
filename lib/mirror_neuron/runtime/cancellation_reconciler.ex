@@ -5,7 +5,7 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
 
   require Logger
 
-  alias MirrorNeuron.Persistence.CancellationStore
+  alias MirrorNeuron.Persistence.{CancellationStore, CheckpointLock, DiskCheckpoint}
   alias MirrorNeuron.Runner.HostLocal
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.EventBus
@@ -31,8 +31,14 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
 
   @impl true
   def init(_opts) do
-    Process.send_after(self(), :scan, 250)
-    {:ok, :ok}
+    case ensure_checkpoint_lock() do
+      :ok ->
+        Process.send_after(self(), :scan, 250)
+        {:ok, :ok}
+
+      {:error, reason} ->
+        {:stop, reason}
+    end
   end
 
   @impl true
@@ -67,10 +73,11 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
       with :ok <- HostLocal.terminate_job(job_id),
            :ok <- stop_local_job(job_id),
            :ok <- OpenShellJobSandbox.cleanup_job_local(job_id),
-           :ok <- DockerJobSandbox.cleanup_job_local(job_id) do
+           :ok <- DockerJobSandbox.cleanup_job_local(job_id),
+           :ok <- DiskCheckpoint.delete_job(job_id) do
         case CancellationStore.acknowledge(job_id, local_node) do
           {:ok, :completed, _cancellation} ->
-            EventBus.publish(job_id, %{
+            EventBus.publish_if_job_exists(job_id, %{
               type: :job_cancelled,
               reason: "durable cluster cancellation acknowledged",
               timestamp: Runtime.timestamp()
@@ -79,7 +86,7 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
             :ok
 
           {:ok, :pending, _cancellation} ->
-            EventBus.publish(job_id, %{
+            EventBus.publish_if_job_exists(job_id, %{
               type: :job_cancellation_acknowledged,
               node: local_node,
               timestamp: Runtime.timestamp()
@@ -119,6 +126,20 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
       {:ok, _status} -> :ok
       {:error, {:job_not_running, ^job_id}} -> :ok
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp ensure_checkpoint_lock do
+    case Process.whereis(CheckpointLock) do
+      pid when is_pid(pid) ->
+        :ok
+
+      nil ->
+        case CheckpointLock.start_link([]) do
+          {:ok, _pid} -> :ok
+          {:error, {:already_started, _pid}} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
     end
   end
 end

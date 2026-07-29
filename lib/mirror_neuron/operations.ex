@@ -238,7 +238,9 @@ defmodule MirrorNeuron.Operations do
            Monitor.list_jobs(limit: 2_147_483_647, include_terminal: true, summary: :basic) do
       {:ok,
        jobs
-       |> Enum.filter(&(Map.get(&1, "status") in ["completed", "failed", "cancelled"]))
+       |> Enum.filter(
+         &(Map.get(&1, "status") in ["completed", "failed", "cancelled", "cancelling"])
+       )
        |> Enum.map(&%{"id" => &1["job_id"], "job_id" => &1["job_id"]})}
     end
   end
@@ -296,8 +298,8 @@ defmodule MirrorNeuron.Operations do
   end
 
   defp clear_item(job_id) do
-    case Runtime.clear_job(job_id) do
-      :ok -> {:cleared, %{}, nil}
+    case Runtime.clear_job_with_result(job_id) do
+      {:ok, result} -> {:cleared, result, nil}
       {:error, reason} -> {:failed, %{}, Runtime.error_message(reason)}
     end
   end

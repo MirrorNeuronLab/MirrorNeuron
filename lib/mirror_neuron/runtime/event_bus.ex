@@ -9,19 +9,35 @@ defmodule MirrorNeuron.Runtime.EventBus do
 
   def publish(job_id, event) do
     persisted = Map.put_new(event, :job_id, job_id)
-    safe_append_event(job_id, json_safe(persisted))
 
-    Registry.dispatch(MirrorNeuron.Runtime.EventRegistry, job_id, fn entries ->
-      Enum.each(entries, fn {pid, _value} -> send(pid, {:mirror_neuron_event, persisted}) end)
-    end)
+    if safe_append_event(job_id, json_safe(persisted)) != :job_cleared do
+      dispatch(job_id, persisted)
+    end
+
+    :ok
+  end
+
+  def publish_if_job_exists(job_id, event) do
+    persisted = Map.put_new(event, :job_id, job_id)
+
+    case safe_append_event_if_job_exists(job_id, json_safe(persisted)) do
+      :persisted ->
+        dispatch(job_id, persisted)
+
+      :job_missing ->
+        :ok
+    end
 
     :ok
   end
 
   defp safe_append_event(job_id, event) do
     case RedisStore.append_event(job_id, event) do
+      {:ok, :job_cleared} ->
+        :job_cleared
+
       {:ok, _event} ->
-        :ok
+        :persisted
 
       {:error, reason} ->
         Logger.warning("failed to persist event for #{job_id}: #{inspect(reason)}")
@@ -35,6 +51,34 @@ defmodule MirrorNeuron.Runtime.EventBus do
     kind, reason ->
       Logger.warning("failed to persist event for #{job_id}: #{kind} #{inspect(reason)}")
       :ok
+  end
+
+  defp dispatch(job_id, event) do
+    Registry.dispatch(MirrorNeuron.Runtime.EventRegistry, job_id, fn entries ->
+      Enum.each(entries, fn {pid, _value} -> send(pid, {:mirror_neuron_event, event}) end)
+    end)
+  end
+
+  defp safe_append_event_if_job_exists(job_id, event) do
+    case RedisStore.append_event_if_job_exists(job_id, event) do
+      {:ok, :job_missing} ->
+        :job_missing
+
+      {:ok, _event} ->
+        :persisted
+
+      {:error, reason} ->
+        Logger.warning("failed to persist event for #{job_id}: #{inspect(reason)}")
+        :job_missing
+    end
+  rescue
+    error ->
+      Logger.warning("failed to persist event for #{job_id}: #{Exception.message(error)}")
+      :job_missing
+  catch
+    kind, reason ->
+      Logger.warning("failed to persist event for #{job_id}: #{kind} #{inspect(reason)}")
+      :job_missing
   end
 
   defp json_safe(%_struct{} = value), do: value |> Map.from_struct() |> json_safe()

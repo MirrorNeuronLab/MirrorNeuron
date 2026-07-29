@@ -3,7 +3,7 @@ defmodule MirrorNeuron.Persistence.CancellationStore do
 
   alias MirrorNeuron.Config
 
-  @active_statuses ["pending", "acknowledged"]
+  @clearable_statuses ["pending", "acknowledged"]
 
   # The request, status transition, fencing epoch and lease revocation deliberately
   # live in one Redis script. A coordinator that retained the old lease can no
@@ -129,6 +129,144 @@ defmodule MirrorNeuron.Persistence.CancellationStore do
     end
   end
 
+  def mark_public_cleared(job_id) when is_binary(job_id) do
+    now = timestamp()
+
+    script = """
+    local encoded_cancellation = redis.call("get", KEYS[1])
+    if not encoded_cancellation then
+      return {"missing_cancellation", ""}
+    end
+
+    local cancellation = cjson.decode(encoded_cancellation)
+    if cancellation["status"] ~= "pending" and cancellation["status"] ~= "acknowledged" then
+      return {"invalid_cancellation", encoded_cancellation}
+    end
+
+    local encoded_job = redis.call("get", KEYS[2])
+    if not encoded_job then
+      if cancellation["public_cleared_at"] then
+        return {"existing", encoded_cancellation}
+      end
+      return {"missing_job", encoded_cancellation}
+    end
+
+    local job = cjson.decode(encoded_job)
+    if job["status"] ~= "cancelling" and job["status"] ~= "cancelled" then
+      return {"job_not_clearable", encoded_cancellation}
+    end
+
+    local encoded_guard = redis.call("get", KEYS[3])
+    if not encoded_guard then
+      return {"missing_fence", encoded_cancellation}
+    end
+
+    local guard = cjson.decode(encoded_guard)
+    local cancellation_epoch = tonumber(cancellation["fence_epoch"])
+    local guard_epoch = tonumber(guard["cancellation_fence_epoch"])
+    local job_epoch = tonumber(job["cancellation_fence_epoch"])
+    if not cancellation_epoch or guard_epoch ~= cancellation_epoch or job_epoch ~= cancellation_epoch then
+      return {"missing_fence", encoded_cancellation}
+    end
+
+    cancellation["public_cleared_at"] = cancellation["public_cleared_at"] or ARGV[1]
+    cancellation["updated_at"] = ARGV[1]
+    local updated = cjson.encode(cancellation)
+    redis.call("set", KEYS[1], updated)
+    return {"marked", updated}
+    """
+
+    case command([
+           "EVAL",
+           script,
+           "3",
+           cancellation_key(job_id),
+           job_key(job_id),
+           job_guard_key(job_id),
+           now
+         ]) do
+      {:ok, [status, encoded]} when status in ["marked", "existing"] ->
+        decode_cancellation(encoded)
+
+      {:ok, ["missing_cancellation", _]} ->
+        {:error, "cancellation for job #{job_id} was not found"}
+
+      {:ok, ["missing_job", _]} ->
+        {:error, "job #{job_id} was not found"}
+
+      {:ok, ["missing_fence", _]} ->
+        {:error, {:cancellation_fence_missing, job_id}}
+
+      {:ok, ["job_not_clearable", _]} ->
+        {:error, {:job_is_not_terminal, job_id}}
+
+      {:ok, ["invalid_cancellation", encoded]} ->
+        with {:ok, cancellation} <- Jason.decode(encoded) do
+          {:error, {:cancellation_not_clearable, cancellation["status"]}}
+        end
+
+      {:error, _reason} = error ->
+        error
+
+      other ->
+        {:error, "unexpected public clear result: #{inspect(other)}"}
+    end
+  end
+
+  def finalize_public_clear(job_id) when is_binary(job_id) do
+    now = timestamp()
+
+    script = """
+    local encoded = redis.call("get", KEYS[1])
+    if not encoded then
+      return {"missing", ""}
+    end
+
+    local cancellation = cjson.decode(encoded)
+    if redis.call("exists", KEYS[2]) == 0 and cancellation["status"] == "acknowledged" then
+      redis.call("del", KEYS[3], KEYS[4])
+      cancellation["fence_released_at"] = cancellation["fence_released_at"] or ARGV[1]
+      cancellation["updated_at"] = ARGV[1]
+      encoded = cjson.encode(cancellation)
+      redis.call("set", KEYS[1], encoded)
+      return {"released", encoded}
+    end
+
+    return {"preserved", encoded}
+    """
+
+    case command([
+           "EVAL",
+           script,
+           "4",
+           cancellation_key(job_id),
+           job_key(job_id),
+           job_guard_key(job_id),
+           lease_epoch_key(job_id),
+           now
+         ]) do
+      {:ok, [status, encoded]} when status in ["released", "preserved"] ->
+        decode_cancellation(encoded)
+
+      {:ok, ["missing", _]} ->
+        {:error, "cancellation for job #{job_id} was not found"}
+
+      {:error, _reason} = error ->
+        error
+
+      other ->
+        {:error, "unexpected public clear finalization result: #{inspect(other)}"}
+    end
+  end
+
+  def pending_nodes(%{"status" => "pending"} = cancellation) do
+    targets = Map.get(cancellation, "target_nodes", [])
+    acknowledged = MapSet.new(Map.get(cancellation, "acknowledged_nodes", []))
+    Enum.reject(targets, &MapSet.member?(acknowledged, &1))
+  end
+
+  def pending_nodes(_cancellation), do: []
+
   def list_pending_for_node(node_name) when is_binary(node_name) do
     script = """
     local pending = {}
@@ -235,7 +373,7 @@ defmodule MirrorNeuron.Persistence.CancellationStore do
 
     if complete then
       cancellation["status"] = "acknowledged"
-      cancellation["acknowledged_at"] = ARGV[2]
+      cancellation["acknowledged_at"] = cancellation["acknowledged_at"] or ARGV[2]
       redis.call("srem", KEYS[4], ARGV[3])
 
       local encoded_job = redis.call("get", KEYS[2])
@@ -256,12 +394,17 @@ defmodule MirrorNeuron.Persistence.CancellationStore do
         redis.call("set", KEYS[3], cjson.encode(summary))
       end
 
-      local encoded_guard = redis.call("get", KEYS[5])
-      if encoded_guard then
-        local guard = cjson.decode(encoded_guard)
-        guard["status"] = "cancelled"
-        guard["updated_at"] = ARGV[2]
-        redis.call("set", KEYS[5], cjson.encode(guard))
+      if not encoded_job and cancellation["public_cleared_at"] then
+        redis.call("del", KEYS[5], KEYS[6])
+        cancellation["fence_released_at"] = cancellation["fence_released_at"] or ARGV[2]
+      else
+        local encoded_guard = redis.call("get", KEYS[5])
+        if encoded_guard then
+          local guard = cjson.decode(encoded_guard)
+          guard["status"] = "cancelled"
+          guard["updated_at"] = ARGV[2]
+          redis.call("set", KEYS[5], cjson.encode(guard))
+        end
       end
     end
 
@@ -272,12 +415,13 @@ defmodule MirrorNeuron.Persistence.CancellationStore do
     case command([
            "EVAL",
            script,
-           "5",
+           "6",
            cancellation_key(job_id),
            job_key(job_id),
            job_summary_key(job_id),
            cancellations_key(),
            job_guard_key(job_id),
+           lease_epoch_key(job_id),
            node_name,
            now,
            job_id
@@ -300,7 +444,14 @@ defmodule MirrorNeuron.Persistence.CancellationStore do
 
   def pending?(job_id) do
     case fetch(job_id) do
-      {:ok, %{"status" => status}} -> status in @active_statuses
+      {:ok, %{"status" => "pending"}} -> true
+      _ -> false
+    end
+  end
+
+  def clearable?(job_id) do
+    case fetch(job_id) do
+      {:ok, %{"status" => status}} -> status in @clearable_statuses
       _ -> false
     end
   end
@@ -309,10 +460,12 @@ defmodule MirrorNeuron.Persistence.CancellationStore do
     do: "cancel-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
 
   defp decode_result(kind, encoded) do
-    with {:ok, cancellation} <- Jason.decode(encoded) do
+    with {:ok, cancellation} <- decode_cancellation(encoded) do
       {:ok, kind, cancellation}
     end
   end
+
+  defp decode_cancellation(encoded), do: Jason.decode(encoded)
 
   defp blank?(value), do: not is_binary(value) or String.trim(value) == ""
 

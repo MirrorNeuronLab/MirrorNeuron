@@ -434,14 +434,30 @@ defmodule MirrorNeuron do
         _ -> []
       end
 
+    placement_nodes =
+      job
+      |> scheduler_placements()
+      |> Enum.map(&(Map.get(&1, "node") || Map.get(&1, :node)))
+
     targets =
       agents
-      |> Enum.map(&Map.get(&1, "assigned_node"))
-      |> Kernel.++([Map.get(job, "lease_owner"), get_in(job, ["lease", "owner_id"])])
+      |> Enum.map(&(Map.get(&1, "assigned_node") || Map.get(&1, :assigned_node)))
+      |> Kernel.++(placement_nodes)
+      |> Kernel.++([
+        Map.get(job, "lease_owner") || Map.get(job, :lease_owner),
+        get_in(job, ["lease", "owner_id"]) || get_in(job, [:lease, :owner_id])
+      ])
       |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
       |> Enum.uniq()
 
     {:ok, if(targets == [], do: [to_string(Node.self())], else: targets)}
+  end
+
+  defp scheduler_placements(job) do
+    case get_in(job, ["scheduler", "placements"]) || get_in(job, [:scheduler, :placements]) do
+      placements when is_list(placements) -> Enum.filter(placements, &is_map/1)
+      _ -> []
+    end
   end
 
   def send_message(job_id, agent_id, message) do

@@ -2,7 +2,7 @@ defmodule MirrorNeuron.Runtime do
   require Logger
 
   alias MirrorNeuron.Bundle.Archive
-  alias MirrorNeuron.Persistence.RedisStore
+  alias MirrorNeuron.Persistence.{CancellationStore, RedisStore}
   alias MirrorNeuron.ContextEnginePreflight
   alias MirrorNeuron.JobId
   alias MirrorNeuron.Scheduler
@@ -258,23 +258,16 @@ defmodule MirrorNeuron.Runtime do
         result =
           jobs
           |> Enum.filter(fn job ->
-            force_all or job["status"] in ["completed", "failed", "cancelled"]
+            force_all or job["status"] in ["completed", "failed", "cancelled", "cancelling"]
           end)
           |> Enum.reduce(%{deleted_jobs: [], failed_jobs: []}, fn job, acc ->
             case prepare_job_cleanup(job, force_all) do
               :ok ->
                 job_id = job["job_id"]
 
-                case cleanup_job_resources(job_id, job) do
-                  :ok ->
-                    case MirrorNeuron.Persistence.RedisStore.delete_job(job_id) do
-                      :ok ->
-                        Map.update!(acc, :deleted_jobs, &[job_id | &1])
-
-                      {:error, reason} ->
-                        failure = %{"job_id" => job_id, "reason" => error_message(reason)}
-                        Map.update!(acc, :failed_jobs, &[failure | &1])
-                    end
+                case clear_job_with_result(job_id) do
+                  {:ok, _clear_result} ->
+                    Map.update!(acc, :deleted_jobs, &[job_id | &1])
 
                   {:error, reason} ->
                     failure = %{"job_id" => job_id, "reason" => error_message(reason)}
@@ -302,17 +295,87 @@ defmodule MirrorNeuron.Runtime do
   end
 
   def clear_job(job_id) when is_binary(job_id) do
-    with {:ok, job} <- RedisStore.fetch_job(job_id),
-         :ok <- prepare_job_cleanup(job, false),
+    case clear_job_with_result(job_id) do
+      {:ok, _result} -> :ok
+      {:error, _reason} = error -> error
+    end
+  end
+
+  def clear_job_with_result(job_id) when is_binary(job_id) do
+    case RedisStore.fetch_job(job_id) do
+      {:ok, job} ->
+        clear_persisted_job(job_id, job)
+
+      {:error, reason} ->
+        publicly_cleared_result(job_id, reason)
+    end
+  end
+
+  defp clear_persisted_job(job_id, %{"status" => status} = job)
+       when status in ["cancelling", "cancelled"] do
+    case CancellationStore.fetch(job_id) do
+      {:ok, %{"status" => cancellation_status}}
+      when cancellation_status in ["pending", "acknowledged"] ->
+        clear_durable_cancellation(job_id)
+
+      _ ->
+        clear_terminal_job(job_id, job)
+    end
+  end
+
+  defp clear_persisted_job(job_id, job), do: clear_terminal_job(job_id, job)
+
+  defp clear_durable_cancellation(job_id) do
+    with {:ok, _cancellation} <- CancellationStore.mark_public_cleared(job_id),
+         :ok <- RedisStore.delete_job(job_id, preserve_cancellation_fence: true),
+         {:ok, cancellation} <- CancellationStore.finalize_public_clear(job_id) do
+      {:ok, cancellation_clear_result(cancellation)}
+    end
+  end
+
+  defp clear_terminal_job(job_id, job) do
+    with :ok <- prepare_job_cleanup(job, false),
          :ok <- cleanup_job_resources(job_id, job),
          :ok <- RedisStore.delete_job(job_id) do
-      :ok
+      {:ok, %{}}
     end
+  end
+
+  defp publicly_cleared_result(job_id, original_reason) do
+    case CancellationStore.fetch(job_id) do
+      {:ok, %{"public_cleared_at" => public_cleared_at} = cancellation}
+      when is_binary(public_cleared_at) ->
+        cancellation =
+          case CancellationStore.finalize_public_clear(job_id) do
+            {:ok, finalized} -> finalized
+            _ -> cancellation
+          end
+
+        {:ok, cancellation_clear_result(cancellation)}
+
+      _ ->
+        {:error, original_reason}
+    end
+  end
+
+  defp cancellation_clear_result(cancellation) do
+    pending_nodes = CancellationStore.pending_nodes(cancellation)
+
+    %{
+      "cleanup_pending_nodes" => pending_nodes,
+      "cleanup_deferred" => pending_nodes != []
+    }
   end
 
   defp prepare_job_cleanup(%{"status" => status}, _force_all)
        when status in ["completed", "failed", "cancelled"],
        do: :ok
+
+  defp prepare_job_cleanup(%{"status" => "cancelling"} = job, _force_all) do
+    if CancellationStore.clearable?(job["job_id"]),
+      do: :ok,
+      else: {:error, :job_is_not_terminal}
+  end
 
   defp prepare_job_cleanup(%{"job_id" => job_id}, true) do
     case cancel_job(job_id) do

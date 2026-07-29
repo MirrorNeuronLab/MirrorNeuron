@@ -1,5 +1,6 @@
 defmodule MirrorNeuron.Monitor do
   alias MirrorNeuron.Persistence.RedisStore
+  alias MirrorNeuron.Runtime
 
   @default_live_window_ms 300_000
   @summary_event_window 25
@@ -319,7 +320,7 @@ defmodule MirrorNeuron.Monitor do
 
       deleted_count =
         Enum.count(to_delete, fn job ->
-          RedisStore.delete_job(job["job_id"]) == :ok
+          match?({:ok, _result}, Runtime.clear_job_with_result(job["job_id"]))
         end)
 
       {:ok, deleted_count}
