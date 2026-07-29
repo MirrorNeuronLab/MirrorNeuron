@@ -3203,6 +3203,15 @@ defmodule MirrorNeuron.RuntimeTest do
   end
 
   test "batch job fails after restart policy attempts are exhausted" do
+    # This test deliberately kills two workers. Keep the health checker from
+    # racing those explicit restart transitions under a loaded CI runner.
+    previous_health_interval = Application.get_env(:mirror_neuron, :job_health_check_interval_ms)
+    Application.put_env(:mirror_neuron, :job_health_check_interval_ms, 1_000)
+
+    on_exit(fn ->
+      restore_application_env(:job_health_check_interval_ms, previous_health_interval)
+    end)
+
     manifest = %{
       "manifest_version" => "1.0",
       "graph_id" => "batch_restart_policy_exhaustion",
@@ -3257,13 +3266,13 @@ defmodule MirrorNeuron.RuntimeTest do
       fn ->
         with {:ok, restarted} <- MirrorNeuron.inspect_job(job_id) do
           restarted["attempt"] == 2 and
-            worker_pid(job_id) and
+            replacement_worker_pid?(job_id, first_pid) and
             attempt_started?(job_id, 2)
         else
           _ -> false
         end
       end,
-      5_000
+      12_000
     )
 
     [{second_pid, _}] =
@@ -3271,7 +3280,7 @@ defmodule MirrorNeuron.RuntimeTest do
 
     Process.exit(second_pid, :kill)
 
-    assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 8_000)
+    assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 12_000)
     assert job["status"] == "failed"
     assert get_in(job, ["restart_budget", "attempts"]) == 1
 
@@ -3524,6 +3533,13 @@ defmodule MirrorNeuron.RuntimeTest do
       [{_pid, _}],
       Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:agent, job_id, "worker"})
     )
+  end
+
+  defp replacement_worker_pid?(job_id, previous_pid) do
+    case Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:agent, job_id, "worker"}) do
+      [{pid, _}] when pid != previous_pid -> Process.alive?(pid)
+      _ -> false
+    end
   end
 
   defp attempt_started?(job_id, attempt) do
