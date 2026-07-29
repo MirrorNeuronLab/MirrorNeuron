@@ -30,6 +30,10 @@ defmodule MirrorNeuron.ApplicationTest do
            ] = Application.grpc_child_specs()
   end
 
+  test "supervises the checkpoint lock used by runtime resource cleanup" do
+    assert MirrorNeuron.Persistence.CheckpointLock in Application.common_child_specs([])
+  end
+
   describe "grpc_bind_opts/1" do
     test "binds empty and localhost values to IPv4 loopback" do
       assert Application.grpc_bind_opts("") == [ip: {127, 0, 0, 1}]

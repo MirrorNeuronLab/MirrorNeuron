@@ -29,15 +29,7 @@ defmodule MirrorNeuron.Application do
 
     role = node_role()
 
-    common_children =
-      [
-        {Registry, keys: :duplicate, name: MirrorNeuron.Runtime.EventRegistry},
-        {Cluster.Supervisor, [topologies, [name: MirrorNeuron.ClusterSupervisor]]},
-        MirrorNeuron.Redis,
-        MirrorNeuron.Persistence.Retention,
-        {Task.Supervisor, name: MirrorNeuron.Runtime.RecoveryTaskSupervisor},
-        MirrorNeuron.Operations.Supervisor
-      ] ++ grpc_child_specs()
+    common_children = common_child_specs(topologies)
 
     children =
       case role do
@@ -73,6 +65,19 @@ defmodule MirrorNeuron.Application do
 
   def node_role do
     Config.string("MN_NODE_ROLE", :node_role)
+  end
+
+  @doc false
+  def common_child_specs(topologies) when is_list(topologies) do
+    [
+      {Registry, keys: :duplicate, name: MirrorNeuron.Runtime.EventRegistry},
+      {Cluster.Supervisor, [topologies, [name: MirrorNeuron.ClusterSupervisor]]},
+      MirrorNeuron.Persistence.CheckpointLock,
+      MirrorNeuron.Redis,
+      MirrorNeuron.Persistence.Retention,
+      {Task.Supervisor, name: MirrorNeuron.Runtime.RecoveryTaskSupervisor},
+      MirrorNeuron.Operations.Supervisor
+    ] ++ grpc_child_specs()
   end
 
   @doc false
