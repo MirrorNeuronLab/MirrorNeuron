@@ -10,6 +10,7 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.EventBus
   alias MirrorNeuron.Sandbox.{DockerJobSandbox, OpenShellJobSandbox}
+  alias MirrorNeuron.ServiceRegistry
 
   @scan_interval_ms 2_000
 
@@ -72,6 +73,7 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
     try do
       with :ok <- HostLocal.terminate_job(job_id),
            :ok <- stop_local_job(job_id),
+           :ok <- ServiceRegistry.deregister_job(job_id),
            :ok <- OpenShellJobSandbox.cleanup_job_local(job_id),
            :ok <- DockerJobSandbox.cleanup_job_local(job_id),
            :ok <- DiskCheckpoint.delete_job(job_id) do

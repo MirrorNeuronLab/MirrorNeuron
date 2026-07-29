@@ -441,9 +441,12 @@ defmodule MirrorNeuron.Scheduler do
       |> eligible_value()
 
     node_coordination_store =
-      map_get(node, "coordination_store") ||
-        map_get(stored, "coordination_store") ||
-        if(name == to_string(Node.self()), do: coordination_store, else: nil)
+      if name == to_string(Node.self()) and is_map(coordination_store) do
+        coordination_store
+      else
+        map_get(node, "coordination_store") ||
+          map_get(stored, "coordination_store")
+      end
 
     capabilities =
       []

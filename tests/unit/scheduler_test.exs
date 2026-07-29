@@ -1983,6 +1983,44 @@ defmodule MirrorNeuron.SchedulerTest do
     assert reason =~ "coordination store identity"
   end
 
+  test "the local node uses the current coordination-store status over a stale advertisement" do
+    local_node = to_string(Node.self())
+
+    {:ok, manifest} =
+      load_manifest(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "local-coordination-store",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "constraints" => [
+              %{"attribute" => "node.name", "operator" => "==", "value" => local_node}
+            ]
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    current_store = %{"identity" => "current-store", "writable_primary" => true}
+
+    stale_local_node =
+      small_node()
+      |> Map.put("name", local_node)
+      |> Map.put("coordination_store", %{"identity" => "stale-store", "writable_primary" => true})
+
+    assert {:ok, plan} =
+             Scheduler.plan(manifest,
+               nodes: [stale_local_node],
+               jobs: [],
+               coordination_store: current_store
+             )
+
+    assert [%{"node" => ^local_node}] = plan["placements"]
+  end
+
   test "Core rejects a single-node manifest whose final plan spans nodes" do
     {:ok, manifest} =
       load_manifest(%{
