@@ -1,5 +1,12 @@
 FROM elixir:1.16-slim
 
+ARG CORE_RELEASE_TAG=""
+ARG CORE_REVISION=""
+
+LABEL org.opencontainers.image.title="MirrorNeuron Core" \
+      org.opencontainers.image.version="${CORE_RELEASE_TAG}" \
+      org.opencontainers.image.revision="${CORE_REVISION}"
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
