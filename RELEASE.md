@@ -22,8 +22,10 @@ CI build numbers are for internal artifacts only. Public releases use clean SemV
 ## Distribution Policy
 
 MirrorNeuron core publishes GitHub Release OTP tarballs and a public Docker
-runtime image. It does not publish runtime releases to Hex, PyPI, npm, or a
-custom source ZIP.
+runtime image. GitHub Actions builds the OTP assets; the multi-platform Docker
+image is published from the local release machine by `mn-deploy/release_all.sh`.
+Core does not publish runtime releases to Hex, PyPI, npm, or a custom source
+ZIP.
 
 OTP releases are OS and architecture specific. A release built for Linux will not run on macOS, and an x64 release will not run on ARM64.
 
@@ -34,9 +36,8 @@ Each tagged release uploads:
 - `MirrorNeuron-vX.Y.Z-linux-arm64-otp-release.tar.gz`
 - `SHA256SUMS.txt`
 
-When the release repository has the required GCP Workload Identity variables,
-the workflow also builds the tagged source Dockerfile for `linux/amd64` and
-`linux/arm64` and publishes it to GAR as:
+After the tag workflow succeeds, the local release orchestrator builds the
+tagged source for `linux/amd64` and `linux/arm64` and publishes it to GAR as:
 
 - `us-central1-docker.pkg.dev/mirrorneuron-public-packages/mirrorneuron-runtime/mirror-neuron-core:vX.Y.Z`
 - `us-central1-docker.pkg.dev/mirrorneuron-public-packages/mirrorneuron-runtime/mirror-neuron-core:X.Y.Z`
@@ -45,10 +46,10 @@ the workflow also builds the tagged source Dockerfile for `linux/amd64` and
 Installers use the immutable `vX.Y.Z` tag. The image carries OCI version and
 revision labels matching the release tag and commit.
 
-For a release tagged before this image job existed, use the manual **Publish
-Core GAR Runtime Image** workflow on `main`. It checks out the requested tag's
-application source while using the maintained release Dockerfile, then publishes
-the same three tags.
+For a release backfill, run
+`mn-deploy/publish_public_core_to_google_artifact_registry.sh --apply --version
+vX.Y.Z`. On Apple Silicon the publisher registers QEMU amd64 emulation and
+uses Erlang's QEMU-compatible single-mapped JIT setting while building.
 
 ## Create a Stable Release
 
@@ -67,8 +68,9 @@ git push origin v1.0.1
 
 Pushing the tag starts the release workflow. The workflow validates the tag,
 runs tests, builds platform-specific OTP releases, writes SHA256 checksums,
-creates a GitHub Release, uploads the OTP tarballs plus checksum file, and
-publishes the multi-platform GAR runtime image when OIDC is configured.
+creates a GitHub Release, and uploads the OTP tarballs plus checksum file.
+The workspace-level `mn-deploy/release_all.sh` then publishes and verifies the
+multi-platform GAR runtime image from the local release machine.
 
 ## Create a Prerelease
 

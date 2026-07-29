@@ -820,6 +820,11 @@ The release workflow builds platform-specific OTP tarballs:
 - `MirrorNeuron-vX.Y.Z-linux-arm64-otp-release.tar.gz`
 - `SHA256SUMS.txt`
 
+The GitHub workflow publishes only these OTP release assets. The
+workspace-level `mn-deploy/release_all.sh` publishes the multi-platform Core
+GAR image from the local release machine, using QEMU for the x64 image when the
+release host is Apple Silicon.
+
 Create a stable release:
 
 ```bash

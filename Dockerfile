@@ -3,6 +3,7 @@ FROM ${ELIXIR_IMAGE}
 
 ARG CORE_RELEASE_TAG=""
 ARG CORE_REVISION=""
+ARG ERL_AFLAGS=""
 
 LABEL org.opencontainers.image.title="MirrorNeuron Core" \
       org.opencontainers.image.version="${CORE_RELEASE_TAG}" \
