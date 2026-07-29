@@ -267,6 +267,55 @@ defmodule MirrorNeuron.RuntimeTest do
     end
   end
 
+  defmodule PauseResumeInvocationCounter do
+    @key __MODULE__
+
+    def reset do
+      :persistent_term.put(@key, :atomics.new(1, []))
+      :ok
+    end
+
+    def next do
+      @key
+      |> :persistent_term.get()
+      |> :atomics.add_get(1, 1)
+    end
+  end
+
+  defmodule PauseResumeRunner do
+    def run(_payload, _config, _opts) do
+      case PauseResumeInvocationCounter.next() do
+        1 ->
+          Process.sleep(30_000)
+
+          {:ok,
+           %{
+             "sandbox_name" => "pause-resume-interrupted",
+             "exit_code" => 0,
+             "stdout" => "{}",
+             "stderr" => "",
+             "logs" => ""
+           }}
+
+        invocation ->
+          {:ok,
+           %{
+             "sandbox_name" => "pause-resume-completed",
+             "exit_code" => 0,
+             "stdout" =>
+               Jason.encode!(%{
+                 "emit_messages" => [
+                   %{"type" => "workflow_done", "body" => %{"resumed" => true}}
+                 ],
+                 "complete_step" => %{"resumed" => true, "invocation" => invocation}
+               }),
+             "stderr" => "",
+             "logs" => ""
+           }}
+      end
+    end
+  end
+
   defmodule SafeRetryRunner do
     def run(payload, _config, opts) do
       {:ok,
@@ -1400,6 +1449,91 @@ defmodule MirrorNeuron.RuntimeTest do
     assert_runtime_workflow_manifest(job_id)
 
     cleanup_runtime_job(job_id)
+  end
+
+  test "pause is idempotent for an already paused job" do
+    manifest = pause_resume_dag_manifest("pause_idempotent_test")
+
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
+    cleanup_job_on_exit(job_id)
+    wait_until(fn -> running_status?(job_id) end)
+
+    assert {:ok, "paused"} = MirrorNeuron.pause(job_id)
+    assert {:ok, "paused"} = MirrorNeuron.pause(job_id)
+    assert {:ok, %{"status" => "paused"}} = MirrorNeuron.inspect_job(job_id)
+
+    cleanup_runtime_job(job_id)
+  end
+
+  test "resume restarts an interrupted workflow agent and immediately reclaims its delivery" do
+    PauseResumeInvocationCounter.reset()
+
+    manifest = %{
+      "apiVersion" => "mn.workflow/v1",
+      "kind" => "Workflow",
+      "manifest_version" => "1.0",
+      "graph_id" => "pause_resume_inflight_workflow_test",
+      "entrypoints" => ["worker"],
+      "initial_inputs" => %{"worker" => [%{"work" => "resume"}]},
+      "flow" => %{
+        "steps" => [
+          %{
+            "id" => "worker",
+            "run" => "worker",
+            "control" => %{
+              "required" => true,
+              "failure_policy" => "fail_workflow",
+              "timeout_seconds" => 60,
+              "retry" => %{"max_attempts" => 1, "backoff_seconds" => 0}
+            }
+          }
+        ],
+        "graph" => %{"edges" => []}
+      },
+      "nodes" => [
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "config" => %{
+            "runner_module" => PauseResumeRunner,
+            "output_message_type" => nil,
+            "safe_to_retry" => true
+          }
+        },
+        %{
+          "node_id" => "sink",
+          "agent_type" => "aggregator",
+          "config" => %{
+            "complete_on_message" => true,
+            "terminal_sink" => true,
+            "complete_run" => true
+          }
+        }
+      ],
+      "edges" => [
+        %{"from_node" => "worker", "to_node" => "sink", "message_type" => "workflow_done"}
+      ],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
+    cleanup_job_on_exit(job_id)
+    wait_until(fn -> running_status?(job_id) end)
+    wait_until(fn -> event_count(job_id, "agent_message_received") >= 1 end, 2_000)
+
+    assert {:ok, "paused"} = MirrorNeuron.pause(job_id)
+    wait_until(fn -> agent_unregistered?(job_id, "worker") end, 2_000)
+
+    assert {:ok, "resumed"} = MirrorNeuron.resume(job_id)
+    assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 3_000)
+    assert job["status"] == "completed"
+    assert get_in(job, ["result", "output", "last_message", "resumed"]) == true
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+    assert_event_before(events, "job_paused", "job_resumed")
+    assert_event_before(events, "job_resumed", "job_completed")
+
+    RedisStore.delete_job(job_id)
   end
 
   test "pause and resume retain exactly one coordinator health timer" do

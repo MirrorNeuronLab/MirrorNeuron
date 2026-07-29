@@ -178,7 +178,18 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     broadcast_agent_control(state, :pause)
 
     if WorkflowLedger.enabled?(state.workflow_state) do
-      terminate_agent_workers(state, WorkflowLedger.active_agent_ids(state.workflow_state))
+      active_agent_ids = WorkflowLedger.active_agent_ids(state.workflow_state)
+      terminate_agent_workers(state, active_agent_ids)
+
+      case wait_for_agents_stopped(state, 5_000, active_agent_ids) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "job #{state.job_id} paused before every active workflow agent stopped: #{inspect(reason)}"
+          )
+      end
     end
 
     next_state =
@@ -192,18 +203,34 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     {:reply, {:ok, "paused"}, next_state}
   end
 
+  def handle_call(:pause, _from, %{status: "paused"} = state) do
+    {:reply, {:ok, "paused"}, state}
+  end
+
   def handle_call(:pause, _from, state), do: {:reply, {:error, "job is not running"}, state}
 
   @impl true
   def handle_call(:resume, _from, %{status: "paused"} = state) do
-    {workflow_state, workflow_events} = WorkflowLedger.resume(state.workflow_state)
-    running_state = %{state | status: "running", workflow_state: workflow_state}
+    case restore_paused_workflow_agents(state) do
+      {:ok, resumable_state} ->
+        {workflow_state, workflow_events} =
+          WorkflowLedger.resume(resumable_state.workflow_state)
 
-    broadcast_agent_control(running_state, :resume)
-    persist_durable_job_snapshot(running_state, job_snapshot(running_state))
-    EventBus.publish(state.job_id, %{type: :job_resumed, timestamp: Runtime.timestamp()})
-    publish_workflow_events(running_state, workflow_events)
-    {:reply, {:ok, "resumed"}, schedule_runtime_timers(running_state)}
+        running_state = %{
+          resumable_state
+          | status: "running",
+            workflow_state: workflow_state
+        }
+
+        broadcast_agent_control(running_state, :resume)
+        persist_durable_job_snapshot(running_state, job_snapshot(running_state))
+        EventBus.publish(state.job_id, %{type: :job_resumed, timestamp: Runtime.timestamp()})
+        publish_workflow_events(running_state, workflow_events)
+        {:reply, {:ok, "resumed"}, schedule_runtime_timers(running_state)}
+
+      {:error, reason, failed_state} ->
+        {:reply, {:error, reason}, failed_state}
+    end
   end
 
   def handle_call(:resume, _from, %{status: "running"} = state) do
@@ -448,7 +475,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     EventBus.publish(state.job_id, %{
       type: event_type,
       agent_id: agent_id,
-      payload: payload,
+      payload: public_agent_event_payload(event_type, payload),
       timestamp: Runtime.timestamp()
     })
 
@@ -657,6 +684,13 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
     :ok
   end
+
+  defp public_agent_event_payload(event_type, payload)
+       when event_type in [:workflow_graph_patch, "workflow_graph_patch"] and is_map(payload) do
+    Map.take(payload, ["patch_id", "base_revision", "region_id"])
+  end
+
+  defp public_agent_event_payload(_event_type, payload), do: payload
 
   defp run_health_check(state, reschedule?) do
     state = refresh_pressure(state)
@@ -1637,12 +1671,24 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     do_wait_for_agents_ready(state, started_at, timeout_ms)
   end
 
-  defp recover_agents(state, agent_ids) do
+  defp restore_paused_workflow_agents(state) do
+    if WorkflowLedger.enabled?(state.workflow_state) do
+      recover_agents(
+        state,
+        WorkflowLedger.active_agent_ids(state.workflow_state),
+        %{"paused" => true, "reclaim_deliveries" => true}
+      )
+    else
+      {:ok, state}
+    end
+  end
+
+  defp recover_agents(state, agent_ids, recovery_snapshot \\ nil) do
     Enum.reduce_while(agent_ids, {:ok, state}, fn agent_id, {:ok, acc_state} ->
       if agent_completed?(acc_state, agent_id) do
         {:cont, {:ok, acc_state}}
       else
-        case recover_agent(acc_state, agent_id) do
+        case recover_agent(acc_state, agent_id, recovery_snapshot) do
           {:ok, next_state} -> {:cont, {:ok, next_state}}
           {:error, reason, next_state} -> {:halt, {:error, reason, next_state}}
         end
@@ -1670,7 +1716,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     end)
   end
 
-  defp recover_agent(state, agent_id) do
+  defp recover_agent(state, agent_id, recovery_snapshot \\ nil) do
     attempt =
       max(
         LifecyclePolicy.active_attempt_count(
@@ -1687,7 +1733,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       timestamp: Runtime.timestamp()
     })
 
-    case start_agent(state, agent_id, nil) do
+    case start_agent(state, agent_id, recovery_snapshot) do
       {:ok, _pid} ->
         finalize_agent_recovery(state, agent_id, attempt)
 
@@ -1722,7 +1768,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     end
   end
 
-  defp start_agent(state, agent_id, _recovery_snapshot \\ nil, retry_count \\ 0) do
+  defp start_agent(state, agent_id, recovery_snapshot \\ nil, retry_count \\ 0) do
     node =
       state.nodes_by_id
       |> Map.fetch!(agent_id)
@@ -1734,7 +1780,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       AgentWorker.child_spec(
         {state.job_id, node, Map.get(state.outbound_edges_by_node, agent_id, []),
          Map.get(state.inbound_edges_by_node, agent_id, []), self(), agent_runtime_context(state),
-         nil}
+         recovery_snapshot}
       )
       |> Map.put(:mirror_neuron_execution_profile, execution_profile)
       |> Map.put(
@@ -1745,11 +1791,11 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     case start_agent_on_target(spec, Scheduler.target_node(scheduler_plan(state), agent_id)) do
       {:error, {:already_started, _pid}} when retry_count < 10 ->
         Process.sleep(100)
-        start_agent(state, agent_id, nil, retry_count + 1)
+        start_agent(state, agent_id, recovery_snapshot, retry_count + 1)
 
       {:error, {:target_node_unavailable, _target_node}} when retry_count < 50 ->
         Process.sleep(200)
-        start_agent(state, agent_id, nil, retry_count + 1)
+        start_agent(state, agent_id, recovery_snapshot, retry_count + 1)
 
       other ->
         other

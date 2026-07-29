@@ -35,6 +35,7 @@ defmodule MirrorNeuron.Manifest do
 
   alias MirrorNeuron.Runtime.{
     DeploymentPolicy,
+    DynamicWorkflowSpec,
     LifecyclePolicy,
     RouteCondition,
     SchedulePolicy,
@@ -586,11 +587,18 @@ defmodule MirrorNeuron.Manifest do
           []
         end
 
+      dynamic_errors =
+        DynamicWorkflowSpec.validation_errors(
+          flow,
+          Enum.map(manifest.nodes, & &1.node_id)
+        )
+
       errors
       |> add_errors(Enum.map(Enum.uniq(duplicate_ids), &"duplicate workflow step id #{&1}"))
       |> add_errors(step_errors)
       |> add_errors(graph_errors)
       |> add_errors(cycle_errors)
+      |> add_errors(dynamic_errors)
     else
       errors
     end

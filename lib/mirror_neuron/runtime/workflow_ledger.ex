@@ -4,10 +4,11 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   alias MirrorNeuron.Message
   alias MirrorNeuron.Artifacts.StagedArtifact
   alias MirrorNeuron.Runtime
+  alias MirrorNeuron.Runtime.DynamicWorkflow
   alias MirrorNeuron.Runtime.ErrorEnvelope
   alias MirrorNeuron.Runtime.WorkflowTrigger
 
-  @schema_version 2
+  @schema_version 3
   @default_timeout_seconds 300
   @default_beacon_timeout_ms 45_000
   @default_retry_backoff_ms 1_000
@@ -17,6 +18,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
 
   def new(manifest, runtime_nodes, existing_job \\ nil, job_id \\ nil) do
     definitions = step_definitions(manifest, runtime_nodes)
+    templates = template_definitions(manifest, runtime_nodes)
 
     if definitions == [] do
       disabled_state()
@@ -30,13 +32,17 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
         "updated_at" => Runtime.timestamp(),
         "status" => "pending",
         "step_order" => Enum.map(definitions, & &1["id"]),
-        "agent_to_step" => build_agent_to_step(definitions),
+        "agent_to_step" => build_agent_to_step(definitions ++ templates),
         "edges" => graph_edges(manifest),
         "steps" => Map.new(definitions, &{&1["id"], initial_step(&1)}),
         "messages" => %{}
       }
 
-      merge_existing(base, existing_job)
+      flow = if is_map(manifest.flow), do: manifest.flow, else: %{}
+
+      base
+      |> DynamicWorkflow.initialize(flow, Map.new(templates, &{&1["id"], initial_step(&1)}))
+      |> merge_existing(existing_job)
     end
   end
 
@@ -135,7 +141,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
         value =
           if is_map(step) do
             step
-            |> Map.drop(["last_message", "output"])
+            |> Map.drop(["last_message", "output", "instance_input"])
             |> maybe_put_output_ref(Map.get(step, "output"))
           else
             step
@@ -245,6 +251,9 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
       |> Message.headers()
       |> Map.drop([
         "mn.workflow.step_id",
+        "mn.workflow.graph_revision",
+        "mn.workflow.template_id",
+        "mn.workflow.region_id",
         "mn.workflow.attempt_id",
         "mn.workflow.attempt",
         "mn.workflow.deadline_at",
@@ -254,6 +263,9 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
       |> Map.merge(%{
         "mn.workflow.run_id" => run_id(state),
         "mn.workflow.step_id" => step["id"],
+        "mn.workflow.graph_revision" => DynamicWorkflow.graph_revision(state),
+        "mn.workflow.template_id" => Map.get(step, "template_id"),
+        "mn.workflow.region_id" => Map.get(step, "region_id"),
         "mn.workflow.timeout_seconds" => Map.get(step, "timeout_seconds"),
         "mn.workflow.heartbeat_timeout_ms" => Map.get(step, "beacon_timeout_ms")
       })
@@ -312,7 +324,8 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
 
   def on_agent_event(state, agent_id, event_type, payload, now \\ Runtime.timestamp()) do
     with true <- enabled?(state),
-         step_id when is_binary(step_id) <- step_id_from_payload(state, agent_id, payload),
+         step_id when is_binary(step_id) <-
+           step_id_from_agent_event(state, agent_id, event_type, payload),
          step when is_map(step) <- get_step(state, step_id) do
       normalized_event_type = normalize_event_type(event_type)
 
@@ -324,7 +337,10 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
           {next_state, events, actions} =
             handle_step_agent_event(state, agent_id, step, normalized_event_type, payload, now)
 
-          activate_ready_steps(next_state, events, actions, now)
+          {next_state, retirement_events} =
+            DynamicWorkflow.retire_completed_service_patches(next_state, now)
+
+          activate_ready_steps(next_state, events ++ retirement_events, actions, now)
       end
     else
       _ -> {state, [], []}
@@ -367,6 +383,20 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
 
       "workflow_step_scatter" ->
         expand_scatter(state, step, payload, now)
+
+      "workflow_graph_patch" ->
+        if stale_attempt_output?(step, payload) do
+          ignore_stale_step_output(state, step, payload, now) |> without_actions()
+        else
+          apply_dynamic_graph_patch(state, step, payload, now)
+        end
+
+      "workflow_controller_checkpoint" ->
+        if stale_attempt_output?(step, payload) do
+          ignore_stale_step_output(state, step, payload, now) |> without_actions()
+        else
+          apply_controller_checkpoint(state, step, payload, now)
+        end
 
       "workflow_step_failed" ->
         fail_current_attempt(
@@ -628,19 +658,22 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
     rule = get_in(step, ["trigger_rule", "rule"])
     edges = incoming_edges(state, step)
 
-    case rule do
-      "one_failed" ->
+    cond do
+      DynamicWorkflow.managed_target?(state, step) ->
         true
 
-      "all_done" ->
+      rule == "one_failed" ->
+        true
+
+      rule == "all_done" ->
         Enum.any?(edges, &dependency_failed?(state, &1))
 
-      "one_done" ->
+      rule == "one_done" ->
         Enum.any?(edges, fn edge ->
           dependency_terminal?(state, edge) and not dependency_success?(state, edge)
         end)
 
-      _ ->
+      true ->
         false
     end
   end
@@ -656,9 +689,20 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
           "step_id" => Map.get(edge, "from"),
           "status" => Map.get(parent, "status"),
           "outcome" => Map.get(parent, "terminal_outcome"),
-          "output" => step_output(parent)
+          "output" => step_output(parent),
+          "edge_id" => Map.get(edge, "id")
         }
       end)
+
+    step_metadata =
+      %{
+        "graph_revision" => DynamicWorkflow.graph_revision(state),
+        "template_id" => Map.get(step, "template_id"),
+        "region_id" => Map.get(step, "region_id"),
+        "step_input" => Map.get(step, "instance_input")
+      }
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+      |> Map.new()
 
     message =
       Message.new(
@@ -666,7 +710,14 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
         "workflow_ledger",
         primary_agent_id(step),
         "workflow_trigger",
-        %{"trigger_rule" => step["trigger_rule"], "parents" => parents},
+        %{
+          "trigger_rule" => step["trigger_rule"],
+          "parents" => parents,
+          "_mn_step" => step_metadata,
+          "step_input" => Map.get(step, "instance_input")
+        }
+        |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+        |> Map.new(),
         timestamp: now,
         class: "command"
       )
@@ -700,6 +751,78 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
       })
 
     {next_state, [event | skip_events], skip_actions}
+  end
+
+  defp apply_dynamic_graph_patch(state, step, payload, now) do
+    case DynamicWorkflow.apply_patch(state, step, payload, now) do
+      {:ok, next_state, event, "checkpoint_fanout"} ->
+        next_state = checkpoint_controller(next_state, step["id"], now)
+        {next_state, [event], []}
+
+      {:ok, next_state, event, _strategy} ->
+        {next_state, [event], []}
+
+      {:duplicate, next_state, event, "checkpoint_fanout"} ->
+        next_state = checkpoint_controller(next_state, step["id"], now)
+        {next_state, [event], []}
+
+      {:duplicate, next_state, event, _strategy} ->
+        {next_state, [event], []}
+
+      {:error, next_state, rejection_event} ->
+        reason =
+          Map.get(rejection_event, :reason) ||
+            Map.get(rejection_event, "reason") ||
+            "workflow graph patch rejected"
+
+        {failed_state, failure_events, actions} =
+          fail_current_attempt(next_state, step, reason, now)
+
+        {failed_state, [rejection_event | failure_events], actions}
+    end
+  end
+
+  defp apply_controller_checkpoint(state, step, payload, now) do
+    case DynamicWorkflow.checkpoint(state, step, payload, now) do
+      {:ok, next_state, event} ->
+        {checkpoint_controller(next_state, step["id"], now), [event], []}
+
+      {:error, next_state, rejection_event} ->
+        reason =
+          Map.get(rejection_event, :reason) ||
+            Map.get(rejection_event, "reason") ||
+            "workflow controller checkpoint rejected"
+
+        {failed_state, failure_events, actions} =
+          fail_current_attempt(next_state, step, reason, now)
+
+        {failed_state, [rejection_event | failure_events], actions}
+    end
+  end
+
+  defp checkpoint_controller(state, step_id, now) do
+    case get_step(state, step_id) do
+      step when is_map(step) ->
+        checkpointed =
+          step
+          |> finish_current_attempt("checkpointed", now)
+          |> Map.merge(%{
+            "status" => "waiting",
+            "deadline_at" => nil,
+            "heartbeat_deadline_at" => nil,
+            "retry_at" => nil,
+            "last_event_at" => now,
+            "terminal_reason" => nil,
+            "terminal_error" => nil,
+            "last_error" => nil,
+            "last_message" => nil
+          })
+
+        put_step(state, checkpointed)
+
+      _ ->
+        state
+    end
   end
 
   defp skip_downstream_steps(state, step, payload, now) do
@@ -990,7 +1113,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
       "status" => "running"
     }
 
-    decorated = decorate_message(state, agent_id, message, metadata.headers)
+    decorated = decorate_step_message(state, step, message, metadata.headers)
 
     step =
       step
@@ -1309,6 +1432,10 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
     payload_idempotency_key = payload_idempotency_key(payload)
 
     cond do
+      not is_map(current_attempt) and
+          (is_binary(payload_attempt_id) or is_binary(payload_idempotency_key)) ->
+        true
+
       not is_map(current_attempt) ->
         false
 
@@ -1359,8 +1486,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
 
         metadata = attempt_metadata(state, step, retry_message, now)
 
-        decorated =
-          decorate_message(state, primary_agent_id(step), retry_message, metadata.headers)
+        decorated = decorate_step_message(state, step, retry_message, metadata.headers)
 
         step =
           step
@@ -1488,20 +1614,28 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   end
 
   defp dependency_satisfied?(state, edge) do
-    case get_step(state, Map.get(edge, "from")) do
-      nil -> true
-      parent -> parent_status_accepted?(Map.get(parent, "status"), Map.get(edge, "accepts"))
+    if DynamicWorkflow.dependency_checkpointed?(state, edge) do
+      true
+    else
+      case get_step(state, Map.get(edge, "from")) do
+        nil -> true
+        parent -> parent_status_accepted?(Map.get(parent, "status"), Map.get(edge, "accepts"))
+      end
     end
   end
 
   defp dependency_success?(state, edge) do
-    case get_step(state, Map.get(edge, "from")) do
-      nil ->
-        true
+    if DynamicWorkflow.dependency_checkpointed?(state, edge) do
+      true
+    else
+      case get_step(state, Map.get(edge, "from")) do
+        nil ->
+          true
 
-      parent ->
-        Map.get(parent, "terminal_outcome") == "success" or
-          Map.get(parent, "status") == "completed"
+        parent ->
+          Map.get(parent, "terminal_outcome") == "success" or
+            Map.get(parent, "status") == "completed"
+      end
     end
   end
 
@@ -1516,9 +1650,13 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   end
 
   defp dependency_terminal?(state, edge) do
-    case get_step(state, Map.get(edge, "from")) do
-      nil -> true
-      parent -> step_terminal?(parent)
+    if DynamicWorkflow.dependency_checkpointed?(state, edge) do
+      true
+    else
+      case get_step(state, Map.get(edge, "from")) do
+        nil -> true
+        parent -> step_terminal?(parent)
+      end
     end
   end
 
@@ -1574,6 +1712,32 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
       []
     end
   end
+
+  defp template_definitions(manifest, runtime_nodes) do
+    flow = if is_map(manifest.flow), do: manifest.flow, else: %{}
+    dynamic = if is_map(Map.get(flow, "dynamic")), do: Map.get(flow, "dynamic"), else: %{}
+    graph = if is_map(Map.get(flow, "graph")), do: Map.get(flow, "graph"), else: %{}
+    runtime_by_id = Map.new(runtime_nodes, &{&1.node_id, &1})
+
+    dynamic
+    |> Map.get("templates", %{})
+    |> normalize_template_specs()
+    |> Enum.map(&step_definition(&1, runtime_by_id, graph))
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp normalize_template_specs(templates) when is_map(templates) do
+    Enum.map(templates, fn {template_id, spec} ->
+      if is_map(spec),
+        do: Map.put_new(spec, "id", to_string(template_id)),
+        else: %{"id" => to_string(template_id)}
+    end)
+  end
+
+  defp normalize_template_specs(templates) when is_list(templates),
+    do: Enum.filter(templates, &is_map/1)
+
+  defp normalize_template_specs(_templates), do: []
 
   defp step_definition(raw, runtime_by_id, graph) do
     step_id = to_string(Map.get(raw, "id") || "")
@@ -1699,7 +1863,8 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
           existing_steps
           |> Enum.filter(fn {step_id, step} ->
             not Map.has_key?(base["steps"], step_id) and is_map(step) and
-              is_integer(Map.get(step, "map_index"))
+              (is_integer(Map.get(step, "map_index")) or
+                 Map.get(step, "dynamic_instance") == true)
           end)
           |> Map.new()
 
@@ -1723,7 +1888,25 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
           end
 
         base
-        |> Map.merge(Map.take(existing, ["created_at", "job_id", "run_id", "status", "messages"]))
+        |> Map.merge(
+          Map.take(existing, [
+            "created_at",
+            "job_id",
+            "run_id",
+            "status",
+            "messages",
+            "mode",
+            "dynamic_enabled",
+            "graph_revision",
+            "dynamic_limits",
+            "dynamic_templates",
+            "dynamic_regions",
+            "applied_patches",
+            "patch_order",
+            "dynamic_patch_instances",
+            "dynamic_history"
+          ])
+        )
         |> Map.put("steps", steps)
         |> Map.put("step_order", step_order)
         |> Map.put("edges", edges)
@@ -1782,6 +1965,16 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
 
   defp step_id_from_payload(state, agent_id, _payload),
     do: active_step_for_agent(state, agent_id) || step_for_agent(state, agent_id)
+
+  defp step_id_from_agent_event(state, agent_id, event_type, payload) do
+    case normalize_event_type(event_type) do
+      type when type in ["workflow_graph_patch", "workflow_controller_checkpoint"] ->
+        active_step_for_agent(state, agent_id) || step_for_agent(state, agent_id)
+
+      _ ->
+        step_id_from_payload(state, agent_id, payload)
+    end
+  end
 
   defp should_start_attempt?(step, _message) do
     not step_terminal?(step) and not is_map(Map.get(step, "current_attempt"))
@@ -1910,6 +2103,8 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
         attempt_id: get_in(step, ["current_attempt", "attempt_id"]),
         attempt: get_in(step, ["current_attempt", "attempt"]),
         status: step["status"],
+        template_id: Map.get(step, "template_id"),
+        region_id: Map.get(step, "region_id"),
         timestamp: Runtime.timestamp()
       }
       |> Map.merge(extra || %{})

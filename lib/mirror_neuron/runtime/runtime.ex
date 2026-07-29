@@ -204,7 +204,12 @@ defmodule MirrorNeuron.Runtime do
     end
   end
 
-  def pause_job(job_id), do: call_job(job_id, :pause)
+  def pause_job(job_id) do
+    case cancellation_blocked?(job_id) do
+      true -> {:error, {:job_cancelling, job_id}}
+      false -> call_job(job_id, :pause)
+    end
+  end
 
   def resume_job(job_id) do
     case cancellation_blocked?(job_id) do

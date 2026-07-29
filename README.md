@@ -391,6 +391,12 @@ MirrorNeuron.resume("job-id")
 MirrorNeuron.cancel("job-id")
 ```
 
+Pausing is idempotent. For an in-flight workflow step, Core stops the active
+worker before reporting the job as paused. Resuming recreates any worker stopped
+by that pause in a paused state, then returns the job to `running` and
+immediately reclaims its durable in-flight delivery. Messages accepted while
+paused remain queued until that transition completes.
+
 Cancellation is durable across a cluster. When the owning node cannot be
 reached, Core records `cancelling`, advances the job fence, revokes its lease,
 and returns `cancellation_pending` immediately. The owner performs local agent,

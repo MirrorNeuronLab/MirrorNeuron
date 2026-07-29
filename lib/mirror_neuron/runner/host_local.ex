@@ -1502,6 +1502,9 @@ defmodule MirrorNeuron.Runner.HostLocal do
     %{
       "MN_WORKFLOW_RUN_ID" => Map.get(workflow, "run_id"),
       "MN_WORKFLOW_STEP_ID" => Map.get(workflow, "step_id"),
+      "MN_WORKFLOW_GRAPH_REVISION" => Map.get(workflow, "graph_revision"),
+      "MN_WORKFLOW_TEMPLATE_ID" => Map.get(workflow, "template_id"),
+      "MN_WORKFLOW_REGION_ID" => Map.get(workflow, "region_id"),
       "MN_WORKFLOW_ATTEMPT_ID" => Map.get(workflow, "attempt_id"),
       "MN_WORKFLOW_ATTEMPT" => Map.get(workflow, "attempt"),
       "MN_WORKFLOW_DEADLINE_AT" => Map.get(workflow, "deadline_at"),
@@ -1518,6 +1521,9 @@ defmodule MirrorNeuron.Runner.HostLocal do
     %{
       "run_id" => Map.get(headers, "mn.workflow.run_id"),
       "step_id" => Map.get(headers, "mn.workflow.step_id"),
+      "graph_revision" => Map.get(headers, "mn.workflow.graph_revision"),
+      "template_id" => Map.get(headers, "mn.workflow.template_id"),
+      "region_id" => Map.get(headers, "mn.workflow.region_id"),
       "attempt_id" => Map.get(headers, "mn.workflow.attempt_id"),
       "attempt" => Map.get(headers, "mn.workflow.attempt"),
       "deadline_at" => Map.get(headers, "mn.workflow.deadline_at"),

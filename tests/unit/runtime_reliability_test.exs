@@ -196,6 +196,7 @@ defmodule MirrorNeuron.RuntimeReliabilityTest do
                    "lease_epoch" => 1
                  })
 
+        assert {:error, {:job_cancelling, ^job_id}} = Runtime.pause_job(job_id)
         assert {:error, {:job_cancelling, ^job_id}} = Runtime.resume_job(job_id)
 
         assert {:ok, :completed, _cancellation} =

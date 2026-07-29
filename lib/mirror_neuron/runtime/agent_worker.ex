@@ -56,12 +56,16 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   @impl true
   def init(
         {job_id, node, outbound_edges, inbound_edges, coordinator, runtime_context,
-         _recovery_snapshot}
+         recovery_snapshot}
       ) do
     module = AgentRegistry.fetch!(node.agent_type)
 
     runtime_context = materialize_runtime_bundle_context(runtime_context)
     node = inject_runtime_paths(node, runtime_context)
+    paused? = recovery_flag?(recovery_snapshot, "paused", :paused)
+
+    reclaim_deliveries? =
+      recovery_flag?(recovery_snapshot, "reclaim_deliveries", :reclaim_deliveries)
 
     case module.init(node) do
       {:ok, local_state} ->
@@ -74,7 +78,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
           inbound_edges: inbound_edges,
           runtime_context: runtime_context,
           coordinator: coordinator,
-          paused?: false,
+          paused?: paused?,
           pending: :queue.new(),
           mailbox_depth: 0,
           processed_messages: 0,
@@ -87,7 +91,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
           next_delivery_reclaim_at_ms: 0,
           delivery_timer_ref: nil,
           delivery_token: nil,
-          reclaim_deliveries?: false,
+          reclaim_deliveries?: reclaim_deliveries?,
           pressure_snapshot: nil
         }
 
@@ -1009,6 +1013,9 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
         headers
         |> Map.drop([
           "mn.workflow.step_id",
+          "mn.workflow.graph_revision",
+          "mn.workflow.template_id",
+          "mn.workflow.region_id",
           "mn.workflow.attempt_id",
           "mn.workflow.attempt",
           "mn.workflow.deadline_at",
@@ -1034,6 +1041,9 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       "run_id" =>
         Map.get(headers, "mn.workflow.run_id") || Map.get(state.runtime_context, :workflow_run_id),
       "step_id" => step_id,
+      "graph_revision" => Map.get(headers, "mn.workflow.graph_revision"),
+      "template_id" => Map.get(headers, "mn.workflow.template_id"),
+      "region_id" => Map.get(headers, "mn.workflow.region_id"),
       "attempt_id" => Map.get(headers, "mn.workflow.attempt_id"),
       "attempt" => Map.get(headers, "mn.workflow.attempt"),
       "deadline_at" => Map.get(headers, "mn.workflow.deadline_at"),
@@ -1066,6 +1076,9 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       "workflow_run_id" => Map.get(headers, "mn.workflow.run_id"),
       "step" => Map.get(headers, "mn.workflow.step_id"),
       "step_id" => Map.get(headers, "mn.workflow.step_id"),
+      "graph_revision" => Map.get(headers, "mn.workflow.graph_revision"),
+      "template_id" => Map.get(headers, "mn.workflow.template_id"),
+      "region_id" => Map.get(headers, "mn.workflow.region_id"),
       "attempt_id" => Map.get(headers, "mn.workflow.attempt_id"),
       "attempt" => Map.get(headers, "mn.workflow.attempt"),
       "deadline_at" => Map.get(headers, "mn.workflow.deadline_at"),
@@ -1087,4 +1100,10 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     |> Map.get(:backpressure_by_agent, %{})
     |> Map.get(to_node, [])
   end
+
+  defp recovery_flag?(snapshot, string_key, atom_key) when is_map(snapshot) do
+    Map.get(snapshot, string_key, Map.get(snapshot, atom_key, false)) == true
+  end
+
+  defp recovery_flag?(_snapshot, _string_key, _atom_key), do: false
 end
