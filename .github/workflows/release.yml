@@ -378,6 +378,9 @@ jobs:
           build-args: |
             CORE_RELEASE_TAG=${{ needs.validate.outputs.tag_name }}
             CORE_REVISION=${{ needs.validate.outputs.tag_commit }}
+          labels: |
+            org.opencontainers.image.version=${{ needs.validate.outputs.tag_name }}
+            org.opencontainers.image.revision=${{ needs.validate.outputs.tag_commit }}
           tags: |
             ${{ steps.image.outputs.repository }}:${{ needs.validate.outputs.tag_name }}
             ${{ steps.image.outputs.repository }}:${{ steps.image.outputs.version }}

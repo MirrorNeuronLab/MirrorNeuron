@@ -21,7 +21,9 @@ CI build numbers are for internal artifacts only. Public releases use clean SemV
 
 ## Distribution Policy
 
-MirrorNeuron core is distributed through GitHub Release OTP tarballs only. This repository intentionally does not publish runtime releases to Hex, PyPI, npm, Docker, or a custom source ZIP.
+MirrorNeuron core publishes GitHub Release OTP tarballs and a public Docker
+runtime image. It does not publish runtime releases to Hex, PyPI, npm, or a
+custom source ZIP.
 
 OTP releases are OS and architecture specific. A release built for Linux will not run on macOS, and an x64 release will not run on ARM64.
 
@@ -31,6 +33,22 @@ Each tagged release uploads:
 - `MirrorNeuron-vX.Y.Z-linux-x64-otp-release.tar.gz`
 - `MirrorNeuron-vX.Y.Z-linux-arm64-otp-release.tar.gz`
 - `SHA256SUMS.txt`
+
+When the release repository has the required GCP Workload Identity variables,
+the workflow also builds the tagged source Dockerfile for `linux/amd64` and
+`linux/arm64` and publishes it to GAR as:
+
+- `us-central1-docker.pkg.dev/mirrorneuron-public-packages/mirrorneuron-runtime/mirror-neuron-core:vX.Y.Z`
+- `us-central1-docker.pkg.dev/mirrorneuron-public-packages/mirrorneuron-runtime/mirror-neuron-core:X.Y.Z`
+- `us-central1-docker.pkg.dev/mirrorneuron-public-packages/mirrorneuron-runtime/mirror-neuron-core:latest`
+
+Installers use the immutable `vX.Y.Z` tag. The image carries OCI version and
+revision labels matching the release tag and commit.
+
+For a release tagged before this image job existed, use the manual **Publish
+Core GAR Runtime Image** workflow on `main`. It checks out the requested tag's
+application source while using the maintained release Dockerfile, then publishes
+the same three tags.
 
 ## Create a Stable Release
 
@@ -47,7 +65,10 @@ git tag v1.0.1
 git push origin v1.0.1
 ```
 
-Pushing the tag starts the release workflow. The workflow validates the tag, runs tests, builds platform-specific OTP releases, writes SHA256 checksums, creates a GitHub Release, and uploads only the OTP tarballs plus checksum file.
+Pushing the tag starts the release workflow. The workflow validates the tag,
+runs tests, builds platform-specific OTP releases, writes SHA256 checksums,
+creates a GitHub Release, uploads the OTP tarballs plus checksum file, and
+publishes the multi-platform GAR runtime image when OIDC is configured.
 
 ## Create a Prerelease
 
