@@ -89,31 +89,6 @@ jobs:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
-      - uses: google-github-actions/setup-gcloud@v2
-
-      - name: Ensure GAR Docker repository is public
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if ! gcloud artifacts repositories describe "${GAR_DOCKER_REPOSITORY}" \
-            --project="${GAR_PROJECT}" \
-            --location="${GAR_LOCATION}" >/dev/null 2>&1; then
-            gcloud artifacts repositories create "${GAR_DOCKER_REPOSITORY}" \
-              --project="${GAR_PROJECT}" \
-              --location="${GAR_LOCATION}" \
-              --repository-format=docker \
-              --description="MirrorNeuron runtime Docker images"
-          fi
-
-          gcloud artifacts repositories add-iam-policy-binding "${GAR_DOCKER_REPOSITORY}" \
-            --project="${GAR_PROJECT}" \
-            --location="${GAR_LOCATION}" \
-            --member=allUsers \
-            --role=roles/artifactregistry.reader \
-            --condition=None \
-            --quiet
-
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
