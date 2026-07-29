@@ -122,11 +122,7 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
   end
 
   defp stop_local_job(job_id) do
-    case Runtime.cancel_job(job_id) do
-      {:ok, _status} -> :ok
-      {:error, {:job_not_running, ^job_id}} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
+    Runtime.terminate_local_job(job_id)
   end
 
   defp ensure_checkpoint_lock do

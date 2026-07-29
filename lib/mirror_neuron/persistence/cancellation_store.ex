@@ -267,6 +267,61 @@ defmodule MirrorNeuron.Persistence.CancellationStore do
 
   def pending_nodes(_cancellation), do: []
 
+  def list_pending_public_clear_job_ids do
+    script = """
+    local clearable = {}
+    local job_ids = redis.call("smembers", KEYS[1])
+
+    for _, job_id in ipairs(job_ids) do
+      local job_key = ARGV[1] .. job_id
+      local cancellation_key = job_key .. ARGV[2]
+      local guard_key = job_key .. ARGV[3]
+      local encoded_cancellation = redis.call("get", cancellation_key)
+
+      if not encoded_cancellation then
+        redis.call("srem", KEYS[1], job_id)
+      else
+        local cancellation = cjson.decode(encoded_cancellation)
+
+        if cancellation["status"] == "pending" and not cancellation["public_cleared_at"] then
+          local encoded_job = redis.call("get", job_key)
+          local encoded_guard = redis.call("get", guard_key)
+
+          if encoded_job and encoded_guard then
+            local job = cjson.decode(encoded_job)
+            local guard = cjson.decode(encoded_guard)
+            local cancellation_epoch = tonumber(cancellation["fence_epoch"])
+            local job_epoch = tonumber(job["cancellation_fence_epoch"])
+            local guard_epoch = tonumber(guard["cancellation_fence_epoch"])
+
+            if (job["status"] == "cancelling" or job["status"] == "cancelled")
+              and cancellation_epoch
+              and job_epoch == cancellation_epoch
+              and guard_epoch == cancellation_epoch then
+              table.insert(clearable, job_id)
+            end
+          end
+        end
+      end
+    end
+
+    return clearable
+    """
+
+    case command([
+           "EVAL",
+           script,
+           "1",
+           cancellations_key(),
+           key("job") <> ":",
+           ":cancellation",
+           ":guard"
+         ]) do
+      {:ok, job_ids} -> {:ok, Enum.sort(job_ids)}
+      {:error, _reason} = error -> error
+    end
+  end
+
   def list_pending_for_node(node_name) when is_binary(node_name) do
     script = """
     local pending = {}

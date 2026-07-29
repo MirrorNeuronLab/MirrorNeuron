@@ -4,7 +4,7 @@ defmodule MirrorNeuron.Operations do
   alias MirrorNeuron.Cluster.{Control, NodeDrainer, Reconciler}
   alias MirrorNeuron.Monitor
   alias MirrorNeuron.Operations.Supervisor
-  alias MirrorNeuron.Persistence.OperationStore
+  alias MirrorNeuron.Persistence.{CancellationStore, OperationStore}
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Scheduler
 
@@ -235,13 +235,16 @@ defmodule MirrorNeuron.Operations do
 
   defp snapshot_targets("clear_jobs", _opts) do
     with {:ok, jobs} <-
-           Monitor.list_jobs(limit: 2_147_483_647, include_terminal: true, summary: :basic) do
-      {:ok,
-       jobs
-       |> Enum.filter(
-         &(Map.get(&1, "status") in ["completed", "failed", "cancelled", "cancelling"])
-       )
-       |> Enum.map(&%{"id" => &1["job_id"], "job_id" => &1["job_id"]})}
+           Monitor.list_jobs(limit: 2_147_483_647, include_terminal: true, summary: :basic),
+         {:ok, pending_clear_job_ids} <- CancellationStore.list_pending_public_clear_job_ids() do
+      job_ids =
+        jobs
+        |> Enum.filter(&(Map.get(&1, "status") in ["completed", "failed", "cancelled"]))
+        |> Enum.map(& &1["job_id"])
+        |> Kernel.++(pending_clear_job_ids)
+        |> Enum.uniq()
+
+      {:ok, Enum.map(job_ids, &%{"id" => &1, "job_id" => &1})}
     end
   end
 

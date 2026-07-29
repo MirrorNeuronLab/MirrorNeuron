@@ -126,6 +126,23 @@ defmodule MirrorNeuron.RuntimeReliabilityTest do
     Process.exit(pid, :kill)
   end
 
+  test "cancellation reconciliation terminates a local runner without calling cancel" do
+    job_id = unique_id("local-job-stop")
+
+    assert {:ok, pid} =
+             Horde.DynamicSupervisor.start_child(
+               MirrorNeuron.Runtime.JobSupervisor,
+               {SlowJob, job_id}
+             )
+
+    monitor = Process.monitor(pid)
+    started_at = System.monotonic_time(:millisecond)
+
+    assert :ok = Runtime.terminate_local_job(job_id)
+    assert_receive {:DOWN, ^monitor, :process, ^pid, _reason}, 1_000
+    assert System.monotonic_time(:millisecond) - started_at < 1_000
+  end
+
   test "cancel records durable intent before an unreachable owner can time out" do
     if redis_available?() do
       with_isolated_redis_namespace(fn ->
@@ -356,6 +373,22 @@ defmodule MirrorNeuron.RuntimeReliabilityTest do
                  })
 
         assert {:ok, "cancellation_pending"} = MirrorNeuron.cancel(job_id)
+
+        assert {:ok, encoded_summary} =
+                 Redix.command(MirrorNeuron.Redis.Connection, [
+                   "GET",
+                   redis_key(["job", job_id, "summary"])
+                 ])
+
+        stale_summary = encoded_summary |> Jason.decode!() |> Map.put("status", "running")
+
+        assert {:ok, "OK"} =
+                 Redix.command(MirrorNeuron.Redis.Connection, [
+                   "SET",
+                   redis_key(["job", job_id, "summary"]),
+                   Jason.encode!(stale_summary)
+                 ])
+
         assert {:ok, operation} = MirrorNeuron.start_operation("clear_jobs")
 
         assert {:ok, completed} =
@@ -366,6 +399,46 @@ defmodule MirrorNeuron.RuntimeReliabilityTest do
         assert item["result"]["cleanup_deferred"] == true
         assert item["result"]["cleanup_pending_nodes"] == [remote_node]
         assert {:error, "job " <> _} = RedisStore.fetch_job(job_id)
+      end)
+    end
+  end
+
+  test "legacy clear discovers a fenced cancellation when its summary is stale" do
+    if redis_available?() do
+      with_isolated_redis_namespace(fn ->
+        job_id = unique_id("legacy-tombstone-clear-job")
+        remote_node = "mirror_neuron@offline-legacy"
+
+        assert {:ok, _job} = RedisStore.persist_job(job_id, active_job(job_id))
+
+        assert {:ok, _agent} =
+                 RedisStore.persist_agent(job_id, "worker", %{
+                   "agent_id" => "worker",
+                   "assigned_node" => remote_node,
+                   "lease_epoch" => 1
+                 })
+
+        assert {:ok, "cancellation_pending"} = MirrorNeuron.cancel(job_id)
+
+        assert {:ok, encoded_summary} =
+                 Redix.command(MirrorNeuron.Redis.Connection, [
+                   "GET",
+                   redis_key(["job", job_id, "summary"])
+                 ])
+
+        stale_summary = encoded_summary |> Jason.decode!() |> Map.put("status", "running")
+
+        assert {:ok, "OK"} =
+                 Redix.command(MirrorNeuron.Redis.Connection, [
+                   "SET",
+                   redis_key(["job", job_id, "summary"]),
+                   Jason.encode!(stale_summary)
+                 ])
+
+        assert {:ok, 1} = MirrorNeuron.Monitor.clear_jobs()
+        assert {:error, "job " <> _} = RedisStore.fetch_job(job_id)
+        assert {:ok, cancellation} = CancellationStore.fetch(job_id)
+        assert is_binary(cancellation["public_cleared_at"])
       end)
     end
   end

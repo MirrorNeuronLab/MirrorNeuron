@@ -1,5 +1,5 @@
 defmodule MirrorNeuron.Monitor do
-  alias MirrorNeuron.Persistence.RedisStore
+  alias MirrorNeuron.Persistence.{CancellationStore, RedisStore}
   alias MirrorNeuron.Runtime
 
   @default_live_window_ms 300_000
@@ -312,15 +312,18 @@ defmodule MirrorNeuron.Monitor do
   end
 
   def clear_jobs() do
-    with {:ok, all_jobs} <- list_jobs(include_terminal: true, summary: :basic) do
+    with {:ok, all_jobs} <- list_jobs(include_terminal: true, summary: :basic),
+         {:ok, pending_clear_job_ids} <- CancellationStore.list_pending_public_clear_job_ids() do
       to_delete =
-        Enum.reject(all_jobs, fn job ->
-          job["status"] in ["running", "pending", "scheduled", "validated", "paused"]
-        end)
+        all_jobs
+        |> Enum.filter(&(&1["status"] in ["completed", "failed", "cancelled"]))
+        |> Enum.map(& &1["job_id"])
+        |> Kernel.++(pending_clear_job_ids)
+        |> Enum.uniq()
 
       deleted_count =
-        Enum.count(to_delete, fn job ->
-          match?({:ok, _result}, Runtime.clear_job_with_result(job["job_id"]))
+        Enum.count(to_delete, fn job_id ->
+          match?({:ok, _result}, Runtime.clear_job_with_result(job_id))
         end)
 
       {:ok, deleted_count}

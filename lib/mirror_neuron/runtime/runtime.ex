@@ -250,6 +250,20 @@ defmodule MirrorNeuron.Runtime do
 
   def cancel_job(job_id), do: call_job(job_id, :cancel, timeout_ms: cancel_job_call_timeout_ms())
 
+  @doc false
+  def terminate_local_job(job_id) when is_binary(job_id) do
+    case lookup_job(job_id) do
+      {:ok, pid} ->
+        if node(pid) == Node.self(), do: terminate_local_job_child(job_id, pid), else: :ok
+
+      :missing ->
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   def cleanup_jobs(opts \\ []) do
     force_all = Keyword.get(opts, :all, false)
 
@@ -500,6 +514,20 @@ defmodule MirrorNeuron.Runtime do
       :missing -> {:error, {:job_not_running, job_id}}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp terminate_local_job_child(job_id, pid) do
+    case Horde.DynamicSupervisor.terminate_child(MirrorNeuron.Runtime.JobSupervisor, pid) do
+      :ok -> :ok
+      {:error, :not_found} -> :ok
+      {:error, reason} -> {:error, {:local_job_stop_failed, job_id, reason}}
+    end
+  rescue
+    exception ->
+      {:error,
+       {:local_job_stop_failed, job_id, {exception.__struct__, Exception.message(exception)}}}
+  catch
+    kind, reason -> {:error, {:local_job_stop_failed, job_id, {kind, reason}}}
   end
 
   defp lookup_job(job_id) do
