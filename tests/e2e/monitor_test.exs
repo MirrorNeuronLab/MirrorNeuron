@@ -364,7 +364,7 @@ defmodule MirrorNeuron.MonitorTest do
     RedisStore.delete_job(job_id)
   end
 
-  test "clear_jobs removes terminal jobs and preserves running jobs" do
+  test "clear_jobs removes safely cleanable terminal jobs and preserves running jobs" do
     running_id = "monitor-running-#{System.unique_integer([:positive])}"
     failed_id = "monitor-failed-#{System.unique_integer([:positive])}"
     cancelled_id = "monitor-cancelled-#{System.unique_integer([:positive])}"
@@ -407,13 +407,20 @@ defmodule MirrorNeuron.MonitorTest do
       "updated_at" => "2026-03-28T00:00:05Z"
     })
 
-    assert {:ok, 2} = Monitor.clear_jobs()
+    # A job whose declared shared-storage submission path is outside the
+    # configured root must remain visible for manual remediation. Deleting its
+    # record would orphan unverified user data; RedisStore.delete_job enforces
+    # the same contract directly.
+    assert {:ok, 1} = Monitor.clear_jobs()
     assert {:ok, jobs} = Monitor.list_jobs(summary: :basic)
     assert Enum.any?(jobs, &(&1["job_id"] == running_id))
     refute Enum.any?(jobs, &(&1["job_id"] == failed_id))
-    refute Enum.any?(jobs, &(&1["job_id"] == cancelled_id))
+    assert Enum.any?(jobs, &(&1["job_id"] == cancelled_id))
     assert File.dir?(outside_submission)
 
+    assert {:ok, cancelled} = RedisStore.fetch_job(cancelled_id)
+    assert {:ok, _cancelled} = RedisStore.persist_job(cancelled_id, Map.put(cancelled, "manifest", %{}))
+    assert :ok = RedisStore.delete_job(cancelled_id)
     RedisStore.delete_job(running_id)
   end
 end

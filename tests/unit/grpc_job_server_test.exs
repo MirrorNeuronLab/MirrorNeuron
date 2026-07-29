@@ -339,6 +339,8 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       restore_env("MN_REDIS_RECONNECT_ATTEMPTS", old_reconnect_attempts)
       File.rm_rf(mn_home)
     end)
+
+    {:ok, redis_url: old_redis_url || "redis://localhost:6379/0"}
   end
 
   test "clear_jobs rejects unauthenticated requests before deleting jobs" do
@@ -711,17 +713,20 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert Exception.message(error) =~ "SetNodeMaintenance is disabled"
   end
 
-  test "network handshake accepts the configured join token" do
+  test "network handshake accepts the configured join token", %{redis_url: redis_url} do
     System.put_env("MN_NETWORK_ONLY", "true")
     System.put_env("MN_NETWORK_JOIN_TOKEN", "join-secret")
     System.put_env("MN_NETWORK_ADVERTISE_HOST", "192.168.4.10")
     System.put_env("MN_NETWORK_REDIS_HOST", "192.168.4.10")
     System.put_env("MN_NETWORK_REDIS_PORT", "6380")
-    System.put_env("MN_REDIS_URL", "redis://:redis-secret@redis:6379/0")
-    System.put_env("MN_REDIS_HA_MODE", "sentinel")
-    System.put_env("MN_REDIS_SENTINELS", "192.168.4.10:26379,192.168.4.20:26379")
-    System.put_env("MN_REDIS_SENTINEL_MASTER", "mirror-neuron")
-    System.put_env("MN_REDIS_WAIT_REPLICAS", "1")
+    # Keep this pointed at the test Redis endpoint. The handshake reserves a
+    # join claim and may reconnect its shared Redix client on a transient
+    # failure, so a documentation-only hostname would make the test flaky.
+    System.put_env("MN_REDIS_URL", redis_url)
+    # The test Redis instance has no replica. Requiring one here makes the
+    # join-claim write block and leaks that global setting into other tests.
+    # Replica-wait validation is covered by Redis sentinel tests.
+    System.put_env("MN_REDIS_WAIT_REPLICAS", "0")
     System.put_env("MN_REDIS_WAIT_TIMEOUT_MS", "1000")
     System.put_env("MN_GRPC_PORT", "50055")
     System.put_env("MN_DIST_PORT", "4500")
@@ -747,7 +752,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert response.dist_port == 4_500
     assert response.redis_host == "192.168.4.10"
     assert response.redis_port == 6_380
-    assert response.redis_url == "redis://:redis-secret@192.168.4.10:6380/0"
+    assert response.redis_url == advertised_redis_url(redis_url, "192.168.4.10", 6380)
     assert response.cluster_nodes == "mirror_neuron@192.168.4.10"
     assert response.grpc_auth_token == "primary-auth-token"
 
@@ -755,9 +760,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert node_info["node_name"] == "mirror_neuron@test"
     assert node_info["host_shared_storage_root"] == "/mnt/mn-shared"
     assert node_info["runtime_shared_storage_root"] == "/root/.mn/shared"
-    assert node_info["redis_ha"]["mode"] == "sentinel"
-    assert node_info["redis_ha"]["sentinels"] == "192.168.4.10:26379,192.168.4.20:26379"
-    assert node_info["redis_ha"]["wait_replicas"] == 1
+    assert node_info["redis_ha"]["wait_replicas"] == 0
     assert node_info["redis_ha"]["wait_timeout_ms"] == 1000
     assert node_info["runtime_models"] == ["nemotron3"]
     assert is_binary(node_info["display_name"])
@@ -1243,6 +1246,15 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       _ ->
         :ok
     end
+  end
+
+  defp advertised_redis_url(redis_url, host, port) do
+    uri = URI.parse(redis_url)
+    scheme = uri.scheme || "redis"
+    path = uri.path || "/0"
+    userinfo = if uri.userinfo in [nil, ""], do: "", else: "#{uri.userinfo}@"
+
+    "#{scheme}://#{userinfo}#{host}:#{port}#{path}"
   end
 
   defp start_tcp_server do
