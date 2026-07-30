@@ -157,6 +157,10 @@ environment/config, captures a structured result, registers durable artifacts,
 and cleans up only owned resources. HostLocal commands run in an owned process
 group when the host supports it; cancellation, owner termination, timeout, and
 missed-beacon failure terminate that command before releasing the runner.
+The published Core image provides Python 3.11 for HostLocal blueprint commands.
+Its build fails if `python3` does not resolve to Python 3.11; the base image is
+pinned by Debian release and multi-architecture digest so immutable Core
+release behavior cannot drift with an upstream rolling tag.
 HostLocal commands receive a loopback `MN_GRPC_TARGET` derived from Core's
 internal gRPC listen port so bind and externally advertised addresses are never
 mistaken for client destinations; an explicit manifest environment override

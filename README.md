@@ -416,6 +416,9 @@ recreating job events or public state.
 HostLocal payloads receive Core's internal loopback gRPC client target; a
 manifest may explicitly override that target when it owns a different reachable
 control endpoint.
+Published Core images include Python 3.11 for HostLocal blueprint commands.
+The Docker build pins the Debian base and verifies that `python3` resolves to
+Python 3.11 so an upstream rolling image cannot change an immutable release.
 
 ### Durable group operations
 

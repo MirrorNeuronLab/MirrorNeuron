@@ -246,7 +246,37 @@ defmodule MirrorNeuron.Runner.HostLocal do
   end
 
   defp execute_command(owner, command, args, env, workdir, config, opts, message) do
-    executable = System.find_executable(command) || command
+    case resolve_executable(command, workdir) do
+      nil ->
+        {:error,
+         "host-local executable not found: #{command}. Verify the Core runtime image contains the interpreter or executable declared by the blueprint"}
+
+      executable ->
+        execute_resolved_command(
+          owner,
+          command,
+          executable,
+          args,
+          env,
+          workdir,
+          config,
+          opts,
+          message
+        )
+    end
+  end
+
+  defp execute_resolved_command(
+         owner,
+         command,
+         executable,
+         args,
+         env,
+         workdir,
+         config,
+         opts,
+         message
+       ) do
     {port_executable, port_args, process_group?} = HostProcess.isolate(executable, args)
     max_output_bytes = max_output_bytes(config)
     timeout_ms = timeout_ms(config)
@@ -290,6 +320,17 @@ defmodule MirrorNeuron.Runner.HostLocal do
   rescue
     error in ErlangError ->
       {:error, "failed to invoke #{command}: #{Exception.message(error)}"}
+  end
+
+  defp resolve_executable(command, workdir) do
+    System.find_executable(command) ||
+      case Path.expand(command, workdir) do
+        candidate when candidate != command ->
+          if File.exists?(candidate), do: candidate
+
+        _candidate ->
+          nil
+      end
   end
 
   defp collect_port_output(

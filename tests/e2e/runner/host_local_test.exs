@@ -39,6 +39,86 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
     end
   end
 
+  test "returns an actionable error when the configured executable is absent" do
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "mirror_neuron_host_local_missing_executable_test_#{System.unique_integer([:positive])}"
+      )
+
+    bundle_dir = Path.join(tmp_dir, "job_bundle")
+    payloads_dir = Path.join(bundle_dir, "payloads")
+    upload_dir = Path.join(payloads_dir, "bundle")
+    missing_executable = "mn-definitely-missing-executable"
+
+    try do
+      File.mkdir_p!(upload_dir)
+
+      config = %{
+        "upload_path" => "bundle",
+        "upload_as" => "bundle",
+        "workdir" => "/sandbox/job/bundle",
+        "command" => [missing_executable]
+      }
+
+      assert {:error, reason} =
+               HostLocal.run(
+                 %{},
+                 config,
+                 job_id: "job-missing-executable",
+                 agent_id: "agent-missing-executable",
+                 bundle_root: bundle_dir,
+                 payloads_path: payloads_dir
+               )
+
+      assert reason =~ "host-local executable not found: #{missing_executable}"
+      assert reason =~ "Core runtime image"
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
+  test "executes a bundle-local command resolved from the staged workdir" do
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "mirror_neuron_host_local_relative_executable_test_#{System.unique_integer([:positive])}"
+      )
+
+    bundle_dir = Path.join(tmp_dir, "job_bundle")
+    payloads_dir = Path.join(bundle_dir, "payloads")
+    upload_dir = Path.join(payloads_dir, "bundle")
+    executable = Path.join(upload_dir, "run-worker")
+
+    try do
+      File.mkdir_p!(upload_dir)
+      File.write!(executable, "#!/bin/sh\nprintf 'bundle-local-ok\\n'\n")
+      File.chmod!(executable, 0o755)
+
+      config = %{
+        "upload_path" => "bundle",
+        "upload_as" => "bundle",
+        "workdir" => "/sandbox/job/bundle",
+        "command" => ["./run-worker"]
+      }
+
+      assert {:ok, result} =
+               HostLocal.run(
+                 %{},
+                 config,
+                 job_id: "job-relative-executable",
+                 agent_id: "agent-relative-executable",
+                 bundle_root: bundle_dir,
+                 payloads_path: payloads_dir
+               )
+
+      assert result["exit_code"] == 0
+      assert result["stdout"] =~ "bundle-local-ok"
+    after
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
   test "parses structured agent event stdout lines without keeping them in stdout" do
     tmp_dir =
       Path.join(

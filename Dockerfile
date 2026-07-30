@@ -1,4 +1,7 @@
-ARG ELIXIR_IMAGE=elixir:1.18-slim
+# HostLocal blueprints require Python 3.11. Pin both the Debian release and the
+# multi-architecture base digest so an upstream rolling slim tag cannot change
+# the runtime Python version underneath an immutable Core release.
+ARG ELIXIR_IMAGE=hexpm/elixir:1.18.4-erlang-28.3-debian-bookworm-20260610-slim@sha256:00153b7780e105e742099378fca72d35c21825890d721a838b8a0a1432bdcb1a
 FROM ${ELIXIR_IMAGE}
 
 ARG CORE_RELEASE_TAG=""
@@ -24,7 +27,11 @@ RUN apt-get update && apt-get install -y \
     python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
-RUN test -x /usr/bin/python3 && python3 --version && python3 -m pip --version
+RUN test -x /usr/bin/python3.11 \
+    && python3.11 -c 'import sys; assert sys.version_info[:2] == (3, 11), sys.version' \
+    && test "$(readlink -f /usr/bin/python3)" = "/usr/bin/python3.11" \
+    && python3 --version \
+    && python3 -m pip --version
 
 RUN python3 -m pip install --no-cache-dir --break-system-packages "litellm[proxy]>=1.72.0"
 
