@@ -324,6 +324,14 @@ defmodule MirrorNeuron.Config do
     optional_ratio!("MN_MAX_GPU_UTILIZATION_RATIO")
     optional_ratio!("MN_MAX_GPU_MEMORY_USED_RATIO")
     boolean("MN_RESOURCE_ADMISSION_ENABLED", :resource_admission_enabled)
+
+    first = integer("MN_AUTO_PORT_START", :auto_port_start)
+    last = integer("MN_AUTO_PORT_END", :auto_port_end)
+
+    unless first in 1..65_535 and last in first..65_535 do
+      raise ArgumentError,
+            "MN_AUTO_PORT_START and MN_AUTO_PORT_END must define an ascending range within 1..65535"
+    end
   end
 
   defp validate_retention! do

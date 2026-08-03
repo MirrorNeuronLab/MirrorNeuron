@@ -1771,6 +1771,165 @@ defmodule MirrorNeuron.SchedulerTest do
     assert reason =~ "devices, ports, volumes, or runtime driver not available"
   end
 
+  test "automatic ports avoid active and same-request allocations" do
+    {:ok, manifest} =
+      load_manifest(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "automatic-ports",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{
+              "ports" => [
+                %{"label" => "mcp", "port" => "auto", "protocol" => "http"},
+                %{"label" => "metrics", "port" => "auto", "protocol" => "http"}
+              ]
+            }
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    jobs = [
+      %{
+        "job_id" => "existing",
+        "status" => "running",
+        "scheduler" => %{
+          "placements" => [
+            %{
+              "agent_id" => "existing",
+              "node" => "large@lab",
+              "resources" => %{},
+              "allocations" => %{
+                "ports" => [
+                  %{"label" => "existing", "port" => 49_152, "protocol" => "tcp"}
+                ]
+              }
+            }
+          ]
+        }
+      }
+    ]
+
+    assert {:ok, plan} = Scheduler.plan(manifest, nodes: [large_node()], jobs: jobs)
+
+    assert [
+             %{"port" => 49_153},
+             %{"port" => 49_154}
+           ] = get_in(plan, ["placements", Access.at(0), "allocations", "ports"])
+  end
+
+  test "automatic ports honor the runtime node's published range" do
+    previous_start = System.get_env("MN_AUTO_PORT_START")
+    previous_end = System.get_env("MN_AUTO_PORT_END")
+
+    try do
+      System.put_env("MN_AUTO_PORT_START", "62000")
+      System.put_env("MN_AUTO_PORT_END", "62001")
+
+      {:ok, manifest} =
+        load_manifest(%{
+          "manifest_version" => "1.0",
+          "graph_id" => "published-automatic-ports",
+          "entrypoints" => ["worker"],
+          "nodes" => [
+            %{
+              "node_id" => "worker",
+              "agent_type" => "executor",
+              "role" => "root",
+              "resources" => %{
+                "ports" => [
+                  %{"label" => "mcp", "port" => "auto", "protocol" => "http"}
+                ]
+              }
+            }
+          ],
+          "edges" => [],
+          "policies" => %{"recovery_mode" => "local_restart"}
+        })
+
+      assert {:ok, plan} = Scheduler.plan(manifest, nodes: [large_node()], jobs: [])
+
+      assert [%{"port" => 62_000}] =
+               get_in(plan, ["placements", Access.at(0), "allocations", "ports"])
+    after
+      restore_env("MN_AUTO_PORT_START", previous_start)
+      restore_env("MN_AUTO_PORT_END", previous_end)
+    end
+  end
+
+  test "automatic ports are released with terminal jobs and fail when the range is exhausted" do
+    {:ok, manifest} =
+      load_manifest(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "automatic-port-lifecycle",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{
+              "ports" => [%{"label" => "mcp", "port" => "auto", "protocol" => "http"}]
+            }
+          }
+        ],
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    terminal_job = %{
+      "job_id" => "completed",
+      "status" => "completed",
+      "scheduler" => %{
+        "placements" => [
+          %{
+            "agent_id" => "completed",
+            "node" => "large@lab",
+            "allocations" => %{
+              "ports" => [%{"label" => "old", "port" => 49_152, "protocol" => "http"}]
+            }
+          }
+        ]
+      }
+    }
+
+    assert {:ok, plan} =
+             Scheduler.plan(manifest, nodes: [large_node()], jobs: [terminal_job])
+
+    assert [%{"port" => 49_152}] =
+             get_in(plan, ["placements", Access.at(0), "allocations", "ports"])
+
+    exhausted_job = %{
+      "job_id" => "exhausted",
+      "status" => "running",
+      "scheduler" => %{
+        "placements" => [
+          %{
+            "agent_id" => "exhausted",
+            "node" => "large@lab",
+            "allocations" => %{
+              "ports" =>
+                Enum.map(49_152..65_535, fn port ->
+                  %{"label" => "port-#{port}", "port" => port, "protocol" => "http"}
+                end)
+            }
+          }
+        ]
+      }
+    }
+
+    assert {:error, "placement_failed: " <> reason} =
+             Scheduler.plan(manifest, nodes: [large_node()], jobs: [exhausted_job])
+
+    assert reason =~ "worker"
+    assert reason =~ "devices, ports, volumes, or runtime driver not available"
+  end
+
   test "host volumes and runtime drivers filter candidate nodes" do
     {:ok, manifest} =
       load_manifest(%{
@@ -2274,4 +2433,7 @@ defmodule MirrorNeuron.SchedulerTest do
     metal_node()
     |> Map.delete("capabilities")
   end
+
+  defp restore_env(name, nil), do: System.delete_env(name)
+  defp restore_env(name, value), do: System.put_env(name, value)
 end

@@ -2496,12 +2496,21 @@ defmodule MirrorNeuron.RuntimeTest do
           "node_id" => "worker",
           "agent_type" => "router",
           "role" => "root_coordinator",
+          "resources" => %{
+            "ports" => [
+              %{"label" => "mcp-collaboration", "port" => "auto", "protocol" => "http"}
+            ]
+          },
           "services" => [
             %{
               "name" => "agent-api",
               "address" => "127.0.0.1",
-              "port" => 18_080,
-              "tags" => ["runtime-test"]
+              "port" => "${env.MN_PORT_MCP_COLLABORATION}",
+              "tags" => ["runtime-test"],
+              "meta" => %{
+                "job_id" => "${env.MN_JOB_ID}",
+                "run_id" => "${env.MN_RUN_ID}"
+              }
             }
           ]
         }
@@ -2524,6 +2533,9 @@ defmodule MirrorNeuron.RuntimeTest do
     assert {:ok, [service]} = ServiceRegistry.resolve("agent-api", job_id: job_id)
     assert service["node"] == to_string(Node.self())
     assert service["tags"] == ["runtime-test"]
+    assert service["port"] in 49_152..65_535
+    assert service["meta"]["job_id"] == job_id
+    assert service["meta"]["run_id"] == job_id
 
     assert {:ok, "cancelled"} = MirrorNeuron.cancel(job_id)
 

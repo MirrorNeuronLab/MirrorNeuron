@@ -158,7 +158,9 @@ defmodule MirrorNeuron.Config.Schema do
       spec("MN_SYNCTHING_FOLDER_PATH", :syncthing_folder_path, :path,
         default: "/var/syncthing/MirrorNeuronShared"
       ),
-      spec("MN_RESOURCE_ADMISSION_ENABLED", :resource_admission_enabled, :boolean, default: true)
+      spec("MN_RESOURCE_ADMISSION_ENABLED", :resource_admission_enabled, :boolean, default: true),
+      spec("MN_AUTO_PORT_START", :auto_port_start, :integer, default: 49_152),
+      spec("MN_AUTO_PORT_END", :auto_port_end, :integer, default: 65_535)
     ]
   end
 

@@ -142,6 +142,18 @@ call must preserve the public result of the same local operation.
 Scheduling and admission consider declared CPU, memory, GPU, services, models,
 node state, and execution profiles. Lack of an admissible placement returns an
 actionable failure; it does not bypass requirements.
+Declared inbound ports may be fixed integers or request runtime allocation with
+`"auto"`. The scheduler makes automatic ports exclusive per active placement
+on a target node, persists the resolved integer in the scheduler plan, exports
+it through `MN_PORT_<LABEL>`, and resolves agent service templates from that
+same allocation. Runtime nodes may constrain the allocatable range with
+`MN_AUTO_PORT_START` and `MN_AUTO_PORT_END` when their container or firewall
+publishes only a bounded port range.
+The public job-collaboration service contract is `mn-job-collaboration` with
+tags `mcp` and `job-collaboration`, loopback Streamable HTTP at `/mcp`, and
+blueprint/job/run/goal identity metadata. It is run-scoped and read-only;
+distributed authenticated discovery and job mutation are outside this
+contract.
 Every Redis namespace carries an opaque coordination-store identity. Runtime
 nodes advertise that identity, Redis role, and writable-primary status.
 Scheduling excludes nodes that do not match the submitting Core's writable
@@ -158,6 +170,9 @@ and cleans up only owned resources. HostLocal commands run in an owned process
 group when the host supports it; cancellation, owner termination, timeout, and
 missed-beacon failure terminate that command before releasing the runner.
 The published Core image provides Python 3.11 for HostLocal blueprint commands.
+When a prepared `python_environment` is attached, HostLocal resolves console
+script entrypoints from that environment's `bin` directory before the Core
+process path.
 Its build fails if `python3` does not resolve to Python 3.11; the base image is
 pinned by Debian release and multi-architecture digest so immutable Core
 release behavior cannot drift with an upstream rolling tag.

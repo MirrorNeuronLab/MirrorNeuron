@@ -1,6 +1,8 @@
 defmodule MirrorNeuron.ServiceSpec do
   @moduledoc false
 
+  alias MirrorNeuron.ResourceSpec
+
   @check_types ["http", "tcp", "script", "grpc"]
   @origins ["internal", "external"]
   @providers ["mirror_neuron"]
@@ -53,6 +55,25 @@ defmodule MirrorNeuron.ServiceSpec do
 
   def service_instances_for_agent(manifest, job_id, node, target_node, opts \\ []) do
     source_agent_id = source_node_id(node)
+
+    node_environment =
+      node
+      |> Map.get(:config, %{})
+      |> map_get("environment")
+      |> stringify_map()
+
+    allocation_environment =
+      opts
+      |> Keyword.get(:allocation, %{})
+      |> ResourceSpec.allocation_env()
+
+    environment =
+      opts
+      |> Keyword.get(:env, node_environment)
+      |> stringify_map()
+      |> Map.merge(allocation_environment)
+
+    opts = Keyword.put(opts, :env, environment)
 
     context =
       manifest

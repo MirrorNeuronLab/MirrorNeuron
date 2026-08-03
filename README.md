@@ -417,6 +417,8 @@ HostLocal payloads receive Core's internal loopback gRPC client target; a
 manifest may explicitly override that target when it owns a different reachable
 control endpoint.
 Published Core images include Python 3.11 for HostLocal blueprint commands.
+Prepared `python_environment` resources also put their `bin` directory first
+for HostLocal console-script entrypoints.
 The Docker build pins the Debian base and verifies that `python3` resolves to
 Python 3.11 so an upstream rolling image cannot change an immutable release.
 
@@ -457,7 +459,10 @@ declared in the manifest, and `policies.scheduler.strategy` can be `binpack` or
       "resources": {
         "cpu_cores": 2,
         "memory_mb": 4096,
-        "gpu_count": 1
+        "gpu_count": 1,
+        "ports": [
+          { "label": "api", "port": "auto", "protocol": "http" }
+        ]
       },
       "constraints": [
         { "attribute": "capabilities", "operator": "contains", "value": "cuda" }
@@ -469,6 +474,20 @@ declared in the manifest, and `policies.scheduler.strategy` can be `binpack` or
 
 Submitted jobs persist their scheduler plan under the job's `scheduler` field so
 API and monitoring clients can inspect where agents were intended to run.
+Port resources accept a fixed integer or `"auto"`. Automatic ports are allocated
+from the node's dynamic/private range, remain exclusive for the active
+placement, and are exposed to the runner as `MN_PORT_<LABEL>`. Agent service
+declarations can reference the resolved value with an environment template such
+as `"${env.MN_PORT_API}"`. Containerized nodes can set `MN_AUTO_PORT_START` and
+`MN_AUTO_PORT_END` to the bounded range published by their runtime.
+
+Job-scoped co-worker collaboration uses a supervised agent service with the
+exact name `mn-job-collaboration`, tags `mcp` and `job-collaboration`, loopback
+binding, an automatic port, and Streamable HTTP path `/mcp`. Its service
+metadata identifies the blueprint, stable job, current run, and optional shared
+goal. The service is registered only for the active run and exposes the
+read-only job snapshot, updates, and record tools; peer selection remains an
+explicit client policy.
 
 ---
 

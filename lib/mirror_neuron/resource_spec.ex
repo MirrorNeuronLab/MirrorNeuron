@@ -349,7 +349,9 @@ defmodule MirrorNeuron.ResourceSpec do
   defp validate_port(errors, port, node_id, index) when is_map(port) do
     path = "resources.ports[#{index}] for node #{node_id}"
     label = map_get(port, "label")
-    port_number = number_value(map_get(port, "port"))
+    port_value = map_get(port, "port")
+    port_number = number_value(port_value)
+    auto_port? = auto_port?(port_value)
     protocol = map_get(port, "protocol") || "tcp"
 
     errors
@@ -358,8 +360,8 @@ defmodule MirrorNeuron.ResourceSpec do
       "#{path}.label is required"
     )
     |> maybe_error(
-      is_nil(port_number) or port_number < 1 or port_number > 65_535,
-      "#{path}.port must be between 1 and 65535"
+      not auto_port? and (is_nil(port_number) or port_number < 1 or port_number > 65_535),
+      "#{path}.port must be between 1 and 65535 or auto"
     )
     |> maybe_error(
       String.downcase(to_string(protocol)) not in @port_protocols,
@@ -490,14 +492,15 @@ defmodule MirrorNeuron.ResourceSpec do
   defp normalize_port(port) when is_map(port) do
     port = stringify_map(port)
     label = map_get(port, "label")
-    number = number_value(map_get(port, "port"))
+    port_value = map_get(port, "port")
+    number = number_value(port_value)
 
-    if is_nil(label) or is_nil(number) do
+    if is_nil(label) or (is_nil(number) and not auto_port?(port_value)) do
       nil
     else
       %{
         "label" => to_string(label),
-        "port" => trunc(number),
+        "port" => if(auto_port?(port_value), do: "auto", else: trunc(number)),
         "protocol" => String.downcase(to_string(map_get(port, "protocol") || "tcp"))
       }
     end
@@ -739,6 +742,11 @@ defmodule MirrorNeuron.ResourceSpec do
 
   defp absolute_path?(value) when is_binary(value), do: Path.type(value) == :absolute
   defp absolute_path?(_value), do: false
+
+  defp auto_port?(value) when is_binary(value),
+    do: String.downcase(String.trim(value)) == "auto"
+
+  defp auto_port?(_value), do: false
 
   defp env_suffix(value) do
     value

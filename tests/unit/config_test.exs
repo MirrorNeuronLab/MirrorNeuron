@@ -17,7 +17,9 @@ defmodule MirrorNeuron.ConfigTest do
     "MN_COOKIE",
     "MN_CHECKPOINT_ROOT",
     "MN_BLUEPRINT_PYTHON_ENVS_DIR",
-    "MN_SYNCTHING_RESCAN_INTERVAL_SECONDS"
+    "MN_SYNCTHING_RESCAN_INTERVAL_SECONDS",
+    "MN_AUTO_PORT_START",
+    "MN_AUTO_PORT_END"
   ]
 
   setup do
@@ -149,6 +151,15 @@ defmodule MirrorNeuron.ConfigTest do
 
     assert Schema.spec_by_env("MN_API_PORT").key == :api_port
     assert Config.integer("MN_API_PORT", :api_port) == 8_081
+  end
+
+  test "validate rejects an invalid automatic service port range" do
+    System.put_env("MN_AUTO_PORT_START", "62049")
+    System.put_env("MN_AUTO_PORT_END", "62000")
+
+    assert_raise ArgumentError, ~r/MN_AUTO_PORT_START.*ascending range/, fn ->
+      Config.validate!()
+    end
   end
 
   test "node-local caches and checkpoints are the unset defaults" do

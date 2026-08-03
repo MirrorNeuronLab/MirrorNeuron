@@ -33,7 +33,12 @@ RUN test -x /usr/bin/python3.11 \
     && python3 --version \
     && python3 -m pip --version
 
-RUN python3 -m pip install --no-cache-dir --break-system-packages "litellm[proxy]>=1.72.0"
+# LiteLLM 1.95 still imports FastAPI's get_flat_dependant helper, which was
+# removed in FastAPI 0.140. Keep the proxy on the newest compatible FastAPI
+# line until LiteLLM removes that import.
+RUN python3 -m pip install --no-cache-dir --break-system-packages \
+    "litellm[proxy]>=1.72.0" \
+    "fastapi>=0.136.3,<0.140"
 
 ARG DOCKER_CLI_VERSION=29.2.1
 RUN set -eux; \

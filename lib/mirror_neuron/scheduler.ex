@@ -3,6 +3,7 @@ defmodule MirrorNeuron.Scheduler do
 
   alias MirrorNeuron.Cluster.{Hardware, NodeState}
   alias MirrorNeuron.Artifacts.BlobRef
+  alias MirrorNeuron.Config
   alias MirrorNeuron.HardwareRequirements
   alias MirrorNeuron.Manifest
   alias MirrorNeuron.Persistence.RedisStore
@@ -1303,24 +1304,61 @@ defmodule MirrorNeuron.Scheduler do
   defp allocate_runtime_driver(_node, _resource_request), do: {:ok, nil}
 
   defp allocate_ports(%{"ports" => ports}, used) when is_list(ports) do
-    requested_keys = Enum.map(ports, &port_key/1)
+    Enum.reduce_while(ports, {:ok, [], used["ports"]}, fn request, {:ok, allocated, reserved} ->
+      case allocate_port(request, reserved) do
+        {:ok, resolved, key} ->
+          {:cont, {:ok, allocated ++ [resolved], MapSet.put(reserved, key)}}
 
-    cond do
-      Enum.any?(requested_keys, &is_nil/1) ->
-        {:error, :invalid_port_request}
-
-      length(requested_keys) != length(Enum.uniq(requested_keys)) ->
-        {:error, :port_conflict}
-
-      Enum.any?(requested_keys, &MapSet.member?(used["ports"], &1)) ->
-        {:error, :port_conflict}
-
-      true ->
-        {:ok, ports}
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, allocated, _reserved} -> {:ok, allocated}
+      {:error, reason} -> {:error, reason}
     end
   end
 
   defp allocate_ports(_resource_request, _used), do: {:ok, []}
+
+  defp allocate_port(%{"port" => "auto"} = request, reserved) do
+    case Enum.find(auto_port_range(), fn port ->
+           not MapSet.member?(reserved, port_key(Map.put(request, "port", port)))
+         end) do
+      nil ->
+        {:error, :port_unavailable}
+
+      port ->
+        resolved = Map.put(request, "port", port)
+        {:ok, resolved, port_key(resolved)}
+    end
+  end
+
+  defp allocate_port(request, reserved) do
+    case port_key(request) do
+      nil ->
+        {:error, :invalid_port_request}
+
+      key ->
+        if MapSet.member?(reserved, key) do
+          {:error, :port_conflict}
+        else
+          {:ok, request, key}
+        end
+    end
+  end
+
+  defp auto_port_range do
+    first = Config.integer("MN_AUTO_PORT_START", :auto_port_start)
+    last = Config.integer("MN_AUTO_PORT_END", :auto_port_end)
+
+    if first in 1..65_535 and last in first..65_535 do
+      first..last
+    else
+      raise ArgumentError,
+            "MN_AUTO_PORT_START and MN_AUTO_PORT_END must define an ascending range within 1..65535"
+    end
+  end
 
   defp allocate_volumes(node, %{"volumes" => volumes}) when is_list(volumes) do
     host_paths = Map.get(node, "host_paths", [])
@@ -1424,7 +1462,16 @@ defmodule MirrorNeuron.Scheduler do
   end
 
   defp port_key(%{"port" => port} = request) do
-    protocol = Map.get(request, "protocol", "tcp") |> to_string() |> String.downcase()
+    protocol =
+      request
+      |> Map.get("protocol", "tcp")
+      |> to_string()
+      |> String.downcase()
+      |> then(fn
+        protocol when protocol in ["http", "grpc"] -> "tcp"
+        protocol -> protocol
+      end)
+
     "#{protocol}:#{trunc(port)}"
   rescue
     _ -> nil

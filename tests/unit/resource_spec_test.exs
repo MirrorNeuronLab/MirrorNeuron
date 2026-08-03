@@ -92,6 +92,31 @@ defmodule MirrorNeuron.ResourceSpecTest do
     assert {:ok, _decoded} = Jason.decode(env["MN_ALLOCATION_JSON"])
   end
 
+  test "normalizes automatic port requests without changing fixed ports" do
+    spec =
+      ResourceSpec.normalize_request(%{
+        "ports" => [
+          %{"label" => "mcp-collaboration", "port" => "auto", "protocol" => "http"},
+          %{"label" => "api", "port" => 8080}
+        ]
+      })
+
+    assert [
+             %{"label" => "mcp-collaboration", "port" => "auto", "protocol" => "http"},
+             %{"label" => "api", "port" => 8080, "protocol" => "tcp"}
+           ] = spec["ports"]
+
+    assert [] =
+             ResourceSpec.validate_node(%{
+               node_id: "worker",
+               resources: %{
+                 "ports" => [
+                   %{"label" => "mcp-collaboration", "port" => "auto", "protocol" => "http"}
+                 ]
+               }
+             })
+  end
+
   test "validates malformed rich resource specs" do
     errors =
       ResourceSpec.validate_node(%{

@@ -246,7 +246,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
   end
 
   defp execute_command(owner, command, args, env, workdir, config, opts, message) do
-    case resolve_executable(command, workdir) do
+    case resolve_executable(command, workdir, env) do
       nil ->
         {:error,
          "host-local executable not found: #{command}. Verify the Core runtime image contains the interpreter or executable declared by the blueprint"}
@@ -322,8 +322,9 @@ defmodule MirrorNeuron.Runner.HostLocal do
       {:error, "failed to invoke #{command}: #{Exception.message(error)}"}
   end
 
-  defp resolve_executable(command, workdir) do
-    System.find_executable(command) ||
+  defp resolve_executable(command, workdir, env) do
+    find_executable_in_child_path(command, workdir, env) ||
+      System.find_executable(command) ||
       case Path.expand(command, workdir) do
         candidate when candidate != command ->
           if File.exists?(candidate), do: candidate
@@ -331,6 +332,29 @@ defmodule MirrorNeuron.Runner.HostLocal do
         _candidate ->
           nil
       end
+  end
+
+  defp find_executable_in_child_path(command, workdir, env) do
+    if Path.type(command) == :relative and Path.basename(command) == command do
+      env
+      |> Enum.find_value(fn
+        {"PATH", path} when is_binary(path) -> executable_from_path(command, workdir, path)
+        _entry -> nil
+      end)
+    end
+  end
+
+  defp executable_from_path(command, workdir, path) do
+    separator = if match?({:win32, _}, :os.type()), do: ";", else: ":"
+
+    path
+    |> String.split(separator, trim: true)
+    |> Enum.find_value(fn directory ->
+      directory
+      |> Path.join(command)
+      |> Path.expand(workdir)
+      |> System.find_executable()
+    end)
   end
 
   defp collect_port_output(

@@ -1615,7 +1615,18 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   defp register_agent_services(state, agent_id) do
     node = Map.fetch!(state.nodes_by_id, agent_id)
-    target_node = Scheduler.target_node(scheduler_plan(state), agent_id) || to_string(Node.self())
+    plan = scheduler_plan(state)
+    target_node = Scheduler.target_node(plan, agent_id) || to_string(Node.self())
+    node_config = Map.get(node, :config, %{})
+
+    service_environment =
+      state
+      |> runtime_environment()
+      |> Map.merge(
+        node_config
+        |> then(&(Map.get(&1, "environment") || Map.get(&1, :environment) || %{}))
+        |> Map.new(fn {key, value} -> {to_string(key), value} end)
+      )
 
     services =
       ServiceSpec.service_instances_for_agent(
@@ -1623,7 +1634,9 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         state.job_id,
         node,
         target_node,
-        bundle_root: runtime_bundle_root(state)
+        bundle_root: runtime_bundle_root(state),
+        allocation: Scheduler.allocation(plan, agent_id),
+        env: service_environment
       )
 
     register_services(state, services)

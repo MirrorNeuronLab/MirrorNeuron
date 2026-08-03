@@ -119,6 +119,57 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
     end
   end
 
+  test "executes a console script from a prepared python environment" do
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "mirror_neuron_host_local_prepared_console_script_test_#{System.unique_integer([:positive])}"
+      )
+
+    bundle_dir = Path.join(tmp_dir, "job_bundle")
+    payloads_dir = Path.join(bundle_dir, "payloads")
+    upload_dir = Path.join(payloads_dir, "bundle")
+    python_env_dir = Path.join(tmp_dir, "prepared-python-environment")
+    console_script = "mn-test-prepared-console-script"
+    console_script_path = Path.join([python_env_dir, "bin", console_script])
+    old_native_prep = System.get_env("MN_CORE_ALLOW_NATIVE_RESOURCE_PREP")
+
+    try do
+      File.mkdir_p!(upload_dir)
+      File.mkdir_p!(Path.dirname(console_script_path))
+      File.write!(console_script_path, "#!/bin/sh\nprintf 'prepared-console-script-ok\\n'\n")
+      File.chmod!(console_script_path, 0o755)
+      System.delete_env("MN_CORE_ALLOW_NATIVE_RESOURCE_PREP")
+
+      config = %{
+        "upload_path" => "bundle",
+        "upload_as" => "bundle",
+        "workdir" => "/sandbox/job/bundle",
+        "command" => [console_script],
+        "python_environment" => %{
+          "packages" => ["mn-test-prepared-console-script==1.0.0"],
+          "path" => python_env_dir
+        }
+      }
+
+      assert {:ok, result} =
+               HostLocal.run(
+                 %{},
+                 config,
+                 job_id: "job-prepared-console-script",
+                 agent_id: "agent-prepared-console-script",
+                 bundle_root: bundle_dir,
+                 payloads_path: payloads_dir
+               )
+
+      assert result["exit_code"] == 0
+      assert result["stdout"] =~ "prepared-console-script-ok"
+    after
+      restore_env("MN_CORE_ALLOW_NATIVE_RESOURCE_PREP", old_native_prep)
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
   test "parses structured agent event stdout lines without keeping them in stdout" do
     tmp_dir =
       Path.join(
