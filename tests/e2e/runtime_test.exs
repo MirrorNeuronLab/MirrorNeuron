@@ -1469,7 +1469,7 @@ defmodule MirrorNeuron.RuntimeTest do
     PauseResumeInvocationCounter.reset()
 
     manifest = %{
-      "apiVersion" => "mn.workflow/v1",
+      "apiVersion" => "mn.workflow/v2",
       "kind" => "Workflow",
       "manifest_version" => "1.0",
       "graph_id" => "pause_resume_inflight_workflow_test",
@@ -3549,7 +3549,7 @@ defmodule MirrorNeuron.RuntimeTest do
 
   defp pause_resume_dag_manifest(graph_id) do
     %{
-      "apiVersion" => "mn.workflow/v1",
+      "apiVersion" => "mn.workflow/v2",
       "kind" => "Workflow",
       "manifest_version" => "1.0",
       "graph_id" => graph_id,
@@ -3655,7 +3655,7 @@ defmodule MirrorNeuron.RuntimeTest do
 
   defp assert_runtime_workflow_manifest(job_id) do
     assert {:ok, job} = RedisStore.fetch_job(job_id)
-    assert get_in(job, ["manifest", "apiVersion"]) == "mn.workflow/v1"
+    assert get_in(job, ["manifest", "apiVersion"]) == "mn.workflow/v2"
     assert get_in(job, ["manifest", "kind"]) == "Workflow"
     assert get_in(job, ["manifest", "contract", "outputs"]) == [%{"id" => "review_packet"}]
     assert get_in(job, ["manifest", "flow", "graph", "schema"]) == "mn.workflow.problem_graph/v1"

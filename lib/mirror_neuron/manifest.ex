@@ -1,4 +1,6 @@
 defmodule MirrorNeuron.Manifest do
+  @api_version "mn.workflow/v2"
+
   defstruct [
     :api_version,
     :kind,
@@ -439,6 +441,10 @@ defmodule MirrorNeuron.Manifest do
 
   defp validate_required(errors, manifest) do
     errors
+    |> maybe_add_error(
+      manifest.api_version != @api_version,
+      "apiVersion must be #{@api_version}"
+    )
     |> maybe_add_error(is_nil(manifest.manifest_version), "manifest_version is required")
     |> maybe_add_error(
       not nonempty_string?(manifest.graph_id),

@@ -61,7 +61,7 @@ defmodule MirrorNeuron.JobBackupTest do
     assert [%{"type" => "job_paused"}] = backup["runtime"]["events"]
     assert is_binary(bundle_files["manifest.json"])
     exported_manifest = Jason.decode!(bundle_files["manifest.json"])
-    assert exported_manifest["apiVersion"] == "mn.workflow/v1"
+    assert exported_manifest["apiVersion"] == "mn.workflow/v2"
 
     assert get_in(exported_manifest, ["flow", "graph", "schema"]) ==
              "mn.workflow.problem_graph/v1"
@@ -77,7 +77,7 @@ defmodule MirrorNeuron.JobBackupTest do
     job_id = "backup-incomplete-workflow-#{System.unique_integer([:positive])}"
 
     incomplete_manifest = %{
-      "apiVersion" => "mn.workflow/v1",
+      "apiVersion" => "mn.workflow/v2",
       "kind" => "Workflow",
       "manifest_version" => "1.0",
       "graph_id" => "incomplete_workflow",
@@ -101,7 +101,7 @@ defmodule MirrorNeuron.JobBackupTest do
     on_exit(fn -> RedisStore.delete_job(job_id) end)
 
     assert {:error, reason} = JobBackup.export_job(job_id)
-    assert reason =~ "embedded mn.workflow/v1 manifest is missing contract, flow, or runtime"
+    assert reason =~ "embedded mn.workflow/v2 manifest is missing contract, flow, or runtime"
   end
 
   test "restore generates a new paused clone with provenance and rewritten runtime", %{
@@ -226,7 +226,7 @@ defmodule MirrorNeuron.JobBackupTest do
     File.mkdir_p!(payloads_dir)
 
     manifest = %{
-      "apiVersion" => "mn.workflow/v1",
+      "apiVersion" => "mn.workflow/v2",
       "kind" => "Workflow",
       "manifest_version" => "1.0",
       "graph_id" => graph_id,

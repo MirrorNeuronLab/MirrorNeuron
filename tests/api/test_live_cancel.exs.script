@@ -19,7 +19,7 @@ defmodule TestLiveCancel do
     Process.sleep(100)
 
     # 3. Call cancel via API
-    conn = conn(:post, "/api/v1/jobs/#{job_id}/cancel")
+    conn = conn(:post, "/api/v2/jobs/#{job_id}/cancel")
     conn = MirrorNeuron.API.Router.call(conn, MirrorNeuron.API.Router.init([]))
     
     IO.inspect(conn.status, label: "API Cancel Status")
