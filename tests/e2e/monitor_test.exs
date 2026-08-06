@@ -419,7 +419,10 @@ defmodule MirrorNeuron.MonitorTest do
     assert File.dir?(outside_submission)
 
     assert {:ok, cancelled} = RedisStore.fetch_job(cancelled_id)
-    assert {:ok, _cancelled} = RedisStore.persist_job(cancelled_id, Map.put(cancelled, "manifest", %{}))
+
+    assert {:ok, _cancelled} =
+             RedisStore.persist_job(cancelled_id, Map.put(cancelled, "manifest", %{}))
+
     assert :ok = RedisStore.delete_job(cancelled_id)
     RedisStore.delete_job(running_id)
   end
