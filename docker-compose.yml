@@ -34,6 +34,7 @@ services:
       - /bin/sh
       - -ec
       - |
+        set -eu
         config_dir="$${STHOMEDIR:-/var/syncthing/config}"
         config_file="$$config_dir/config.xml"
         mkdir -p "$$config_dir"
@@ -47,6 +48,10 @@ services:
           -e 's#<globalAnnounceEnabled>[^<]*</globalAnnounceEnabled>#<globalAnnounceEnabled>false</globalAnnounceEnabled>#' \
           -e 's#<natEnabled>[^<]*</natEnabled>#<natEnabled>false</natEnabled>#' \
           -e 's#<localAnnounceEnabled>[^<]*</localAnnounceEnabled>#<localAnnounceEnabled>true</localAnnounceEnabled>#' \
+          -e 's#<stunKeepaliveStartS>[^<]*</stunKeepaliveStartS>#<stunKeepaliveStartS>0</stunKeepaliveStartS>#' \
+          -e 's#<urAccepted>[^<]*</urAccepted>#<urAccepted>-1</urAccepted>#' \
+          -e 's#<autoUpgradeIntervalH>[^<]*</autoUpgradeIntervalH>#<autoUpgradeIntervalH>0</autoUpgradeIntervalH>#' \
+          -e 's#<crashReportingEnabled>[^<]*</crashReportingEnabled>#<crashReportingEnabled>false</crashReportingEnabled>#' \
           "$$config_file"
 
         exec /bin/entrypoint.sh /bin/syncthing serve
@@ -54,6 +59,7 @@ services:
       STGUIADDRESS: 0.0.0.0:8384
       STGUIAPIKEY: ${MN_SYNCTHING_API_KEY:-}
       STHOMEDIR: /var/syncthing/config
+      MN_SYNCTHING_LAN_ONLY: "1"
       MN_HOST_SHARED_STORAGE_ROOT: ${MN_HOST_SHARED_STORAGE_ROOT:-${MN_SHARED_STORAGE_ROOT:-./mn/shared}}
       MN_SYNCTHING_API_KEY: ${MN_SYNCTHING_API_KEY:-}
     ports:

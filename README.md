@@ -687,9 +687,10 @@ between joined nodes. The shared root contains `blobs/` for durable sha256
 content and `jobs/` for temporary per-job staging. Set
 `MN_SYNCTHING_REQUIRED=1` to fail startup/join when replication cannot be
 started or peer-configured. The sidecar is LAN-only: on every start it disables
-Syncthing relays, global discovery, and NAT traversal while keeping local
-discovery enabled. Configure peer devices with LAN or VPN addresses when they
-cannot be discovered locally.
+Syncthing relays, global discovery, NAT/STUN traversal, usage reporting,
+automatic upgrade checks, and crash reporting while keeping local discovery
+enabled. Configure peer devices with LAN or VPN addresses when they cannot be
+discovered locally.
 Filesystem watching remains enabled and the fallback rescan interval defaults
 to 3600 seconds (`MN_SYNCTHING_RESCAN_INTERVAL_SECONDS`). Managed ignores keep
 derived Python environments, staged Python sources, and local checkpoints out
