@@ -170,6 +170,64 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
     end
   end
 
+  test "executes a prepared Python console script whose shebang names the host cache path" do
+    tmp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "mirror_neuron_host_local_host_shebang_test_#{System.unique_integer([:positive])}"
+      )
+
+    bundle_dir = Path.join(tmp_dir, "job_bundle")
+    payloads_dir = Path.join(bundle_dir, "payloads")
+    upload_dir = Path.join(payloads_dir, "bundle")
+    python_env_dir = Path.join(tmp_dir, "prepared-python-environment")
+    python_env_bin = Path.join(python_env_dir, "bin")
+    console_script = "mn-test-host-shebang-console-script"
+    console_script_path = Path.join(python_env_bin, console_script)
+    old_native_prep = System.get_env("MN_CORE_ALLOW_NATIVE_RESOURCE_PREP")
+
+    try do
+      File.mkdir_p!(upload_dir)
+      {_, 0} = System.cmd(System.find_executable("python3.11"), ["-m", "venv", python_env_dir])
+
+      File.write!(
+        console_script_path,
+        "#!/Users/developer/.mn/cache/blueprint-python-envs/test/bin/python\n" <>
+          "print('prepared-host-shebang-console-script-ok')\n"
+      )
+
+      File.chmod!(console_script_path, 0o755)
+      System.delete_env("MN_CORE_ALLOW_NATIVE_RESOURCE_PREP")
+
+      config = %{
+        "upload_path" => "bundle",
+        "upload_as" => "bundle",
+        "workdir" => "/sandbox/job/bundle",
+        "command" => [console_script],
+        "python_environment" => %{
+          "packages" => ["mn-test-host-shebang-console-script==1.0.0"],
+          "path" => python_env_dir
+        }
+      }
+
+      assert {:ok, result} =
+               HostLocal.run(
+                 %{},
+                 config,
+                 job_id: "job-host-shebang-console-script",
+                 agent_id: "agent-host-shebang-console-script",
+                 bundle_root: bundle_dir,
+                 payloads_path: payloads_dir
+               )
+
+      assert result["exit_code"] == 0
+      assert result["stdout"] =~ "prepared-host-shebang-console-script-ok"
+    after
+      restore_env("MN_CORE_ALLOW_NATIVE_RESOURCE_PREP", old_native_prep)
+      File.rm_rf!(tmp_dir)
+    end
+  end
+
   test "parses structured agent event stdout lines without keeping them in stdout" do
     tmp_dir =
       Path.join(

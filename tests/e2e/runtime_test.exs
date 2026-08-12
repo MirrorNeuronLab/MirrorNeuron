@@ -2020,11 +2020,30 @@ defmodule MirrorNeuron.RuntimeTest do
       "policies" => %{"recovery_mode" => "local_restart"}
     }
 
-    {:ok, job_id} = persist_recoverable_job(manifest, "safe-retry")
+    scheduler_plan = %{
+      "status" => "scheduled",
+      "job_type" => "batch",
+      "strategy" => "binpack",
+      "placements" => [
+        %{
+          "agent_id" => "worker",
+          "node" => to_string(Node.self()),
+          "allocations" => %{
+            "ports" => [
+              %{"label" => "mcp-collaboration", "port" => 62_000, "protocol" => "http"}
+            ]
+          }
+        }
+      ]
+    }
+
+    {:ok, job_id} =
+      persist_recoverable_job(manifest, "safe-retry", %{"scheduler" => scheduler_plan})
 
     assert {:ok, %{action: :started}} = MirrorNeuron.recover_job(job_id)
     assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 3_000)
     assert job["status"] == "completed"
+    assert job["scheduler"] == scheduler_plan
     assert get_in(job, ["result", "output", "payload", "value"]) == 42
     assert get_in(job, ["result", "output", "retried"]) == true
 
@@ -2257,6 +2276,16 @@ defmodule MirrorNeuron.RuntimeTest do
         "restore_provenance" => restore_provenance
       })
 
+    service_id = "unsafe-recovery-service-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _service} =
+             ServiceRegistry.register(%{
+               "id" => service_id,
+               "name" => "unsafe-recovery-service",
+               "job_id" => job_id,
+               "node" => to_string(Node.self())
+             })
+
     assert {:ok, %{action: :paused_for_review, reason: reason}} =
              MirrorNeuron.recover_job(job_id)
 
@@ -2268,6 +2297,8 @@ defmodule MirrorNeuron.RuntimeTest do
     assert job["recovery_requires_review"] == true
     assert get_in(job, ["recovery", "status"]) == "paused_for_review"
     assert job["restore_provenance"] == restore_provenance
+
+    assert {:ok, []} = ServiceRegistry.list(job_id: job_id)
 
     assert {:ok, jobs} = MirrorNeuron.list_jobs(summary: :basic, include_terminal: false)
     summary = Enum.find(jobs, &(&1["job_id"] == job_id))
@@ -2536,6 +2567,26 @@ defmodule MirrorNeuron.RuntimeTest do
     assert service["port"] in 49_152..65_535
     assert service["meta"]["job_id"] == job_id
     assert service["meta"]["run_id"] == job_id
+
+    assert {:ok, "paused"} = MirrorNeuron.pause(job_id)
+
+    wait_until(
+      fn ->
+        {:ok, services} = ServiceRegistry.list(job_id: job_id, passing_only: false)
+        services == []
+      end,
+      2_000
+    )
+
+    assert {:ok, "resumed"} = MirrorNeuron.resume(job_id)
+
+    wait_until(
+      fn ->
+        {:ok, services} = ServiceRegistry.resolve("agent-api", job_id: job_id)
+        Enum.any?(services, &(&1["agent_id"] == "worker" and &1["status"] == "passing"))
+      end,
+      2_000
+    )
 
     assert {:ok, "cancelled"} = MirrorNeuron.cancel(job_id)
 

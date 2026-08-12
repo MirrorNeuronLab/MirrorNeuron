@@ -214,38 +214,43 @@ defmodule MirrorNeuron.Cluster.Reconciler do
   end
 
   defp enqueue_or_run_orphaned_job(job, opts) do
-    if paused_for_review?(job) do
-      skipped(job, "job is paused for review")
-    else
-      case redis_store(opts).get_lease("job:#{job["job_id"]}") do
-        {:ok, nil} ->
-          with {:ok, full_job} <- fetch_reconciliation_job(job, opts) do
-            if dry_run?(opts) or Keyword.has_key?(opts, :eval) do
-              reconcile_orphaned_job(full_job, opts)
+    cond do
+      paused_for_review?(job) ->
+        skipped(job, "job is paused for review")
+
+      not cluster_recoverable?(job) ->
+        skipped(job, "job is managed by local recovery")
+
+      true ->
+        case redis_store(opts).get_lease("job:#{job["job_id"]}") do
+          {:ok, nil} ->
+            with {:ok, full_job} <- fetch_reconciliation_job(job, opts) do
+              if dry_run?(opts) or Keyword.has_key?(opts, :eval) do
+                reconcile_orphaned_job(full_job, opts)
+              else
+                failed_node = lease_owner(full_job)
+                reason = Keyword.get(opts, :reason, "lost job lease")
+
+                enqueue_and_process_eval(
+                  full_job,
+                  Keyword.fetch!(opts, :trigger),
+                  failed_node,
+                  [],
+                  reason,
+                  opts
+                )
+              end
             else
-              failed_node = lease_owner(full_job)
-              reason = Keyword.get(opts, :reason, "lost job lease")
-
-              enqueue_and_process_eval(
-                full_job,
-                Keyword.fetch!(opts, :trigger),
-                failed_node,
-                [],
-                reason,
-                opts
-              )
+              {:error, reason} ->
+                failed(job, "could not load job for orphan sweep: #{inspect(reason)}")
             end
-          else
-            {:error, reason} ->
-              failed(job, "could not load job for orphan sweep: #{inspect(reason)}")
-          end
 
-        {:ok, _lease} ->
-          skipped(job, "job lease is still active")
+          {:ok, _lease} ->
+            skipped(job, "job lease is still active")
 
-        {:error, reason} ->
-          failed(job, "could not inspect job lease: #{inspect(reason)}")
-      end
+          {:error, reason} ->
+            failed(job, "could not inspect job lease: #{inspect(reason)}")
+        end
     end
   end
 

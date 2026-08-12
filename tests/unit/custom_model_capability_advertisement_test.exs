@@ -5,8 +5,10 @@ defmodule MirrorNeuron.CustomModelCapabilityAdvertisementTest do
 
   @env_names [
     "MN_NODE_HARDWARE_JSON",
+    "MN_NATIVE_SDK_GRPC_HOST",
     "MN_NATIVE_SDK_GRPC_ADVERTISE_HOST",
     "MN_NATIVE_SDK_GRPC_ADVERTISE_PORT",
+    "MN_NETWORK_ADVERTISE_HOST",
     "MN_RUNTIME_SHARED_STORAGE_ROOT",
     "MN_SYNCTHING_RESCAN_INTERVAL_SECONDS"
   ]
@@ -48,5 +50,42 @@ defmodule MirrorNeuron.CustomModelCapabilityAdvertisementTest do
     assert info["native_sdk_grpc"]["target"] == "192.168.4.173:55052"
     assert info["native_sdk_grpc"]["capabilities"] == ["custom_hf_model_v1"]
     assert info["syncthing"]["rescan_interval_seconds"] == 7_200
+  end
+
+  test "node advertisement uses host hardware native SDK route when container advertise env is absent" do
+    System.put_env("MN_NATIVE_SDK_GRPC_ADVERTISE_HOST", "")
+    System.put_env("MN_NATIVE_SDK_GRPC_ADVERTISE_PORT", "")
+    System.put_env("MN_NATIVE_SDK_GRPC_HOST", "")
+    System.put_env("MN_NETWORK_ADVERTISE_HOST", "")
+    System.put_env("MN_RUNTIME_SHARED_STORAGE_ROOT", "/tmp/mn-shared")
+
+    System.put_env(
+      "MN_NODE_HARDWARE_JSON",
+      Jason.encode!(%{
+        "platform" => %{},
+        "cpu" => %{},
+        "memory" => %{},
+        "gpu" => [],
+        "native_sdk_grpc" => %{
+          "enabled" => true,
+          "host" => "mn-native-sdk-grpc",
+          "port" => 55_052,
+          "target" => "mn-native-sdk-grpc:55052",
+          "bind_host" => "0.0.0.0",
+          "capabilities" => ["custom_hf_model_v1", "docker_worker_prepare_v1"]
+        }
+      })
+    )
+
+    info = ClusterHandshake.node_advertisement_info()
+
+    assert info["native_sdk_grpc"] == %{
+             "enabled" => true,
+             "host" => "mn-native-sdk-grpc",
+             "port" => 55_052,
+             "target" => "mn-native-sdk-grpc:55052",
+             "bind_host" => "0.0.0.0",
+             "capabilities" => ["custom_hf_model_v1", "docker_worker_prepare_v1"]
+           }
   end
 end

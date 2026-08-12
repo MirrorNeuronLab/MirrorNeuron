@@ -54,4 +54,20 @@ defmodule MirrorNeuron.Runtime.JobCoordinatorTimerTest do
     assert :ok = JobCoordinator.terminate(:normal, state)
     refute Process.alive?(task.pid)
   end
+
+  test "paused coordinators discard health checks instead of recovering stopped service agents" do
+    token = make_ref()
+
+    state = %{
+      status: "paused",
+      health_check_timer_ref: nil,
+      health_check_token: token
+    }
+
+    assert {:noreply, next_state} =
+             JobCoordinator.handle_info({:health_check, token}, state)
+
+    assert next_state.health_check_timer_ref == nil
+    assert next_state.health_check_token == nil
+  end
 end

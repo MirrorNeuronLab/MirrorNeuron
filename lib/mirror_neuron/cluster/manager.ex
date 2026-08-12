@@ -1,4 +1,5 @@
 defmodule MirrorNeuron.Cluster.Manager do
+  alias MirrorNeuron.Config
   alias MirrorNeuron.Cluster.NodeAdapter
   alias MirrorNeuron.Cluster.NodeState
   alias MirrorNeuron.Execution.LeaseManager
@@ -152,31 +153,51 @@ defmodule MirrorNeuron.Cluster.Manager do
   end
 
   defp native_sdk_grpc_node_info(hardware) do
-    host =
-      System.get_env("MN_NATIVE_SDK_GRPC_ADVERTISE_HOST") ||
-        System.get_env("MN_NETWORK_ADVERTISE_HOST") ||
-        node_host(NodeAdapter.self())
-
-    port = native_sdk_grpc_port()
-    target = if host in [nil, ""], do: "", else: "#{host}:#{port}"
-
     advertised =
       Map.get(hardware, "native_sdk_grpc") || Map.get(hardware, :native_sdk_grpc) || %{}
+
+    host =
+      Config.optional_string(
+        "MN_NATIVE_SDK_GRPC_ADVERTISE_HOST",
+        :native_sdk_grpc_advertise_host
+      ) ||
+        Config.optional_string("MN_NETWORK_ADVERTISE_HOST", :network_advertise_host) ||
+        Map.get(advertised, "host") ||
+        Map.get(advertised, :host) ||
+        node_host(NodeAdapter.self())
+
+    port =
+      Config.optional_string(
+        "MN_NATIVE_SDK_GRPC_ADVERTISE_PORT",
+        :native_sdk_grpc_advertise_port
+      ) ||
+        Map.get(advertised, "port") ||
+        Map.get(advertised, :port) ||
+        native_sdk_grpc_port()
+
+    target = if host in [nil, ""], do: "", else: "#{host}:#{port}"
 
     %{
       "enabled" => host not in [nil, ""] and port not in [nil, ""],
       "host" => host || "",
       "port" => port,
       "target" => target,
-      "bind_host" => System.get_env("MN_NATIVE_SDK_GRPC_HOST") || "",
+      "bind_host" =>
+        Config.optional_string("MN_NATIVE_SDK_GRPC_HOST", :native_sdk_grpc_host) ||
+          Map.get(advertised, "bind_host") ||
+          Map.get(advertised, :bind_host) ||
+          "",
       "capabilities" =>
         Map.get(advertised, "capabilities") || Map.get(advertised, :capabilities) || []
     }
   end
 
   defp native_sdk_grpc_port do
-    System.get_env("MN_NATIVE_SDK_GRPC_ADVERTISE_PORT") ||
-      System.get_env("MN_NATIVE_SDK_GRPC_PORT") ||
+    Config.optional_string(
+      "MN_NATIVE_SDK_GRPC_ADVERTISE_PORT",
+      :native_sdk_grpc_advertise_port
+    ) ||
+      Config.optional_string("MN_NATIVE_SDK_GRPC_PORT", :native_sdk_grpc_port) ||
       "55052"
   end
 

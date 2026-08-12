@@ -664,7 +664,7 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
     refute_received {:eval_persisted, _, _}
   end
 
-  test "orphan sweep with missing lease persists one compact recovery eval" do
+  test "orphan sweep delegates local restart jobs without creating a cluster recovery eval" do
     job_id = unique_job_id("orphan-job")
 
     job =
@@ -680,16 +680,14 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
     assert {:ok, result} = Reconciler.sweep_orphaned_jobs(nil, redis_store: RedisStoreStub)
 
     assert result.checked == 1
-    assert result.paused == 1
-    assert_receive {:eval_persisted, _eval_id, %{"status" => "pending"} = pending_eval}
-    refute Map.has_key?(pending_eval, "job")
-    assert_receive {:eval_persisted, _eval_id, %{"status" => "running"} = running_eval}
-    refute Map.has_key?(running_eval, "job")
-    assert_receive {:eval_persisted, _eval_id, %{"status" => "complete"} = complete_eval}
-    refute Map.has_key?(complete_eval, "job")
-    assert {:ok, [stored_eval]} = RedisStoreStub.list_recovery_evals()
-    assert stored_eval["status"] == "complete"
-    refute Map.has_key?(stored_eval, "job")
+    assert result.skipped == 1
+
+    assert [%{job_id: ^job_id, action: :skipped, reason: "job is managed by local recovery"}] =
+             result.jobs
+
+    assert {:ok, []} = RedisStoreStub.list_recovery_evals()
+    refute_received {:eval_persisted, _, _}
+    refute_received {:job_persisted, ^job_id, _, _}
   end
 
   test "repeated orphan sweeps with active lease do not create eval churn" do

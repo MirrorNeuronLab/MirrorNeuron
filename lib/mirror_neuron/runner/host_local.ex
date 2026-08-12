@@ -206,11 +206,40 @@ defmodule MirrorNeuron.Runner.HostLocal do
   defp rewrite_python_command([], _python_env), do: []
   defp rewrite_python_command(command, nil), do: command
 
-  defp rewrite_python_command([executable | args], %{python: python}) do
-    if Path.basename(executable) in ["python", "python3", "python3.11"] do
-      [python | args]
-    else
-      [executable | args]
+  defp rewrite_python_command([executable | args], %{python: python} = python_env) do
+    cond do
+      Path.basename(executable) in ["python", "python3", "python3.11"] ->
+        [python | args]
+
+      console_script = python_console_script(executable, python_env) ->
+        [python, console_script | args]
+
+      true ->
+        [executable | args]
+    end
+  end
+
+  defp python_console_script(executable, %{bin: bin}) do
+    if executable == Path.basename(executable) do
+      candidate = Path.join(bin, executable)
+
+      with true <- File.regular?(candidate),
+           {:ok, shebang} when is_binary(shebang) <-
+             File.open(candidate, [:read], &IO.read(&1, :line)) do
+        interpreter =
+          shebang
+          |> String.trim()
+          |> String.trim_leading("#!")
+          |> String.split()
+          |> List.first()
+
+        if is_binary(interpreter) and
+             Path.basename(interpreter) in ["python", "python3", "python3.11"] do
+          candidate
+        end
+      else
+        _ -> nil
+      end
     end
   end
 

@@ -817,7 +817,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
   end
 
   test "service discovery hides deployment candidates until promoted" do
-    assert {:ok, _service} =
+    assert {:ok, registered_service} =
              ServiceRegistry.register(%{
                "id" => "svc-candidate",
                "name" => "agent-api",
@@ -1002,6 +1002,30 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert {:ok, %{"job_id" => "job-new"}} = RedisStore.fetch_service_instance(instance_id)
     assert :ok = ServiceRegistry.deregister_job("job-new")
     assert {:error, _reason} = RedisStore.fetch_service_instance(instance_id)
+  end
+
+  test "health updates cannot resurrect a deregistered service" do
+    job_id = "deregistered-health-service-#{System.unique_integer([:positive])}"
+    instance_id = "#{job_id}:worker:agent-api"
+
+    assert {:ok, _service} =
+             ServiceRegistry.register(%{
+               "id" => instance_id,
+               "name" => "agent-api",
+               "job_id" => job_id,
+               "agent_id" => "worker",
+               "node" => to_string(Node.self())
+             })
+
+    assert :ok = ServiceRegistry.deregister_job(job_id)
+
+    assert {:error, _reason} =
+             RedisStore.update_service_instance_if_exists(
+               instance_id,
+               Map.put(registered_service, "status", "passing")
+             )
+
+    assert {:ok, []} = ServiceRegistry.list(job_id: job_id, passing_only: false)
   end
 
   test "concurrent service registration cannot leave stale ownership", %{namespace: namespace} do

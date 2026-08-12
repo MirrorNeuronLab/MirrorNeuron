@@ -61,7 +61,7 @@ defmodule MirrorNeuron.ServiceRegistry do
       |> Map.put("health", stringify_map(health))
       |> Map.put("health_check_failures", failure_counts)
       |> Map.put("last_check_at", timestamp())
-      |> register()
+      |> then(&RedisStore.update_service_instance_if_exists(service_id, &1))
     end
   end
 

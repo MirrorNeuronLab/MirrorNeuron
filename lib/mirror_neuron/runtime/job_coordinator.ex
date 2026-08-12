@@ -177,8 +177,14 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     {workflow_state, workflow_events} = WorkflowLedger.pause(state.workflow_state)
     broadcast_agent_control(state, :pause)
 
-    if WorkflowLedger.enabled?(state.workflow_state) do
-      active_agent_ids = WorkflowLedger.active_agent_ids(state.workflow_state)
+    if WorkflowLedger.enabled?(state.workflow_state) or job_type(state) == "service" do
+      active_agent_ids =
+        if job_type(state) == "service" do
+          state.agent_ids
+        else
+          WorkflowLedger.active_agent_ids(state.workflow_state)
+        end
+
       terminate_agent_workers(state, active_agent_ids)
 
       case wait_for_agents_stopped(state, 5_000, active_agent_ids) do
@@ -192,10 +198,16 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       end
     end
 
+    if job_type(state) == "service" do
+      cleanup_sandboxes(state)
+      ServiceRegistry.deregister_job(state.job_id)
+    end
+
     next_state =
       state
       |> Map.merge(%{status: "paused", workflow_state: workflow_state})
       |> cancel_coordinator_delivery_timer()
+      |> cancel_health_check_timer()
 
     persist_job(next_state)
     EventBus.publish(state.job_id, %{type: :job_paused, timestamp: Runtime.timestamp()})
@@ -657,8 +669,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     {:noreply, drop_recovery_task(state, ref)}
   end
 
-  def handle_info({:health_check, token}, %{health_check_token: token, status: status} = state)
-      when status in ["running", "paused"] do
+  def handle_info({:health_check, token}, %{health_check_token: token, status: "running"} = state) do
     state |> clear_health_check_timer() |> run_health_check(true)
   end
 
@@ -667,8 +678,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   def handle_info({:health_check, _stale_token}, state), do: {:noreply, state}
 
-  def handle_info(:health_check, %{status: status} = state)
-      when status in ["running", "paused"] do
+  def handle_info(:health_check, %{status: "running"} = state) do
     run_health_check(state, false)
   end
 
@@ -1685,15 +1695,36 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp restore_paused_workflow_agents(state) do
-    if WorkflowLedger.enabled?(state.workflow_state) do
-      recover_agents(
-        state,
-        WorkflowLedger.active_agent_ids(state.workflow_state),
-        %{"paused" => true, "reclaim_deliveries" => true}
-      )
-    else
-      {:ok, state}
+    agent_ids =
+      cond do
+        job_type(state) == "service" ->
+          state.agent_ids
+
+        WorkflowLedger.enabled?(state.workflow_state) ->
+          WorkflowLedger.active_agent_ids(state.workflow_state)
+
+        true ->
+          []
+      end
+
+    case recover_agents(
+           state,
+           agent_ids,
+           %{"paused" => true, "reclaim_deliveries" => true}
+         ) do
+      {:ok, recovered_state} ->
+        case register_resumed_job_services(recovered_state) do
+          :ok -> {:ok, recovered_state}
+          {:error, reason} -> {:error, reason, recovered_state}
+        end
+
+      error ->
+        error
     end
+  end
+
+  defp register_resumed_job_services(state) do
+    if job_type(state) == "service", do: register_job_services(state), else: :ok
   end
 
   defp recover_agents(state, agent_ids, recovery_snapshot \\ nil) do

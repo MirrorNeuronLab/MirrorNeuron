@@ -326,32 +326,46 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
   end
 
   defp native_sdk_grpc_node_info(hardware) do
+    advertised = map_value(hardware, "native_sdk_grpc") || %{}
+
     host =
-      System.get_env("MN_NATIVE_SDK_GRPC_ADVERTISE_HOST") ||
+      MirrorNeuron.Config.optional_string(
+        "MN_NATIVE_SDK_GRPC_ADVERTISE_HOST",
+        :native_sdk_grpc_advertise_host
+      ) ||
         MirrorNeuron.Config.optional_string("MN_NETWORK_ADVERTISE_HOST", :network_advertise_host) ||
+        map_value(advertised, "host") ||
         advertised_host()
 
-    port = native_sdk_grpc_port()
-    target = if host in [nil, ""], do: "", else: "#{host}:#{port}"
+    port =
+      MirrorNeuron.Config.optional_string(
+        "MN_NATIVE_SDK_GRPC_ADVERTISE_PORT",
+        :native_sdk_grpc_advertise_port
+      ) ||
+        map_value(advertised, "port") ||
+        native_sdk_grpc_port()
 
-    advertised = map_value(hardware, "native_sdk_grpc") || %{}
+    target = if host in [nil, ""], do: "", else: "#{host}:#{port}"
 
     %{
       "enabled" => host not in [nil, ""] and port not in [nil, ""],
       "host" => host || "",
       "port" => port,
       "target" => target,
-      "bind_host" => System.get_env("MN_NATIVE_SDK_GRPC_HOST") || "",
+      "bind_host" =>
+        MirrorNeuron.Config.optional_string("MN_NATIVE_SDK_GRPC_HOST", :native_sdk_grpc_host) ||
+          map_value(advertised, "bind_host") || "",
       "capabilities" => map_value(advertised, "capabilities") || []
     }
   end
 
   defp native_sdk_grpc_port do
-    case System.get_env("MN_NATIVE_SDK_GRPC_ADVERTISE_PORT") do
-      nil -> System.get_env("MN_NATIVE_SDK_GRPC_PORT") || "55052"
-      "" -> System.get_env("MN_NATIVE_SDK_GRPC_PORT") || "55052"
-      value -> value
-    end
+    MirrorNeuron.Config.optional_string(
+      "MN_NATIVE_SDK_GRPC_ADVERTISE_PORT",
+      :native_sdk_grpc_advertise_port
+    ) ||
+      MirrorNeuron.Config.optional_string("MN_NATIVE_SDK_GRPC_PORT", :native_sdk_grpc_port) ||
+      "55052"
   end
 
   defp redis_host do

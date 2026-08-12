@@ -6,6 +6,7 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
   alias MirrorNeuron.JobBundle
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
+  alias MirrorNeuron.ServiceRegistry
   alias MirrorNeuron.Runtime.{EventBus, JobRunner, RecoverySafety}
 
   @active_statuses ["pending", "running", "paused"]
@@ -37,6 +38,7 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
           result =
             cond do
               paused_for_review?(job) and not Keyword.get(opts, :manual_resume, false) ->
+                deregister_job_services(job["job_id"])
                 %{job_id: job["job_id"], action: :skipped, reason: "job is paused for review"}
 
               job_runner_alive?(job["job_id"]) ->
@@ -178,6 +180,7 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
   defp recover_job_map(%{"job_id" => job_id, "status" => status} = job, opts) do
     cond do
       paused_for_review?(job) and not Keyword.get(opts, :manual_resume, false) ->
+        deregister_job_services(job_id)
         {:ok, %{job_id: job_id, action: :skipped, reason: "job is paused for review"}}
 
       not recoverable_job_status?(job) ->
@@ -238,6 +241,8 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
             status: "paused"
           )
 
+          deregister_job_services(job_id)
+
           EventBus.publish(job_id, %{
             type: :local_recovery_paused_for_review,
             mode: "clean_restart",
@@ -253,6 +258,8 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
           requires_review?: true,
           status: "paused"
         )
+
+        deregister_job_services(job_id)
 
         EventBus.publish(job_id, %{
           type: :local_recovery_paused_for_review,
@@ -319,6 +326,7 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
         job_data_dir: job["job_data_dir"],
         job_data_access: job["job_data_access"],
         data_generation: job["data_generation"],
+        scheduler_plan: job["scheduler"],
         requested_recovery_policy: job["requested_recovery_policy"],
         recovery_policy: job["recovery_policy"],
         reliability: job["reliability"]
@@ -348,6 +356,8 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
           requires_review?: true,
           status: "paused"
         )
+
+        deregister_job_services(job_id)
 
         {:error, "failed to start local recovery for #{job_id}: #{inspect(reason)}"}
     end
@@ -435,6 +445,23 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
         )
     end
   end
+
+  defp deregister_job_services(job_id) when is_binary(job_id) and job_id != "" do
+    case ServiceRegistry.deregister_job(job_id) do
+      {:ok, _count} ->
+        :ok
+
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "failed to deregister services for paused recovery job #{job_id}: #{inspect(reason)}"
+        )
+    end
+  end
+
+  defp deregister_job_services(_job_id), do: :ok
 
   defp maybe_put_status(map, nil), do: map
   defp maybe_put_status(map, status), do: Map.put(map, "status", status)

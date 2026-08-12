@@ -1561,6 +1561,14 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   def persist_service_instance(instance_id, service_map) do
+    write_service_instance(instance_id, service_map, false)
+  end
+
+  def update_service_instance_if_exists(instance_id, service_map) do
+    write_service_instance(instance_id, service_map, true)
+  end
+
+  defp write_service_instance(instance_id, service_map, require_existing?) do
     service =
       service_map
       |> stringify_map()
@@ -1571,6 +1579,10 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     script = """
     local existing = redis.call("get", KEYS[1])
 
+    if ARGV[3] == "1" and not existing then
+      return 0
+    end
+
     if existing then
       local ok, decoded = pcall(cjson.decode, existing)
 
@@ -1578,7 +1590,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
         return redis.error_reply("invalid existing service instance " .. ARGV[1])
       end
 
-      for index = 3, #ARGV, 3 do
+      for index = 4, #ARGV, 3 do
         local old_value = decoded[ARGV[index]]
 
         if type(old_value) == "string" and old_value ~= "" then
@@ -1590,7 +1602,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     redis.call("set", KEYS[1], ARGV[2])
     redis.call("sadd", KEYS[2], ARGV[1])
 
-    for index = 3, #ARGV, 3 do
+    for index = 4, #ARGV, 3 do
       local new_value = ARGV[index + 2]
 
       if new_value ~= "" then
@@ -1609,12 +1621,16 @@ defmodule MirrorNeuron.Persistence.RedisStore do
         key("service", "instance", instance_id),
         key("service", "instances"),
         instance_id,
-        Jason.encode!(service)
+        Jason.encode!(service),
+        if(require_existing?, do: "1", else: "0")
       ] ++ service_index_script_args(service)
 
     case command(args) do
       {:ok, 1} ->
         with :ok <- wait_for_replicas(), do: {:ok, service}
+
+      {:ok, 0} ->
+        {:error, "service instance #{instance_id} was not found"}
 
       {:error, reason} ->
         {:error, format_reason(reason)}
