@@ -79,7 +79,9 @@ scheduling, and drain migration until locally owned cleanup is acknowledged.
 Terminal-run clearing removes job-owned HostLocal processes, DockerWorker and
 OpenShell sandboxes, checkpoints, services, staged storage, artifacts, leases,
 delivery state, and Redis records on every recorded runtime node before the run
-is reported as cleared. A durably fenced `cancelling` run is the exception:
+is reported as cleared. The legacy local-node identity `nonode@nohost` is
+normalized to the current local runtime during cleanup rather than treated as a
+remote cluster node. A durably fenced `cancelling` run is the exception:
 public state and global artifacts may be cleared while an internal cancellation
 tombstone retains pending runtime nodes and the write fence. Rejoining nodes
 finish local cleanup by run ID, and the final acknowledgement releases the
@@ -92,6 +94,12 @@ operation. Acknowledgement removes the index entry but retains the durable
 cancellation record for audit.
 Pause, resume, cancel, backup, restore, deployment, and schedule operations
 preserve event/status coherence.
+Pausing a service terminates its owned HostLocal commands and sandboxes while
+retaining resumable workflow state. A retry-safe auxiliary service-agent
+failure reuses durable command redelivery while its healthy supervising agent
+stays alive, so unrelated effectful workflow steps are not replayed and the
+live job does not enter operator review solely because an auxiliary endpoint
+restarted.
 Job backup and restore use the breaking `mn.backup.v2` contract. Core owns the
 durable runtime snapshot and bundle map; adapters may add verified
 content-addressed payload blobs, wheels, images, and compatibility metadata for
@@ -156,6 +164,8 @@ distributed authenticated discovery and job mutation are outside this
 contract.
 Every Redis namespace carries an opaque coordination-store identity. Runtime
 nodes advertise that identity, Redis role, and writable-primary status.
+If Redis is still loading or its status cannot be read, self-advertisement
+fails without persisting a cordoned node so the supervised monitor retries.
 Scheduling excludes nodes that do not match the submitting Core's writable
 primary and reports `coordination_store_mismatch` before a run enters
 `running`. A manifest declaring `runtime.placement.mode=single_node` is rejected

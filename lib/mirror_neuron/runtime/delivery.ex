@@ -150,14 +150,17 @@ defmodule MirrorNeuron.Runtime.Delivery do
   def retry(job_id, agent_id, consumer, delivery) do
     delay_ms = retry_delay_ms(Map.get(delivery, :attempt, 1))
 
-    RedisStore.retry_delivery(
-      job_id,
-      agent_id,
-      consumer,
-      delivery.stream_id,
-      delay_ms,
-      lease_ms()
-    )
+    case RedisStore.retry_delivery(
+           job_id,
+           agent_id,
+           consumer,
+           delivery.stream_id,
+           delay_ms,
+           lease_ms()
+         ) do
+      :ok -> {:ok, delay_ms}
+      {:error, _reason} = error -> error
+    end
   end
 
   def start_lease_renewer(job_id, agent_id, consumer, stream_id) do

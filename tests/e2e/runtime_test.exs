@@ -237,6 +237,53 @@ defmodule MirrorNeuron.RuntimeTest do
     end
   end
 
+  defmodule FailOnceCounter do
+    @key __MODULE__
+
+    def init do
+      :persistent_term.put(@key, :atomics.new(1, []))
+      :atomics.put(:persistent_term.get(@key), 1, 0)
+      :ok
+    end
+
+    def next_invocation do
+      atomics = :persistent_term.get(@key)
+      :atomics.add_get(atomics, 1, 1)
+    end
+
+    def invocations do
+      @key
+      |> :persistent_term.get()
+      |> :atomics.get(1)
+    end
+  end
+
+  defmodule FailOnceServiceRunner do
+    def run(_payload, _config, _opts) do
+      case FailOnceCounter.next_invocation() do
+        1 ->
+          {:error,
+           %{
+             "exit_code" => 3,
+             "error" => "temporary service bind failure",
+             "logs" => ""
+           }}
+
+        _invocation ->
+          Process.sleep(10_000)
+
+          {:ok,
+           %{
+             "sandbox_name" => "fail-once-service",
+             "exit_code" => 0,
+             "stdout" => "{}",
+             "stderr" => "",
+             "logs" => ""
+           }}
+      end
+    end
+  end
+
   defmodule DelayedCompleteRunner do
     def run(_payload, _config, _opts) do
       Process.sleep(1_000)
@@ -2458,6 +2505,87 @@ defmodule MirrorNeuron.RuntimeTest do
     assert {:ok, job} = MirrorNeuron.inspect_job(job_id)
     assert job["status"] == "running"
     assert job["job_type"] == "service"
+
+    assert {:ok, "cancelled"} = MirrorNeuron.cancel(job_id)
+    RedisStore.delete_job(job_id)
+  end
+
+  test "service jobs recover retry-safe auxiliary command failures without replaying the job" do
+    :ok = FailOnceCounter.init()
+
+    manifest = %{
+      "apiVersion" => "mn.workflow/v2",
+      "kind" => "Workflow",
+      "manifest_version" => "1.0",
+      "graph_id" => "service_auxiliary_failure_recovery_test",
+      "type" => "service",
+      "entrypoints" => ["workflow_worker", "service_worker"],
+      "initial_inputs" => %{
+        "workflow_worker" => [%{"work" => "stay available"}],
+        "service_worker" => [%{"work" => "serve requests"}]
+      },
+      "flow" => %{
+        "steps" => [
+          %{
+            "id" => "workflow_worker",
+            "run" => "workflow_worker",
+            "control" => %{
+              "required" => true,
+              "failure_policy" => "fail_workflow",
+              "timeout_seconds" => 60,
+              "retry" => %{"max_attempts" => 1, "backoff_seconds" => 0}
+            }
+          }
+        ],
+        "graph" => %{"edges" => []}
+      },
+      "nodes" => [
+        %{
+          "node_id" => "workflow_worker",
+          "agent_type" => "executor",
+          "role" => "root_coordinator",
+          "config" => %{
+            "runner_module" => LongSleepRunner,
+            "output_message_type" => nil,
+            "safe_to_retry" => true
+          }
+        },
+        %{
+          "node_id" => "service_worker",
+          "agent_type" => "executor",
+          "config" => %{
+            "runner_module" => FailOnceServiceRunner,
+            "output_message_type" => nil,
+            "safe_to_retry" => true
+          }
+        }
+      ],
+      "edges" => [],
+      "policies" => %{
+        "recovery_mode" => "local_restart",
+        "restart" => %{
+          "attempts" => 2,
+          "interval_ms" => 60_000,
+          "delay_ms" => 1,
+          "delay_function" => "constant",
+          "max_delay_ms" => 1,
+          "mode" => "delay"
+        }
+      }
+    }
+
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
+    cleanup_job_on_exit(job_id)
+    wait_until(fn -> FailOnceCounter.invocations() >= 2 end, 3_000)
+
+    assert {:ok, job} = MirrorNeuron.inspect_job(job_id)
+    assert job["status"] == "running"
+    assert job["attempt"] == 1
+
+    assert {:ok, events} = MirrorNeuron.events(job_id)
+    assert Enum.any?(events, &(&1["type"] == "service_agent_failed"))
+    assert Enum.any?(events, &(&1["type"] == "message_retry_scheduled"))
+    refute Enum.any?(events, &(&1["type"] == "job_clean_restart_scheduled"))
 
     assert {:ok, "cancelled"} = MirrorNeuron.cancel(job_id)
     RedisStore.delete_job(job_id)

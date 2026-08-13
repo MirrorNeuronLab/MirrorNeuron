@@ -82,6 +82,12 @@ defmodule MirrorNeuron.Cluster.NodeStateTest do
     end
   end
 
+  defmodule LoadingCoordinationStoreStub do
+    def coordination_store_status do
+      {:error, {:coordination_store_unavailable, :loading}}
+    end
+  end
+
   setup do
     old_store = Application.get_env(:mirror_neuron, :node_state_store)
     old_coordination_store = Application.get_env(:mirror_neuron, :coordination_store)
@@ -271,6 +277,19 @@ defmodule MirrorNeuron.Cluster.NodeStateTest do
     assert advertised["operator_disconnect"] == false
     assert advertised["scheduling_eligible"] == true
     assert NodeState.schedulable?(self_node)
+  end
+
+  test "advertise_self returns coordination startup failures so the monitor retries" do
+    Application.put_env(
+      :mirror_neuron,
+      :coordination_store,
+      LoadingCoordinationStoreStub
+    )
+
+    assert {:error, {:coordination_store_unavailable, :loading}} =
+             NodeState.advertise_self("healthy", %{"hardware" => %{}})
+
+    assert NodeState.list() == []
   end
 
   test "advertise_self normalizes stale object-shaped profiles" do

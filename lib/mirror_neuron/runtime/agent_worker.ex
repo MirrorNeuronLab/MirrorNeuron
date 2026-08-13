@@ -263,37 +263,40 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
 
     case result do
       {:ok, next_state} ->
-        case Delivery.ack(
-               state.job_id,
-               state.node.node_id,
-               state.delivery_consumer,
-               delivery
-             ) do
-          :ok ->
-            persist_observation(next_state)
+        retry_result =
+          case Delivery.ack(
+                 state.job_id,
+                 state.node.node_id,
+                 state.delivery_consumer,
+                 delivery
+               ) do
+            :ok ->
+              persist_observation(next_state)
 
-            send(state.coordinator, {
-              :agent_event,
-              state.node.node_id,
-              :message_acked,
-              %{"message_id" => delivery.message_id, "attempt" => delivery.attempt}
-            })
+              send(state.coordinator, {
+                :agent_event,
+                state.node.node_id,
+                :message_acked,
+                %{"message_id" => delivery.message_id, "attempt" => delivery.attempt}
+              })
 
-          {:error, reason} ->
-            report_delivery_retry(delivery, {:ack_failed, reason}, state)
-        end
+              :no_retry
 
-        next_state
+            {:error, reason} ->
+              report_delivery_retry(delivery, {:ack_failed, reason}, state)
+          end
+
+        schedule_delivery_reclaim(next_state, retry_result)
 
       {:error, reason, next_state} ->
-        report_delivery_retry(delivery, reason, state)
+        retry_result = report_delivery_retry(delivery, reason, state)
         send(state.coordinator, {:agent_failed, state.node.node_id, reason})
-        next_state
+        schedule_delivery_reclaim(next_state, retry_result)
     end
   end
 
   defp report_delivery_retry(delivery, reason, state) do
-    _result =
+    result =
       Delivery.retry(
         state.job_id,
         state.node.node_id,
@@ -308,10 +311,27 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       %{
         "message_id" => delivery.message_id,
         "attempt" => delivery.attempt,
-        "reason" => inspect(reason)
+        "reason" => inspect(reason),
+        "delay_ms" => retry_delay(result)
       }
     })
+
+    result
   end
+
+  defp schedule_delivery_reclaim(state, {:ok, delay_ms})
+       when is_integer(delay_ms) and delay_ms >= 0 do
+    %{
+      state
+      | reclaim_deliveries?: false,
+        next_delivery_reclaim_at_ms: System.monotonic_time(:millisecond) + delay_ms
+    }
+  end
+
+  defp schedule_delivery_reclaim(state, _retry_result), do: state
+
+  defp retry_delay({:ok, delay_ms}) when is_integer(delay_ms), do: delay_ms
+  defp retry_delay(_result), do: nil
 
   defp schedule_delivery_poll(%{paused?: true} = state, _delay_ms),
     do: cancel_delivery_timer(state)

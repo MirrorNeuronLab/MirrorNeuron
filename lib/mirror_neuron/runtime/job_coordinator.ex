@@ -969,7 +969,33 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp pending_workflow_completion(_state), do: nil
 
   defp handle_runtime_agent_failed(state, agent_id, reason) do
-    restart_clean_attempt(state, {:agent_failed, agent_id, reason})
+    if service_auxiliary_retry_safe?(state, agent_id, reason) do
+      EventBus.publish(state.job_id, %{
+        type: :service_agent_failed,
+        agent_id: agent_id,
+        reason: stringify(reason),
+        timestamp: Runtime.timestamp()
+      })
+
+      # AgentWorker already returned the failed delivery to its durable retry
+      # queue. Keep that healthy owner alive so it can reclaim the command after
+      # the short delivery backoff; replacing it would strand the lease until the
+      # stale-delivery timeout and still must not replay the workflow.
+      {:noreply, state}
+    else
+      restart_clean_attempt(state, {:agent_failed, agent_id, reason})
+    end
+  end
+
+  defp service_auxiliary_retry_safe?(state, agent_id, reason) do
+    node = Map.get(state.nodes_by_id, agent_id)
+    config = if is_map(node), do: Map.get(node, :config, %{}), else: %{}
+
+    job_type(state) == "service" and
+      not workflow_agent?(state, agent_id) and
+      is_map(reason) and
+      is_map(config) and
+      Map.get(config, "safe_to_retry") == true
   end
 
   defp restart_agents_now(state, agent_ids, reason) do

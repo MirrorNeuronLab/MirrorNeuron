@@ -95,4 +95,52 @@ defmodule MirrorNeuron.Runtime.JobCleanupTest do
     assert_receive {:cleanup_rpc, :control@lab, DockerJobSandbox, :cleanup_job_local, ["run-2"],
                     15_000}
   end
+
+  test "sandbox cleanup also terminates owned HostLocal commands without deleting checkpoints" do
+    NodeAdapterStub.reset(self())
+
+    assert :ok = JobCleanup.cleanup_sandboxes("paused-service", nil, [])
+
+    for node <- [:control@lab, :connected@lab],
+        {module, function} <- [
+          {HostLocal, :terminate_job},
+          {OpenShellJobSandbox, :cleanup_job_local},
+          {DockerJobSandbox, :cleanup_job_local}
+        ] do
+      assert_receive {:cleanup_rpc, ^node, ^module, ^function, ["paused-service"], 15_000}
+    end
+
+    refute_receive {:cleanup_rpc, _node, DiskCheckpoint, :delete_job, _args, _timeout}
+    refute_receive {:cleanup_rpc, _node, _module, _function, _args, _timeout}
+  end
+
+  test "runtime cleanup treats legacy nonode records as the current local node" do
+    NodeAdapterStub.reset(self())
+
+    job = %{
+      "scheduler" => %{
+        "placements" => [
+          %{"node" => "nonode@nohost"},
+          %{"node" => :nonode@nohost}
+        ]
+      }
+    }
+
+    agents = [%{"assigned_node" => "nonode@nohost"}]
+
+    assert :ok = JobCleanup.cleanup_runtime_resources("legacy-run", job, agents)
+
+    for node <- [:control@lab, :connected@lab],
+        {module, function} <- [
+          {HostLocal, :terminate_job},
+          {OpenShellJobSandbox, :cleanup_job_local},
+          {DockerJobSandbox, :cleanup_job_local},
+          {DiskCheckpoint, :delete_job}
+        ] do
+      assert_receive {:cleanup_rpc, ^node, ^module, ^function, ["legacy-run"], 15_000}
+    end
+
+    refute_receive {:cleanup_rpc, :nonode@nohost, _module, _function, _args, _timeout}
+    refute_receive {:cleanup_rpc, _node, _module, _function, _args, _timeout}
+  end
 end
