@@ -161,7 +161,10 @@ The public job-collaboration service contract is `mn-job-collaboration` with
 tags `mcp` and `job-collaboration`, loopback Streamable HTTP at `/mcp`, and
 blueprint/job/run/goal identity metadata. It is run-scoped and read-only;
 distributed authenticated discovery and job mutation are outside this
-contract.
+contract. The persistent supervisory MCP at
+`/api/v1/jobs/{job_id}/mcp` is owned by `mn-api`: it projects stable Core state
+without an active Run and does not extend the lifetime or mutation authority of
+this Core-owned peer-collaboration service.
 Every Redis namespace carries an opaque coordination-store identity. Runtime
 nodes advertise that identity, Redis role, and writable-primary status.
 If Redis is still loading or its status cannot be read, self-advertisement

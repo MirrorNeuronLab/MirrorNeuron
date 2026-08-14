@@ -55,6 +55,26 @@ defmodule MirrorNeuron.Runtime.PageTest do
              )
   end
 
+  test "composite tuple keys are encoded as cursor parts" do
+    jobs = [
+      %{"created_at" => "2026-08-12T18:18:20.109Z", "job_id" => "job-b"},
+      %{"created_at" => "2026-08-12T18:18:20.109Z", "job_id" => "job-a"},
+      %{"created_at" => "2026-08-13T18:18:20.109Z", "job_id" => "job-c"}
+    ]
+
+    key_fun = &{&1["created_at"], &1["job_id"]}
+
+    assert {:ok, [first, second], token} =
+             Page.paginate(jobs, [page_size: 2], "jobs", %{}, key_fun)
+
+    assert [first["job_id"], second["job_id"]] == ["job-a", "job-b"]
+    assert is_binary(token)
+
+    assert {:ok, [last], nil} =
+             Page.paginate(jobs, [page_size: 2, page_token: token], "jobs", %{}, key_fun)
+
+    assert last["job_id"] == "job-c"
+  end
+
   defp record(id), do: %{"id" => id}
 end
-

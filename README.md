@@ -487,7 +487,11 @@ binding, an automatic port, and Streamable HTTP path `/mcp`. Its service
 metadata identifies the blueprint, stable job, current run, and optional shared
 goal. The service is registered only for the active run and exposes the
 read-only job snapshot, updates, and record tools; peer selection remains an
-explicit client policy.
+explicit client policy. It is the runtime peer-collaboration surface, not the
+persistent supervisory MCP exposed by `mn-api` at
+`/api/v1/jobs/{job_id}/mcp`. The API-owned endpoint reads stable Core job/run
+state without starting a Run; Core does not keep this runtime service alive
+while a job is idle.
 
 ---
 

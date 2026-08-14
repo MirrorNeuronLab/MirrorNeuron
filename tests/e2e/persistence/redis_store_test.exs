@@ -817,7 +817,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
   end
 
   test "service discovery hides deployment candidates until promoted" do
-    assert {:ok, registered_service} =
+    assert {:ok, _registered_service} =
              ServiceRegistry.register(%{
                "id" => "svc-candidate",
                "name" => "agent-api",
@@ -1008,7 +1008,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     job_id = "deregistered-health-service-#{System.unique_integer([:positive])}"
     instance_id = "#{job_id}:worker:agent-api"
 
-    assert {:ok, _service} =
+    assert {:ok, registered_service} =
              ServiceRegistry.register(%{
                "id" => instance_id,
                "name" => "agent-api",

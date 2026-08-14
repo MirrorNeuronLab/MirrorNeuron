@@ -9,7 +9,7 @@ defmodule MirrorNeuron.Runtime.Page do
     ordered = Enum.sort_by(items, key_fun)
 
     with {:ok, cursor} <- decode_cursor(Keyword.get(opts, :page_token), collection, filters) do
-      upper = cursor && cursor["upper"] || key_for(List.last(ordered), key_fun)
+      upper = (cursor && cursor["upper"]) || key_for(List.last(ordered), key_fun)
       after_key = cursor && cursor["after"]
 
       eligible =
@@ -34,7 +34,17 @@ defmodule MirrorNeuron.Runtime.Page do
   defp normalize_size(_), do: @default_size
 
   defp key_for(nil, _key_fun), do: nil
-  defp key_for(item, key_fun), do: item |> key_fun.() |> List.wrap() |> Enum.map(&to_string/1)
+
+  defp key_for(item, key_fun) do
+    item
+    |> key_fun.()
+    |> key_parts()
+    |> Enum.map(&to_string/1)
+  end
+
+  defp key_parts(value) when is_tuple(value), do: Tuple.to_list(value)
+  defp key_parts(value) when is_list(value), do: value
+  defp key_parts(value), do: [value]
 
   defp encode_cursor(collection, filters, after_key, upper) do
     %{
@@ -65,4 +75,3 @@ defmodule MirrorNeuron.Runtime.Page do
 
   defp decode_cursor(_token, _collection, _filters), do: {:error, :invalid_page_token}
 end
-
