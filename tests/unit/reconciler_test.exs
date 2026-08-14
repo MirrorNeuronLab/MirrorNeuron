@@ -1064,6 +1064,7 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
 
   defp manifest do
     %{
+      "apiVersion" => "mn.workflow/v2",
       "manifest_version" => "1.0",
       "graph_id" => "reconcile-test",
       "entrypoints" => ["worker"],
@@ -1085,6 +1086,7 @@ defmodule MirrorNeuron.Cluster.ReconcilerTest do
 
   defp gpu_manifest do
     %{
+      "apiVersion" => "mn.workflow/v2",
       "manifest_version" => "1.0",
       "graph_id" => "gpu-reconcile-test",
       "entrypoints" => ["worker"],

@@ -1,5 +1,6 @@
 defmodule MirrorNeuron.Sandbox.OpenShellJobSandbox do
   alias MirrorNeuron.Config
+  alias MirrorNeuron.Sandbox.OpenShellCLI
   use GenServer
   require Logger
 
@@ -281,7 +282,10 @@ defmodule MirrorNeuron.Sandbox.OpenShellJobSandbox do
       |> maybe_put_flag("--no-auto-providers", Map.get(config, "no_auto_providers", true))
       |> Kernel.++(["--", "bash", "-lc", "mkdir -p /sandbox/job && true"])
 
-    case System.cmd(executable, args, stderr_to_stdout: true, env: [{"NO_COLOR", "1"}]) do
+    case System.cmd(executable, args,
+           stderr_to_stdout: true,
+           env: OpenShellCLI.command_env()
+         ) do
       {_output, 0} ->
         :ok
 
@@ -325,7 +329,7 @@ defmodule MirrorNeuron.Sandbox.OpenShellJobSandbox do
   defp delete_openshell_sandbox(executable, sandbox_name) do
     case System.cmd(executable, ["sandbox", "delete", sandbox_name],
            stderr_to_stdout: true,
-           env: [{"NO_COLOR", "1"}]
+           env: OpenShellCLI.command_env()
          ) do
       {_output, 0} -> :ok
       {output, exit_code} -> {:error, %{"exit_code" => exit_code, "logs" => output}}
@@ -440,7 +444,7 @@ defmodule MirrorNeuron.Sandbox.OpenShellJobSandbox do
   defp sandbox_exists?(executable, sandbox_name) do
     case System.cmd(executable, ["sandbox", "get", sandbox_name],
            stderr_to_stdout: true,
-           env: [{"NO_COLOR", "1"}]
+           env: OpenShellCLI.command_env()
          ) do
       {_output, 0} -> true
       {_output, _exit_code} -> false

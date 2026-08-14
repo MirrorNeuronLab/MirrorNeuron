@@ -2,6 +2,7 @@ defmodule MirrorNeuron.Runner.OpenShell do
   alias MirrorNeuron.Config
   alias MirrorNeuron.Message
   alias MirrorNeuron.Runner.OpenShellSharedStorage
+  alias MirrorNeuron.Sandbox.OpenShellCLI
   alias MirrorNeuron.Sandbox.OpenShellJobSandbox
 
   @result_start "__MN_RESULT_START__"
@@ -267,9 +268,7 @@ defmodule MirrorNeuron.Runner.OpenShell do
     {output, exit_code} =
       System.cmd(executable, args,
         stderr_to_stdout: true,
-        env: [
-          {"NO_COLOR", "1"}
-        ]
+        env: OpenShellCLI.command_env()
       )
 
     {:ok, output, exit_code}
@@ -286,7 +285,7 @@ defmodule MirrorNeuron.Runner.OpenShell do
              executable,
              ["sandbox", "upload", sandbox_name, source, destination, "--no-git-ignore"],
              stderr_to_stdout: true,
-             env: [{"NO_COLOR", "1"}]
+             env: OpenShellCLI.command_env()
            ) do
         {_output, 0} ->
           {:cont, {:ok, :uploaded}}
@@ -311,8 +310,16 @@ defmodule MirrorNeuron.Runner.OpenShell do
   end
 
   defp run_ssh_command(config, sandbox_name, ssh_host, command) do
-    ssh_bin = Map.get(config, "ssh_bin", "ssh")
     executable = sandbox_cli(config)
+
+    case OpenShellCLI.direct_exec_args(sandbox_name, command) do
+      nil -> run_registered_gateway_ssh(config, executable, sandbox_name, ssh_host, command)
+      args -> OpenShellCLI.run_with_closed_stdin(executable, args)
+    end
+  end
+
+  defp run_registered_gateway_ssh(config, executable, sandbox_name, ssh_host, command) do
+    ssh_bin = Map.get(config, "ssh_bin", "ssh")
 
     temp_config =
       Path.join(
@@ -323,7 +330,7 @@ defmodule MirrorNeuron.Runner.OpenShell do
     try do
       case System.cmd(executable, ["sandbox", "ssh-config", sandbox_name],
              stderr_to_stdout: true,
-             env: [{"NO_COLOR", "1"}]
+             env: OpenShellCLI.command_env()
            ) do
         {ssh_config, 0} ->
           File.write!(temp_config, ssh_config)

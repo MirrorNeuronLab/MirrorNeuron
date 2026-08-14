@@ -1375,7 +1375,15 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     end)
 
     assert {:error, failures} = Runtime.cleanup_job_sandboxes(job_id, job)
-    assert Enum.map(failures, & &1.node) == [to_string(remote_node), to_string(remote_node)]
+
+    assert Enum.map(failures, & &1.node) == [
+             to_string(remote_node),
+             to_string(remote_node),
+             to_string(remote_node)
+           ]
+
+    assert_receive {:cleanup_rpc, ^remote_node, MirrorNeuron.Runner.HostLocal, :terminate_job,
+                    [^job_id], 15_000}
 
     assert_receive {:cleanup_rpc, ^remote_node, MirrorNeuron.Sandbox.OpenShellJobSandbox,
                     :cleanup_job_local, [^job_id], 15_000}
@@ -2556,6 +2564,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     File.mkdir_p!(payloads_dir)
 
     manifest = %{
+      "apiVersion" => "mn.workflow/v2",
       "manifest_version" => "1.0",
       "graph_id" => graph_id,
       "flow" => %{

@@ -109,6 +109,7 @@ defmodule MirrorNeuron.ServicePreflightTest do
   defp bundle!(root, extra) do
     manifest =
       %{
+        "apiVersion" => "mn.workflow/v2",
         "manifest_version" => "1.0",
         "graph_id" => "service-preflight",
         "job_name" => "service-preflight",

@@ -119,6 +119,7 @@ defmodule MirrorNeuron.BlueprintValidationTest do
     File.chmod!(Path.join(root, "payloads/validation/check.sh"), 0o755)
 
     manifest_map = %{
+      "apiVersion" => "mn.workflow/v2",
       "manifest_version" => "1.0",
       "graph_id" => "validation",
       "entrypoints" => ["worker"],

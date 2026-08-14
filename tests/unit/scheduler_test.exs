@@ -27,6 +27,8 @@ defmodule MirrorNeuron.SchedulerTest do
   end
 
   defp load_manifest(raw) when is_map(raw) do
+    raw = Map.put_new(raw, "apiVersion", "mn.workflow/v2")
+
     raw =
       if Map.has_key?(raw, "flow") do
         raw

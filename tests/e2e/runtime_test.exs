@@ -4053,6 +4053,7 @@ defmodule MirrorNeuron.RuntimeTest do
   end
 
   defp flow_manifest(%{} = manifest) do
+    manifest = Map.put_new(manifest, "apiVersion", "mn.workflow/v2")
     {nodes, manifest} = Map.pop(manifest, "nodes")
     {edges, manifest} = Map.pop(manifest, "edges")
 

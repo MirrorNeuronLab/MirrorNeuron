@@ -5,6 +5,7 @@ defmodule MirrorNeuron.JobBundleTest do
   alias MirrorNeuron.Manifest
 
   @valid_manifest_map %{
+    "apiVersion" => "mn.workflow/v2",
     "manifest_version" => "1.0",
     "graph_id" => "test_graph",
     "entrypoints" => ["test_node"],

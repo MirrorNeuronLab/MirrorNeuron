@@ -2,6 +2,7 @@ defmodule MirrorNeuron.Runner.OpenShellSharedStorage do
   @moduledoc false
 
   alias MirrorNeuron.Config
+  alias MirrorNeuron.Sandbox.OpenShellCLI
 
   defstruct enabled: false,
             config: %{},
@@ -104,7 +105,7 @@ defmodule MirrorNeuron.Runner.OpenShellSharedStorage do
   def system_command(executable, args) do
     System.cmd(executable, args,
       stderr_to_stdout: true,
-      env: [{"NO_COLOR", "1"}]
+      env: OpenShellCLI.command_env()
     )
   end
 

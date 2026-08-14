@@ -196,6 +196,9 @@ remains authoritative.
 DockerWorker command environments include
 the runtime-owned `MN_EXECUTION_NODE` value for the Core node actually invoking
 the command; manifest environment cannot override that placement identity.
+OpenShell CLI subprocesses give `OPENSHELL_GATEWAY_ENDPOINT` precedence over an
+inherited `OPENSHELL_GATEWAY` selector for every sandbox lifecycle operation;
+direct-endpoint command execution uses the gRPC exec transport with closed stdin.
 An OpenShell worker may explicitly set `sync_shared_storage=true`. Core then
 mirrors only the job-scoped `inputs` and `outputs` directories into an
 invocation-owned sandbox path, rewrites references rooted at

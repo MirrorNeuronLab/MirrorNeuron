@@ -3,13 +3,16 @@ defmodule TestFetchJob do
     # Create the job exactly as it would be created
     job_id = "test-job-1"
     raw_manifest = %{
+      "apiVersion" => "mn.workflow/v2",
       "graph_id" => "graph-1",
       "job_name" => "Test Job",
       "type" => "batch",
       "entrypoints" => ["root"],
       "initial_inputs" => %{"root" => [%{"message" => "hello"}]},
-      "nodes" => [%{"node_id" => "root", "agent_type" => "router", "type" => "map"}],
-      "edges" => [],
+      "flow" => %{
+        "nodes" => [%{"node_id" => "root", "agent_type" => "router", "type" => "map"}],
+        "edges" => []
+      },
       "policies" => %{},
       "manifest_version" => "1.0"
     }

@@ -149,6 +149,7 @@ defmodule MirrorNeuron.Runtime.LifecyclePolicyTest do
 
   defp manifest(overrides \\ %{}) do
     %{
+      "apiVersion" => "mn.workflow/v2",
       "manifest_version" => "1.0",
       "graph_id" => "policy-test",
       "entrypoints" => ["worker"],

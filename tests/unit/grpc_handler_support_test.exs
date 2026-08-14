@@ -39,6 +39,7 @@ defmodule MirrorNeuron.Grpc.Handlers.SupportTest do
 
     manifest_json =
       Jason.encode!(%{
+        "apiVersion" => "mn.workflow/v2",
         "manifest_version" => "1.0",
         "graph_id" => "grpc_handoff",
         "flow" => %{
