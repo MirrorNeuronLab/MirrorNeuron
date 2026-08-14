@@ -5,7 +5,6 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
   alias MirrorNeuron.Sandbox.DockerJobSandbox
 
   setup do
-    previous_docker = System.get_env("MN_DOCKER_BIN")
     previous_skills_root = System.get_env("MN_SKILLS_ROOT")
     previous_workspace_root = System.get_env("MN_WORKSPACE_ROOT")
     previous_buildkit = System.get_env("DOCKER_BUILDKIT")
@@ -20,12 +19,6 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     System.put_env("MN_CORE_ALLOW_NATIVE_SANDBOX_PREP", "1")
 
     on_exit(fn ->
-      DockerJobSandbox.cleanup_job_local("job-1")
-
-      if is_nil(previous_docker),
-        do: System.delete_env("MN_DOCKER_BIN"),
-        else: System.put_env("MN_DOCKER_BIN", previous_docker)
-
       if is_nil(previous_skills_root),
         do: System.delete_env("MN_SKILLS_ROOT"),
         else: System.put_env("MN_SKILLS_ROOT", previous_skills_root)
@@ -90,7 +83,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     """)
 
     File.chmod!(fake_docker, 0o755)
-    System.put_env("MN_DOCKER_BIN", fake_docker)
+    cleanup_docker_job_on_exit("job-1", fake_docker)
     parent = self()
 
     assert {:ok, result} =
@@ -207,7 +200,6 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     """)
 
     File.chmod!(fake_docker, 0o755)
-    System.put_env("MN_DOCKER_BIN", fake_docker)
 
     endpoints =
       Jason.encode!(%{
@@ -266,7 +258,6 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     """)
 
     File.chmod!(fake_docker, 0o755)
-    System.put_env("MN_DOCKER_BIN", fake_docker)
     parent = self()
     execution_node = to_string(Node.self())
 
@@ -339,7 +330,6 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     """)
 
     File.chmod!(fake_docker, 0o755)
-    System.put_env("MN_DOCKER_BIN", fake_docker)
     System.put_env("MN_NODE_RUNTIME_MODELS", "gemma4:e2b,nemotron3")
 
     assert {:ok, result} =
@@ -421,7 +411,6 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     """)
 
     File.chmod!(fake_docker, 0o755)
-    System.put_env("MN_DOCKER_BIN", fake_docker)
     System.put_env("MN_HOST_SHARED_STORAGE_ROOT", host_shared)
     System.put_env("MN_SHARED_STORAGE_ROOT", "/runtime/shared")
     System.put_env("MN_RUNTIME_SHARED_STORAGE_ROOT", "/runtime/shared")
@@ -480,7 +469,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     """)
 
     File.chmod!(fake_docker, 0o755)
-    System.put_env("MN_DOCKER_BIN", fake_docker)
+    cleanup_docker_job_on_exit("job-1", fake_docker)
 
     config = %{
       "image" => "example/worker:latest",
@@ -619,7 +608,6 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     """)
 
     File.chmod!(fake_docker, 0o755)
-    System.put_env("MN_DOCKER_BIN", fake_docker)
     parent = self()
 
     assert {:error, reason} =
@@ -678,7 +666,6 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     """)
 
     File.chmod!(fake_docker, 0o755)
-    System.put_env("MN_DOCKER_BIN", fake_docker)
     System.put_env("DOCKER_BUILDKIT", "1")
     System.delete_env("MN_DOCKER_WORKER_BUILDKIT")
 
@@ -730,7 +717,6 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     """)
 
     File.chmod!(fake_docker, 0o755)
-    System.put_env("MN_DOCKER_BIN", fake_docker)
     System.delete_env("MN_SKILLS_ROOT")
 
     assert {:ok, result} =
@@ -792,7 +778,6 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     """)
 
     File.chmod!(fake_docker, 0o755)
-    System.put_env("MN_DOCKER_BIN", fake_docker)
     System.delete_env("MN_WORKSPACE_ROOT")
 
     assert {:ok, result} =
@@ -820,6 +805,12 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
              )
 
     assert result["stdout"] =~ "worker output"
+  end
+
+  defp cleanup_docker_job_on_exit(job_id, fake_docker) do
+    on_exit(fn ->
+      DockerJobSandbox.cleanup_job_local(job_id, %{"docker_bin" => fake_docker})
+    end)
   end
 
   defp docker_calls(path) do

@@ -3609,6 +3609,14 @@ defmodule MirrorNeuron.RuntimeTest do
     assert job["status"] == "failed"
     assert get_in(job, ["restart_budget", "attempts"]) == 1
 
+    wait_until(
+      fn ->
+        agent_unregistered?(job_id, "root") and agent_unregistered?(job_id, "worker") and
+          job_runner_unregistered?(job_id)
+      end,
+      2_000
+    )
+
     RedisStore.delete_job(job_id)
   end
 

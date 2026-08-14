@@ -164,6 +164,16 @@ defmodule MirrorNeuron.Runtime.JobRunner do
         {:stop, :normal}
 
       {:exhausted, reason} ->
+        case cleanup_previous_attempt(job_id, %{"restart_reason" => reason}) do
+          :ok ->
+            :ok
+
+          {:error, cleanup_reason} ->
+            Logger.warning(
+              "restart exhaustion cleanup was incomplete for #{job_id}: #{inspect(cleanup_reason)}"
+            )
+        end
+
         release_job_lease(job_id, node_name, lease)
 
         EventBus.publish(job_id, %{
