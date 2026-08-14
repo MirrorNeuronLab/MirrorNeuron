@@ -14,7 +14,8 @@ defmodule MirrorNeuron.Grpc.Handlers.JobV2 do
     Idempotency.run(
       "create-job",
       request.idempotency_key,
-      {request.manifest_json, request.payloads, request.job_id, request.resolved_configuration_json, request.storage_json},
+      {request.manifest_json, request.payloads, request.job_id,
+       request.resolved_configuration_json, request.storage_json},
       fn ->
         request
         |> with_json_bundle(fn tmp_dir ->
@@ -42,9 +43,13 @@ defmodule MirrorNeuron.Grpc.Handlers.JobV2 do
            page_token: Support.blank_to_nil(request.page_token)
          ) do
       {:ok, jobs, next_page_token} ->
-        response(%{"items" => JobV2Projection.summaries(jobs), "next_page_token" => next_page_token})
+        response(%{
+          "items" => JobV2Projection.summaries(jobs),
+          "next_page_token" => next_page_token
+        })
 
-      error -> respond(error)
+      error ->
+        respond(error)
     end
   end
 
@@ -53,7 +58,9 @@ defmodule MirrorNeuron.Grpc.Handlers.JobV2 do
 
     result =
       if String.trim(request.manifest_json || "") == "" do
-        MirrorNeuron.update_job(request.job_id, attrs, expected_revision: request.expected_revision)
+        MirrorNeuron.update_job(request.job_id, attrs,
+          expected_revision: request.expected_revision
+        )
       else
         request
         |> with_json_bundle(fn tmp_dir ->
@@ -102,9 +109,14 @@ defmodule MirrorNeuron.Grpc.Handlers.JobV2 do
       |> Keyword.put(:inputs, Support.decode_json_map(request.inputs_json))
 
     result =
-      Idempotency.run("start-run:#{request.job_id}", request.idempotency_key, {request.run_id, request.inputs_json}, fn ->
-        MirrorNeuron.start_run(request.job_id, opts)
-      end)
+      Idempotency.run(
+        "start-run:#{request.job_id}",
+        request.idempotency_key,
+        {request.run_id, request.inputs_json},
+        fn ->
+          MirrorNeuron.start_run(request.job_id, opts)
+        end
+      )
 
     case result do
       {:ok, run_id, _pid} ->
@@ -240,7 +252,7 @@ defmodule MirrorNeuron.Grpc.Handlers.JobV2 do
     }
   end
 
-  defp revision(value) when is_map(value) and is_integer(value["revision"]), do: value["revision"]
+  defp revision(%{"revision" => revision}) when is_integer(revision), do: revision
   defp revision(_value), do: 0
 
   defp page_size(0), do: 50

@@ -100,7 +100,9 @@ defmodule MirrorNeuron.Runtime.StableJob do
     end
   end
 
-  def update(job_id, attrs, opts \\ []) when is_map(attrs) do
+  def update(job_id, attrs, opts \\ [])
+
+  def update(job_id, attrs, opts) when is_map(attrs) do
     allowed = ~w(resolved_configuration schedules storage job_name)
 
     with_start_gate(job_id, fn ->
