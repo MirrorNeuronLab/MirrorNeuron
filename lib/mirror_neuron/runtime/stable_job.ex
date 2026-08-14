@@ -13,6 +13,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
   alias MirrorNeuron.Cluster.NodeAdapter
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
+  alias MirrorNeuron.Runtime.Page
 
   @terminal_statuses ["completed", "failed", "cancelled"]
   @definition_scoped_keys ~w(
@@ -55,6 +56,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
         "storage" => storage,
         "owner_node" => to_string(Keyword.get(opts, :owner_node, NodeAdapter.self())),
         "status" => "active",
+        "revision" => 1,
         "data_generation" => 1,
         "data_dir" => data_dir,
         "run_ids" => [],
@@ -84,15 +86,31 @@ defmodule MirrorNeuron.Runtime.StableJob do
     end
   end
 
-  def update(job_id, attrs) when is_map(attrs) do
+  def list_page(opts \\ []) do
+    include_archived = Keyword.get(opts, :include_archived, false)
+
+    with {:ok, definitions} <- list(include_archived: include_archived) do
+      Page.paginate(
+        definitions,
+        opts,
+        "jobs",
+        %{"include_archived" => include_archived},
+        &{&1["created_at"] || "", &1["job_id"] || ""}
+      )
+    end
+  end
+
+  def update(job_id, attrs, opts \\ []) when is_map(attrs) do
     allowed = ~w(resolved_configuration schedules storage job_name)
 
     with_start_gate(job_id, fn ->
       with {:ok, definition} <- get(job_id),
+           :ok <- ensure_revision(definition, Keyword.get(opts, :expected_revision)),
            {:ok, normalized_attrs} <- normalize_update(definition, stringify(attrs)) do
         updated =
           definition
           |> Map.merge(Map.take(normalized_attrs, allowed))
+          |> increment_revision()
           |> Map.put("updated_at", Runtime.timestamp())
 
         RedisStore.persist_job_definition(job_id, updated)
@@ -100,15 +118,16 @@ defmodule MirrorNeuron.Runtime.StableJob do
     end)
   end
 
-  def update(_job_id, _attrs), do: {:error, :invalid_job_update}
+  def update(_job_id, _attrs, _opts), do: {:error, :invalid_job_update}
 
-  def replace_bundle(job_id, input, attrs \\ %{})
+  def replace_bundle(job_id, input, attrs \\ %{}, opts \\ [])
 
-  def replace_bundle(job_id, input, attrs) when is_map(attrs) do
+  def replace_bundle(job_id, input, attrs, opts) when is_map(attrs) do
     allowed = ~w(resolved_configuration schedules storage job_name)
 
     with_start_gate(job_id, fn ->
       with {:ok, definition} <- get(job_id),
+           :ok <- ensure_revision(definition, Keyword.get(opts, :expected_revision)),
            :ok <- ensure_active(definition),
            :ok <- ensure_no_active_runs(definition),
            {:ok, bundle} <- JobBundle.load(input),
@@ -123,7 +142,8 @@ defmodule MirrorNeuron.Runtime.StableJob do
             "job_name" => bundle.manifest.job_name,
             "manifest" => Manifest.to_map(bundle.manifest),
             "bundle_ref" => Runtime.bundle_ref(bundle.manifest, bundle),
-            "updated_at" => Runtime.timestamp()
+            "updated_at" => Runtime.timestamp(),
+            "revision" => (definition["revision"] || 0) + 1
           })
 
         case RedisStore.persist_job_definition(job_id, updated) do
@@ -142,14 +162,18 @@ defmodule MirrorNeuron.Runtime.StableJob do
     end)
   end
 
-  def replace_bundle(_job_id, _input, _attrs), do: {:error, :invalid_job_update}
+  def replace_bundle(_job_id, _input, _attrs, _opts), do: {:error, :invalid_job_update}
 
-  def archive(job_id) do
+  def archive(job_id, opts \\ []) do
     with_start_gate(job_id, fn ->
       with {:ok, definition} <- get(job_id),
+           :ok <- ensure_revision(definition, Keyword.get(opts, :expected_revision)),
            :ok <- ensure_no_active_runs(definition),
            {:ok, archived} <-
-             RedisStore.persist_job_definition(job_id, Map.put(definition, "status", "archived")),
+             RedisStore.persist_job_definition(
+               job_id,
+               definition |> Map.put("status", "archived") |> increment_revision()
+             ),
            :ok <- pause_job_schedules(job_id) do
         {:ok, archived}
       end
@@ -202,6 +226,18 @@ defmodule MirrorNeuron.Runtime.StableJob do
     end
   end
 
+  def list_runs_page(job_id, opts \\ []) do
+    with {:ok, runs} <- list_runs(job_id) do
+      Page.paginate(
+        runs,
+        opts,
+        "job-runs:#{job_id}",
+        %{"job_id" => job_id},
+        &{&1["submitted_at"] || &1["started_at"] || "", &1["run_id"] || ""}
+      )
+    end
+  end
+
   def reset_data(job_id) do
     with_start_gate(job_id, fn ->
       with {:ok, definition} <- get(job_id),
@@ -223,6 +259,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
     if Keyword.get(opts, :confirmed, false) do
       with_start_gate(job_id, fn ->
         with {:ok, definition} <- get(job_id),
+             :ok <- ensure_revision(definition, Keyword.get(opts, :expected_revision)),
              :ok <- ensure_no_active_runs(definition),
              :ok <- delete_job_schedules(job_id),
              :ok <- delete_historical_runs(definition),
@@ -267,9 +304,25 @@ defmodule MirrorNeuron.Runtime.StableJob do
       definition
       |> Map.update("run_ids", [run_id], &Enum.uniq(&1 ++ [run_id]))
       |> Map.put("latest_run_id", run_id)
+      |> increment_revision()
 
     RedisStore.persist_job_definition(definition["job_id"], updated)
   end
+
+  defp increment_revision(definition) do
+    Map.update(definition, "revision", 1, &(&1 + 1))
+  end
+
+  defp ensure_revision(_definition, nil), do: :ok
+  defp ensure_revision(_definition, 0), do: :ok
+
+  defp ensure_revision(definition, expected) when is_integer(expected) do
+    if definition["revision"] == expected,
+      do: :ok,
+      else: {:error, :revision_mismatch}
+  end
+
+  defp ensure_revision(_definition, _expected), do: {:error, :invalid_revision}
 
   defp ensure_run_id_available(run_id) do
     case RedisStore.execution_exists?(run_id) do

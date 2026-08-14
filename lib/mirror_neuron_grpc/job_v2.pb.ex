@@ -31,6 +31,7 @@ defmodule Mirrorneuron.Job.V2.CreateJobRequest do
   field(:resolved_configuration_json, 4, type: :string, json_name: "resolvedConfigurationJson")
   field(:storage_json, 5, type: :string, json_name: "storageJson")
   field(:version, 6, type: :uint32)
+  field(:idempotency_key, 7, type: :string, json_name: "idempotencyKey")
 end
 
 defmodule Mirrorneuron.Job.V2.JobRequest do
@@ -43,6 +44,9 @@ defmodule Mirrorneuron.Job.V2.JobRequest do
 
   field(:job_id, 1, type: :string, json_name: "jobId")
   field(:version, 2, type: :uint32)
+  field(:expected_revision, 3, type: :uint64, json_name: "expectedRevision")
+  field(:page_size, 4, type: :uint32, json_name: "pageSize")
+  field(:page_token, 5, type: :string, json_name: "pageToken")
 end
 
 defmodule Mirrorneuron.Job.V2.ListJobsRequest do
@@ -55,6 +59,8 @@ defmodule Mirrorneuron.Job.V2.ListJobsRequest do
 
   field(:include_archived, 1, type: :bool, json_name: "includeArchived")
   field(:version, 2, type: :uint32)
+  field(:page_size, 3, type: :uint32, json_name: "pageSize")
+  field(:page_token, 4, type: :string, json_name: "pageToken")
 end
 
 defmodule Mirrorneuron.Job.V2.UpdateJobRequest.PayloadsEntry do
@@ -88,6 +94,7 @@ defmodule Mirrorneuron.Job.V2.UpdateJobRequest do
     type: Mirrorneuron.Job.V2.UpdateJobRequest.PayloadsEntry,
     map: true
   )
+  field(:expected_revision, 6, type: :uint64, json_name: "expectedRevision")
 end
 
 defmodule Mirrorneuron.Job.V2.DeleteJobRequest do
@@ -101,6 +108,7 @@ defmodule Mirrorneuron.Job.V2.DeleteJobRequest do
   field(:job_id, 1, type: :string, json_name: "jobId")
   field(:confirmed, 2, type: :bool)
   field(:version, 3, type: :uint32)
+  field(:expected_revision, 4, type: :uint64, json_name: "expectedRevision")
 end
 
 defmodule Mirrorneuron.Job.V2.StartRunRequest do
@@ -115,6 +123,7 @@ defmodule Mirrorneuron.Job.V2.StartRunRequest do
   field(:run_id, 2, type: :string, json_name: "runId")
   field(:inputs_json, 3, type: :string, json_name: "inputsJson")
   field(:version, 4, type: :uint32)
+  field(:idempotency_key, 5, type: :string, json_name: "idempotencyKey")
 end
 
 defmodule Mirrorneuron.Job.V2.RunRequest do
@@ -169,6 +178,7 @@ defmodule Mirrorneuron.Job.V2.CreateJobScheduleRequest do
   field(:schedule_json, 2, type: :string, json_name: "scheduleJson")
   field(:source_json, 3, type: :string, json_name: "sourceJson")
   field(:version, 4, type: :uint32)
+  field(:idempotency_key, 5, type: :string, json_name: "idempotencyKey")
 end
 
 defmodule Mirrorneuron.Job.V2.JsonResponse do
@@ -181,6 +191,8 @@ defmodule Mirrorneuron.Job.V2.JsonResponse do
 
   field(:result_json, 1, type: :string, json_name: "resultJson")
   field(:version, 2, type: :uint32)
+  field(:revision, 3, type: :uint64)
+  field(:next_page_token, 4, type: :string, json_name: "nextPageToken")
 end
 
 defmodule Mirrorneuron.Job.V2.JobService.Service do

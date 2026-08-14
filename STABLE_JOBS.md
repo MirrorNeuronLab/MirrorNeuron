@@ -18,9 +18,10 @@ stable job: job-7f3a
   pause, resume, cancel, logs, events, artifacts, retention, and deletion.
 - `attempt_id` identifies a retry or recovery attempt. A retry keeps its
   `run_id`; it does not create another execution.
-- The v1 `/jobs/{id}` and original `JobService` surfaces are execution-oriented.
-  Their historical `job_id` is treated as a `run_id`. The v2 service is the
-  authoritative stable-job API.
+- The canonical REST API uses `/api/v1/jobs/{id}` for durable definitions and
+  `/api/v1/runs/{id}` for executions. Internal gRPC packages retain their
+  existing versioned names; `mirror_neuron.job.v2.JobServiceV2` is the
+  authoritative stable-job service used by the REST adapter.
 
 Code must never infer that a job and a run are one-to-one. A job can have no
 runs, one run, or many runs. A run belongs to exactly one job.
@@ -88,7 +89,7 @@ declared read-only or read-write mode.
 
 ## Runtime environment
 
-Every v2 run receives:
+Every run receives:
 
 | Variable | Meaning |
 | --- | --- |
@@ -104,8 +105,9 @@ fallback from `MN_JOB_ID` to a run identity.
 
 ## Lifecycle operations
 
-The versioned v2 gRPC service is defined in `proto/job_v2.proto` and exposed by
-the API under `/api/v2`.
+The versioned internal gRPC service is defined in `proto/job_v2.proto`. The
+public REST adapter exposes the stable model through the canonical `/api/v1`
+resource routes; the internal package number is not an HTTP API version.
 
 Stable job operations:
 
@@ -140,9 +142,10 @@ manifest and merges the job's current resolved configuration into
 
 ## Compatibility and migration
 
-New clients should use v2. The v1 execution API remains readable and
-controllable for historical records and maps its old execution identifier to a
-run. New state is not permanently dual-written into two job models.
+The REST reset is a clean break. First-party clients use only `/api/v1`;
+historical execution-oriented aliases and `/api/v2` are not mounted. Existing
+internal gRPC/domain version labels remain unchanged and new pagination or
+revision fields are added to those messages without renaming their packages.
 
 Desktop co-worker records migrate as follows:
 

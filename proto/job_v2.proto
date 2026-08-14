@@ -28,16 +28,22 @@ message CreateJobRequest {
   string resolved_configuration_json = 4;
   string storage_json = 5;
   uint32 version = 6;
+  string idempotency_key = 7;
 }
 
 message JobRequest {
   string job_id = 1;
   uint32 version = 2;
+  uint64 expected_revision = 3;
+  uint32 page_size = 4;
+  string page_token = 5;
 }
 
 message ListJobsRequest {
   bool include_archived = 1;
   uint32 version = 2;
+  uint32 page_size = 3;
+  string page_token = 4;
 }
 
 message UpdateJobRequest {
@@ -46,12 +52,14 @@ message UpdateJobRequest {
   uint32 version = 3;
   string manifest_json = 4;
   map<string, bytes> payloads = 5;
+  uint64 expected_revision = 6;
 }
 
 message DeleteJobRequest {
   string job_id = 1;
   bool confirmed = 2;
   uint32 version = 3;
+  uint64 expected_revision = 4;
 }
 
 message StartRunRequest {
@@ -59,6 +67,7 @@ message StartRunRequest {
   string run_id = 2;
   string inputs_json = 3;
   uint32 version = 4;
+  string idempotency_key = 5;
 }
 
 message RunRequest {
@@ -85,9 +94,12 @@ message CreateJobScheduleRequest {
   string schedule_json = 2;
   string source_json = 3;
   uint32 version = 4;
+  string idempotency_key = 5;
 }
 
 message JsonResponse {
   string result_json = 1;
   uint32 version = 2;
+  uint64 revision = 3;
+  string next_page_token = 4;
 }

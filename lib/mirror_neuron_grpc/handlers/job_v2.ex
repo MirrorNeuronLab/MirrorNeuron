@@ -5,19 +5,27 @@ defmodule MirrorNeuron.Grpc.Handlers.JobV2 do
   alias MirrorNeuron.Grpc.JobV2Projection
   alias MirrorNeuron.Grpc.Validation
   alias MirrorNeuron.Runtime.LiveInput
+  alias MirrorNeuron.Runtime.Idempotency
   alias Mirrorneuron.Job.V2.JsonResponse
 
   @interface_version 2
 
   def create_job(request, _stream) do
-    request
-    |> with_json_bundle(fn tmp_dir ->
-      MirrorNeuron.create_job(tmp_dir,
-        job_id: Support.blank_to_nil(request.job_id),
-        resolved_configuration: Support.decode_json_map(request.resolved_configuration_json),
-        storage: Support.decode_json_map(request.storage_json)
-      )
-    end)
+    Idempotency.run(
+      "create-job",
+      request.idempotency_key,
+      {request.manifest_json, request.payloads, request.job_id, request.resolved_configuration_json, request.storage_json},
+      fn ->
+        request
+        |> with_json_bundle(fn tmp_dir ->
+          MirrorNeuron.create_job(tmp_dir,
+            job_id: Support.blank_to_nil(request.job_id),
+            resolved_configuration: Support.decode_json_map(request.resolved_configuration_json),
+            storage: Support.decode_json_map(request.storage_json)
+          )
+        end)
+      end
+    )
     |> respond_definition(:summary)
   end
 
@@ -28,8 +36,14 @@ defmodule MirrorNeuron.Grpc.Handlers.JobV2 do
   end
 
   def list_jobs(request, _stream) do
-    case MirrorNeuron.list_stable_jobs(include_archived: request.include_archived) do
-      {:ok, jobs} -> response(%{"data" => JobV2Projection.summaries(jobs)})
+    case MirrorNeuron.list_stable_jobs_page(
+           include_archived: request.include_archived,
+           page_size: page_size(request.page_size),
+           page_token: Support.blank_to_nil(request.page_token)
+         ) do
+      {:ok, jobs, next_page_token} ->
+        response(%{"items" => JobV2Projection.summaries(jobs), "next_page_token" => next_page_token})
+
       error -> respond(error)
     end
   end
@@ -39,11 +53,13 @@ defmodule MirrorNeuron.Grpc.Handlers.JobV2 do
 
     result =
       if String.trim(request.manifest_json || "") == "" do
-        MirrorNeuron.update_job(request.job_id, attrs)
+        MirrorNeuron.update_job(request.job_id, attrs, expected_revision: request.expected_revision)
       else
         request
         |> with_json_bundle(fn tmp_dir ->
-          MirrorNeuron.update_job_bundle(request.job_id, tmp_dir, attrs)
+          MirrorNeuron.update_job_bundle(request.job_id, tmp_dir, attrs,
+            expected_revision: request.expected_revision
+          )
         end)
       end
 
@@ -52,7 +68,7 @@ defmodule MirrorNeuron.Grpc.Handlers.JobV2 do
 
   def archive_job(request, _stream) do
     request.job_id
-    |> MirrorNeuron.archive_job()
+    |> MirrorNeuron.archive_job(expected_revision: request.expected_revision)
     |> respond_definition(:summary)
   end
 
@@ -63,7 +79,10 @@ defmodule MirrorNeuron.Grpc.Handlers.JobV2 do
   end
 
   def delete_job(request, _stream) do
-    case MirrorNeuron.delete_stable_job(request.job_id, confirmed: request.confirmed) do
+    case MirrorNeuron.delete_stable_job(request.job_id,
+           confirmed: request.confirmed,
+           expected_revision: request.expected_revision
+         ) do
       {:ok, retired_resources} ->
         response(%{
           "job_id" => request.job_id,
@@ -82,7 +101,12 @@ defmodule MirrorNeuron.Grpc.Handlers.JobV2 do
       |> Support.maybe_put_opt(:run_id, Support.blank_to_nil(request.run_id))
       |> Keyword.put(:inputs, Support.decode_json_map(request.inputs_json))
 
-    case MirrorNeuron.start_run(request.job_id, opts) do
+    result =
+      Idempotency.run("start-run:#{request.job_id}", request.idempotency_key, {request.run_id, request.inputs_json}, fn ->
+        MirrorNeuron.start_run(request.job_id, opts)
+      end)
+
+    case result do
       {:ok, run_id, _pid} ->
         response(%{
           "job_id" => request.job_id,
@@ -96,9 +120,16 @@ defmodule MirrorNeuron.Grpc.Handlers.JobV2 do
   end
 
   def list_runs(request, _stream) do
-    case MirrorNeuron.list_runs(request.job_id) do
-      {:ok, runs} ->
-        response(%{"job_id" => request.job_id, "data" => JobV2Projection.runs(runs)})
+    case MirrorNeuron.list_runs_page(request.job_id,
+           page_size: page_size(request.page_size),
+           page_token: Support.blank_to_nil(request.page_token)
+         ) do
+      {:ok, runs, next_page_token} ->
+        response(%{
+          "job_id" => request.job_id,
+          "items" => JobV2Projection.runs(runs),
+          "next_page_token" => next_page_token
+        })
 
       error ->
         respond(error)
@@ -147,7 +178,15 @@ defmodule MirrorNeuron.Grpc.Handlers.JobV2 do
     schedule = Support.decode_json_map(request.schedule_json)
     source = Support.decode_json_map(request.source_json)
 
-    case MirrorNeuron.create_job_schedule(request.job_id, schedule, source: source) do
+    result =
+      Idempotency.run(
+        "create-job-schedule:#{request.job_id}",
+        request.idempotency_key,
+        {request.schedule_json, request.source_json},
+        fn -> MirrorNeuron.create_job_schedule(request.job_id, schedule, source: source) end
+      )
+
+    case result do
       {:ok, created} -> response(JobV2Projection.schedule(created))
       error -> respond(error)
     end
@@ -194,11 +233,16 @@ defmodule MirrorNeuron.Grpc.Handlers.JobV2 do
 
   defp response(value) do
     %JsonResponse{
-      result_json: Jason.encode!(versioned(value)),
-      version: @interface_version
+      result_json: Jason.encode!(value),
+      version: @interface_version,
+      revision: revision(value),
+      next_page_token: if(is_map(value), do: value["next_page_token"] || "", else: "")
     }
   end
 
-  defp versioned(value) when is_map(value), do: Map.put_new(value, "version", @interface_version)
-  defp versioned(value), do: %{"version" => @interface_version, "result" => value}
+  defp revision(value) when is_map(value) and is_integer(value["revision"]), do: value["revision"]
+  defp revision(_value), do: 0
+
+  defp page_size(0), do: 50
+  defp page_size(value), do: value
 end
