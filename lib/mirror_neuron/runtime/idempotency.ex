@@ -59,4 +59,3 @@ defmodule MirrorNeuron.Runtime.Idempotency do
     end
   end
 end
-

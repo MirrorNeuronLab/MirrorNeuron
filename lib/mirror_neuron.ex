@@ -52,7 +52,9 @@ defmodule MirrorNeuron do
   def get_job(job_id), do: MirrorNeuron.Runtime.StableJob.get(job_id)
   def list_stable_jobs(opts \\ []), do: MirrorNeuron.Runtime.StableJob.list(opts)
   def list_stable_jobs_page(opts \\ []), do: MirrorNeuron.Runtime.StableJob.list_page(opts)
-  def update_job(job_id, attrs, opts \\ []), do: MirrorNeuron.Runtime.StableJob.update(job_id, attrs, opts)
+
+  def update_job(job_id, attrs, opts \\ []),
+    do: MirrorNeuron.Runtime.StableJob.update(job_id, attrs, opts)
 
   def update_job_bundle(job_id, input, attrs \\ %{}, opts \\ []),
     do: MirrorNeuron.Runtime.StableJob.replace_bundle(job_id, input, attrs, opts)
@@ -65,7 +67,10 @@ defmodule MirrorNeuron do
 
   def start_run(job_id, opts \\ []), do: MirrorNeuron.Runtime.StableJob.start_run(job_id, opts)
   def list_runs(job_id), do: MirrorNeuron.Runtime.StableJob.list_runs(job_id)
-  def list_runs_page(job_id, opts \\ []), do: MirrorNeuron.Runtime.StableJob.list_runs_page(job_id, opts)
+
+  def list_runs_page(job_id, opts \\ []),
+    do: MirrorNeuron.Runtime.StableJob.list_runs_page(job_id, opts)
+
   def delete_run(run_id, opts \\ []), do: MirrorNeuron.Runtime.StableJob.delete_run(run_id, opts)
 
   def deploy_manifest(input, opts \\ []) do

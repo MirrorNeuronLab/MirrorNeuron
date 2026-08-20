@@ -329,10 +329,6 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     {:ok, redis_url: old_redis_url || "redis://localhost:6379/0"}
   end
 
-
-
-
-
   test "network-only mode forwards runtime model preparation to node-local SDK" do
     previous_target = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
     previous_client = Application.get_env(:mirror_neuron, :native_sdk_grpc_client)
@@ -567,11 +563,6 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       restore_env(:native_sdk_grpc_client, previous_client)
     end
   end
-
-
-
-
-
 
   test "network handshake accepts the configured join token", %{redis_url: redis_url} do
     System.put_env("MN_NETWORK_ONLY", "true")

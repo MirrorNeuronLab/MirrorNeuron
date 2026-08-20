@@ -258,4 +258,3 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
   defp page_size(0), do: 50
   defp page_size(value), do: value
 end
-
