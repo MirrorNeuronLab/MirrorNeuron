@@ -9,7 +9,7 @@ defmodule MirrorNeuron.Runtime.StableJobTest do
 
     assert {:ok, manifest} =
              Manifest.load(%{
-               "apiVersion" => "mn.workflow/v2",
+               "apiVersion" => "mn.workflow/v1",
                "manifest_version" => "1.0",
                "graph_id" => "stable-job-test",
                "entrypoints" => ["worker"],

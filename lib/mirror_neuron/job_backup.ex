@@ -262,7 +262,7 @@ defmodule MirrorNeuron.JobBackup do
 
   defp export_embedded_manifest(%{"manifest" => manifest}) when is_map(manifest) do
     if workflow_manifest_incomplete?(manifest) do
-      {:error, "embedded mn.workflow/v2 manifest is missing contract, flow, or runtime"}
+      {:error, "embedded mn.workflow/v1 manifest is missing contract, flow, or runtime"}
     else
       {:ok, %{"manifest.json" => Jason.encode!(manifest, pretty: true)}}
     end
@@ -270,7 +270,7 @@ defmodule MirrorNeuron.JobBackup do
 
   defp export_embedded_manifest(_job), do: {:error, "backup bundle is unavailable"}
 
-  defp workflow_manifest_incomplete?(%{"apiVersion" => "mn.workflow/v2"} = manifest) do
+  defp workflow_manifest_incomplete?(%{"apiVersion" => "mn.workflow/v1"} = manifest) do
     not (is_map(manifest["contract"]) and is_map(manifest["flow"]) and is_map(manifest["runtime"]))
   end
 

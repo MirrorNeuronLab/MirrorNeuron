@@ -3,7 +3,7 @@ defmodule TestFetchJob do
     # Create the job exactly as it would be created
     job_id = "test-job-1"
     raw_manifest = %{
-      "apiVersion" => "mn.workflow/v2",
+      "apiVersion" => "mn.workflow/v1",
       "graph_id" => "graph-1",
       "job_name" => "Test Job",
       "type" => "batch",

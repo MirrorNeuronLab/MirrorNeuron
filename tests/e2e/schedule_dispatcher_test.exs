@@ -121,7 +121,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcherTest do
 
   defp manifest(graph_id) do
     %{
-      "apiVersion" => "mn.workflow/v2",
+      "apiVersion" => "mn.workflow/v1",
       "manifest_version" => "1.0",
       "graph_id" => "schedule_#{graph_id}",
       "job_name" => "schedule #{graph_id}",

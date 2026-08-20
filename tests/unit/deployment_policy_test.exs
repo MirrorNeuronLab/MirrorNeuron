@@ -67,7 +67,7 @@ defmodule MirrorNeuron.Runtime.DeploymentPolicyTest do
   defp manifest(overrides \\ %{}) do
     Map.merge(
       %{
-        "apiVersion" => "mn.workflow/v2",
+        "apiVersion" => "mn.workflow/v1",
         "manifest_version" => "1.0",
         "graph_id" => "deploy-policy-test",
         "entrypoints" => ["worker"],

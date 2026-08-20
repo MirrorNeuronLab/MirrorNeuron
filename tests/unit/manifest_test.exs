@@ -12,17 +12,17 @@ defmodule MirrorNeuron.ManifestTest do
     assert {:error, "unexpected byte" <> _} = Manifest.load("invalid json string {")
   end
 
-  test "rejects v1 and missing api versions" do
-    assert {:error, v1_errors} =
-             Manifest.load(%{"apiVersion" => "mn.workflow/v1", "graph_id" => "legacy"})
+  test "rejects retired and missing api versions" do
+    assert {:error, retired_errors} =
+             Manifest.load(%{"apiVersion" => "mn.workflow/v2", "graph_id" => "legacy"})
 
-    assert Enum.any?(v1_errors, &String.contains?(&1, "apiVersion must be mn.workflow/v2"))
+    assert Enum.any?(retired_errors, &String.contains?(&1, "apiVersion must be mn.workflow/v1"))
 
     assert {:error, missing_errors} = Manifest.load(%{"graph_id" => "missing-version"})
 
     assert Enum.any?(
              missing_errors,
-             &String.contains?(&1, "apiVersion must be mn.workflow/v2")
+             &String.contains?(&1, "apiVersion must be mn.workflow/v1")
            )
   end
 
@@ -119,7 +119,7 @@ defmodule MirrorNeuron.ManifestTest do
 
   test "round-trips workflow manifest fields and problem DAG metadata" do
     manifest = %{
-      "apiVersion" => "mn.workflow/v2",
+      "apiVersion" => "mn.workflow/v1",
       "kind" => "Workflow",
       "manifest_version" => "1.0",
       "graph_id" => "tax-dag",
@@ -171,7 +171,7 @@ defmodule MirrorNeuron.ManifestTest do
     assert {:ok, normalized} = Manifest.load(flow_manifest(manifest))
     durable = Manifest.to_map(normalized)
 
-    assert durable["apiVersion"] == "mn.workflow/v2"
+    assert durable["apiVersion"] == "mn.workflow/v1"
     assert durable["kind"] == "Workflow"
     assert durable["contract"]["outputs"]["primary"]["path"] == "final_artifact.json"
     assert durable["flow"]["graph"]["schema"] == "mn.workflow.problem_graph/v1"
@@ -188,7 +188,7 @@ defmodule MirrorNeuron.ManifestTest do
 
   test "topology remains runtime agent topology while flow graph remains problem DAG" do
     manifest = %{
-      "apiVersion" => "mn.workflow/v2",
+      "apiVersion" => "mn.workflow/v1",
       "kind" => "Workflow",
       "manifest_version" => "1.0",
       "graph_id" => "layered-runtime",
@@ -1016,9 +1016,9 @@ defmodule MirrorNeuron.ManifestTest do
 
       manifest
       |> Map.put("flow", flow)
-      |> Map.put_new("apiVersion", "mn.workflow/v2")
+      |> Map.put_new("apiVersion", "mn.workflow/v1")
     else
-      Map.put_new(manifest, "apiVersion", "mn.workflow/v2")
+      Map.put_new(manifest, "apiVersion", "mn.workflow/v1")
     end
   end
 

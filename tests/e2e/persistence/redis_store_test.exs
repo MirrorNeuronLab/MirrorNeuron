@@ -2564,7 +2564,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     File.mkdir_p!(payloads_dir)
 
     manifest = %{
-      "apiVersion" => "mn.workflow/v2",
+      "apiVersion" => "mn.workflow/v1",
       "manifest_version" => "1.0",
       "graph_id" => graph_id,
       "flow" => %{

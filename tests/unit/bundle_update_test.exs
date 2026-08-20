@@ -41,7 +41,7 @@ defmodule MirrorNeuron.BundleUpdateTest do
     File.mkdir_p!(payloads_dir)
 
     manifest = %{
-      "apiVersion" => "mn.workflow/v2",
+      "apiVersion" => "mn.workflow/v1",
       "manifest_version" => "1.0",
       "graph_id" => graph_id,
       "reload" => %{"mode" => reload_mode, "interval_seconds" => interval},
@@ -104,7 +104,7 @@ defmodule MirrorNeuron.BundleUpdateTest do
 
     # Update the manifest file
     new_manifest = %{
-      "apiVersion" => "mn.workflow/v2",
+      "apiVersion" => "mn.workflow/v1",
       "manifest_version" => "1.0",
       # Must match
       "graph_id" => "update_test_bundle",

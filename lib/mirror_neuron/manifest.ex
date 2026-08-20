@@ -1,5 +1,5 @@
 defmodule MirrorNeuron.Manifest do
-  @api_version "mn.workflow/v2"
+  @api_version "mn.workflow/v1"
 
   defstruct [
     :api_version,
