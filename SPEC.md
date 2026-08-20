@@ -221,19 +221,14 @@ values, uploads, and runner output are untrusted. Size, path, fan-out, TTL,
 queue, resource, and command limits are enforced before expensive or dangerous
 work. Secrets never appear in events or ordinary logs.
 
-## Compatibility
+## Job and run API
 
-Breaking changes include manifest semantics, protobuf fields/service behavior,
-message/event shapes, lifecycle transitions, persistence keys/formats, default
-delivery policy, runner policy, or configuration precedence. They require a
-versioned migration/compatibility path and tests. Additive optional fields are
-compatible only when omitted behavior remains unchanged.
-
-The v2 stable-job API is authoritative for new definitions. The v1 job API is
-execution-oriented: its historical job identifier maps to `run_id`. Historical
-terminal records remain readable without rewriting them. Runtime environment
-code must not interpret `MN_JOB_ID` as a run identity; it uses `MN_RUN_ID` and
-`MN_ATTEMPT_ID` explicitly. See `STABLE_JOBS.md` for the complete contract.
+`mirrorneuron.job.v1.JobService` is the sole authoritative protobuf contract.
+It exposes durable definition and explicit run operations only; no legacy
+submission, deployment, general-schedule, backup/restore, bulk-cancel, clear,
+alias, or dual-registration surface is provided. Runtime environment code must
+not interpret `MN_JOB_ID` as a run identity; it uses `MN_RUN_ID` and
+`MN_ATTEMPT_ID` explicitly. See `JOBS_AND_RUNS.md` for the complete contract.
 
 ## Acceptance
 

@@ -2,46 +2,6 @@ defmodule MirrorNeuron.Grpc.JobServer do
   use GRPC.Server, service: Mirrorneuron.Job.V1.JobService.Service
 
   for {function, command} <- [
-        submit_job: :SubmitJob,
-        get_job: :GetJob,
-        list_jobs: :ListJobs,
-        cancel_job: :CancelJob,
-        cancel_all_jobs: :CancelAllJobs,
-        pause_job: :PauseJob,
-        resume_job: :ResumeJob,
-        export_job_backup: :ExportJobBackup,
-        restore_job_backup: :RestoreJobBackup,
-        clear_jobs: :ClearJobs,
-        deploy_job: :DeployJob,
-        update_deployment: :UpdateDeployment,
-        get_deployment: :GetDeployment,
-        list_deployments: :ListDeployments,
-        promote_deployment: :PromoteDeployment,
-        rollback_deployment: :RollbackDeployment,
-        pause_deployment: :PauseDeployment,
-        resume_deployment: :ResumeDeployment,
-        fail_deployment: :FailDeployment,
-        create_schedule: :CreateSchedule,
-        update_schedule: :UpdateSchedule,
-        get_schedule: :GetSchedule,
-        list_schedules: :ListSchedules,
-        pause_schedule: :PauseSchedule,
-        resume_schedule: :ResumeSchedule,
-        delete_schedule: :DeleteSchedule,
-        dispatch_schedule: :DispatchSchedule,
-        emit_trigger_event: :EmitTriggerEvent,
-        list_trigger_events: :ListTriggerEvents
-      ] do
-    def unquote(function)(request, stream) do
-      MirrorNeuron.Grpc.CommandHub.dispatch(:job, unquote(command), request, stream)
-    end
-  end
-end
-
-defmodule MirrorNeuron.Grpc.JobV2Server do
-  use GRPC.Server, service: Mirrorneuron.Job.V2.JobService.Service
-
-  for {function, command} <- [
         create_job: :CreateJob,
         get_job: :GetJob,
         list_jobs: :ListJobs,
@@ -60,7 +20,7 @@ defmodule MirrorNeuron.Grpc.JobV2Server do
         create_job_schedule: :CreateJobSchedule
       ] do
     def unquote(function)(request, stream) do
-      MirrorNeuron.Grpc.CommandHub.dispatch(:job_v2, unquote(command), request, stream)
+      MirrorNeuron.Grpc.CommandHub.dispatch(:job, unquote(command), request, stream)
     end
   end
 end
@@ -134,7 +94,6 @@ defmodule MirrorNeuron.Grpc.Endpoint do
   intercept(GRPC.Server.Interceptors.Logger)
 
   run(MirrorNeuron.Grpc.JobServer)
-  run(MirrorNeuron.Grpc.JobV2Server)
   run(MirrorNeuron.Grpc.ClusterServer)
   run(MirrorNeuron.Grpc.ObservabilityServer)
   run(MirrorNeuron.Grpc.OperationsServer)

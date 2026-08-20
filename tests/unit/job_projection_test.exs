@@ -1,9 +1,9 @@
-defmodule MirrorNeuron.Grpc.JobV2ProjectionTest do
+defmodule MirrorNeuron.Grpc.JobProjectionTest do
   use ExUnit.Case, async: true
 
-  alias MirrorNeuron.Grpc.JobV2Projection
+  alias MirrorNeuron.Grpc.JobProjection
 
-  test "stable job responses reference archived bundles without echoing manifests" do
+  test "job responses reference archived bundles without echoing manifests" do
     definition = %{
       "job_id" => "job-1",
       "graph_id" => "large-workflow",
@@ -25,8 +25,8 @@ defmodule MirrorNeuron.Grpc.JobV2ProjectionTest do
       }
     }
 
-    summary = JobV2Projection.summary(definition)
-    detail = JobV2Projection.detail(definition)
+    summary = JobProjection.summary(definition)
+    detail = JobProjection.detail(definition)
 
     for projected <- [summary, detail] do
       refute Map.has_key?(projected, "manifest")
@@ -48,7 +48,7 @@ defmodule MirrorNeuron.Grpc.JobV2ProjectionTest do
     large_manifest = %{"flow" => String.duplicate("x", 4_500_000)}
 
     run =
-      JobV2Projection.run(%{
+      JobProjection.run(%{
         "job_id" => "run-1",
         "stable_job_id" => "job-1",
         "status" => "running",
@@ -62,7 +62,7 @@ defmodule MirrorNeuron.Grpc.JobV2ProjectionTest do
       })
 
     schedule =
-      JobV2Projection.schedule(%{
+      JobProjection.schedule(%{
         "schedule_id" => "schedule-1",
         "job_id" => "job-1",
         "status" => "active",

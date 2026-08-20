@@ -362,10 +362,10 @@ MirrorNeuron.plan_manifest("path/to/manifest.json")
 MirrorNeuron.run_manifest("path/to/manifest.json")
 ```
 
-For repeatable work, use the v2 stable-job model: one `job_id` owns the
+For repeatable work, use the durable job model: one `job_id` owns the
 configuration and shared data, while every manual or scheduled execution gets
 a distinct `run_id`. Retries retain their run and receive a new attempt. See
-[STABLE_JOBS.md](STABLE_JOBS.md) for the full identity, storage, lifecycle,
+[JOBS_AND_RUNS.md](JOBS_AND_RUNS.md) for the full identity, storage, lifecycle,
 migration, and safety contract.
 
 Inactive definitions can atomically replace their executable bundle when the
@@ -707,7 +707,6 @@ of the replicated shared-data set.
 MirrorNeuron Core includes protobuf definitions and generated Elixir modules for:
 
 - `proto/job.proto`
-- `proto/job_v2.proto`
 - `proto/cluster.proto`
 - `proto/observability.proto`
 - `proto/operations.proto`
@@ -716,14 +715,11 @@ Generated modules live under `lib/mirror_neuron_grpc/`. The gRPC listener binds
 to `MN_CORE_HOST` and listens on `MN_GRPC_PORT`.
 
 Protected RPCs use one client identity from the `authorization` metadata header.
-`JobService.ClearJobs` uses the same identity as every other protected call;
-there are no operator/admin token scopes or credentials embedded in requests.
+There are no operator/admin token scopes or credentials embedded in requests.
 
-`mirrorneuron.job.v2.JobService` owns stable definitions and their one-to-many
-runs. Its stable job operations never reuse a run ID as a job ID; execution
-control and deletion always target `run_id`. The original job service remains a
-temporary execution-oriented compatibility surface for historical clients.
-V2 responses keep expanded manifests and histories in durable storage and
+`mirrorneuron.job.v1.JobService` is the sole job contract. It owns durable job
+definitions and their one-to-many runs; execution control and deletion always
+target `run_id`. Responses keep expanded manifests and histories in durable storage and
 return bounded lifecycle metadata plus bundle/artifact references.
 `UpdateJobRequest` may include `manifest_json` and `payloads` to atomically
 replace an inactive definition's executable bundle without changing its graph

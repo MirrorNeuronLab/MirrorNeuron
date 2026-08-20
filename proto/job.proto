@@ -1,243 +1,105 @@
 syntax = "proto3";
 package mirrorneuron.job.v1;
 
+// Durable configured jobs and their one-to-many execution runs.
 service JobService {
-  rpc SubmitJob (SubmitJobRequest) returns (SubmitJobResponse);
-  rpc GetJob (GetJobRequest) returns (GetJobResponse);
-  rpc ListJobs (ListJobsRequest) returns (ListJobsResponse);
-  rpc CancelJob (CancelJobRequest) returns (CancelJobResponse);
-  rpc CancelAllJobs (CancelAllJobsRequest) returns (CancelAllJobsResponse);
-  rpc PauseJob (PauseJobRequest) returns (PauseJobResponse);
-  rpc ResumeJob (ResumeJobRequest) returns (ResumeJobResponse);
-  rpc ExportJobBackup (ExportJobBackupRequest) returns (ExportJobBackupResponse);
-  rpc RestoreJobBackup (RestoreJobBackupRequest) returns (RestoreJobBackupResponse);
-  rpc ClearJobs (ClearJobsRequest) returns (ClearJobsResponse);
-  rpc DeployJob (DeployJobRequest) returns (DeploymentResponse);
-  rpc UpdateDeployment (UpdateDeploymentRequest) returns (DeploymentResponse);
-  rpc GetDeployment (GetDeploymentRequest) returns (DeploymentResponse);
-  rpc ListDeployments (ListDeploymentsRequest) returns (DeploymentResponse);
-  rpc PromoteDeployment (PromoteDeploymentRequest) returns (DeploymentResponse);
-  rpc RollbackDeployment (RollbackDeploymentRequest) returns (DeploymentResponse);
-  rpc PauseDeployment (DeploymentActionRequest) returns (DeploymentResponse);
-  rpc ResumeDeployment (DeploymentActionRequest) returns (DeploymentResponse);
-  rpc FailDeployment (DeploymentActionRequest) returns (DeploymentResponse);
-  rpc CreateSchedule (CreateScheduleRequest) returns (ScheduleResponse);
-  rpc UpdateSchedule (ScheduleActionRequest) returns (ScheduleResponse);
-  rpc GetSchedule (GetScheduleRequest) returns (ScheduleResponse);
-  rpc ListSchedules (ListSchedulesRequest) returns (ScheduleResponse);
-  rpc PauseSchedule (ScheduleActionRequest) returns (ScheduleResponse);
-  rpc ResumeSchedule (ScheduleActionRequest) returns (ScheduleResponse);
-  rpc DeleteSchedule (ScheduleActionRequest) returns (ScheduleResponse);
-  rpc DispatchSchedule (DispatchScheduleRequest) returns (ScheduleResponse);
-  rpc EmitTriggerEvent (EmitTriggerEventRequest) returns (ScheduleResponse);
-  rpc ListTriggerEvents (ListTriggerEventsRequest) returns (ScheduleResponse);
+  rpc CreateJob (CreateJobRequest) returns (JsonResponse);
+  rpc GetJob (JobRequest) returns (JsonResponse);
+  rpc ListJobs (ListJobsRequest) returns (JsonResponse);
+  rpc UpdateJob (UpdateJobRequest) returns (JsonResponse);
+  rpc ArchiveJob (JobRequest) returns (JsonResponse);
+  rpc ResetJobData (JobRequest) returns (JsonResponse);
+  rpc DeleteJob (DeleteJobRequest) returns (JsonResponse);
+  rpc StartRun (StartRunRequest) returns (JsonResponse);
+  rpc ListRuns (JobRequest) returns (JsonResponse);
+  rpc GetRun (RunRequest) returns (JsonResponse);
+  rpc PauseRun (RunRequest) returns (JsonResponse);
+  rpc ResumeRun (RunRequest) returns (JsonResponse);
+  rpc CancelRun (RunRequest) returns (JsonResponse);
+  rpc DeleteRun (DeleteRunRequest) returns (JsonResponse);
+  rpc SendRunInput (SendRunInputRequest) returns (JsonResponse);
+  rpc CreateJobSchedule (CreateJobScheduleRequest) returns (JsonResponse);
 }
 
-message SubmitJobRequest {
+message CreateJobRequest {
   string manifest_json = 1;
   map<string, bytes> payloads = 2;
-  uint32 version = 3;
+  string job_id = 3;
+  string resolved_configuration_json = 4;
+  string storage_json = 5;
+  uint32 version = 6;
+  string idempotency_key = 7;
 }
 
-message SubmitJobResponse {
-  string job_id = 1;
-  string status = 2;
-  uint32 version = 3;
-}
-
-message GetJobRequest {
+message JobRequest {
   string job_id = 1;
   uint32 version = 2;
-}
-
-message GetJobResponse {
-  string job_json = 1;
-  uint32 version = 2;
+  uint64 expected_revision = 3;
+  uint32 page_size = 4;
+  string page_token = 5;
 }
 
 message ListJobsRequest {
-  int32 limit = 1;
-  bool include_terminal = 2;
-  uint32 version = 3;
-}
-
-message ListJobsResponse {
-  string jobs_json = 1;
+  bool include_archived = 1;
   uint32 version = 2;
+  uint32 page_size = 3;
+  string page_token = 4;
 }
 
-message CancelJobRequest {
+message UpdateJobRequest {
   string job_id = 1;
-  uint32 version = 2;
-}
-
-message CancelJobResponse {
-  string job_id = 1;
-  string status = 2;
-  uint32 version = 3;
-}
-
-message CancelAllJobsRequest {
-  uint32 version = 1;
-}
-
-message CancelAllJobsResponse {
-  string result_json = 1;
-  uint32 version = 2;
-}
-
-message PauseJobRequest {
-  string job_id = 1;
-  uint32 version = 2;
-}
-
-message PauseJobResponse {
-  string job_id = 1;
-  string status = 2;
-  uint32 version = 3;
-}
-
-message ResumeJobRequest {
-  string job_id = 1;
-  uint32 version = 2;
-}
-
-message ResumeJobResponse {
-  string job_id = 1;
-  string status = 2;
-  uint32 version = 3;
-}
-
-message ExportJobBackupRequest {
-  string job_id = 1;
-  uint32 version = 2;
-}
-
-message ExportJobBackupResponse {
-  string backup_json = 1;
-  map<string, bytes> bundle_files = 2;
-  uint32 version = 3;
-}
-
-message RestoreJobBackupRequest {
-  string backup_json = 1;
-  map<string, bytes> bundle_files = 2;
-  string blueprint_id = 3;
-  string run_id = 4;
-  uint32 version = 5;
-}
-
-message RestoreJobBackupResponse {
-  string result_json = 1;
-  uint32 version = 2;
-}
-
-message ClearJobsRequest {
-  reserved 1;
-  uint32 version = 2;
-}
-
-message ClearJobsResponse {
-  int32 cleared_count = 1;
-  uint32 version = 2;
-}
-
-message DeployJobRequest {
-  string manifest_json = 1;
-  map<string, bytes> payloads = 2;
-  string deployment_key = 3;
-  string update_policy_json = 4;
-  bool wait = 5;
-  uint32 version = 6;
-}
-
-message UpdateDeploymentRequest {
-  string deployment_key = 1;
-  string manifest_json = 2;
-  map<string, bytes> payloads = 3;
-  string update_policy_json = 4;
-  bool wait = 5;
-  uint32 version = 6;
-}
-
-message GetDeploymentRequest {
-  string id_or_key = 1;
-  uint32 version = 2;
-}
-
-message ListDeploymentsRequest {
-  string query_json = 1;
-  uint32 version = 2;
-}
-
-message PromoteDeploymentRequest {
-  string id_or_key = 1;
-  uint32 version = 2;
-}
-
-message RollbackDeploymentRequest {
-  string id_or_key = 1;
-  string version = 2;
-  string tag = 3;
-  string reason = 4;
-}
-
-message DeploymentActionRequest {
-  string id_or_key = 1;
-  string reason = 2;
-  uint32 version = 3;
-}
-
-message DeploymentResponse {
-  string result_json = 1;
-  uint32 version = 2;
-}
-
-message CreateScheduleRequest {
-  string manifest_json = 1;
-  map<string, bytes> payloads = 2;
-  string schedule_json = 3;
-  string source_json = 4;
-  uint32 version = 5;
-}
-
-message ScheduleActionRequest {
-  string schedule_id = 1;
   string attrs_json = 2;
-  string reason = 3;
-  uint32 version = 4;
+  uint32 version = 3;
+  string manifest_json = 4;
+  map<string, bytes> payloads = 5;
+  uint64 expected_revision = 6;
 }
 
-message GetScheduleRequest {
-  string schedule_id = 1;
+message DeleteJobRequest {
+  string job_id = 1;
+  bool confirmed = 2;
+  uint32 version = 3;
+  uint64 expected_revision = 4;
+}
+
+message StartRunRequest {
+  string job_id = 1;
+  string run_id = 2;
+  string inputs_json = 3;
+  uint32 version = 4;
+  string idempotency_key = 5;
+}
+
+message RunRequest {
+  string run_id = 1;
   uint32 version = 2;
 }
 
-message ListSchedulesRequest {
-  string query_json = 1;
-  uint32 version = 2;
+message DeleteRunRequest {
+  string run_id = 1;
+  bool confirmed = 2;
+  uint32 version = 3;
 }
 
-message DispatchScheduleRequest {
-  string schedule_id = 1;
-  string payload_json = 2;
-  string reason = 3;
+message SendRunInputRequest {
+  string run_id = 1;
+  string input_id = 2;
+  string payload_json = 3;
+  string idempotency_key = 4;
+  uint32 version = 5;
+}
+
+message CreateJobScheduleRequest {
+  string job_id = 1;
+  string schedule_json = 2;
+  string source_json = 3;
   uint32 version = 4;
+  string idempotency_key = 5;
 }
 
-message EmitTriggerEventRequest {
-  string event_type = 1;
-  string payload_json = 2;
-  string source = 3;
-  uint32 version = 4;
-}
-
-message ListTriggerEventsRequest {
-  int32 limit = 1;
-  uint32 version = 2;
-}
-
-message ScheduleResponse {
+message JsonResponse {
   string result_json = 1;
   uint32 version = 2;
+  uint64 revision = 3;
+  string next_page_token = 4;
 }

@@ -1,9 +1,9 @@
-# Stable Jobs and Execution Runs
+# Durable Jobs and Execution Runs
 
 MirrorNeuron separates a configured job from each time that job executes.
 
 ```text
-stable job: job-7f3a
+durable job: job-7f3a
   persistent data: $MN_HOME/job-data/job-7f3a/
   run: run-20260722-a   (manual, completed)
   run: run-20260723-b   (scheduled, running)
@@ -19,9 +19,9 @@ stable job: job-7f3a
 - `attempt_id` identifies a retry or recovery attempt. A retry keeps its
   `run_id`; it does not create another execution.
 - The canonical REST API uses `/api/v1/jobs/{id}` for durable definitions and
-  `/api/v1/runs/{id}` for executions. Internal gRPC packages retain their
-  existing versioned names; `mirror_neuron.job.v2.JobServiceV2` is the
-  authoritative stable-job service used by the REST adapter.
+  `/api/v1/runs/{id}` for executions. The sole internal contract is
+  `mirrorneuron.job.v1.JobService`; package v1 contains the current durable
+  job/run capability set and has no legacy companion service.
 
 Code must never infer that a job and a run are one-to-one. A job can have no
 runs, one run, or many runs. A run belongs to exactly one job.
@@ -105,11 +105,11 @@ fallback from `MN_JOB_ID` to a run identity.
 
 ## Lifecycle operations
 
-The versioned internal gRPC service is defined in `proto/job_v2.proto`. The
-public REST adapter exposes the stable model through the canonical `/api/v1`
-resource routes; the internal package number is not an HTTP API version.
+The authoritative internal gRPC service is defined in `proto/job.proto` under
+the `mirrorneuron.job.v1` package. The public REST adapter exposes the same
+model through the canonical `/api/v1` resource routes.
 
-Stable job operations:
+Job operations:
 
 - create, inspect, list, and update a definition;
 - archive while retaining data;
@@ -118,7 +118,7 @@ Stable job operations:
 - start and list runs;
 - create schedules that target the stable `job_id`.
 
-Stable-job responses are bounded projections of the persisted definition. They
+Job responses are bounded projections of the persisted definition. They
 return lifecycle/configuration fields and a durable `bundle_ref`, but never
 echo the expanded executable manifest or private runtime paths over gRPC.
 List and mutation responses use summaries; inspect adds resolved configuration,

@@ -1,227 +1,261 @@
 defmodule MirrorNeuron.Grpc.Handlers.Job do
   @moduledoc false
 
+  alias MirrorNeuron.Grpc.Handlers.Support
+  alias MirrorNeuron.Grpc.JobProjection
+  alias MirrorNeuron.Grpc.Validation
+  alias MirrorNeuron.Runtime.LiveInput
+  alias MirrorNeuron.Runtime.Idempotency
+  alias Mirrorneuron.Job.V1.JsonResponse
+
   @interface_version 1
 
-  alias MirrorNeuron.Grpc.Handlers.Support
-
-  alias Mirrorneuron.Job.V1.{
-    SubmitJobResponse,
-    GetJobResponse,
-    ListJobsResponse,
-    CancelJobResponse,
-    CancelAllJobsResponse,
-    PauseJobResponse,
-    ResumeJobResponse,
-    ExportJobBackupResponse,
-    RestoreJobBackupResponse,
-    ClearJobsResponse
-  }
-
-  def submit_job(request, _stream) do
-    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("SubmitJob")
-
-    result =
-      Support.with_request_bundle(request.manifest_json, request.payloads, fn tmp_dir ->
-        case MirrorNeuron.run_manifest(tmp_dir, await: false) do
-          {:ok, job_id} ->
-            %SubmitJobResponse{job_id: job_id, status: "pending", version: @interface_version}
-
-          {:ok, job_id, _job} ->
-            %SubmitJobResponse{job_id: job_id, status: "pending", version: @interface_version}
-
-          {:error, "resource_overloaded:" <> _ = reason} ->
-            raise GRPC.RPCError, status: GRPC.Status.resource_exhausted(), message: reason
-
-          {:error, "requirements_not_met:" <> _ = reason} ->
-            raise GRPC.RPCError, status: GRPC.Status.failed_precondition(), message: reason
-
-          {:error, "service_requirements_not_met:" <> _ = reason} ->
-            raise GRPC.RPCError, status: GRPC.Status.failed_precondition(), message: reason
-
-          {:error, "input_validation_failed:" <> _ = reason} ->
-            raise GRPC.RPCError, status: GRPC.Status.invalid_argument(), message: reason
-
-          {:error, reason} ->
-            raise GRPC.RPCError,
-              status: :invalid_argument,
-              message: MirrorNeuron.Runtime.error_message(reason)
-        end
-      end)
-
-    case result do
-      %SubmitJobResponse{} = response ->
-        response
-
-      {:error, reason} ->
-        raise GRPC.RPCError,
-          status: :invalid_argument,
-          message: MirrorNeuron.Runtime.error_message(reason)
-    end
+  def create_job(request, _stream) do
+    Idempotency.run(
+      "create-job",
+      request.idempotency_key,
+      {request.manifest_json, request.payloads, request.job_id,
+       request.resolved_configuration_json, request.storage_json},
+      fn ->
+        request
+        |> with_json_bundle(fn tmp_dir ->
+          MirrorNeuron.create_job(tmp_dir,
+            job_id: Support.blank_to_nil(request.job_id),
+            resolved_configuration: Support.decode_json_map(request.resolved_configuration_json),
+            storage: Support.decode_json_map(request.storage_json)
+          )
+        end)
+      end
+    )
+    |> respond_definition(:summary)
   end
 
   def get_job(request, _stream) do
-    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("GetJob")
-
-    job_id = request.job_id
-
-    case MirrorNeuron.job_details(job_id, compact: true, event_limit: 10) do
-      {:ok, details_map} ->
-        details_map = MirrorNeuron.Monitor.bound_job_details(details_map)
-
-        %GetJobResponse{
-          job_json: Support.versioned_json(details_map),
-          version: @interface_version
-        }
-
-      _ ->
-        %GetJobResponse{job_json: Support.versioned_json(%{}), version: @interface_version}
-    end
+    request.job_id
+    |> MirrorNeuron.get_job()
+    |> respond_definition(:detail)
   end
 
   def list_jobs(request, _stream) do
-    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("ListJobs")
-
-    limit = if request.limit > 0, do: request.limit, else: 100
-
-    case MirrorNeuron.Monitor.list_jobs(
-           limit: limit,
-           include_terminal: request.include_terminal,
-           summary: :basic
+    case MirrorNeuron.list_stable_jobs_page(
+           include_archived: request.include_archived,
+           page_size: page_size(request.page_size),
+           page_token: Support.blank_to_nil(request.page_token)
          ) do
-      {:ok, jobs} ->
-        %ListJobsResponse{
-          jobs_json: Support.versioned_json(%{data: jobs}),
-          version: @interface_version
-        }
+      {:ok, jobs, next_page_token} ->
+        response(%{
+          "items" => JobProjection.summaries(jobs),
+          "next_page_token" => next_page_token
+        })
 
-      _ ->
-        %ListJobsResponse{
-          jobs_json: Support.versioned_json(%{data: []}),
-          version: @interface_version
-        }
+      error ->
+        respond(error)
     end
   end
 
-  def cancel_job(request, _stream) do
-    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("CancelJob")
+  def update_job(request, _stream) do
+    attrs = Support.decode_json_map(request.attrs_json)
 
-    job_id = request.job_id
+    result =
+      if String.trim(request.manifest_json || "") == "" do
+        MirrorNeuron.update_job(request.job_id, attrs,
+          expected_revision: request.expected_revision
+        )
+      else
+        request
+        |> with_json_bundle(fn tmp_dir ->
+          MirrorNeuron.update_job_bundle(request.job_id, tmp_dir, attrs,
+            expected_revision: request.expected_revision
+          )
+        end)
+      end
 
-    case MirrorNeuron.cancel(job_id) do
-      {:error, reason} ->
-        Support.raise_runtime_error!(reason)
+    respond_definition(result, :summary)
+  end
 
-      {:ok, status} ->
-        %CancelJobResponse{job_id: job_id, status: status, version: @interface_version}
+  def archive_job(request, _stream) do
+    request.job_id
+    |> MirrorNeuron.archive_job(expected_revision: request.expected_revision)
+    |> respond_definition(:summary)
+  end
 
-      _ ->
-        %CancelJobResponse{job_id: job_id, status: "cancelled", version: @interface_version}
+  def reset_job_data(request, _stream) do
+    request.job_id
+    |> MirrorNeuron.reset_job_data()
+    |> respond_definition(:summary)
+  end
+
+  def delete_job(request, _stream) do
+    case MirrorNeuron.delete_stable_job(request.job_id,
+           confirmed: request.confirmed,
+           expected_revision: request.expected_revision
+         ) do
+      {:ok, retired_resources} ->
+        response(%{
+          "job_id" => request.job_id,
+          "status" => "deleted",
+          "retired_definition_resources" => retired_resources
+        })
+
+      error ->
+        respond(error)
     end
   end
 
-  def cancel_all_jobs(_request, _stream) do
-    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("CancelAllJobs")
+  def start_run(request, _stream) do
+    opts =
+      []
+      |> Support.maybe_put_opt(:run_id, Support.blank_to_nil(request.run_id))
+      |> Keyword.put(:inputs, Support.decode_json_map(request.inputs_json))
 
-    case MirrorNeuron.cancel_all() do
-      {:ok, result} ->
-        %CancelAllJobsResponse{
-          result_json: Support.versioned_json(result),
-          version: @interface_version
-        }
+    result =
+      Idempotency.run(
+        "start-run:#{request.job_id}",
+        request.idempotency_key,
+        {request.run_id, request.inputs_json},
+        fn ->
+          MirrorNeuron.start_run(request.job_id, opts)
+        end
+      )
 
-      {:error, reason} ->
-        Support.raise_runtime_error!(reason)
+    case result do
+      {:ok, run_id, _pid} ->
+        response(%{
+          "job_id" => request.job_id,
+          "run_id" => run_id,
+          "status" => "pending"
+        })
+
+      error ->
+        respond(error)
     end
   end
 
-  def pause_job(request, _stream) do
-    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("PauseJob")
+  def list_runs(request, _stream) do
+    case MirrorNeuron.list_runs_page(request.job_id,
+           page_size: page_size(request.page_size),
+           page_token: Support.blank_to_nil(request.page_token)
+         ) do
+      {:ok, runs, next_page_token} ->
+        response(%{
+          "job_id" => request.job_id,
+          "items" => JobProjection.runs(runs),
+          "next_page_token" => next_page_token
+        })
 
-    job_id = request.job_id
-
-    case MirrorNeuron.pause(job_id) do
-      {:error, reason} ->
-        Support.raise_runtime_error!(reason)
-
-      {:ok, status} ->
-        %PauseJobResponse{job_id: job_id, status: status, version: @interface_version}
-
-      _ ->
-        %PauseJobResponse{job_id: job_id, status: "paused", version: @interface_version}
+      error ->
+        respond(error)
     end
   end
 
-  def resume_job(request, _stream) do
-    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("ResumeJob")
-
-    job_id = request.job_id
-
-    case MirrorNeuron.resume(job_id) do
-      {:error, reason} ->
-        Support.raise_runtime_error!(reason)
-
-      {:ok, status} ->
-        %ResumeJobResponse{job_id: job_id, status: status, version: @interface_version}
-
-      _ ->
-        %ResumeJobResponse{job_id: job_id, status: "running", version: @interface_version}
+  def get_run(request, _stream) do
+    case MirrorNeuron.inspect_job(request.run_id) do
+      {:ok, run} -> response(JobProjection.run(run, request.run_id))
+      error -> respond(error)
     end
   end
 
-  def export_job_backup(request, _stream) do
-    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("ExportJobBackup")
+  def pause_run(request, _stream), do: control_run(request.run_id, &MirrorNeuron.pause/1)
+  def resume_run(request, _stream), do: control_run(request.run_id, &MirrorNeuron.resume/1)
+  def cancel_run(request, _stream), do: control_run(request.run_id, &MirrorNeuron.cancel/1)
 
-    case MirrorNeuron.export_job_backup(request.job_id) do
-      {:ok, backup, bundle_files} ->
-        %ExportJobBackupResponse{
-          backup_json: Support.versioned_json(backup),
-          bundle_files: bundle_files,
-          version: @interface_version
-        }
-
-      {:error, reason} ->
-        raise GRPC.RPCError, status: Support.backup_error_status(reason), message: inspect(reason)
+  def delete_run(request, _stream) do
+    case MirrorNeuron.delete_run(request.run_id, confirmed: request.confirmed) do
+      :ok -> response(%{"run_id" => request.run_id, "status" => "deleted"})
+      error -> respond(error)
     end
   end
 
-  def restore_job_backup(request, _stream) do
-    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("RestoreJobBackup")
-
-    with {:ok, backup} <- Jason.decode(request.backup_json),
-         {:ok, result} <-
-           MirrorNeuron.restore_job_backup(backup, request.bundle_files,
-             blueprint_id: Support.blank_to_nil(request.blueprint_id),
-             run_id: Support.blank_to_nil(request.run_id)
+  def send_run_input(request, _stream) do
+    with :ok <- validate_live_input_size(request.payload_json),
+         {:ok, payload} <- Validation.decode_json_map(request.payload_json),
+         {:ok, accepted} <-
+           LiveInput.send(
+             request.run_id,
+             request.input_id,
+             payload,
+             request.idempotency_key
            ) do
-      %RestoreJobBackupResponse{
-        result_json: Support.versioned_json(result),
-        version: @interface_version
-      }
+      response(accepted)
     else
-      {:error, %Jason.DecodeError{} = error} ->
-        raise GRPC.RPCError,
-          status: GRPC.Status.invalid_argument(),
-          message: "backup_json must be valid JSON: #{Exception.message(error)}"
+      {:error, reason} when is_binary(reason) ->
+        respond({:error, {:invalid_live_input, reason}})
 
-      {:error, reason} ->
-        raise GRPC.RPCError, status: Support.backup_error_status(reason), message: inspect(reason)
+      error ->
+        respond(error)
     end
   end
 
-  def clear_jobs(_request, _stream) do
-    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("ClearJobs")
+  def create_job_schedule(request, _stream) do
+    schedule = Support.decode_json_map(request.schedule_json)
+    source = Support.decode_json_map(request.source_json)
 
-    with {:ok, operation} <- MirrorNeuron.start_operation("clear_jobs"),
-         {:ok, completed} <- MirrorNeuron.Operations.await(operation["operation_id"], 30_000) do
-      result = MirrorNeuron.Operations.legacy_clear_result(completed)
+    result =
+      Idempotency.run(
+        "create-job-schedule:#{request.job_id}",
+        request.idempotency_key,
+        {request.schedule_json, request.source_json},
+        fn -> MirrorNeuron.create_job_schedule(request.job_id, schedule, source: source) end
+      )
 
-      %ClearJobsResponse{cleared_count: result["cleared_count"], version: @interface_version}
-    else
-      {:error, reason} ->
-        raise GRPC.RPCError,
-          status: GRPC.Status.internal(),
-          message: MirrorNeuron.Runtime.error_message(reason)
+    case result do
+      {:ok, created} -> response(JobProjection.schedule(created))
+      error -> respond(error)
     end
   end
+
+  defp control_run(run_id, operation) do
+    case operation.(run_id) do
+      {:ok, status} -> response(%{"run_id" => run_id, "status" => status})
+      :ok -> response(%{"run_id" => run_id, "status" => "accepted"})
+      error -> respond(error)
+    end
+  end
+
+  defp with_json_bundle(request, callback) do
+    Support.with_request_bundle(request.manifest_json, request.payloads, fn tmp_dir ->
+      callback.(tmp_dir)
+    end)
+  end
+
+  defp respond_definition({:ok, definition}, :summary),
+    do: response(JobProjection.summary(definition))
+
+  defp respond_definition({:ok, definition}, :detail),
+    do: response(JobProjection.detail(definition))
+
+  defp respond_definition(error, _projection), do: respond(error)
+
+  defp respond({:ok, value}), do: response(value)
+
+  defp respond({:error, reason}) do
+    Support.raise_runtime_error!(reason)
+  end
+
+  defp respond(other), do: response(other)
+
+  defp validate_live_input_size(payload_json) when is_binary(payload_json) do
+    if byte_size(payload_json) <= LiveInput.max_payload_bytes(),
+      do: :ok,
+      else: {:error, {:invalid_live_input, "payload exceeds the live-input size limit"}}
+  end
+
+  defp validate_live_input_size(_payload_json),
+    do: {:error, {:invalid_live_input, "payload must be valid JSON"}}
+
+  defp response(value) do
+    %JsonResponse{
+      result_json: Jason.encode!(value),
+      version: @interface_version,
+      revision: revision(value),
+      next_page_token: if(is_map(value), do: value["next_page_token"] || "", else: "")
+    }
+  end
+
+  defp revision(%{"revision" => revision}) when is_integer(revision), do: revision
+  defp revision(_value), do: 0
+
+  defp page_size(0), do: 50
+  defp page_size(value), do: value
 end
+

@@ -1,4 +1,4 @@
-defmodule MirrorNeuron.Grpc.JobV2Projection do
+defmodule MirrorNeuron.Grpc.JobProjection do
   @moduledoc false
 
   @summary_fields ~w(
@@ -89,3 +89,4 @@ defmodule MirrorNeuron.Grpc.JobV2Projection do
   defp list_count(value) when is_list(value), do: length(value)
   defp list_count(_value), do: 0
 end
+

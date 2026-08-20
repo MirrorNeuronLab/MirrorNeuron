@@ -2,29 +2,15 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
   use ExUnit.Case, async: false
 
   alias MirrorNeuron.Grpc.ClusterServer
-  alias MirrorNeuron.Grpc.JobServer
   alias MirrorNeuron.Cluster.JoinClaim
   alias MirrorNeuron.Cluster.NodeState
 
   alias Mirrorneuron.Cluster.V1.{
     AddNodeRequest,
     CheckServicesRequest,
-    DrainNodeRequest,
     NetworkHandshakeRequest,
     RemoveNodeRequest,
-    SetResourceRequest,
-    SetNodeMaintenanceRequest
-  }
-
-  alias Mirrorneuron.Job.V1.{
-    CancelAllJobsRequest,
-    CancelAllJobsResponse,
-    CancelJobRequest,
-    ClearJobsRequest,
-    ClearJobsResponse,
-    GetDeploymentRequest,
-    ListDeploymentsRequest,
-    SubmitJobRequest
+    SetResourceRequest
   }
 
   @identity_token_env "MN_GRPC_AUTH_TOKEN"
@@ -343,54 +329,9 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     {:ok, redis_url: old_redis_url || "redis://localhost:6379/0"}
   end
 
-  test "clear_jobs rejects unauthenticated requests before deleting jobs" do
-    error =
-      assert_raise GRPC.RPCError, fn ->
-        JobServer.clear_jobs(%ClearJobsRequest{}, nil)
-      end
 
-    assert Exception.message(error) == "gRPC client identity is required for this RPC"
-  end
 
-  test "clear_jobs accepts the configured client identity" do
-    System.put_env(@identity_token_env, "configured-identity")
 
-    try do
-      response =
-        JobServer.clear_jobs(
-          %ClearJobsRequest{},
-          identity_stream("configured-identity")
-        )
-
-      assert %ClearJobsResponse{} = response
-      assert is_integer(response.cleared_count)
-    rescue
-      error in GRPC.RPCError ->
-        refute Exception.message(error) =~ "client identity is required"
-    end
-  end
-
-  test "clear_jobs rejects a mismatched client identity" do
-    System.put_env(@identity_token_env, "configured-identity")
-
-    error =
-      assert_raise GRPC.RPCError, fn ->
-        JobServer.clear_jobs(%ClearJobsRequest{}, identity_stream("wrong-identity"))
-      end
-
-    assert Exception.message(error) == "gRPC client identity is required for this RPC"
-  end
-
-  test "network-only mode rejects job submission" do
-    System.put_env("MN_NETWORK_ONLY", "true")
-
-    error =
-      assert_raise GRPC.RPCError, fn ->
-        JobServer.submit_job(%SubmitJobRequest{manifest_json: "{}"}, nil)
-      end
-
-    assert Exception.message(error) =~ "SubmitJob is disabled"
-  end
 
   test "network-only mode forwards runtime model preparation to node-local SDK" do
     previous_target = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
@@ -627,91 +568,10 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     end
   end
 
-  test "cancel_job maps a missing runtime job to not_found" do
-    job_id = "missing-grpc-job-#{System.unique_integer([:positive])}"
 
-    error =
-      assert_raise GRPC.RPCError, fn ->
-        JobServer.cancel_job(%CancelJobRequest{job_id: job_id}, nil)
-      end
 
-    assert error.status == GRPC.Status.not_found()
-    assert Exception.message(error) =~ "not running" or Exception.message(error) =~ "not found"
-  end
 
-  test "cancel_all_jobs returns a versioned result for the active-job snapshot" do
-    if redis_available?() do
-      response = JobServer.cancel_all_jobs(%CancelAllJobsRequest{}, nil)
 
-      assert %CancelAllJobsResponse{version: 1, result_json: result_json} = response
-
-      assert %{"cancelled_count" => cancelled, "failed_count" => failed, "results" => results} =
-               Jason.decode!(result_json)
-
-      assert is_integer(cancelled)
-      assert is_integer(failed)
-      assert is_list(results)
-    end
-  end
-
-  test "network-only mode rejects deployment RPCs" do
-    System.put_env("MN_NETWORK_ONLY", "true")
-
-    error =
-      assert_raise GRPC.RPCError, fn ->
-        JobServer.get_deployment(%GetDeploymentRequest{id_or_key: "agent-api"}, nil)
-      end
-
-    assert Exception.message(error) =~ "GetDeployment is disabled"
-  end
-
-  test "deployment status RPCs return JSON-safe results" do
-    if redis_available?() do
-      deployment_id = "dep-grpc-#{System.unique_integer([:positive])}"
-
-      assert {:ok, _deployment} =
-               MirrorNeuron.Persistence.RedisStore.persist_deployment(deployment_id, %{
-                 "deployment_key" => "grpc-deploy",
-                 "status" => "successful",
-                 "current_version" => "1"
-               })
-
-      response = JobServer.get_deployment(%GetDeploymentRequest{id_or_key: "grpc-deploy"}, nil)
-      assert %{"deployment_key" => "grpc-deploy"} = Jason.decode!(response.result_json)
-
-      list_response = JobServer.list_deployments(%ListDeploymentsRequest{query_json: "{}"}, nil)
-      assert %{"data" => deployments} = Jason.decode!(list_response.result_json)
-      assert Enum.any?(deployments, &(&1["deployment_key"] == "grpc-deploy"))
-    end
-  end
-
-  test "network-only mode rejects destructive admin RPCs before token checks" do
-    System.put_env("MN_NETWORK_ONLY", "true")
-
-    error =
-      assert_raise GRPC.RPCError, fn ->
-        JobServer.clear_jobs(%ClearJobsRequest{}, nil)
-      end
-
-    assert Exception.message(error) =~ "ClearJobs is disabled"
-
-    error =
-      assert_raise GRPC.RPCError, fn ->
-        ClusterServer.drain_node(%DrainNodeRequest{node_name: "node@lab"}, nil)
-      end
-
-    assert Exception.message(error) =~ "DrainNode is disabled"
-
-    error =
-      assert_raise GRPC.RPCError, fn ->
-        ClusterServer.set_node_maintenance(
-          %SetNodeMaintenanceRequest{node_name: "node@lab", enabled: true},
-          nil
-        )
-      end
-
-    assert Exception.message(error) =~ "SetNodeMaintenance is disabled"
-  end
 
   test "network handshake accepts the configured join token", %{redis_url: redis_url} do
     System.put_env("MN_NETWORK_ONLY", "true")

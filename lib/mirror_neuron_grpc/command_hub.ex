@@ -88,51 +88,22 @@ defmodule MirrorNeuron.Grpc.CommandPolicy do
   @moduledoc false
 
   @network_only_denied MapSet.new([
-                         {:job_v2, :CreateJob},
-                         {:job_v2, :GetJob},
-                         {:job_v2, :ListJobs},
-                         {:job_v2, :UpdateJob},
-                         {:job_v2, :ArchiveJob},
-                         {:job_v2, :ResetJobData},
-                         {:job_v2, :DeleteJob},
-                         {:job_v2, :StartRun},
-                         {:job_v2, :ListRuns},
-                         {:job_v2, :GetRun},
-                         {:job_v2, :PauseRun},
-                         {:job_v2, :ResumeRun},
-                         {:job_v2, :CancelRun},
-                         {:job_v2, :DeleteRun},
-                         {:job_v2, :SendRunInput},
-                         {:job_v2, :CreateJobSchedule},
-                         {:job, :SubmitJob},
+                         {:job, :CreateJob},
                          {:job, :GetJob},
                          {:job, :ListJobs},
-                         {:job, :CancelJob},
-                         {:job, :CancelAllJobs},
-                         {:job, :PauseJob},
-                         {:job, :ResumeJob},
-                         {:job, :ExportJobBackup},
-                         {:job, :RestoreJobBackup},
-                         {:job, :ClearJobs},
-                         {:job, :DeployJob},
-                         {:job, :UpdateDeployment},
-                         {:job, :GetDeployment},
-                         {:job, :ListDeployments},
-                         {:job, :PromoteDeployment},
-                         {:job, :RollbackDeployment},
-                         {:job, :PauseDeployment},
-                         {:job, :ResumeDeployment},
-                         {:job, :FailDeployment},
-                         {:job, :CreateSchedule},
-                         {:job, :UpdateSchedule},
-                         {:job, :GetSchedule},
-                         {:job, :ListSchedules},
-                         {:job, :PauseSchedule},
-                         {:job, :ResumeSchedule},
-                         {:job, :DeleteSchedule},
-                         {:job, :DispatchSchedule},
-                         {:job, :EmitTriggerEvent},
-                         {:job, :ListTriggerEvents},
+                         {:job, :UpdateJob},
+                         {:job, :ArchiveJob},
+                         {:job, :ResetJobData},
+                         {:job, :DeleteJob},
+                         {:job, :StartRun},
+                         {:job, :ListRuns},
+                         {:job, :GetRun},
+                         {:job, :PauseRun},
+                         {:job, :ResumeRun},
+                         {:job, :CancelRun},
+                         {:job, :DeleteRun},
+                         {:job, :SendRunInput},
+                         {:job, :CreateJobSchedule},
                          {:cluster, :SetResource},
                          {:cluster, :AddNode},
                          {:cluster, :RemoveNode},
@@ -157,20 +128,15 @@ defmodule MirrorNeuron.Grpc.CommandPolicy do
                               ])
 
   @identity_auth_required MapSet.new([
-                            {:job_v2, :UpdateJob},
-                            {:job_v2, :ArchiveJob},
-                            {:job_v2, :ResetJobData},
-                            {:job_v2, :DeleteJob},
-                            {:job_v2, :PauseRun},
-                            {:job_v2, :ResumeRun},
-                            {:job_v2, :CancelRun},
-                            {:job_v2, :DeleteRun},
-                            {:job_v2, :SendRunInput},
-                            {:job, :PauseJob},
-                            {:job, :ResumeJob},
-                            {:job, :ExportJobBackup},
-                            {:job, :RestoreJobBackup},
-                            {:job, :ClearJobs},
+                            {:job, :UpdateJob},
+                            {:job, :ArchiveJob},
+                            {:job, :ResetJobData},
+                            {:job, :DeleteJob},
+                            {:job, :PauseRun},
+                            {:job, :ResumeRun},
+                            {:job, :CancelRun},
+                            {:job, :DeleteRun},
+                            {:job, :SendRunInput},
                             {:cluster, :ReconcileNode},
                             {:cluster, :DrainNode},
                             {:cluster, :CancelNodeDrain},
@@ -247,57 +213,7 @@ defmodule MirrorNeuron.Grpc.CommandHub do
                          :SendRunInput,
                          :CreateJobSchedule
                        ],
-                       &{{:job_v2, &1}, MirrorNeuron.Grpc.Handlers.JobV2}
-                     )
-                   )
-                   |> Map.merge(
-                     Map.new(
-                       [
-                         :SubmitJob,
-                         :GetJob,
-                         :ListJobs,
-                         :CancelJob,
-                         :CancelAllJobs,
-                         :PauseJob,
-                         :ResumeJob,
-                         :ExportJobBackup,
-                         :RestoreJobBackup,
-                         :ClearJobs
-                       ],
                        &{{:job, &1}, MirrorNeuron.Grpc.Handlers.Job}
-                     )
-                   )
-                   |> Map.merge(
-                     Map.new(
-                       [
-                         :DeployJob,
-                         :UpdateDeployment,
-                         :GetDeployment,
-                         :ListDeployments,
-                         :PromoteDeployment,
-                         :RollbackDeployment,
-                         :PauseDeployment,
-                         :ResumeDeployment,
-                         :FailDeployment
-                       ],
-                       &{{:job, &1}, MirrorNeuron.Grpc.Handlers.Deployment}
-                     )
-                   )
-                   |> Map.merge(
-                     Map.new(
-                       [
-                         :CreateSchedule,
-                         :UpdateSchedule,
-                         :GetSchedule,
-                         :ListSchedules,
-                         :PauseSchedule,
-                         :ResumeSchedule,
-                         :DeleteSchedule,
-                         :DispatchSchedule,
-                         :EmitTriggerEvent,
-                         :ListTriggerEvents
-                       ],
-                       &{{:job, &1}, MirrorNeuron.Grpc.Handlers.Schedule}
                      )
                    )
                    |> Map.merge(%{
