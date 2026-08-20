@@ -230,6 +230,17 @@ defmodule MirrorNeuron.ModelServices do
     )
   end
 
+  @doc false
+  def job_response_command(attrs, timeout \\ 25_000) when is_map(attrs) do
+    native_sdk_json_command(
+      attrs,
+      timeout,
+      :native_sdk_grpc_job_response_client,
+      &__MODULE__.grpc_set_resource/3,
+      "native SDK Job response command"
+    )
+  end
+
   defp register_model_services(services, node_name) do
     case services do
       [] ->
@@ -331,6 +342,21 @@ defmodule MirrorNeuron.ModelServices do
       {:error, reason} ->
         {:error,
          "native SDK gRPC LiteLLM gateway route removal failed for #{target}: #{inspect(reason)}"}
+    end
+  end
+
+  @doc false
+  def grpc_set_resource(target, request, timeout) do
+    with {:ok, channel} <- GRPC.Stub.connect(target, timeout: timeout),
+         {:ok, response} <- ClusterService.Stub.set_resource(channel, request, timeout: timeout) do
+      {:ok, response}
+    else
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error,
+         "native SDK gRPC resource command failed for #{target}: #{Exception.message(error)}"}
+
+      {:error, reason} ->
+        {:error, "native SDK gRPC resource command failed for #{target}: #{inspect(reason)}"}
     end
   end
 

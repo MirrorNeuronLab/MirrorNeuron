@@ -11,6 +11,7 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
     JobRequest,
     JsonResponse,
     ListJobsRequest,
+    QueryJobResponseRequest,
     RunRequest,
     SendRunInputRequest,
     StartRunRequest,
@@ -36,7 +37,8 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
     {:CancelRun, :cancel_run, RunRequest},
     {:DeleteRun, :delete_run, DeleteRunRequest},
     {:SendRunInput, :send_run_input, SendRunInputRequest},
-    {:CreateJobSchedule, :create_job_schedule, CreateJobScheduleRequest}
+    {:CreateJobSchedule, :create_job_schedule, CreateJobScheduleRequest},
+    {:QueryJobResponse, :query_job_response, QueryJobResponseRequest}
   ]
 
   @identity_commands MapSet.new([
@@ -48,7 +50,8 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
                        :ResumeRun,
                        :CancelRun,
                        :DeleteRun,
-                       :SendRunInput
+                       :SendRunInput,
+                       :QueryJobResponse
                      ])
 
   defmodule AuthenticatedStream do
@@ -74,7 +77,8 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
           :cancel_run,
           :delete_run,
           :send_run_input,
-          :create_job_schedule
+          :create_job_schedule,
+          :query_job_response
         ] do
       def unquote(function)(request, stream) do
         if pid = Process.whereis(@test_pid_name),

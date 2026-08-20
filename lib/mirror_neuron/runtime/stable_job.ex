@@ -13,6 +13,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
   alias MirrorNeuron.Cluster.NodeAdapter
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
+  alias MirrorNeuron.Runtime.JobResponse
   alias MirrorNeuron.Runtime.Page
 
   @terminal_statuses ["completed", "failed", "cancelled"]
@@ -64,7 +65,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
         "updated_at" => now
       }
 
-      RedisStore.persist_job_definition(job_id, definition)
+      persist_and_reconcile(job_id, definition)
     else
       {:ok, true} -> {:error, :job_already_exists}
       {:error, reason} -> {:error, reason}
@@ -115,7 +116,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
           |> increment_revision()
           |> Map.put("updated_at", Runtime.timestamp())
 
-        RedisStore.persist_job_definition(job_id, updated)
+        persist_and_reconcile(job_id, updated)
       end
     end)
   end
@@ -150,6 +151,8 @@ defmodule MirrorNeuron.Runtime.StableJob do
 
         case RedisStore.persist_job_definition(job_id, updated) do
           {:ok, saved} ->
+            _ = JobResponse.definition_changed(saved)
+
             {:ok,
              Map.put(
                saved,
@@ -171,6 +174,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
       with {:ok, definition} <- get(job_id),
            :ok <- ensure_revision(definition, Keyword.get(opts, :expected_revision)),
            :ok <- ensure_no_active_runs(definition),
+           :ok <- JobResponse.stop(definition),
            {:ok, archived} <-
              RedisStore.persist_job_definition(
                job_id,
@@ -244,6 +248,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
     with_start_gate(job_id, fn ->
       with {:ok, definition} <- get(job_id),
            :ok <- ensure_no_active_runs(definition),
+           :ok <- JobResponse.stop(definition),
            {:ok, bundle} <- load_bundle(definition),
            {:ok, seeds} <- seed_paths(bundle, definition["storage"] || %{}),
            {:ok, data_dir} <- JobData.reset(job_id, seeds) do
@@ -252,7 +257,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
           |> Map.update("data_generation", 2, &(&1 + 1))
           |> Map.put("data_dir", data_dir)
 
-        RedisStore.persist_job_definition(job_id, updated)
+        persist_and_reconcile(job_id, updated)
       end
     end)
   end
@@ -263,6 +268,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
         with {:ok, definition} <- get(job_id),
              :ok <- ensure_revision(definition, Keyword.get(opts, :expected_revision)),
              :ok <- ensure_no_active_runs(definition),
+             :ok <- JobResponse.stop(definition),
              :ok <- delete_job_schedules(job_id),
              :ok <- delete_historical_runs(definition),
              :ok <- SharedStorage.cleanup_manifest(job_id, definition["manifest"]),
@@ -313,6 +319,17 @@ defmodule MirrorNeuron.Runtime.StableJob do
 
   defp increment_revision(definition) do
     Map.update(definition, "revision", 1, &(&1 + 1))
+  end
+
+  defp persist_and_reconcile(job_id, definition) do
+    case RedisStore.persist_job_definition(job_id, definition) do
+      {:ok, saved} = result ->
+        _ = JobResponse.definition_changed(saved)
+        result
+
+      error ->
+        error
+    end
   end
 
   defp ensure_revision(_definition, nil), do: :ok

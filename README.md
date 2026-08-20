@@ -481,7 +481,7 @@ declarations can reference the resolved value with an environment template such
 as `"${env.MN_PORT_API}"`. Containerized nodes can set `MN_AUTO_PORT_START` and
 `MN_AUTO_PORT_END` to the bounded range published by their runtime.
 
-Job-scoped co-worker collaboration uses a supervised agent service with the
+Legacy Job-scoped co-worker collaboration uses a supervised agent service with the
 exact name `mn-job-collaboration`, tags `mcp` and `job-collaboration`, loopback
 binding, an automatic port, and Streamable HTTP path `/mcp`. Its service
 metadata identifies the blueprint, stable job, current run, and optional shared
@@ -489,9 +489,19 @@ goal. The service is registered only for the active run and exposes the
 read-only job snapshot, updates, and record tools; peer selection remains an
 explicit client policy. It is the runtime peer-collaboration surface, not the
 persistent supervisory MCP exposed by `mn-api` at
-`/api/v1/jobs/{job_id}/mcp`. The API-owned endpoint reads stable Core job/run
-state without starting a Run; Core does not keep this runtime service alive
-while a job is idle.
+`/api/v1/jobs/{job_id}/mcp`.
+
+An opt-in manifest can instead declare one always-warm response service outside
+the run DAG:
+
+```json
+{"response_service": {"enabled": true}}
+```
+
+Core supervises this definition-scoped service on the Job owner node, starts it
+asynchronously, routes bounded unary questions to it, and stops it before Job
+data reset or deletion. It remains available before the first Run and between
+Runs. Asking it a question never creates or keeps alive a Run.
 
 ---
 
@@ -728,6 +738,9 @@ or blueprint identity.
 active run. Core resolves the public input ID through the run's immutable
 manifest, validates its JSON schema and declared entrypoint route, and uses the
 normal backpressure-aware message plane; callers cannot name agents or streams.
+`JobService.QueryJobResponse` accepts an authenticated bounded question plus a
+sanitized Job-context object, routes it to the definition owner, and returns a
+bounded answer or deterministic fallback without starting a Run.
 
 `ClusterService.NetworkHandshake` is used by cluster join flows to verify the
 join token and keep network-facing nodes scoped to cluster/resource inspection

@@ -19,6 +19,7 @@ service JobService {
   rpc DeleteRun (DeleteRunRequest) returns (JsonResponse);
   rpc SendRunInput (SendRunInputRequest) returns (JsonResponse);
   rpc CreateJobSchedule (CreateJobScheduleRequest) returns (JsonResponse);
+  rpc QueryJobResponse (QueryJobResponseRequest) returns (JsonResponse);
 }
 
 message CreateJobRequest {
@@ -95,6 +96,15 @@ message CreateJobScheduleRequest {
   string source_json = 3;
   uint32 version = 4;
   string idempotency_key = 5;
+}
+
+message QueryJobResponseRequest {
+  string job_id = 1;
+  string question = 2;
+  string conversation_id = 3;
+  string request_id = 4;
+  string context_json = 5;
+  uint32 version = 6;
 }
 
 message JsonResponse {

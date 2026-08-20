@@ -182,6 +182,22 @@ defmodule Mirrorneuron.Job.V1.CreateJobScheduleRequest do
   field(:idempotency_key, 5, type: :string, json_name: "idempotencyKey")
 end
 
+defmodule Mirrorneuron.Job.V1.QueryJobResponseRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.QueryJobResponseRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:job_id, 1, type: :string, json_name: "jobId")
+  field(:question, 2, type: :string)
+  field(:conversation_id, 3, type: :string, json_name: "conversationId")
+  field(:request_id, 4, type: :string, json_name: "requestId")
+  field(:context_json, 5, type: :string, json_name: "contextJson")
+  field(:version, 6, type: :uint32)
+end
+
 defmodule Mirrorneuron.Job.V1.JsonResponse do
   @moduledoc false
 
@@ -234,6 +250,12 @@ defmodule Mirrorneuron.Job.V1.JobService.Service do
   rpc(
     :CreateJobSchedule,
     Mirrorneuron.Job.V1.CreateJobScheduleRequest,
+    Mirrorneuron.Job.V1.JsonResponse
+  )
+
+  rpc(
+    :QueryJobResponse,
+    Mirrorneuron.Job.V1.QueryJobResponseRequest,
     Mirrorneuron.Job.V1.JsonResponse
   )
 end

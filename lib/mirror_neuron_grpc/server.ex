@@ -17,7 +17,8 @@ defmodule MirrorNeuron.Grpc.JobServer do
         cancel_run: :CancelRun,
         delete_run: :DeleteRun,
         send_run_input: :SendRunInput,
-        create_job_schedule: :CreateJobSchedule
+        create_job_schedule: :CreateJobSchedule,
+        query_job_response: :QueryJobResponse
       ] do
     def unquote(function)(request, stream) do
       MirrorNeuron.Grpc.CommandHub.dispatch(:job, unquote(command), request, stream)

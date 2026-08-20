@@ -1002,6 +1002,36 @@ defmodule MirrorNeuron.ManifestTest do
     assert bundle.manifest.graph_id == "bundle-test"
   end
 
+  test "keeps the singular response service outside runtime topology" do
+    base =
+      flow_manifest(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "response-service-test",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{"node_id" => "worker", "agent_type" => "executor", "role" => "root"}
+        ],
+        "edges" => [],
+        "response_service" => %{"enabled" => true}
+      })
+
+    assert {:ok, manifest} = Manifest.load(base)
+    assert manifest.response_service == %{"enabled" => true}
+    assert Manifest.to_map(manifest)["response_service"] == %{"enabled" => true}
+    assert Enum.map(manifest.nodes, & &1.node_id) == ["worker"]
+    assert manifest.services == []
+
+    for invalid <- [
+          false,
+          %{"enabled" => false},
+          %{"enabled" => true, "command" => "python responder.py"},
+          %{"enabled" => true, "port" => 9000}
+        ] do
+      assert {:error, errors} = Manifest.load(Map.put(base, "response_service", invalid))
+      assert Enum.any?(errors, &String.contains?(&1, "response_service"))
+    end
+  end
+
   defp flow_manifest(manifest) do
     {nodes, manifest} = Map.pop(manifest, "nodes")
     {edges, manifest} = Map.pop(manifest, "edges")

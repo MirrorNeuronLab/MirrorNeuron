@@ -41,6 +41,7 @@ defmodule MirrorNeuron.Grpc.JobProjectionTest do
     end
 
     assert detail["resolved_configuration"] == %{"mode" => "safe"}
+    assert detail["recent_run_ids"] == ["run-2", "run-1"]
     refute Map.has_key?(summary, "resolved_configuration")
   end
 
@@ -90,5 +91,29 @@ defmodule MirrorNeuron.Grpc.JobProjectionTest do
 
     assert byte_size(Jason.encode!(run)) < 10_000
     assert byte_size(Jason.encode!(schedule)) < 10_000
+  end
+
+  test "job projections expose only sanitized response service lifecycle state" do
+    definition = %{
+      "job_id" => "job-response-1",
+      "status" => "active",
+      "manifest" => %{"response_service" => %{"enabled" => true}},
+      "response_service" => %{
+        "state" => "ready",
+        "ready_at" => "2026-08-20T10:00:00Z",
+        "endpoint" => "http://127.0.0.1:9999/private",
+        "token" => "secret",
+        "safe_error_code" => nil
+      }
+    }
+
+    projected = JobProjection.detail(definition)
+
+    assert projected["response_service"]["state"] in ~w(starting ready)
+    refute Map.has_key?(projected["response_service"], "endpoint")
+    refute Map.has_key?(projected["response_service"], "token")
+
+    disabled = JobProjection.detail(%{"job_id" => "legacy", "manifest" => %{}})
+    assert disabled["response_service"] == %{"state" => "disabled"}
   end
 end

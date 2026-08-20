@@ -21,6 +21,7 @@ defmodule MirrorNeuron.Manifest do
     :schedule,
     :triggers,
     :parameterized,
+    :response_service,
     :metadata,
     :nodes,
     :edges,
@@ -68,6 +69,7 @@ defmodule MirrorNeuron.Manifest do
                           "schedule",
                           "triggers",
                           "parameterized",
+                          "response_service",
                           "metadata",
                           "nodes",
                           "edges",
@@ -142,6 +144,7 @@ defmodule MirrorNeuron.Manifest do
       "schedule" => json_safe(manifest.schedule),
       "triggers" => json_safe(manifest.triggers),
       "parameterized" => json_safe(manifest.parameterized),
+      "response_service" => json_safe(manifest.response_service),
       "metadata" => json_safe(manifest.metadata),
       "policies" => json_safe(manifest.policies),
       "entrypoints" => manifest.entrypoints,
@@ -184,6 +187,7 @@ defmodule MirrorNeuron.Manifest do
       schedule: normalize_schedule(Map.get(raw, "schedule", %{})),
       triggers: normalize_triggers(Map.get(raw, "triggers", [])),
       parameterized: normalize_parameterized(Map.get(raw, "parameterized", %{})),
+      response_service: normalize_response_service(Map.get(raw, "response_service")),
       metadata: Map.get(raw, "metadata", %{}),
       nodes: Enum.map(raw_nodes, &normalize_node/1),
       edges: Enum.map(raw_edges, &normalize_edge/1),
@@ -430,6 +434,7 @@ defmodule MirrorNeuron.Manifest do
       |> validate_services(manifest)
       |> validate_deployment(manifest)
       |> validate_schedule(manifest)
+      |> validate_response_service(manifest)
       |> validate_completion_contract(manifest)
       |> validate_policies(manifest)
 
@@ -877,6 +882,27 @@ defmodule MirrorNeuron.Manifest do
     add_errors(errors, schedule_errors ++ trigger_errors)
   end
 
+  defp validate_response_service(errors, %{response_service: nil}), do: errors
+
+  defp validate_response_service(errors, %{response_service: response_service})
+       when is_map(response_service) do
+    unknown = Map.keys(response_service) -- ["enabled"]
+
+    errors
+    |> maybe_add_error(
+      response_service["enabled"] !== true,
+      "response_service.enabled must be the literal boolean true"
+    )
+    |> maybe_add_error(
+      unknown != [],
+      "response_service accepts only enabled"
+    )
+  end
+
+  defp validate_response_service(errors, _manifest) do
+    ["response_service must be an object" | errors]
+  end
+
   defp normalize_node(raw) do
     %{
       node_id: Map.get(raw, "node_id", Map.get(raw, "id")),
@@ -1007,6 +1033,13 @@ defmodule MirrorNeuron.Manifest do
     do: json_safe(parameterized)
 
   defp normalize_parameterized(_parameterized), do: %{}
+
+  defp normalize_response_service(nil), do: nil
+
+  defp normalize_response_service(response_service) when is_map(response_service),
+    do: json_safe(response_service)
+
+  defp normalize_response_service(response_service), do: response_service
 
   defp normalize_optional_map(value) when is_map(value), do: json_safe(value)
   defp normalize_optional_map(_value), do: nil

@@ -44,6 +44,12 @@ data, schedules, and run history. Run preparation rewrites only run/attempt
 identity and run-output locations; submission IDs, containers, input roots,
 and definition-owned resources remain immutable until a later bundle
 replacement retires them.
+An executable manifest may opt into one definition-scoped response service with
+the singular top-level `response_service: {"enabled": true}` declaration.
+Core starts it asynchronously on the owner node, routes bounded unary queries
+to that owner, reconciles and restarts failures with bounded backoff, and stops
+it for archive, reset, deletion, and definition replacement. Response queries
+never create Runs.
 Runtime nodes are long-lived OTP processes. Generic built-ins and templates
 route messages and invoke configured runner behavior.
 
@@ -157,14 +163,15 @@ it through `MN_PORT_<LABEL>`, and resolves agent service templates from that
 same allocation. Runtime nodes may constrain the allocatable range with
 `MN_AUTO_PORT_START` and `MN_AUTO_PORT_END` when their container or firewall
 publishes only a bounded port range.
-The public job-collaboration service contract is `mn-job-collaboration` with
+The legacy run-scoped job-collaboration service contract is
+`mn-job-collaboration` with
 tags `mcp` and `job-collaboration`, loopback Streamable HTTP at `/mcp`, and
 blueprint/job/run/goal identity metadata. It is run-scoped and read-only;
 distributed authenticated discovery and job mutation are outside this
-contract. The persistent supervisory MCP at
-`/api/v1/jobs/{job_id}/mcp` is owned by `mn-api`: it projects stable Core state
-without an active Run and does not extend the lifetime or mutation authority of
-this Core-owned peer-collaboration service.
+contract. Response-enabled Jobs instead use the owner-node, definition-scoped
+response supervisor. The MCP transport at `/api/v1/jobs/{job_id}/mcp` remains
+owned by `mn-api`; it projects stable Core state and dispatches response
+questions through the bounded Core RPC without extending a Run.
 Every Redis namespace carries an opaque coordination-store identity. Runtime
 nodes advertise that identity, Redis role, and writable-primary status.
 If Redis is still loading or its status cannot be read, self-advertisement
@@ -224,7 +231,8 @@ work. Secrets never appear in events or ordinary logs.
 ## Job and run API
 
 `mirrorneuron.job.v1.JobService` is the sole authoritative protobuf contract.
-It exposes durable definition and explicit run operations only; no legacy
+It exposes durable definition, optional definition-response queries, and
+explicit run operations only; no legacy
 submission, deployment, general-schedule, backup/restore, bulk-cancel, clear,
 alias, or dual-registration surface is provided. Runtime environment code must
 not interpret `MN_JOB_ID` as a run identity; it uses `MN_RUN_ID` and

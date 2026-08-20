@@ -204,6 +204,21 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     end
   end
 
+  def query_job_response(request, _stream) do
+    with {:ok, context} <- Validation.decode_json_map(request.context_json),
+         {:ok, answer} <-
+           MirrorNeuron.query_job_response(request.job_id, %{
+             "question" => request.question,
+             "conversation_id" => Support.blank_to_nil(request.conversation_id),
+             "request_id" => Support.blank_to_nil(request.request_id),
+             "context" => context
+           }) do
+      response(answer)
+    else
+      {:error, reason} -> respond({:error, reason})
+    end
+  end
+
   defp control_run(run_id, operation) do
     case operation.(run_id) do
       {:ok, status} -> response(%{"run_id" => run_id, "status" => status})
