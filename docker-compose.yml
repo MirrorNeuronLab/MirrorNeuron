@@ -54,6 +54,12 @@ services:
           -e 's#<crashReportingEnabled>[^<]*</crashReportingEnabled>#<crashReportingEnabled>false</crashReportingEnabled>#' \
           "$$config_file"
 
+        # The policy setup above runs as root, while the image entrypoint
+        # drops to PUID:PGID before starting Syncthing.  Hand the complete
+        # generated configuration back to that runtime user so certificate
+        # rotation and config updates work on bind mounts as well.
+        chown -R "$${PUID:-1000}:$${PGID:-1000}" "$$config_dir"
+
         exec /bin/entrypoint.sh /bin/syncthing serve
     environment:
       STGUIADDRESS: 0.0.0.0:8384
