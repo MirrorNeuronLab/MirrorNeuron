@@ -3,21 +3,50 @@ defmodule MirrorNeuron.Cluster.FederationClient do
 
   alias MirrorNeuron.Cluster.FederationRegistry
   alias MirrorNeuron.Cluster.NodeAdapter
+  alias Mirrorneuron.Cluster.V1.ListServicesRequest
+  alias Mirrorneuron.Cluster.V1.ClusterService.Stub, as: ClusterStub
   alias Mirrorneuron.Job.V1.{JobRequest, ListJobsRequest}
-  alias Mirrorneuron.Job.V1.JobService.Stub
+  alias Mirrorneuron.Job.V1.JobService.Stub, as: JobStub
 
   @timeout 15_000
 
   def call(node_name, function, request) when is_atom(function) do
+    response = rpc_call(node_name, JobStub, function, request)
+    record_response(node_name, function, response)
+    response
+  end
+
+  def list_services(node_name, opts \\ []) when is_list(opts) do
+    request = %ListServicesRequest{
+      query_json: opts |> Map.new() |> Jason.encode!(),
+      version: 1
+    }
+
+    node_name
+    |> rpc_call(ClusterStub, :list_services, request)
+    |> Map.get(:result_json)
+    |> decode_services()
+  end
+
+  @doc false
+  def decode_services(json) when is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, %{"services" => services}} when is_list(services) -> services
+      _ -> []
+    end
+  end
+
+  def decode_services(_json), do: []
+
+  defp rpc_call(node_name, stub, function, request) do
     with {:ok, peer} <- FederationRegistry.fetch(node_name),
          {:ok, target} <- target(peer),
          {:ok, channel} <- connect(target, peer),
-         result <- apply(Stub, function, [channel, request, [timeout: @timeout]]) do
+         result <- apply(stub, function, [channel, request, [timeout: @timeout]]) do
       _ = GRPC.Stub.disconnect(channel)
 
       case result do
         {:ok, response} ->
-          record_response(node_name, function, response)
           response
 
         {:error, reason} ->

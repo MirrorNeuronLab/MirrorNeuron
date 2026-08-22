@@ -32,4 +32,18 @@ defmodule MirrorNeuron.Cluster.FederationClientTest do
 
     assert FederationClient.availability_failure?(:econnrefused)
   end
+
+  test "decodes federated service-list responses" do
+    assert FederationClient.decode_services(
+             Jason.encode!(%{
+               "services" => [
+                 %{"id" => "service-1", "job_id" => "job-1", "status" => "passing"}
+               ],
+               "version" => 1
+             })
+           ) == [%{"id" => "service-1", "job_id" => "job-1", "status" => "passing"}]
+
+    assert FederationClient.decode_services("{}") == []
+    assert FederationClient.decode_services("not-json") == []
+  end
 end

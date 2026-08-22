@@ -160,6 +160,9 @@ Federation handshakes advertise the owner's complete hardware profile. Resource
 reports preserve both direct scheduler eligibility and the separate federated
 owner eligibility facts, so submitters can validate a remote owner without
 making that owner a member of their local scheduler.
+Service discovery aggregates each authenticated federated owner's local
+registry in one hop, preserving the normal service filters without recursively
+forwarding a peer request.
 Declared inbound ports may be fixed integers or request runtime allocation with
 `"auto"`. The scheduler makes automatic ports exclusive per active placement
 on a target node, persists the resolved integer in the scheduler plan, exports

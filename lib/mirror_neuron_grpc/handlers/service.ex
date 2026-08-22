@@ -11,12 +11,19 @@ defmodule MirrorNeuron.Grpc.Handlers.Service do
     ResolveServiceResponse
   }
 
-  def list_services(request, _stream) do
+  def list_services(request, stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("ListServices")
 
     opts = query_opts(request.query_json)
 
-    case MirrorNeuron.list_services(opts) do
+    result =
+      if MirrorNeuron.Grpc.Auth.federation_hop(stream) > 0 do
+        MirrorNeuron.ServiceRegistry.list(opts)
+      else
+        MirrorNeuron.list_services(opts)
+      end
+
+    case result do
       {:ok, services} ->
         %ListServicesResponse{
           result_json: Support.versioned_json(%{"services" => services}),

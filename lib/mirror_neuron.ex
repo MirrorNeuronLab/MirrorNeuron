@@ -1,5 +1,5 @@
 defmodule MirrorNeuron do
-  alias MirrorNeuron.Cluster.Control
+  alias MirrorNeuron.Cluster.{Control, FederatedServices}
   alias MirrorNeuron.JobBundle
   alias MirrorNeuron.Monitor
   alias MirrorNeuron.Operations
@@ -330,7 +330,7 @@ defmodule MirrorNeuron do
     if control_node?() do
       Control.call(__MODULE__, :list_services, [opts])
     else
-      MirrorNeuron.ServiceRegistry.list(opts)
+      FederatedServices.list(opts)
     end
   end
 
