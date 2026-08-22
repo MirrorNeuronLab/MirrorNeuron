@@ -36,7 +36,12 @@ defmodule MirrorNeuron.Runtime.HordeClusterTest do
     NodeStateStoreStub.put_states([
       %{"node" => "mn2@192.168.4.173", "status" => "healthy"},
       %{"node" => "mn3@192.168.4.174", "status" => "joining"},
-      %{"node" => "mn4@192.168.4.175", "status" => "disconnected"}
+      %{"node" => "mn4@192.168.4.175", "status" => "disconnected"},
+      %{
+        "node" => "mn5@192.168.4.176",
+        "status" => "healthy",
+        "connection_mode" => "federated"
+      }
     ])
 
     assert HordeCluster.configured_nodes() == [

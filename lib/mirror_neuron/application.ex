@@ -40,6 +40,7 @@ defmodule MirrorNeuron.Application do
           common_children ++
             [
               MirrorNeuron.Cluster.NodeMonitor,
+              MirrorNeuron.Cluster.FederationMonitor,
               MirrorNeuron.Cluster.Leader,
               MirrorNeuron.Runtime.ReliabilityObserver,
               MirrorNeuron.Execution.LeaseManager,

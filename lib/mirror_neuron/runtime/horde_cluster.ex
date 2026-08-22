@@ -213,6 +213,9 @@ defmodule MirrorNeuron.Runtime.HordeCluster do
   defp persisted_configured_nodes do
     MirrorNeuron.Cluster.NodeState.list()
     |> Enum.flat_map(fn
+      %{"connection_mode" => "federated"} ->
+        []
+
       %{"node" => node_name, "status" => status}
       when status in ["healthy", "joining"] ->
         node_name_to_atom(node_name)

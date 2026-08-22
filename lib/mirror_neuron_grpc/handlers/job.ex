@@ -4,25 +4,38 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
   alias MirrorNeuron.Grpc.Handlers.Support
   alias MirrorNeuron.Grpc.JobProjection
   alias MirrorNeuron.Grpc.Validation
+  alias MirrorNeuron.Cluster.{FederationClient, FederationRegistry, NodeAdapter}
   alias MirrorNeuron.Runtime.LiveInput
   alias MirrorNeuron.Runtime.Idempotency
   alias Mirrorneuron.Job.V1.JsonResponse
 
   @interface_version 1
+  @unavailable_status GRPC.Status.unavailable()
 
-  def create_job(request, _stream) do
+  def create_job(request, stream) do
+    owner_node = Support.blank_to_nil(request.owner_node) || to_string(NodeAdapter.self())
+
+    if owner_node != to_string(NodeAdapter.self()) do
+      forward_call(owner_node, :create_job, %{request | owner_node: owner_node}, stream)
+    else
+      create_local_job(request, owner_node)
+    end
+  end
+
+  defp create_local_job(request, owner_node) do
     Idempotency.run(
       "create-job",
       request.idempotency_key,
       {request.manifest_json, request.payloads, request.job_id,
-       request.resolved_configuration_json, request.storage_json},
+       request.resolved_configuration_json, request.storage_json, request.owner_node},
       fn ->
         request
         |> with_json_bundle(fn tmp_dir ->
           MirrorNeuron.create_job(tmp_dir,
             job_id: Support.blank_to_nil(request.job_id),
             resolved_configuration: Support.decode_json_map(request.resolved_configuration_json),
-            storage: Support.decode_json_map(request.storage_json)
+            storage: Support.decode_json_map(request.storage_json),
+            owner_node: owner_node
           )
         end)
       end
@@ -30,10 +43,11 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     |> respond_definition(:summary)
   end
 
-  def get_job(request, _stream) do
-    request.job_id
-    |> MirrorNeuron.get_job()
-    |> respond_definition(:detail)
+  def get_job(request, stream) do
+    case MirrorNeuron.get_job(request.job_id) do
+      {:ok, definition} -> response(JobProjection.detail(definition))
+      _error -> remote_read(request.job_id, :get_job, request, stream)
+    end
   end
 
   def list_jobs(request, _stream) do
@@ -43,8 +57,15 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
            page_token: Support.blank_to_nil(request.page_token)
          ) do
       {:ok, jobs, next_page_token} ->
+        items =
+          if Map.get(request, :local_only, false) do
+            JobProjection.summaries(jobs)
+          else
+            JobProjection.summaries(jobs) ++ FederationRegistry.projections()
+          end
+
         response(%{
-          "items" => JobProjection.summaries(jobs),
+          "items" => Enum.uniq_by(items, &Map.get(&1, "job_id")),
           "next_page_token" => next_page_token
         })
 
@@ -53,7 +74,14 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     end
   end
 
-  def update_job(request, _stream) do
+  def update_job(request, stream) do
+    case remote_owner(request.job_id) do
+      nil -> update_local_job(request)
+      owner -> forward_call(owner, :update_job, request, stream)
+    end
+  end
+
+  defp update_local_job(request) do
     attrs = Support.decode_json_map(request.attrs_json)
 
     result =
@@ -73,19 +101,33 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     respond_definition(result, :summary)
   end
 
-  def archive_job(request, _stream) do
-    request.job_id
-    |> MirrorNeuron.archive_job(expected_revision: request.expected_revision)
-    |> respond_definition(:summary)
+  def archive_job(request, stream) do
+    case remote_owner(request.job_id) do
+      nil ->
+        request.job_id
+        |> MirrorNeuron.archive_job(expected_revision: request.expected_revision)
+        |> respond_definition(:summary)
+
+      owner ->
+        forward_call(owner, :archive_job, request, stream)
+    end
   end
 
-  def reset_job_data(request, _stream) do
-    request.job_id
-    |> MirrorNeuron.reset_job_data()
-    |> respond_definition(:summary)
+  def reset_job_data(request, stream) do
+    case remote_owner(request.job_id) do
+      nil -> request.job_id |> MirrorNeuron.reset_job_data() |> respond_definition(:summary)
+      owner -> forward_call(owner, :reset_job_data, request, stream)
+    end
   end
 
-  def delete_job(request, _stream) do
+  def delete_job(request, stream) do
+    case remote_owner(request.job_id) do
+      nil -> delete_local_job(request)
+      owner -> forward_call(owner, :delete_job, request, stream)
+    end
+  end
+
+  defp delete_local_job(request) do
     case MirrorNeuron.delete_stable_job(request.job_id,
            confirmed: request.confirmed,
            expected_revision: request.expected_revision
@@ -102,7 +144,14 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     end
   end
 
-  def start_run(request, _stream) do
+  def start_run(request, stream) do
+    case remote_owner(request.job_id) do
+      nil -> start_local_run(request)
+      owner -> forward_call(owner, :start_run, request, stream)
+    end
+  end
+
+  defp start_local_run(request) do
     opts =
       []
       |> Support.maybe_put_opt(:run_id, Support.blank_to_nil(request.run_id))
@@ -131,7 +180,14 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     end
   end
 
-  def list_runs(request, _stream) do
+  def list_runs(request, stream) do
+    case remote_owner(request.job_id) do
+      nil -> list_local_runs(request)
+      owner -> remote_runs_read(owner, request, stream)
+    end
+  end
+
+  defp list_local_runs(request) do
     case MirrorNeuron.list_runs_page(request.job_id,
            page_size: page_size(request.page_size),
            page_token: Support.blank_to_nil(request.page_token)
@@ -148,25 +204,43 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     end
   end
 
-  def get_run(request, _stream) do
+  def get_run(request, stream) do
     case MirrorNeuron.inspect_job(request.run_id) do
       {:ok, run} -> response(JobProjection.run(run, request.run_id))
-      error -> respond(error)
+      _error -> remote_read(request.run_id, :get_run, request, stream)
     end
   end
 
-  def pause_run(request, _stream), do: control_run(request.run_id, &MirrorNeuron.pause/1)
-  def resume_run(request, _stream), do: control_run(request.run_id, &MirrorNeuron.resume/1)
-  def cancel_run(request, _stream), do: control_run(request.run_id, &MirrorNeuron.cancel/1)
+  def pause_run(request, stream),
+    do: route_run_control(request, :pause_run, &MirrorNeuron.pause/1, stream)
 
-  def delete_run(request, _stream) do
-    case MirrorNeuron.delete_run(request.run_id, confirmed: request.confirmed) do
-      :ok -> response(%{"run_id" => request.run_id, "status" => "deleted"})
-      error -> respond(error)
+  def resume_run(request, stream),
+    do: route_run_control(request, :resume_run, &MirrorNeuron.resume/1, stream)
+
+  def cancel_run(request, stream),
+    do: route_run_control(request, :cancel_run, &MirrorNeuron.cancel/1, stream)
+
+  def delete_run(request, stream) do
+    case remote_owner(request.run_id) do
+      nil ->
+        case MirrorNeuron.delete_run(request.run_id, confirmed: request.confirmed) do
+          :ok -> response(%{"run_id" => request.run_id, "status" => "deleted"})
+          error -> respond(error)
+        end
+
+      owner ->
+        forward_call(owner, :delete_run, request, stream)
     end
   end
 
-  def send_run_input(request, _stream) do
+  def send_run_input(request, stream) do
+    case remote_owner(request.run_id) do
+      nil -> send_local_run_input(request)
+      owner -> forward_call(owner, :send_run_input, request, stream)
+    end
+  end
+
+  defp send_local_run_input(request) do
     with :ok <- validate_live_input_size(request.payload_json),
          {:ok, payload} <- Validation.decode_json_map(request.payload_json),
          {:ok, accepted} <-
@@ -186,7 +260,14 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     end
   end
 
-  def create_job_schedule(request, _stream) do
+  def create_job_schedule(request, stream) do
+    case remote_owner(request.job_id) do
+      nil -> create_local_job_schedule(request)
+      owner -> forward_call(owner, :create_job_schedule, request, stream)
+    end
+  end
+
+  defp create_local_job_schedule(request) do
     schedule = Support.decode_json_map(request.schedule_json)
     source = Support.decode_json_map(request.source_json)
 
@@ -204,7 +285,14 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     end
   end
 
-  def query_job_response(request, _stream) do
+  def query_job_response(request, stream) do
+    case remote_owner(request.job_id) do
+      nil -> query_local_job_response(request)
+      owner -> forward_call(owner, :query_job_response, request, stream)
+    end
+  end
+
+  defp query_local_job_response(request) do
     with {:ok, context} <- Validation.decode_json_map(request.context_json),
          {:ok, answer} <-
            MirrorNeuron.query_job_response(request.job_id, %{
@@ -227,17 +315,77 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     end
   end
 
+  defp route_run_control(request, function, operation, stream) do
+    case remote_owner(request.run_id) do
+      nil -> control_run(request.run_id, operation)
+      owner -> forward_call(owner, function, request, stream)
+    end
+  end
+
+  defp remote_owner(resource_id) do
+    FederationRegistry.projection_owner(resource_id)
+  end
+
+  defp remote_read(resource_id, function, request, stream) do
+    case remote_owner(resource_id) do
+      nil ->
+        respond({:error, :not_found})
+
+      owner ->
+        try do
+          forward_call(owner, function, request, stream)
+        rescue
+          error in GRPC.RPCError ->
+            if error.status == @unavailable_status do
+              case FederationRegistry.projection(resource_id) do
+                nil ->
+                  reraise error, __STACKTRACE__
+
+                projection ->
+                  response(projection)
+              end
+            else
+              reraise error, __STACKTRACE__
+            end
+        end
+    end
+  end
+
+  defp remote_runs_read(owner, request, stream) do
+    try do
+      forward_call(owner, :list_runs, request, stream)
+    rescue
+      error in GRPC.RPCError ->
+        if error.status == @unavailable_status do
+          items =
+            FederationRegistry.run_projections()
+            |> Enum.filter(&(Map.get(&1, "job_id") == request.job_id))
+
+          response(%{"job_id" => request.job_id, "items" => items, "next_page_token" => nil})
+        else
+          reraise error, __STACKTRACE__
+        end
+    end
+  end
+
   defp with_json_bundle(request, callback) do
     Support.with_request_bundle(request.manifest_json, request.payloads, fn tmp_dir ->
       callback.(tmp_dir)
     end)
   end
 
+  defp forward_call(owner, function, request, stream) do
+    if MirrorNeuron.Grpc.Auth.federation_hop(stream) > 0 do
+      raise GRPC.RPCError,
+        status: GRPC.Status.failed_precondition(),
+        message: "MN_FEDERATION_LOOP: forwarded request cannot be forwarded again"
+    end
+
+    FederationClient.call(owner, function, request)
+  end
+
   defp respond_definition({:ok, definition}, :summary),
     do: response(JobProjection.summary(definition))
-
-  defp respond_definition({:ok, definition}, :detail),
-    do: response(JobProjection.detail(definition))
 
   defp respond_definition(error, _projection), do: respond(error)
 

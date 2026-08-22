@@ -30,6 +30,7 @@ message CreateJobRequest {
   string storage_json = 5;
   uint32 version = 6;
   string idempotency_key = 7;
+  string owner_node = 8;
 }
 
 message JobRequest {
@@ -45,6 +46,7 @@ message ListJobsRequest {
   uint32 version = 2;
   uint32 page_size = 3;
   string page_token = 4;
+  bool local_only = 5;
 }
 
 message UpdateJobRequest {

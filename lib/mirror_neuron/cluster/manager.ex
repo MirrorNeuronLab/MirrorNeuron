@@ -3,9 +3,10 @@ defmodule MirrorNeuron.Cluster.Manager do
   alias MirrorNeuron.Cluster.NodeAdapter
   alias MirrorNeuron.Cluster.NodeState
   alias MirrorNeuron.Execution.LeaseManager
+  alias MirrorNeuron.Persistence.RedisStore
 
   def nodes do
-    [NodeAdapter.self() | NodeAdapter.list()]
+    ([NodeAdapter.self() | NodeAdapter.list()] ++ federated_node_names())
     |> Enum.uniq()
     |> Enum.map(fn node ->
       state = stored_node_state(node)
@@ -13,25 +14,44 @@ defmodule MirrorNeuron.Cluster.Manager do
       if node != NodeAdapter.self() and NodeState.operator_disconnected_state?(state) do
         nil
       else
-        case fetch_node_info(node) do
+        case fetch_node_info(node, state) do
           {:ok, {lease_stats, hardware_info}} ->
             %{
               name: to_string(node),
               display_name: node_display_name(node, state, hardware_info),
               hostname: node_hostname(hardware_info),
-              address: Map.get(state, "address") || node_host(node),
-              grpc_host: Map.get(state, "grpc_host") || node_host(node),
+              address: Map.get(state, "address") || node_grpc_host(node, state),
+              grpc_host: node_grpc_host(node, state),
               grpc_port: Map.get(state, "grpc_port") || node_grpc_port(state),
               native_sdk_grpc: native_sdk_grpc_info(node, state, hardware_info),
               status: Map.get(state, "status", "healthy"),
-              scheduling_eligible: Map.get(state, "scheduling_eligible", true),
-              coordination_store: Map.get(state, "coordination_store", %{}),
+              scheduling_eligible:
+                if(Map.get(state, "connection_mode") == "federated",
+                  do: false,
+                  else: Map.get(state, "scheduling_eligible", true)
+                ),
+              local_scheduler_eligible:
+                Map.get(state, "local_scheduler_eligible", node == NodeAdapter.self()),
+              job_owner_eligible: Map.get(state, "job_owner_eligible", true),
+              connection_mode:
+                Map.get(
+                  state,
+                  "connection_mode",
+                  if(node == NodeAdapter.self(), do: "local", else: "local_distribution")
+                ),
+              peer_available: Map.get(state, "peer_available", true),
+              litellm: node_litellm(node, state),
+              coordination_store: node_coordination_store(node, state),
               drain: Map.get(state, "drain"),
               runtime_status: Map.get(state, "runtime_status", %{}),
-              connected_nodes: runtime_connected_nodes(node),
+              connected_nodes: runtime_connected_nodes(node, state),
               self?: node == NodeAdapter.self(),
               scheduler_hint:
-                if(node == NodeAdapter.self(), do: "cluster_member", else: "remote_member"),
+                cond do
+                  node == NodeAdapter.self() -> "local_owner"
+                  Map.get(state, "connection_mode") == "federated" -> "federated_owner"
+                  true -> "remote_member"
+                end,
               executor_pools: lease_stats,
               hardware: hardware_info
             }
@@ -79,7 +99,11 @@ defmodule MirrorNeuron.Cluster.Manager do
     end
   end
 
-  defp fetch_node_info(node) do
+  defp fetch_node_info(_node, %{"connection_mode" => "federated"} = state) do
+    {:ok, {Map.get(state, "executor_pools", %{}), Map.get(state, "hardware", %{})}}
+  end
+
+  defp fetch_node_info(node, _state) do
     if node == NodeAdapter.self() do
       {:ok, {LeaseManager.stats(), local_hardware_info()}}
     else
@@ -101,11 +125,23 @@ defmodule MirrorNeuron.Cluster.Manager do
     Map.put(hardware, "native_sdk_grpc", native_sdk_grpc_node_info(hardware))
   end
 
-  defp runtime_connected_nodes(self_node) do
+  defp runtime_connected_nodes(_self_node, %{"connection_mode" => "federated"}), do: []
+
+  defp runtime_connected_nodes(self_node, _state) do
     [self_node | NodeAdapter.list()]
     |> Enum.uniq()
     |> Enum.reject(&(&1 == NodeAdapter.self() and self_node != NodeAdapter.self()))
     |> Enum.map(&to_string/1)
+  end
+
+  defp federated_node_names do
+    NodeState.list()
+    |> Enum.filter(fn state ->
+      Map.get(state, "connection_mode") == "federated" and
+        not NodeState.operator_disconnected_state?(state)
+    end)
+    |> Enum.map(&(Map.get(&1, "node") || Map.get(&1, "name")))
+    |> Enum.reject(&is_nil/1)
   end
 
   defp stored_node_state(node) do
@@ -142,6 +178,19 @@ defmodule MirrorNeuron.Cluster.Manager do
   defp node_grpc_port(state) do
     Map.get(state, "grpc_port") ||
       advertised_grpc_port()
+  end
+
+  defp node_grpc_host(node, state) do
+    Map.get(state, "grpc_host") ||
+      if(node == NodeAdapter.self(),
+        do:
+          Config.optional_string(
+            "MN_NETWORK_ADVERTISE_HOST",
+            :network_advertise_host
+          ),
+        else: nil
+      ) ||
+      node_host(node)
   end
 
   defp native_sdk_grpc_info(node, state, hardware) do
@@ -199,6 +248,45 @@ defmodule MirrorNeuron.Cluster.Manager do
     ) ||
       Config.optional_string("MN_NATIVE_SDK_GRPC_PORT", :native_sdk_grpc_port) ||
       "55052"
+  end
+
+  defp node_coordination_store(node, state) do
+    if node == NodeAdapter.self() do
+      case coordination_store().coordination_store_status() do
+        {:ok, status} -> status
+        _ -> %{}
+      end
+    else
+      Map.get(state, "coordination_store", %{})
+    end
+  end
+
+  defp node_litellm(node, state) do
+    if node == NodeAdapter.self() do
+      host =
+        Config.optional_string("MN_LITELLM_ADVERTISE_HOST", :litellm_advertise_host) ||
+          Config.optional_string("MN_NETWORK_ADVERTISE_HOST", :network_advertise_host) ||
+          node_host(node)
+
+      port =
+        Config.optional_string("MN_LITELLM_ADVERTISE_PORT", :litellm_advertise_port) ||
+          Config.optional_string("MN_LITELLM_GATEWAY_PORT", :litellm_gateway_port) ||
+          Config.optional_string("MN_LITELLM_PORT", :litellm_port) ||
+          "4000"
+
+      %{
+        "enabled" => host not in [nil, ""],
+        "host" => host || "",
+        "port" => parse_grpc_port(port),
+        "url" => if(host in [nil, ""], do: "", else: "http://#{host}:#{port}")
+      }
+    else
+      Map.get(state, "litellm", %{})
+    end
+  end
+
+  defp coordination_store do
+    Application.get_env(:mirror_neuron, :coordination_store, RedisStore)
   end
 
   defp advertised_grpc_port do

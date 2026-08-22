@@ -601,11 +601,13 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert response.grpc_host == "192.168.4.10"
     assert response.grpc_port == 50_055
     assert response.dist_port == 4_500
-    assert response.redis_host == "192.168.4.10"
-    assert response.redis_port == 6_380
-    assert response.redis_url == advertised_redis_url(redis_url, "192.168.4.10", 6380)
-    assert response.cluster_nodes == "mirror_neuron@192.168.4.10"
-    assert response.grpc_auth_token == "primary-auth-token"
+    assert response.redis_host == ""
+    assert response.redis_port == 0
+    assert response.redis_url == ""
+    assert response.cluster_nodes == ""
+
+    assert response.grpc_auth_token ==
+             MirrorNeuron.Grpc.Tokens.peer_token("mirror_neuron@192.168.4.20")
 
     node_info = Jason.decode!(response.node_info_json)
     assert node_info["node_name"] == "mirror_neuron@test"
@@ -618,7 +620,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert is_integer(node_info["gpu_count"])
   end
 
-  test "network handshake preserves unauthenticated Redis URLs when configured without auth" do
+  test "network handshake never advertises standalone Redis URLs" do
     System.put_env("MN_NETWORK_ONLY", "true")
     System.put_env("MN_NETWORK_JOIN_TOKEN", "join-secret")
     System.put_env("MN_NETWORK_ADVERTISE_HOST", "192.168.4.10")
@@ -635,10 +637,10 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
         nil
       )
 
-    assert response.redis_url == "redis://192.168.4.10:6380/0"
+    assert response.redis_url == ""
   end
 
-  test "network handshake returns the direct identity token before the file token" do
+  test "network handshake returns a scoped peer token derived from the direct identity token" do
     auth_file = write_token_file("mn-auth-token", "file-auth-token")
 
     System.put_env("MN_NETWORK_ONLY", "true")
@@ -655,7 +657,8 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
         nil
       )
 
-    assert response.grpc_auth_token == "stale-auth-token"
+    assert response.grpc_auth_token ==
+             MirrorNeuron.Grpc.Tokens.peer_token("mirror_neuron@192.168.4.20")
   end
 
   test "network-only handshake does not record joining node metadata" do
@@ -898,100 +901,28 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert Exception.message(error) =~ "valid MN_NETWORK_JOIN_TOKEN is required"
   end
 
-  test "add_node sets cookie, connects, and syncs peer cookies after successful join" do
-    node_name = "mirror_neuron@10.0.0.42"
-    remote_node = String.to_atom(node_name)
-    peer_a = :"peer-a@lab"
-    peer_b = :"peer-b@lab"
-    cookie = cookie_from_token("join-secret")
-
-    ClusterNodeAdapterStub.put_list([peer_a, remote_node, peer_b])
-
-    ClusterNodeAdapterStub.put_rpc_result(
-      remote_node,
-      ClusterServer,
-      :node_advertisement_info,
-      [],
-      %{
-        "runtime_models" => ["nemotron3"]
-      }
-    )
-
-    response =
-      ClusterServer.add_node(%AddNodeRequest{node_name: node_name, token: "join-secret"}, nil)
-
-    assert response.node_name == node_name
-    assert response.status == "connected"
-
-    assert_receive {:set_cookie, ^remote_node, cookie_atom}
-    assert Atom.to_string(cookie_atom) == cookie
-    assert_receive {:connect, ^remote_node}
-    assert_receive {:node_state_persisted, ^node_name, %{"status" => "healthy"} = state}
-    assert state["operator_disconnect"] == false
-    assert state["scheduling_eligible"] == true
-
-    assert_receive {:rpc_call, ^remote_node, ClusterServer, :confirm_join_claim,
-                    ["mirror_neuron@test"], 2_000}
-
-    assert_receive {:rpc_call, ^peer_a, ClusterServer, :set_peer_cookie, [^node_name, ^cookie],
-                    2_000}
-
-    assert_receive {:rpc_call, ^remote_node, ClusterServer, :set_peer_cookie,
-                    ["peer-a@lab", ^cookie], 2_000}
-
-    assert_receive {:rpc_call, ^peer_b, ClusterServer, :set_peer_cookie, [^node_name, ^cookie],
-                    2_000}
-
-    assert_receive {:rpc_call, ^remote_node, ClusterServer, :set_peer_cookie,
-                    ["peer-b@lab", ^cookie], 2_000}
-
-    assert_receive {:rpc_call, ^remote_node, ClusterServer, :set_peer_cookie,
-                    ["mirror_neuron@test", ^cookie], 2_000}
-
-    assert_receive {:rpc_call, ^remote_node, ClusterServer, :connect_peer, ["mirror_neuron@test"],
-                    2_000}
-
-    assert_receive {:rpc_call, ^remote_node, MirrorNeuron.Cluster.Manager, :add_node,
-                    ["mirror_neuron@test"], 5_000}
-
-    assert_receive {:services_registered, services}
-    assert [%{"name" => "docker-model-runner", "node" => ^node_name} = service] = services
-    assert "model:nemotron3" in service["tags"]
-    assert "model:ai/nemotron3:latest" in service["tags"]
-  end
-
-  test "add_node clears stale disconnected scheduling state when a worker rejoins" do
+  test "legacy add_node rejects BEAM cluster membership without connecting" do
     node_name = "mirror_neuron@10.0.0.42"
     remote_node = String.to_atom(node_name)
 
-    assert {:ok, _state} =
-             NodeState.mark(node_name, "disconnected", %{
-               "scheduling_eligible" => false,
-               "reason" => "operator requested disconnect"
-             })
+    error =
+      assert_raise GRPC.RPCError, fn ->
+        ClusterServer.add_node(%AddNodeRequest{node_name: node_name, token: "join-secret"}, nil)
+      end
 
-    assert_receive {:node_state_persisted, ^node_name, %{"status" => "disconnected"}}
-
-    response =
-      ClusterServer.add_node(%AddNodeRequest{node_name: node_name, token: "join-secret"}, nil)
-
-    assert response.node_name == node_name
-    assert response.status == "connected"
-    assert_receive {:connect, ^remote_node}
-    assert_receive {:node_state_persisted, ^node_name, %{"status" => "healthy"} = state}
-    assert state["operator_disconnect"] == false
-    assert state["scheduling_eligible"] == true
-    assert NodeState.schedulable?(node_name)
+    assert error.status == GRPC.Status.failed_precondition()
+    refute_receive {:connect, ^remote_node}
+    refute_receive {:set_cookie, ^remote_node, _cookie}
   end
 
-  test "remove_node marks operator disconnect before clearing claim and disconnecting locally" do
+  test "legacy remove_node delegates to the local federation registry only" do
     node_name = "mirror_neuron@10.0.0.42"
     remote_node = String.to_atom(node_name)
 
     response = ClusterServer.remove_node(%RemoveNodeRequest{node_name: node_name}, nil)
 
     assert response.node_name == node_name
-    assert response.status == "disconnected"
+    assert response.status == "not_found"
 
     assert_receive {:node_state_persisted, ^node_name,
                     %{
@@ -1000,10 +931,8 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
                       "scheduling_eligible" => false
                     }}
 
-    assert_receive {:rpc_call, ^remote_node, ClusterServer, :clear_join_claim,
-                    ["mirror_neuron@test"], 2_000}
-
-    assert_receive {:disconnect, ^remote_node}
+    refute_receive {:disconnect, ^remote_node}
+    refute_receive {:rpc_call, ^remote_node, ClusterServer, :clear_join_claim, _, _}
   end
 
   test "cluster peer helpers tolerate absent peer links" do
@@ -1080,11 +1009,6 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     :exit, _reason -> false
   end
 
-  defp cookie_from_token(token) do
-    :crypto.hash(:sha256, "mirror-neuron:cookie:#{token}")
-    |> Base.encode16(case: :lower)
-  end
-
   defp cleanup_namespace(namespace) do
     case Redix.command(MirrorNeuron.Redis.Connection, ["KEYS", "#{namespace}:*"]) do
       {:ok, []} ->
@@ -1097,15 +1021,6 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       _ ->
         :ok
     end
-  end
-
-  defp advertised_redis_url(redis_url, host, port) do
-    uri = URI.parse(redis_url)
-    scheme = uri.scheme || "redis"
-    path = uri.path || "/0"
-    userinfo = if uri.userinfo in [nil, ""], do: "", else: "#{uri.userinfo}@"
-
-    "#{scheme}://#{userinfo}#{host}:#{port}#{path}"
   end
 
   defp start_tcp_server do

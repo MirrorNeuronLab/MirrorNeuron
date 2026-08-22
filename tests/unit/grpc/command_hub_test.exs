@@ -41,18 +41,7 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
     {:QueryJobResponse, :query_job_response, QueryJobResponseRequest}
   ]
 
-  @identity_commands MapSet.new([
-                       :UpdateJob,
-                       :ArchiveJob,
-                       :ResetJobData,
-                       :DeleteJob,
-                       :PauseRun,
-                       :ResumeRun,
-                       :CancelRun,
-                       :DeleteRun,
-                       :SendRunInput,
-                       :QueryJobResponse
-                     ])
+  @identity_commands @rpc_cases |> Enum.map(&elem(&1, 0)) |> MapSet.new()
 
   defmodule AuthenticatedStream do
     defstruct headers: %{}
@@ -185,7 +174,7 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
     refute_received {:called, :create_job, _, _}
   end
 
-  test "protected v1 commands require the configured client identity" do
+  test "all v1 commands require the configured client identity" do
     error =
       assert_raise GRPC.RPCError, fn ->
         JobServer.cancel_run(%RunRequest{run_id: "run-1"}, nil)
@@ -198,6 +187,10 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
                %RunRequest{run_id: "run-1"},
                authenticated_stream()
              )
+
+    assert_raise GRPC.RPCError, fn ->
+      JobServer.get_job(%JobRequest{job_id: "job-1"}, nil)
+    end
   end
 
   defp authenticated_stream do

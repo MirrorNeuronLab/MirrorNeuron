@@ -6,7 +6,7 @@ defmodule MirrorNeuron.Grpc.Auth do
   def authorize_identity!(stream) do
     expected_token = MirrorNeuron.Grpc.Tokens.auth_token()
 
-    if authorized?(stream, expected_token) do
+    if authorized?(stream, expected_token) or peer_authorized?(stream) do
       :ok
     else
       raise GRPC.RPCError,
@@ -26,6 +26,35 @@ defmodule MirrorNeuron.Grpc.Auth do
   end
 
   def authorized?(_stream, _expected_token), do: false
+
+  def federation_hop(stream) do
+    stream
+    |> metadata()
+    |> Map.get("x-mn-federation-hop")
+    |> header_values()
+    |> List.first()
+    |> case do
+      value when is_binary(value) ->
+        case Integer.parse(String.trim(value)) do
+          {hop, ""} when hop >= 0 -> hop
+          _ -> 0
+        end
+
+      _ ->
+        0
+    end
+  end
+
+  defp peer_authorized?(stream) do
+    metadata = metadata(stream)
+    peer_name = metadata |> Map.get("x-mn-federation-peer") |> header_values() |> List.first()
+    expected = MirrorNeuron.Grpc.Tokens.peer_token(to_string(peer_name || ""))
+
+    expected != "" and
+      metadata
+      |> token_candidates()
+      |> Enum.any?(&MirrorNeuron.Grpc.Tokens.secure_compare(&1, expected))
+  end
 
   defp metadata(stream) when is_map(stream) do
     stream_map = if Map.has_key?(stream, :__struct__), do: Map.from_struct(stream), else: stream

@@ -59,4 +59,31 @@ defmodule MirrorNeuron.Grpc.AuthTest do
 
     assert :ok = Auth.authorize_identity!(stream)
   end
+
+  test "authorizes only the peer credential matching the federation identity" do
+    System.put_env("MN_GRPC_AUTH_TOKEN", "configured-operator-token")
+    token = MirrorNeuron.Grpc.Tokens.peer_token("mirror_neuron@peer")
+
+    stream = %Stream{
+      headers: %{
+        "authorization" => "Bearer #{token}",
+        "x-mn-federation-peer" => "mirror_neuron@peer"
+      }
+    }
+
+    assert :ok = Auth.authorize_identity!(stream)
+
+    mismatched = %{
+      stream
+      | headers: Map.put(stream.headers, "x-mn-federation-peer", "mirror_neuron@other")
+    }
+
+    assert_raise GRPC.RPCError, fn -> Auth.authorize_identity!(mismatched) end
+  end
+
+  test "parses federation hop metadata conservatively" do
+    assert Auth.federation_hop(%Stream{headers: %{"x-mn-federation-hop" => "1"}}) == 1
+    assert Auth.federation_hop(%Stream{headers: %{"x-mn-federation-hop" => "invalid"}}) == 0
+    assert Auth.federation_hop(%Stream{headers: %{}}) == 0
+  end
 end

@@ -25,13 +25,13 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
       grpc_host: advertised_host(),
       grpc_port: advertised_grpc_port(),
       dist_port: env_integer("MN_DIST_PORT", 4_370),
-      redis_host: redis_host(),
-      redis_port: redis_port(),
-      redis_url: redis_url(),
-      cluster_nodes: MirrorNeuron.Config.string("MN_CLUSTER_NODES", :cluster_nodes),
+      redis_host: "",
+      redis_port: 0,
+      redis_url: "",
+      cluster_nodes: "",
       network_only: MirrorNeuron.Grpc.NetworkOnly.enabled?(),
       node_info_json: Support.versioned_json(handshake_node_info()),
-      grpc_auth_token: MirrorNeuron.Grpc.Tokens.auth_token(),
+      grpc_auth_token: handshake_peer_token(request),
       version: @interface_version
     }
   end
@@ -45,10 +45,15 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
     node_name = request |> Map.get(:node_name, "") |> to_string() |> String.trim()
 
     if node_name != "" do
+      existing_attrs =
+        case MirrorNeuron.Cluster.NodeState.fetch(node_name) do
+          {:ok, state} when is_map(state) -> state
+          _ -> %{}
+        end
+
       attrs =
-        request
-        |> Map.get(:node_info_json, "")
-        |> decode_node_info()
+        existing_attrs
+        |> Map.merge(request |> Map.get(:node_info_json, "") |> decode_node_info())
         |> Map.put("operator_disconnect", false)
         |> Map.put("scheduling_eligible", true)
 
@@ -157,6 +162,9 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
     %{
       "node_name" => to_string(NodeAdapter.self()),
       "node_role" => MirrorNeuron.Application.node_role(),
+      "connection_mode" => "federated",
+      "job_owner_eligible" => true,
+      "scheduling_eligible" => true,
       "grpc_host" => advertised_host(),
       "grpc_port" => advertised_grpc_port(),
       "host_shared_storage_root" =>
@@ -169,6 +177,7 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
       "syncthing" => syncthing_node_info(),
       "redis_ha" => redis_ha_node_info(),
       "coordination_store" => coordination_store_node_info(),
+      "litellm" => litellm_node_info(),
       "native_sdk_grpc" => native_sdk_grpc_node_info(hardware),
       "display_name" => map_value(platform, "display_name"),
       "hostname" => map_value(platform, "hostname"),
@@ -180,6 +189,21 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
       "memory_gb" => memory_gb(memory),
       "runtime_models" => ModelServices.env_model_refs(),
       "services" => ModelServices.service_instances_for_env(System.get_env(), NodeAdapter.self())
+    }
+  end
+
+  defp litellm_node_info do
+    host =
+      MirrorNeuron.Config.optional_string("MN_LITELLM_ADVERTISE_HOST", :litellm_advertise_host) ||
+        advertised_host()
+
+    port = litellm_port()
+
+    %{
+      "enabled" => host not in [nil, ""],
+      "host" => host || "",
+      "port" => port,
+      "url" => if(host in [nil, ""], do: "", else: "http://#{host}:#{port}")
     }
   end
 
@@ -312,6 +336,14 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
 
   defp secure_compare(left, right), do: MirrorNeuron.Grpc.Tokens.secure_compare(left, right)
 
+  defp handshake_peer_token(request) do
+    peer_name = request |> Map.get(:node_name, "") |> to_string() |> String.trim()
+
+    if peer_name == "",
+      do: MirrorNeuron.Grpc.Tokens.auth_token(),
+      else: MirrorNeuron.Grpc.Tokens.peer_token(peer_name)
+  end
+
   defp advertised_host do
     MirrorNeuron.Config.optional_string("MN_NETWORK_ADVERTISE_HOST", :network_advertise_host) ||
       MirrorNeuron.Config.string("MN_CORE_HOST", :core_host)
@@ -368,32 +400,19 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
       "55052"
   end
 
-  defp redis_host do
-    MirrorNeuron.Config.optional_string("MN_NETWORK_REDIS_HOST", :network_redis_host) ||
-      (redis_uri().host || advertised_host())
-  end
+  defp litellm_port do
+    value =
+      MirrorNeuron.Config.optional_string(
+        "MN_LITELLM_ADVERTISE_PORT",
+        :litellm_advertise_port
+      ) ||
+        MirrorNeuron.Config.optional_string(
+          "MN_LITELLM_GATEWAY_PORT",
+          :litellm_gateway_port
+        ) ||
+        MirrorNeuron.Config.optional_string("MN_LITELLM_PORT", :litellm_port)
 
-  defp redis_port do
-    case MirrorNeuron.Config.optional_string("MN_NETWORK_REDIS_PORT", :network_redis_port) do
-      nil -> redis_uri().port || 6_379
-      value -> parse_integer(value, "MN_NETWORK_REDIS_PORT")
-    end
-  end
-
-  defp redis_url do
-    uri = redis_uri()
-    host = redis_host()
-    port = redis_port()
-    path = uri.path || "/0"
-    scheme = uri.scheme || "redis"
-    userinfo = if uri.userinfo in [nil, ""], do: "", else: "#{uri.userinfo}@"
-
-    "#{scheme}://#{userinfo}#{host}:#{port}#{path}"
-  end
-
-  defp redis_uri do
-    MirrorNeuron.Redis.connection_url()
-    |> URI.parse()
+    if value, do: parse_integer(value, "MN_LITELLM_ADVERTISE_PORT"), else: 4_000
   end
 
   defp env_integer(name, default) do

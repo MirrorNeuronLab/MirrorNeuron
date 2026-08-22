@@ -11,6 +11,9 @@ service ClusterService {
   rpc AckRuntimeStatusEvents (SetResourceRequest) returns (SetResourceResponse);
   rpc AddNode (AddNodeRequest) returns (AddNodeResponse);
   rpc RemoveNode (RemoveNodeRequest) returns (RemoveNodeResponse);
+  rpc RegisterFederatedPeer (RegisterFederatedPeerRequest) returns (RegisterFederatedPeerResponse);
+  rpc GetFederatedPeer (GetFederatedPeerRequest) returns (GetFederatedPeerResponse);
+  rpc RemoveFederatedPeer (RemoveFederatedPeerRequest) returns (RemoveFederatedPeerResponse);
   rpc ReconcileNode (ReconcileNodeRequest) returns (ReconcileNodeResponse);
   rpc DrainNode (DrainNodeRequest) returns (DrainNodeResponse);
   rpc CancelNodeDrain (CancelNodeDrainRequest) returns (CancelNodeDrainResponse);
@@ -124,6 +127,42 @@ message RemoveNodeRequest {
 }
 
 message RemoveNodeResponse {
+  string node_name = 1;
+  string status = 2;
+  uint32 version = 3;
+}
+
+message RegisterFederatedPeerRequest {
+  string node_name = 1;
+  string peer_info_json = 2;
+  string peer_auth_token = 3;
+  uint32 version = 4;
+}
+
+message RegisterFederatedPeerResponse {
+  string node_name = 1;
+  string status = 2;
+  string peer_json = 3;
+  uint32 version = 4;
+  string local_peer_auth_token = 5;
+}
+
+message GetFederatedPeerRequest {
+  string node_name = 1;
+  uint32 version = 2;
+}
+
+message GetFederatedPeerResponse {
+  string peer_json = 1;
+  uint32 version = 2;
+}
+
+message RemoveFederatedPeerRequest {
+  string node_name = 1;
+  uint32 version = 2;
+}
+
+message RemoveFederatedPeerResponse {
   string node_name = 1;
   string status = 2;
   uint32 version = 3;

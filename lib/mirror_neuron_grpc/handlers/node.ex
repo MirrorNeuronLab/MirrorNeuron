@@ -4,39 +4,77 @@ defmodule MirrorNeuron.Grpc.Handlers.Node do
   @interface_version 1
 
   alias MirrorNeuron.Cluster.JoinClaim
+  alias MirrorNeuron.Cluster.FederationRegistry
   alias MirrorNeuron.Cluster.NodeAdapter
-  alias MirrorNeuron.Cluster.NodeState
   alias MirrorNeuron.Grpc.Handlers.Support
 
   alias Mirrorneuron.Cluster.V1.{
-    AddNodeResponse,
     CancelNodeDrainResponse,
     DrainNodeResponse,
     GetNodeDrainStatusResponse,
     ReconcileNodeResponse,
     RemoveNodeResponse,
+    RegisterFederatedPeerResponse,
+    GetFederatedPeerResponse,
+    RemoveFederatedPeerResponse,
     SetNodeMaintenanceResponse
   }
 
-  def add_node(request, _stream) do
-    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("AddNode")
-    token = Map.get(request, :token, "")
-    maybe_set_remote_cookie(request.node_name, token)
+  def add_node(_request, _stream) do
+    raise GRPC.RPCError,
+      status: GRPC.Status.failed_precondition(),
+      message: "AddNode is a legacy distributed-cluster RPC; use RegisterFederatedPeer"
+  end
 
-    case MirrorNeuron.add_node(request.node_name) do
-      {:ok, %{status: status}} ->
-        confirm_remote_join_claim(request.node_name)
-        sync_remote_cookie_with_cluster(request.node_name, token)
-        advertise_remote_model_services(request.node_name)
+  def register_federated_peer(request, _stream) do
+    with {:ok, peer_info} <- decode_peer_info(request.peer_info_json),
+         {:ok, peer, status} <-
+           FederationRegistry.register(request.node_name, peer_info, request.peer_auth_token) do
+      _ = disconnect_peer(request.node_name)
+      _ = confirm_join_claim(request.node_name)
+      maybe_start_local_leader()
 
-        %AddNodeResponse{
+      %RegisterFederatedPeerResponse{
+        node_name: request.node_name,
+        status: status,
+        peer_json: Support.versioned_json(peer),
+        local_peer_auth_token: MirrorNeuron.Grpc.Tokens.peer_token(request.node_name),
+        version: @interface_version
+      }
+    else
+      {:error, reason} -> raise_federation_error!(reason)
+    end
+  end
+
+  def get_federated_peer(request, _stream) do
+    case FederationRegistry.public_fetch(request.node_name) do
+      {:ok, peer} ->
+        %GetFederatedPeerResponse{
+          peer_json: Support.versioned_json(peer),
+          version: @interface_version
+        }
+
+      {:error, :peer_not_found} ->
+        raise GRPC.RPCError,
+          status: GRPC.Status.not_found(),
+          message: "federated peer was not found"
+    end
+  end
+
+  def remove_federated_peer(request, _stream) do
+    case FederationRegistry.remove(request.node_name) do
+      {:ok, status} ->
+        _ = disconnect_peer(request.node_name)
+        _ = clear_join_claim(request.node_name)
+
+        %RemoveFederatedPeerResponse{
           node_name: request.node_name,
           status: status,
           version: @interface_version
         }
 
       {:error, reason} ->
-        raise GRPC.RPCError, status: GRPC.Status.internal(), message: reason
+        raise_federation_error!(reason)
     end
   end
 
@@ -71,7 +109,7 @@ defmodule MirrorNeuron.Grpc.Handlers.Node do
   def disconnect_peer(node_name) when is_binary(node_name) and node_name != "" do
     case MirrorNeuron.SafeAccess.node_name_to_atom(node_name) do
       {:ok, node} ->
-        NodeAdapter.disconnect(node)
+        if node in NodeAdapter.list(), do: NodeAdapter.disconnect(node)
         :ok
 
       {:error, reason} ->
@@ -98,22 +136,55 @@ defmodule MirrorNeuron.Grpc.Handlers.Node do
   end
 
   def remove_node(request, _stream) do
-    MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("RemoveNode")
-
-    case mark_node_operator_disconnected(request.node_name) do
-      {:ok, remote_node} ->
-        clear_remote_join_claim(request.node_name)
-        _ = NodeAdapter.disconnect(remote_node)
+    case FederationRegistry.remove(request.node_name) do
+      {:ok, status} ->
+        _ = disconnect_peer(request.node_name)
+        _ = clear_join_claim(request.node_name)
 
         %RemoveNodeResponse{
           node_name: request.node_name,
-          status: "disconnected",
+          status: status,
           version: @interface_version
         }
 
       {:error, reason} ->
-        raise GRPC.RPCError, status: GRPC.Status.internal(), message: reason
+        raise_federation_error!(reason)
     end
+  end
+
+  defp decode_peer_info(json) when is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, info} when is_map(info) -> {:ok, info}
+      _ -> {:error, :invalid_peer_info}
+    end
+  end
+
+  defp decode_peer_info(_json), do: {:error, :invalid_peer_info}
+
+  defp raise_federation_error!(:peer_identity_conflict) do
+    raise GRPC.RPCError,
+      status: GRPC.Status.already_exists(),
+      message: "federated peer identity conflicts with an existing registration"
+  end
+
+  defp raise_federation_error!(:shared_coordination_store) do
+    raise GRPC.RPCError,
+      status: GRPC.Status.failed_precondition(),
+      message: "federated peers must use distinct coordination stores"
+  end
+
+  defp raise_federation_error!(reason) do
+    raise GRPC.RPCError,
+      status: GRPC.Status.invalid_argument(),
+      message: "federated peer registration failed: #{reason}"
+  end
+
+  defp maybe_start_local_leader do
+    if Process.whereis(MirrorNeuron.Cluster.Leader) do
+      send(MirrorNeuron.Cluster.Leader, :campaign)
+    end
+
+    :ok
   end
 
   def reconcile_node(request, _stream) do
@@ -216,223 +287,5 @@ defmodule MirrorNeuron.Grpc.Handlers.Node do
       {:error, reason} ->
         raise GRPC.RPCError, status: GRPC.Status.internal(), message: inspect(reason)
     end
-  end
-
-  defp maybe_set_remote_cookie(node_name, token)
-       when is_binary(node_name) and is_binary(token) and token != "" do
-    with {:ok, node} <- MirrorNeuron.SafeAccess.node_name_to_atom(node_name),
-         {:ok, cookie} <-
-           cookie_from_token(token) |> MirrorNeuron.SafeAccess.nonempty_binary_to_atom() do
-      NodeAdapter.set_cookie(node, cookie)
-      :ok
-    else
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp maybe_set_remote_cookie(_node_name, _token), do: :ok
-
-  defp sync_remote_cookie_with_cluster(node_name, token)
-       when is_binary(node_name) and is_binary(token) and node_name != "" and token != "" do
-    case MirrorNeuron.SafeAccess.node_name_to_atom(node_name) do
-      {:ok, remote_node} ->
-        cookie = cookie_from_token(token)
-
-        peer_nodes =
-          [NodeAdapter.self() | NodeAdapter.list()]
-          |> Enum.uniq()
-          |> Enum.reject(&(&1 == remote_node))
-
-        peer_nodes
-        |> Enum.reject(&(&1 == NodeAdapter.self()))
-        |> Enum.each(fn peer ->
-          _ =
-            NodeAdapter.rpc_call(
-              peer,
-              MirrorNeuron.Grpc.ClusterServer,
-              :set_peer_cookie,
-              [node_name, cookie],
-              2_000
-            )
-        end)
-
-        Enum.each(peer_nodes, fn peer ->
-          _ =
-            NodeAdapter.rpc_call(
-              remote_node,
-              MirrorNeuron.Grpc.ClusterServer,
-              :set_peer_cookie,
-              [Atom.to_string(peer), cookie],
-              2_000
-            )
-        end)
-
-        _ =
-          NodeAdapter.rpc_call(
-            remote_node,
-            MirrorNeuron.Grpc.ClusterServer,
-            :connect_peer,
-            [Atom.to_string(NodeAdapter.self())],
-            2_000
-          )
-
-        _ =
-          NodeAdapter.rpc_call(
-            remote_node,
-            MirrorNeuron.Cluster.Manager,
-            :add_node,
-            [Atom.to_string(NodeAdapter.self())],
-            5_000
-          )
-
-        :ok
-
-      {:error, _reason} ->
-        :ok
-    end
-  end
-
-  defp sync_remote_cookie_with_cluster(_node_name, _token), do: :ok
-
-  defp confirm_remote_join_claim(node_name) when is_binary(node_name) and node_name != "" do
-    with {:ok, remote_node} <- MirrorNeuron.SafeAccess.node_name_to_atom(node_name) do
-      _ =
-        NodeAdapter.rpc_call(
-          remote_node,
-          MirrorNeuron.Grpc.ClusterServer,
-          :confirm_join_claim,
-          [Atom.to_string(NodeAdapter.self())],
-          2_000
-        )
-
-      :ok
-    else
-      {:error, _reason} -> :ok
-    end
-  end
-
-  defp confirm_remote_join_claim(_node_name), do: :ok
-
-  defp advertise_remote_model_services(node_name) when is_binary(node_name) and node_name != "" do
-    with {:ok, remote_node} <- MirrorNeuron.SafeAccess.node_name_to_atom(node_name),
-         %{} = info <-
-           NodeAdapter.rpc_call(
-             remote_node,
-             MirrorNeuron.Grpc.ClusterServer,
-             :node_advertisement_info,
-             [],
-             2_000
-           ) do
-      services = services_from_node_info(info, node_name)
-
-      if services != [] do
-        _ = service_registry().register_many(services)
-      end
-    end
-
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp advertise_remote_model_services(_node_name), do: :ok
-
-  defp services_from_node_info(info, fallback_node_name) when is_map(info) do
-    explicit_services =
-      List.wrap(Map.get(info, "services")) ++ List.wrap(Map.get(info, :services))
-
-    node_name = Map.get(info, "node_name") || Map.get(info, :node_name) || fallback_node_name
-
-    runtime_model_services =
-      (List.wrap(Map.get(info, "runtime_models")) ++ List.wrap(Map.get(info, :runtime_models)))
-      |> Enum.flat_map(&runtime_model_service(&1, node_name))
-
-    (explicit_services ++ runtime_model_services)
-    |> Enum.filter(&is_map/1)
-  end
-
-  defp runtime_model_service(model, node_name) when is_binary(model) do
-    model = String.trim(model)
-    node_name = Support.blank_to_nil(to_string(node_name || ""))
-
-    if model == "" or is_nil(node_name) do
-      []
-    else
-      canonical_model = canonical_runtime_model(model)
-
-      [
-        %{
-          "id" => "#{node_name}:docker-model-runner:#{model}",
-          "name" => "docker-model-runner",
-          "node" => node_name,
-          "provider" => "docker_model_runner",
-          "origin" => "runtime_model_advertisement",
-          "status" => "passing",
-          "tags" =>
-            [
-              "docker-model-runner",
-              "model:#{model}",
-              "model-id:#{model}",
-              "model:#{canonical_model}",
-              "model-id:#{canonical_model}"
-            ]
-            |> Enum.uniq(),
-          "meta" => %{"model" => canonical_model, "model_id" => model}
-        }
-      ]
-    end
-  end
-
-  defp runtime_model_service(_model, _node_name), do: []
-
-  defp canonical_runtime_model("nemotron3"), do: "ai/nemotron3:latest"
-  defp canonical_runtime_model(model), do: model
-
-  defp service_registry do
-    Application.get_env(:mirror_neuron, :service_registry, MirrorNeuron.ServiceRegistry)
-  end
-
-  defp clear_remote_join_claim(node_name) when is_binary(node_name) and node_name != "" do
-    with {:ok, remote_node} <- MirrorNeuron.SafeAccess.node_name_to_atom(node_name) do
-      _ =
-        NodeAdapter.rpc_call(
-          remote_node,
-          MirrorNeuron.Grpc.ClusterServer,
-          :clear_join_claim,
-          [Atom.to_string(NodeAdapter.self())],
-          2_000
-        )
-
-      :ok
-    else
-      {:error, _reason} -> :ok
-    end
-  end
-
-  defp clear_remote_join_claim(_node_name), do: :ok
-
-  defp mark_node_operator_disconnected(node_name) when is_binary(node_name) do
-    case MirrorNeuron.SafeAccess.node_name_to_atom(node_name) do
-      {:ok, remote_node} ->
-        case NodeState.mark(node_name, "disconnected", %{
-               "operator_disconnect" => true,
-               "scheduling_eligible" => false,
-               "reason" => "operator requested disconnect"
-             }) do
-          {:ok, _state} -> {:ok, remote_node}
-          {:error, reason} -> {:error, to_string(reason)}
-        end
-
-      {:error, _reason} ->
-        {:error, "invalid node name #{inspect(node_name)}"}
-    end
-  end
-
-  defp mark_node_operator_disconnected(node_name),
-    do: {:error, "invalid node name #{inspect(node_name)}"}
-
-  defp cookie_from_token(token) do
-    :crypto.hash(:sha256, "mirror-neuron:cookie:#{token}")
-    |> Base.encode16(case: :lower)
   end
 end

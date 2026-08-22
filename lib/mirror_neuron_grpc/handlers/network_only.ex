@@ -2,7 +2,8 @@ defmodule MirrorNeuron.Grpc.NetworkOnly do
   @moduledoc false
 
   def enabled? do
-    MirrorNeuron.Config.boolean("MN_NETWORK_ONLY", :network_only)
+    MirrorNeuron.Config.boolean("MN_NETWORK_ONLY", :network_only) and
+      not MirrorNeuron.Cluster.FederationRegistry.ready?()
   end
 
   def reject_if_enabled!(operation) do

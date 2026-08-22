@@ -228,6 +228,84 @@ defmodule Mirrorneuron.Cluster.V1.RemoveNodeResponse do
   field(:version, 3, type: :uint32)
 end
 
+defmodule Mirrorneuron.Cluster.V1.RegisterFederatedPeerRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.RegisterFederatedPeerRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:node_name, 1, type: :string, json_name: "nodeName")
+  field(:peer_info_json, 2, type: :string, json_name: "peerInfoJson")
+  field(:peer_auth_token, 3, type: :string, json_name: "peerAuthToken")
+  field(:version, 4, type: :uint32)
+end
+
+defmodule Mirrorneuron.Cluster.V1.RegisterFederatedPeerResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.RegisterFederatedPeerResponse",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:node_name, 1, type: :string, json_name: "nodeName")
+  field(:status, 2, type: :string)
+  field(:peer_json, 3, type: :string, json_name: "peerJson")
+  field(:version, 4, type: :uint32)
+  field(:local_peer_auth_token, 5, type: :string, json_name: "localPeerAuthToken")
+end
+
+defmodule Mirrorneuron.Cluster.V1.GetFederatedPeerRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.GetFederatedPeerRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:node_name, 1, type: :string, json_name: "nodeName")
+  field(:version, 2, type: :uint32)
+end
+
+defmodule Mirrorneuron.Cluster.V1.GetFederatedPeerResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.GetFederatedPeerResponse",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:peer_json, 1, type: :string, json_name: "peerJson")
+  field(:version, 2, type: :uint32)
+end
+
+defmodule Mirrorneuron.Cluster.V1.RemoveFederatedPeerRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.RemoveFederatedPeerRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:node_name, 1, type: :string, json_name: "nodeName")
+  field(:version, 2, type: :uint32)
+end
+
+defmodule Mirrorneuron.Cluster.V1.RemoveFederatedPeerResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.RemoveFederatedPeerResponse",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:node_name, 1, type: :string, json_name: "nodeName")
+  field(:status, 2, type: :string)
+  field(:version, 3, type: :uint32)
+end
+
 defmodule Mirrorneuron.Cluster.V1.ReconcileNodeRequest do
   @moduledoc false
 
@@ -487,6 +565,24 @@ defmodule Mirrorneuron.Cluster.V1.ClusterService.Service do
     :RemoveNode,
     Mirrorneuron.Cluster.V1.RemoveNodeRequest,
     Mirrorneuron.Cluster.V1.RemoveNodeResponse
+  )
+
+  rpc(
+    :RegisterFederatedPeer,
+    Mirrorneuron.Cluster.V1.RegisterFederatedPeerRequest,
+    Mirrorneuron.Cluster.V1.RegisterFederatedPeerResponse
+  )
+
+  rpc(
+    :GetFederatedPeer,
+    Mirrorneuron.Cluster.V1.GetFederatedPeerRequest,
+    Mirrorneuron.Cluster.V1.GetFederatedPeerResponse
+  )
+
+  rpc(
+    :RemoveFederatedPeer,
+    Mirrorneuron.Cluster.V1.RemoveFederatedPeerRequest,
+    Mirrorneuron.Cluster.V1.RemoveFederatedPeerResponse
   )
 
   rpc(

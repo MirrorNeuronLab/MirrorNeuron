@@ -32,6 +32,7 @@ defmodule Mirrorneuron.Job.V1.CreateJobRequest do
   field(:storage_json, 5, type: :string, json_name: "storageJson")
   field(:version, 6, type: :uint32)
   field(:idempotency_key, 7, type: :string, json_name: "idempotencyKey")
+  field(:owner_node, 8, type: :string, json_name: "ownerNode")
 end
 
 defmodule Mirrorneuron.Job.V1.JobRequest do
@@ -61,6 +62,7 @@ defmodule Mirrorneuron.Job.V1.ListJobsRequest do
   field(:version, 2, type: :uint32)
   field(:page_size, 3, type: :uint32, json_name: "pageSize")
   field(:page_token, 4, type: :string, json_name: "pageToken")
+  field(:local_only, 5, type: :bool, json_name: "localOnly")
 end
 
 defmodule Mirrorneuron.Job.V1.UpdateJobRequest.PayloadsEntry do
