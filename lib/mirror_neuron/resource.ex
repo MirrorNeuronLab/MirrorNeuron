@@ -87,6 +87,8 @@ defmodule MirrorNeuron.Resource do
     host_paths = ResourceSpec.normalize_node_host_paths(node, hardware)
     runtime_drivers = ResourceSpec.normalize_node_runtime_drivers(node, hardware)
     name = Map.get(node, :name) || Map.get(node, "name") || "unknown"
+    self? = node_attr(node, :self?, false) || node_attr(node, :self, false)
+    scheduling_eligible = node_attr(node, :scheduling_eligible, true)
     memory_total_gb = memory_gb(memory)
     memory_available_gb = memory_available_gb(memory)
     gpu_memory_total_mb = gpu_memory_total_mb(devices)
@@ -99,9 +101,15 @@ defmodule MirrorNeuron.Resource do
       "hostname" =>
         Map.get(node, :hostname) || Map.get(node, "hostname") || map_get(platform, "hostname"),
       "platform" => platform_summary(platform),
-      "self" => node_attr(node, :self?, false) || node_attr(node, :self, false),
+      "self" => self?,
       "status" => Map.get(node, :status) || Map.get(node, "status") || "healthy",
-      "scheduling_eligible" => node_attr(node, :scheduling_eligible, true),
+      "scheduling_eligible" => scheduling_eligible,
+      "connection_mode" =>
+        node_attr(node, :connection_mode, if(self?, do: "local", else: "local_distribution")),
+      "local_scheduler_eligible" =>
+        node_attr(node, :local_scheduler_eligible, scheduling_eligible),
+      "job_owner_eligible" => node_attr(node, :job_owner_eligible, scheduling_eligible),
+      "peer_available" => node_attr(node, :peer_available, true),
       "drain" => Map.get(node, :drain) || Map.get(node, "drain"),
       "cpu_cores" => integer_value(map_get(cpu, "logical_processors")),
       "cpu_model" => cpu_model(cpu),

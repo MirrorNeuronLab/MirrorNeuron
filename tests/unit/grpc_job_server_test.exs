@@ -618,6 +618,8 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert node_info["runtime_models"] == ["nemotron3"]
     assert is_binary(node_info["display_name"])
     assert is_integer(node_info["gpu_count"])
+    assert is_map(node_info["hardware"])
+    assert is_list(node_info["hardware"]["capabilities"])
   end
 
   test "network handshake never advertises standalone Redis URLs" do

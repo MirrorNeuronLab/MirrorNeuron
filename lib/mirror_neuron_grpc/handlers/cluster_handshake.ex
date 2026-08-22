@@ -187,6 +187,7 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
       "gpu_model" => List.first(gpu_models(gpu)),
       "gpu_models" => gpu_models(gpu),
       "memory_gb" => memory_gb(memory),
+      "hardware" => hardware,
       "runtime_models" => ModelServices.env_model_refs(),
       "services" => ModelServices.service_instances_for_env(System.get_env(), NodeAdapter.self())
     }

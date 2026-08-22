@@ -156,6 +156,10 @@ call must preserve the public result of the same local operation.
 Scheduling and admission consider declared CPU, memory, GPU, services, models,
 node state, and execution profiles. Lack of an admissible placement returns an
 actionable failure; it does not bypass requirements.
+Federation handshakes advertise the owner's complete hardware profile. Resource
+reports preserve both direct scheduler eligibility and the separate federated
+owner eligibility facts, so submitters can validate a remote owner without
+making that owner a member of their local scheduler.
 Declared inbound ports may be fixed integers or request runtime allocation with
 `"auto"`. The scheduler makes automatic ports exclusive per active placement
 on a target node, persists the resolved integer in the scheduler plan, exports

@@ -66,6 +66,11 @@ defmodule MirrorNeuron.ResourceTest do
         },
         %{
           "name" => "mn2@127.0.0.1",
+          "connection_mode" => "federated",
+          "scheduling_eligible" => false,
+          "local_scheduler_eligible" => true,
+          "job_owner_eligible" => true,
+          "peer_available" => true,
           "hardware" => %{
             "cpu" => %{"logical_processors" => 4},
             "memory" => %{"total_mb" => 8192, "available_mb" => 4096},
@@ -169,6 +174,13 @@ defmodule MirrorNeuron.ResourceTest do
     assert hd(draining["devices"])["api_version"] == "12.4"
     assert hd(draining["devices"])["memory_total_mb"] == 12_288
     assert "host_local" in draining["runtime_drivers"]
+
+    federated = Enum.at(report["nodes"], 1)
+    assert federated["connection_mode"] == "federated"
+    assert federated["scheduling_eligible"] == false
+    assert federated["local_scheduler_eligible"] == true
+    assert federated["job_owner_eligible"] == true
+    assert federated["peer_available"] == true
   end
 
   test "keeps single-node resources while exposing combined totals" do
