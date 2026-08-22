@@ -21,7 +21,11 @@ defmodule MirrorNeuron.Cluster.FederationClient do
           response
 
         {:error, reason} ->
-          unavailable!(node_name, reason)
+          if availability_failure?(reason) do
+            unavailable!(node_name, reason)
+          else
+            raise reason
+          end
       end
     else
       {:error, reason} -> unavailable!(node_name, reason)
@@ -67,6 +71,17 @@ defmodule MirrorNeuron.Cluster.FederationClient do
       _ = FederationRegistry.mark_unavailable(node_name)
       {:error, error}
   end
+
+  @doc false
+  def availability_failure?(%GRPC.RPCError{status: status}) do
+    status in [
+      GRPC.Status.deadline_exceeded(),
+      GRPC.Status.unauthenticated(),
+      GRPC.Status.unavailable()
+    ]
+  end
+
+  def availability_failure?(_reason), do: true
 
   defp connect(target, peer) do
     token = Map.get(peer, "peer_auth_token", "")
