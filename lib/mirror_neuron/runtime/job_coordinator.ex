@@ -9,6 +9,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.{JobBundle, ServiceRegistry, ServiceSpec}
   alias MirrorNeuron.Scheduler
+  alias MirrorNeuron.Sandbox.DockerJobSandbox
 
   alias MirrorNeuron.Runtime.{
     AgentWorker,
@@ -199,6 +200,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     end
 
     if job_type(state) == "service" do
+      reset_prepared_service_containers(state)
       cleanup_sandboxes(state)
       ServiceRegistry.deregister_job(state.job_id)
     end
@@ -3240,6 +3242,26 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp cleanup_sandboxes(state) do
     _ = Runtime.cleanup_job_sandboxes(state.job_id)
     :ok
+  end
+
+  defp reset_prepared_service_containers(state) do
+    state.nodes_by_id
+    |> Map.values()
+    |> Enum.each(fn
+      %{config: config} when is_map(config) ->
+        case DockerJobSandbox.reset_prepared_container(config) do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning(
+              "failed to reset prepared DockerWorker while pausing service #{state.job_id}: #{inspect(reason)}"
+            )
+        end
+
+      _node ->
+        :ok
+    end)
   end
 
   defp recovery_fields_from(job) when is_map(job) do

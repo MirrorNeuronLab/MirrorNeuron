@@ -66,6 +66,10 @@ defmodule MirrorNeuron do
     do: MirrorNeuron.Runtime.StableJob.delete(job_id, opts)
 
   def start_run(job_id, opts \\ []), do: MirrorNeuron.Runtime.StableJob.start_run(job_id, opts)
+
+  def start_run_result(job_id, opts \\ []),
+    do: MirrorNeuron.Runtime.StableJob.start_run_result(job_id, opts)
+
   def list_runs(job_id), do: MirrorNeuron.Runtime.StableJob.list_runs(job_id)
 
   def list_runs_page(job_id, opts \\ []),

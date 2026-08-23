@@ -98,6 +98,7 @@ defmodule Mirrorneuron.Job.V1.UpdateJobRequest do
   )
 
   field(:expected_revision, 6, type: :uint64, json_name: "expectedRevision")
+  field(:replace_existing_run, 7, type: :bool, json_name: "replaceExistingRun")
 end
 
 defmodule Mirrorneuron.Job.V1.DeleteJobRequest do
@@ -127,6 +128,7 @@ defmodule Mirrorneuron.Job.V1.StartRunRequest do
   field(:inputs_json, 3, type: :string, json_name: "inputsJson")
   field(:version, 4, type: :uint32)
   field(:idempotency_key, 5, type: :string, json_name: "idempotencyKey")
+  field(:replace_existing_run, 6, type: :bool, json_name: "replaceExistingRun")
 end
 
 defmodule Mirrorneuron.Job.V1.RunRequest do

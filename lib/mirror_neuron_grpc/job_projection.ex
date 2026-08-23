@@ -4,7 +4,7 @@ defmodule MirrorNeuron.Grpc.JobProjection do
   alias MirrorNeuron.Runtime.JobResponse
 
   @summary_fields ~w(
-    job_id blueprint_id graph_id job_name owner_node status data_generation
+    job_id blueprint_id graph_id job_name type owner_node status data_generation
     latest_run_id created_at updated_at bundle_ref retired_definition_resources
   )
   @detail_fields @summary_fields ++
@@ -21,6 +21,7 @@ defmodule MirrorNeuron.Grpc.JobProjection do
   def summary(definition) when is_map(definition) do
     definition
     |> Map.take(@summary_fields)
+    |> put_definition_type(definition)
     |> put_counts(definition)
     |> compact_bundle_ref()
   end
@@ -28,6 +29,7 @@ defmodule MirrorNeuron.Grpc.JobProjection do
   def detail(definition) when is_map(definition) do
     definition
     |> Map.take(@detail_fields)
+    |> put_definition_type(definition)
     |> put_counts(definition)
     |> put_recent_run_ids(definition)
     |> put_response_service(definition)
@@ -64,6 +66,11 @@ defmodule MirrorNeuron.Grpc.JobProjection do
     projected
     |> Map.put("run_count", list_count(definition["run_ids"]))
     |> Map.put("schedule_count", list_count(definition["schedule_ids"]))
+  end
+
+  defp put_definition_type(projected, definition) do
+    type = definition["type"] || get_in(definition, ["manifest", "type"])
+    Map.put(projected, "type", type)
   end
 
   defp put_recent_run_ids(projected, definition) do

@@ -76,4 +76,38 @@ defmodule MirrorNeuron.Runtime.SchedulePolicyTest do
 
     assert SchedulePolicy.missed?(schedule, ~U[2026-05-24 10:00:02Z])
   end
+
+  test "service schedules use lifecycle windows that pause instead of cancel" do
+    now = ~U[2026-05-24 10:00:00Z]
+    manifest = %{"type" => "service", "job_name" => "continuous worker"}
+
+    assert {:ok, schedule} =
+             SchedulePolicy.normalize(
+               %{
+                 "cron" => "5 10 * * *",
+                 "window" => %{"duration_ms" => 60_000, "end_action" => "cancel"}
+               },
+               manifest,
+               now: now
+             )
+
+    assert schedule["target_type"] == "service"
+    assert schedule["window"]["end_action"] == "pause"
+  end
+
+  test "batch schedule windows retain cancel semantics" do
+    assert {:ok, schedule} =
+             SchedulePolicy.normalize(
+               %{
+                 "kind" => "delayed",
+                 "delay_ms" => 1_000,
+                 "window" => %{"duration_ms" => 60_000, "end_action" => "cancel"}
+               },
+               %{"type" => "batch"},
+               now: ~U[2026-05-24 10:00:00Z]
+             )
+
+    refute Map.has_key?(schedule, "target_type")
+    assert schedule["window"]["end_action"] == "cancel"
+  end
 end

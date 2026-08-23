@@ -58,6 +58,21 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
     end
   end
 
+  def reset_prepared_container(config) when is_map(config) do
+    case prepared_container_name(config) do
+      name when is_binary(name) and name != "" ->
+        case docker_cmd(["restart", "--time", "1", name], config) do
+          {:ok, _output} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+
+      _missing ->
+        :ok
+    end
+  end
+
+  def reset_prepared_container(_config), do: :ok
+
   @doc false
   def prepared_container?(config) do
     case prepared_container_name(config) do

@@ -5,7 +5,7 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
   @default_catchup_limit 10
   @supported_kinds ["periodic", "delayed", "event", "resource_wait"]
   @supported_missed_policies ["skip", "catchup_one", "catchup_all"]
-  @supported_end_actions ["cancel", "none"]
+  @supported_end_actions ["cancel", "pause", "none"]
 
   def normalize(schedule, manifest \\ nil, opts \\ [])
 
@@ -39,6 +39,7 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
         "metadata" => Map.get(raw, "metadata", %{})
       }
       |> drop_empty()
+      |> apply_service_lifecycle(manifest)
 
     case validate(normalized) do
       :ok -> {:ok, put_next_run(normalized, now)}
@@ -303,8 +304,24 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
     add_error(
       errors,
       is_binary(end_action) and end_action not in @supported_end_actions,
-      "schedule.window.end_action must be cancel or none"
+      "schedule.window.end_action must be cancel, pause, or none"
     )
+  end
+
+  defp apply_service_lifecycle(schedule, manifest) do
+    if manifest_map(manifest)["type"] == "service" do
+      schedule
+      |> Map.put("target_type", "service")
+      |> Map.update("window", %{}, fn
+        %{"duration_ms" => duration} = window when is_integer(duration) and duration > 0 ->
+          Map.put(window, "end_action", "pause")
+
+        window ->
+          window
+      end)
+    else
+      schedule
+    end
   end
 
   defp invalid_cron_errors(crons) do

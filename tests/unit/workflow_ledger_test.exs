@@ -424,6 +424,90 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     assert get_in(state, ["steps", "slow_llm_step", "beacon_timeout_ms"]) == 300_000
   end
 
+  test "service entrypoint has no implicit deadline while downstream steps stay bounded" do
+    manifest = %Manifest{
+      type: "service",
+      flow: %{
+        "entrypoint" => "service",
+        "steps" => [
+          %{"id" => "service", "run" => "service", "control" => %{}},
+          %{"id" => "finalize", "run" => "finalize", "control" => %{}}
+        ],
+        "graph" => %{
+          "edges" => [
+            %{"id" => "service_to_finalize", "from" => "service", "to" => "finalize"}
+          ]
+        }
+      }
+    }
+
+    nodes = [%{node_id: "service", config: %{}}, %{node_id: "finalize", config: %{}}]
+    {state, []} = WorkflowLedger.new(manifest, nodes) |> WorkflowLedger.job_running()
+
+    assert get_in(state, ["steps", "service", "timeout_seconds"]) == nil
+    assert get_in(state, ["steps", "service", "beacon_timeout_ms"]) == nil
+    assert get_in(state, ["steps", "finalize", "timeout_seconds"]) == 300
+    assert get_in(state, ["steps", "finalize", "beacon_timeout_ms"]) == 300_000
+
+    message = Message.new("job", "runtime", "service", "start", %{})
+    decorated = WorkflowLedger.decorate_message(state, "service", message)
+
+    refute Map.has_key?(decorated["headers"], "mn.workflow.deadline_at")
+    refute Map.has_key?(decorated["headers"], "mn.workflow.heartbeat_deadline_at")
+
+    {state, [_started]} =
+      WorkflowLedger.on_message_received(
+        state,
+        "service",
+        decorated,
+        "2026-06-02T16:00:00.000Z"
+      )
+
+    assert get_in(state, ["steps", "service", "status"]) == "running"
+    assert get_in(state, ["steps", "service", "deadline_at"]) == nil
+    assert get_in(state, ["steps", "service", "heartbeat_deadline_at"]) == nil
+
+    {state, [_beacon], []} =
+      WorkflowLedger.on_agent_event(
+        state,
+        "service",
+        "agent_beacon",
+        %{"step_id" => "service"},
+        "2026-06-02T20:00:00.000Z"
+      )
+
+    assert get_in(state, ["steps", "service", "heartbeat_deadline_at"]) == nil
+
+    {reconciled, [], []} =
+      WorkflowLedger.reconcile(state, "2026-06-03T16:00:00.000Z")
+
+    assert get_in(reconciled, ["steps", "service", "status"]) == "running"
+  end
+
+  test "service entrypoint honors an explicit timeout" do
+    manifest = %Manifest{
+      type: "service",
+      flow: %{
+        "entrypoint" => "service",
+        "steps" => [
+          %{
+            "id" => "service",
+            "run" => "service",
+            "control" => %{"timeout_seconds" => 60}
+          }
+        ],
+        "graph" => %{"edges" => []}
+      }
+    }
+
+    {state, []} =
+      WorkflowLedger.new(manifest, [%{node_id: "service", config: %{}}])
+      |> WorkflowLedger.job_running()
+
+    assert get_in(state, ["steps", "service", "timeout_seconds"]) == 60
+    assert get_in(state, ["steps", "service", "beacon_timeout_ms"]) == 60_000
+  end
+
   test "runs a linear pipeline in dependency order" do
     state = dag_state(["a", "b", "c"], [edge("a", "b"), edge("b", "c")])
     {state, [_]} = receive_message(state, "b")

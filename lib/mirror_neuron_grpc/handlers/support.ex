@@ -139,6 +139,17 @@ defmodule MirrorNeuron.Grpc.Handlers.Support do
   defp runtime_error_status({:invalid_live_input, _reason}), do: GRPC.Status.invalid_argument()
   defp runtime_error_status({:inactive_run, _status}), do: GRPC.Status.failed_precondition()
   defp runtime_error_status({:active_runs, _run_ids}), do: GRPC.Status.failed_precondition()
+
+  defp runtime_error_status({:service_run_exists, _run_ids}),
+    do: GRPC.Status.failed_precondition()
+
+  defp runtime_error_status(:replacement_requires_service_job), do: GRPC.Status.invalid_argument()
+  defp runtime_error_status(:replacement_run_id_required), do: GRPC.Status.invalid_argument()
+  defp runtime_error_status(:replacement_run_id_must_be_fresh), do: GRPC.Status.invalid_argument()
+
+  defp runtime_error_status({:service_run_cleanup_failed, _run_id, _reason}),
+    do: GRPC.Status.failed_precondition()
+
   defp runtime_error_status(:revision_mismatch), do: GRPC.Status.failed_precondition()
   defp runtime_error_status(:invalid_revision), do: GRPC.Status.invalid_argument()
   defp runtime_error_status(:invalid_page_token), do: GRPC.Status.invalid_argument()

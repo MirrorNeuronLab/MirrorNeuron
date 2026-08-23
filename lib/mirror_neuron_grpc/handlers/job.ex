@@ -93,7 +93,8 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
         request
         |> with_json_bundle(fn tmp_dir ->
           MirrorNeuron.update_job_bundle(request.job_id, tmp_dir, attrs,
-            expected_revision: request.expected_revision
+            expected_revision: request.expected_revision,
+            replace_existing_run: request.replace_existing_run
           )
         end)
       end
@@ -156,24 +157,23 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
       []
       |> Support.maybe_put_opt(:run_id, Support.blank_to_nil(request.run_id))
       |> Keyword.put(:inputs, Support.decode_json_map(request.inputs_json))
+      |> Keyword.put(:replace_existing_run, request.replace_existing_run)
 
     result =
       Idempotency.run(
         "start-run:#{request.job_id}",
         request.idempotency_key,
-        {request.run_id, request.inputs_json},
+        {request.run_id, request.inputs_json, request.replace_existing_run},
         fn ->
-          MirrorNeuron.start_run(request.job_id, opts)
+          MirrorNeuron.start_run_result(request.job_id, opts)
         end
       )
 
     case result do
-      {:ok, run_id, _pid} ->
-        response(%{
-          "job_id" => request.job_id,
-          "run_id" => run_id,
-          "status" => "pending"
-        })
+      {:ok, started} ->
+        started
+        |> Map.drop([:pid, "pid"])
+        |> response()
 
       error ->
         respond(error)

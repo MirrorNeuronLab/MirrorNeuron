@@ -56,6 +56,28 @@ defmodule MirrorNeuron.NativeResourceBoundaryTest do
     assert :ok = DockerJobSandbox.cleanup_job_local(job_id, config)
   end
 
+  @tag :tmp_dir
+  test "prepared DockerWorker can be reset in place for a service pause", %{tmp_dir: tmp_dir} do
+    fake_docker = Path.join(tmp_dir, "fake-docker-reset")
+    args_log = Path.join(tmp_dir, "reset-args.log")
+
+    File.write!(fake_docker, """
+    #!/usr/bin/env bash
+    printf '%s\\n' "$@" >> #{args_log}
+    exit 0
+    """)
+
+    File.chmod!(fake_docker, 0o755)
+
+    assert :ok =
+             DockerJobSandbox.reset_prepared_container(%{
+               "docker_bin" => fake_docker,
+               "docker_worker_container_name" => "mn-service-worker"
+             })
+
+    assert File.read!(args_log) == "restart\n--time\n1\nmn-service-worker\n"
+  end
+
   test "DockerWorker runner refuses unprepared ad hoc containers by default" do
     assert {:error, reason} =
              DockerWorker.run(

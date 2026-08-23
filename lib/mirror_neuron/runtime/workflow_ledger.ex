@@ -10,7 +10,6 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
 
   @schema_version 3
   @default_timeout_seconds 300
-  @default_beacon_timeout_ms 45_000
   @default_retry_backoff_ms 1_000
   @default_max_scatter_items 1_000
   @successful_step_statuses ["completed", "partial", "skipped"]
@@ -1508,11 +1507,10 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
     attempt_number = Map.get(step, "attempt_count", 0) + 1
     attempt_id = attempt_id(step["id"], attempt_number)
 
-    deadline_at =
-      iso_after_seconds(now, Map.get(step, "timeout_seconds", @default_timeout_seconds))
+    deadline_at = iso_after_seconds_if_configured(now, Map.get(step, "timeout_seconds"))
 
     heartbeat_deadline_at =
-      iso_after_ms(now, Map.get(step, "beacon_timeout_ms", @default_beacon_timeout_ms))
+      iso_after_ms_if_configured(now, Map.get(step, "beacon_timeout_ms"))
 
     idempotency_key = idempotency_key(state, step["id"], attempt_number, message)
 
@@ -1702,11 +1700,19 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
     steps = Map.get(flow, "steps", [])
     graph = if is_map(Map.get(flow, "graph")), do: Map.get(flow, "graph"), else: %{}
     runtime_by_id = Map.new(runtime_nodes, &{&1.node_id, &1})
+    service_entrypoint_id = service_entrypoint_id(manifest, steps)
 
     if is_list(steps) do
       steps
       |> Enum.filter(&is_map/1)
-      |> Enum.map(&step_definition(&1, runtime_by_id, graph))
+      |> Enum.map(fn step ->
+        step_definition(
+          step,
+          runtime_by_id,
+          graph,
+          Map.get(step, "id") == service_entrypoint_id
+        )
+      end)
       |> Enum.reject(&is_nil/1)
     else
       []
@@ -1722,7 +1728,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
     dynamic
     |> Map.get("templates", %{})
     |> normalize_template_specs()
-    |> Enum.map(&step_definition(&1, runtime_by_id, graph))
+    |> Enum.map(&step_definition(&1, runtime_by_id, graph, false))
     |> Enum.reject(&is_nil/1)
   end
 
@@ -1739,7 +1745,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
 
   defp normalize_template_specs(_templates), do: []
 
-  defp step_definition(raw, runtime_by_id, graph) do
+  defp step_definition(raw, runtime_by_id, graph, unbounded_by_default?) do
     step_id = to_string(Map.get(raw, "id") || "")
 
     if step_id == "" do
@@ -1777,21 +1783,37 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
       control = if is_map(Map.get(raw, "control")), do: Map.get(raw, "control"), else: %{}
       retry = if is_map(Map.get(control, "retry")), do: Map.get(control, "retry"), else: %{}
 
+      configured_timeout_seconds =
+        Map.get(control, "timeout_seconds") || Map.get(node_config, "timeout_seconds")
+
       timeout_seconds =
-        positive_int(
-          Map.get(control, "timeout_seconds") || Map.get(node_config, "timeout_seconds"),
-          @default_timeout_seconds
-        )
+        if unbounded_by_default? and is_nil(configured_timeout_seconds) do
+          nil
+        else
+          positive_int(configured_timeout_seconds, @default_timeout_seconds)
+        end
 
       # DockerWorker can report a terminal result but does not stream workflow
-      # beacons while an LLM request is in flight.  Do not fail those valid
-      # long-running steps at the generic 45-second beacon interval; their
-      # declared workflow timeout remains the authoritative upper bound.
+      # beacons while a command is in flight. Keep the declared workflow
+      # timeout authoritative; an unbounded service entrypoint therefore has
+      # no implicit beacon deadline either.
+      configured_beacon_timeout_ms =
+        Map.get(control, "beacon_timeout_ms") || Map.get(node_config, "beacon_timeout_ms")
+
       beacon_timeout_ms =
-        positive_int(
-          Map.get(control, "beacon_timeout_ms") || Map.get(node_config, "beacon_timeout_ms"),
-          timeout_seconds * 1_000
-        )
+        cond do
+          not is_nil(configured_beacon_timeout_ms) ->
+            positive_int(
+              configured_beacon_timeout_ms,
+              (timeout_seconds || @default_timeout_seconds) * 1_000
+            )
+
+          is_nil(timeout_seconds) ->
+            nil
+
+          true ->
+            timeout_seconds * 1_000
+        end
 
       trigger_rule =
         case WorkflowTrigger.from_step(raw, graph) do
@@ -1846,6 +1868,18 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
       "terminal_outcome" => nil
     })
   end
+
+  defp service_entrypoint_id(%{type: "service", flow: flow}, steps)
+       when is_map(flow) and is_list(steps) do
+    Map.get(flow, "entrypoint") ||
+      Map.get(flow, "source") ||
+      Enum.find_value(steps, fn
+        %{"id" => step_id} when is_binary(step_id) and step_id != "" -> step_id
+        _ -> nil
+      end)
+  end
+
+  defp service_entrypoint_id(_manifest, _steps), do: nil
 
   defp merge_existing(base, existing_job) when is_map(existing_job) do
     case Map.get(existing_job, "workflow_state") do
@@ -2001,18 +2035,23 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   defp touch_step(step, now), do: Map.put(step, "last_event_at", now)
 
   defp refresh_beacon(step, payload, now) do
+    configured_timeout_ms =
+      Map.get(payload, "timeout_ms") || Map.get(step, "beacon_timeout_ms")
+
     timeout_ms =
       positive_int(
-        Map.get(payload, "timeout_ms") || Map.get(step, "beacon_timeout_ms"),
-        @default_beacon_timeout_ms
+        configured_timeout_ms,
+        Map.get(step, "beacon_timeout_ms")
       )
+
+    heartbeat_deadline_at = iso_after_ms_if_configured(now, timeout_ms)
 
     current =
       case Map.get(step, "current_attempt") do
         attempt when is_map(attempt) ->
           attempt
           |> Map.put("last_beacon_at", now)
-          |> Map.put("heartbeat_deadline_at", iso_after_ms(now, timeout_ms))
+          |> Map.put("heartbeat_deadline_at", heartbeat_deadline_at)
 
         other ->
           other
@@ -2022,7 +2061,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
     |> Map.merge(%{
       "status" => "running",
       "last_event_at" => now,
-      "heartbeat_deadline_at" => iso_after_ms(now, timeout_ms),
+      "heartbeat_deadline_at" => heartbeat_deadline_at,
       "current_attempt" => current
     })
   end
@@ -2250,6 +2289,12 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   end
 
   defp iso_after_seconds(now, seconds), do: iso_after_ms(now, positive_int(seconds, 0) * 1000)
+
+  defp iso_after_seconds_if_configured(_now, nil), do: nil
+  defp iso_after_seconds_if_configured(now, seconds), do: iso_after_seconds(now, seconds)
+
+  defp iso_after_ms_if_configured(_now, nil), do: nil
+  defp iso_after_ms_if_configured(now, ms), do: iso_after_ms(now, ms)
 
   defp iso_after_ms(now, ms) do
     case parse_iso(now) do

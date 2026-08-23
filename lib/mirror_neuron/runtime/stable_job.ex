@@ -1,10 +1,10 @@
 defmodule MirrorNeuron.Runtime.StableJob do
   @moduledoc """
-  Durable configured jobs and their one-to-many execution runs.
+  Durable configured jobs and their execution runs.
 
-  `job_id` identifies this record and its persistent data. Every call to
-  `start_run/2` creates a new `run_id`; the existing runtime engine receives
-  that run ID as its execution key, preserving v1 observability and controls.
+  `job_id` identifies this record and its persistent data. Batch definitions
+  retain one-to-many run history. A `type: service` definition retains exactly
+  one attached run whose identity survives pause and resume.
   """
 
   alias MirrorNeuron.{JobBundle, JobData, JobId, Manifest}
@@ -49,6 +49,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
         "blueprint_id" => blueprint_id(bundle.manifest),
         "graph_id" => bundle.manifest.graph_id,
         "job_name" => bundle.manifest.job_name,
+        "type" => bundle.manifest.type,
         "manifest" => Manifest.to_map(bundle.manifest),
         "bundle_ref" => Runtime.bundle_ref(bundle.manifest, bundle),
         "resolved_configuration" => stringify(Keyword.get(opts, :resolved_configuration, %{})),
@@ -132,10 +133,12 @@ defmodule MirrorNeuron.Runtime.StableJob do
       with {:ok, definition} <- get(job_id),
            :ok <- ensure_revision(definition, Keyword.get(opts, :expected_revision)),
            :ok <- ensure_active(definition),
-           :ok <- ensure_no_active_runs(definition),
+           :ok <- ensure_owner_node(definition),
            {:ok, bundle} <- JobBundle.load(input),
            :ok <- ensure_same_bundle_identity(definition, bundle),
-           {:ok, normalized_attrs} <- normalize_update(definition, stringify(attrs)) do
+           {:ok, normalized_attrs} <- normalize_update(definition, stringify(attrs)),
+           {:ok, definition, replacement} <-
+             prepare_bundle_replacement(definition, bundle, opts) do
         updated =
           definition
           |> Map.merge(Map.take(normalized_attrs, allowed))
@@ -143,6 +146,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
             "blueprint_id" => blueprint_id(bundle.manifest),
             "graph_id" => bundle.manifest.graph_id,
             "job_name" => bundle.manifest.job_name,
+            "type" => bundle.manifest.type,
             "manifest" => Manifest.to_map(bundle.manifest),
             "bundle_ref" => Runtime.bundle_ref(bundle.manifest, bundle),
             "updated_at" => Runtime.timestamp(),
@@ -155,7 +159,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
 
             {:ok,
              Map.put(
-               saved,
+               Map.merge(saved, replacement),
                "retired_definition_resources",
                definition_resource_descriptor(definition)
              )}
@@ -187,33 +191,30 @@ defmodule MirrorNeuron.Runtime.StableJob do
   end
 
   def start_run(job_id, opts \\ []) do
+    case start_run_result(job_id, opts) do
+      {:ok, result} -> {:ok, result.run_id, result.pid}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  def start_run_result(job_id, opts \\ []) do
+    with_start_gate(job_id, fn ->
+      with {:ok, definition} <- get(job_id) do
+        do_start_run_result(definition, opts)
+      end
+    end)
+  end
+
+  def scheduled_transition(job_id, opts \\ []) do
     with_start_gate(job_id, fn ->
       with {:ok, definition} <- get(job_id),
            :ok <- ensure_active(definition),
-           :ok <- ensure_owner_node(definition),
-           access <- requested_job_data_access(definition, opts),
-           :ok <- ensure_job_data_access(definition, access),
-           {:ok, %JobBundle{} = bundle} <- load_bundle(definition),
-           run_id <-
-             Keyword.get(opts, :run_id) || Runtime.generate_job_id(bundle.manifest.graph_id),
-           :ok <- JobData.validate_id(run_id),
-           :ok <- ensure_run_id_available(run_id),
-           {:ok, data_dir} <- JobData.initialize(job_id),
-           {:ok, manifest} <-
-             prepare_run_manifest(bundle.manifest, definition, run_id, data_dir, access, opts),
-           run_bundle <- %JobBundle{bundle | manifest: manifest},
-           {:ok, ^run_id, pid} <-
-             Runtime.start_job(manifest,
-               job_id: run_id,
-               job_bundle: run_bundle,
-               stable_job_id: job_id,
-               run_id: run_id,
-               job_data_dir: data_dir,
-               job_data_access: access,
-               data_generation: definition["data_generation"]
-             ),
-           {:ok, _definition} <- attach_run(definition, run_id) do
-        {:ok, run_id, pid}
+           :ok <- ensure_owner_node(definition) do
+        if service_definition?(definition) do
+          do_scheduled_service_transition(definition, opts)
+        else
+          do_start_run_result(definition, opts)
+        end
       end
     end)
   end
@@ -349,6 +350,180 @@ defmodule MirrorNeuron.Runtime.StableJob do
       {:ok, true} -> {:error, :run_already_exists}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp do_start_run_result(definition, opts) do
+    replace_existing = Keyword.get(opts, :replace_existing_run, false)
+    service = service_definition?(definition)
+    existing_run_ids = definition |> Map.get("run_ids", []) |> Enum.uniq()
+    requested_run_id = Keyword.get(opts, :run_id)
+
+    with :ok <- ensure_replacement_scope(service, replace_existing),
+         {:replay, replay} <-
+           replacement_replay(definition, requested_run_id, replace_existing) do
+      {:ok, replay}
+    else
+      :continue ->
+        do_start_new_run(
+          definition,
+          opts,
+          service,
+          replace_existing,
+          existing_run_ids,
+          requested_run_id
+        )
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp do_start_new_run(
+         definition,
+         opts,
+         service,
+         replace_existing,
+         existing_run_ids,
+         requested_run_id
+       ) do
+    job_id = definition["job_id"]
+    access = requested_job_data_access(definition, opts)
+
+    with :ok <- ensure_service_start_allowed(service, replace_existing, existing_run_ids),
+         :ok <- ensure_replacement_run_id(requested_run_id, replace_existing, existing_run_ids),
+         :ok <- maybe_ensure_job_data_access(definition, access, service and replace_existing),
+         {:ok, %JobBundle{} = bundle} <- load_bundle(definition),
+         run_id <- requested_run_id || Runtime.generate_job_id(bundle.manifest.graph_id),
+         :ok <- JobData.validate_id(run_id),
+         :ok <- ensure_fresh_replacement_run_id(run_id, existing_run_ids, replace_existing),
+         :ok <- ensure_run_id_available(run_id),
+         {:ok, data_dir} <- JobData.initialize(job_id),
+         {:ok, manifest} <-
+           prepare_run_manifest(bundle.manifest, definition, run_id, data_dir, access, opts),
+         run_bundle <- %JobBundle{bundle | manifest: manifest},
+         :ok <- MirrorNeuron.BlueprintValidation.run_input_validation(run_bundle),
+         {:ok, definition, replacement} <-
+           maybe_replace_service_runs(definition, service and replace_existing),
+         {:ok, attached_definition} <- attach_run(definition, run_id),
+         result <-
+           Runtime.start_job(manifest,
+             job_id: run_id,
+             job_bundle: run_bundle,
+             stable_job_id: job_id,
+             run_id: run_id,
+             job_data_dir: data_dir,
+             job_data_access: access,
+             data_generation: definition["data_generation"]
+           ) do
+      finish_started_run(result, attached_definition, run_id, replacement)
+    end
+  end
+
+  defp finish_started_run({:ok, run_id, pid}, definition, run_id, replacement) do
+    {:ok,
+     replacement
+     |> Map.merge(%{
+       action: if(replacement.replaced_run_ids == [], do: "started", else: "replaced"),
+       job_id: definition["job_id"],
+       run_id: run_id,
+       status: "pending",
+       pid: pid
+     })}
+  end
+
+  defp finish_started_run({:error, reason}, definition, run_id, _replacement) do
+    _ = maybe_detach_unpersisted_run(definition, run_id)
+    {:error, reason}
+  end
+
+  defp finish_started_run(other, _definition, _run_id, _replacement), do: other
+
+  defp maybe_detach_unpersisted_run(definition, run_id) do
+    case RedisStore.execution_exists?(run_id) do
+      {:ok, true} -> :ok
+      _missing -> detach_attached_run(definition, run_id)
+    end
+  end
+
+  defp detach_attached_run(definition, run_id) do
+    remaining = List.delete(Map.get(definition, "run_ids", []), run_id)
+
+    updated =
+      definition
+      |> Map.put("run_ids", remaining)
+      |> Map.put("latest_run_id", List.last(remaining))
+      |> increment_revision()
+
+    RedisStore.persist_job_definition(definition["job_id"], updated)
+  end
+
+  defp replacement_replay(definition, run_id, true)
+       when is_binary(run_id) and run_id != "" do
+    existing_run_ids = definition |> Map.get("run_ids", []) |> Enum.uniq()
+
+    if existing_run_ids == [run_id] do
+      case RedisStore.fetch_job(run_id) do
+        {:ok, run} ->
+          {:replay,
+           %{
+             action: "already_running",
+             job_id: definition["job_id"],
+             run_id: run_id,
+             status: run["status"] || "unknown",
+             pid: nil,
+             replaced_run_ids: [],
+             cleanup_deferred: false,
+             cleanup_pending_nodes: []
+           }}
+
+        _missing ->
+          :continue
+      end
+    else
+      :continue
+    end
+  end
+
+  defp replacement_replay(_definition, _run_id, _replace_existing), do: :continue
+
+  defp ensure_replacement_scope(true, _replace_existing), do: :ok
+  defp ensure_replacement_scope(false, false), do: :ok
+  defp ensure_replacement_scope(false, true), do: {:error, :replacement_requires_service_job}
+
+  defp ensure_service_start_allowed(true, false, run_ids) when run_ids != [],
+    do: {:error, {:service_run_exists, run_ids}}
+
+  defp ensure_service_start_allowed(_service, _replace_existing, _run_ids), do: :ok
+
+  defp ensure_replacement_run_id(nil, true, _run_ids),
+    do: {:error, :replacement_run_id_required}
+
+  defp ensure_replacement_run_id("", true, _run_ids), do: {:error, :replacement_run_id_required}
+
+  defp ensure_replacement_run_id(_run_id, _replace_existing, _run_ids), do: :ok
+
+  defp ensure_fresh_replacement_run_id(run_id, existing_run_ids, true) do
+    if run_id in existing_run_ids,
+      do: {:error, :replacement_run_id_must_be_fresh},
+      else: :ok
+  end
+
+  defp ensure_fresh_replacement_run_id(_run_id, _existing_run_ids, false), do: :ok
+
+  defp maybe_ensure_job_data_access(_definition, _access, true), do: :ok
+
+  defp maybe_ensure_job_data_access(definition, access, false),
+    do: ensure_job_data_access(definition, access)
+
+  defp maybe_replace_service_runs(definition, true), do: clear_service_runs(definition)
+  defp maybe_replace_service_runs(definition, false), do: {:ok, definition, empty_replacement()}
+
+  defp empty_replacement do
+    %{
+      replaced_run_ids: [],
+      cleanup_deferred: false,
+      cleanup_pending_nodes: []
+    }
   end
 
   defp load_bundle(definition) do
@@ -568,6 +743,224 @@ defmodule MirrorNeuron.Runtime.StableJob do
       run_ids = Enum.map(active, & &1["run_id"])
       if run_ids == [], do: :ok, else: {:error, {:active_runs, run_ids}}
     end
+  end
+
+  defp prepare_bundle_replacement(definition, bundle, opts) do
+    replace_existing = Keyword.get(opts, :replace_existing_run, false)
+    target_service = bundle.manifest.type == "service"
+    run_ids = definition |> Map.get("run_ids", []) |> Enum.uniq()
+
+    cond do
+      replace_existing and not target_service ->
+        {:error, :replacement_requires_service_job}
+
+      replace_existing ->
+        clear_service_runs(definition)
+
+      target_service and length(run_ids) > 1 ->
+        {:error, {:service_run_exists, run_ids}}
+
+      true ->
+        with :ok <- ensure_no_active_runs(definition) do
+          {:ok, definition, empty_replacement()}
+        end
+    end
+  end
+
+  defp clear_service_runs(definition, run_ids \\ nil) do
+    selected = Enum.uniq(run_ids || Map.get(definition, "run_ids", []))
+
+    if selected == [] do
+      {:ok, definition, empty_replacement()}
+    else
+      with {:ok, cleanup} <- cleanup_service_run_ids(selected),
+           remaining <- Enum.reject(Map.get(definition, "run_ids", []), &(&1 in selected)),
+           updated <-
+             definition
+             |> Map.put("run_ids", remaining)
+             |> Map.put("latest_run_id", List.last(remaining))
+             |> Map.put("updated_at", Runtime.timestamp())
+             |> increment_revision(),
+           {:ok, saved} <- RedisStore.persist_job_definition(definition["job_id"], updated) do
+        {:ok, saved,
+         %{
+           replaced_run_ids: selected,
+           cleanup_deferred: cleanup.pending_nodes != [],
+           cleanup_pending_nodes: cleanup.pending_nodes
+         }}
+      end
+    end
+  end
+
+  defp cleanup_service_run_ids(run_ids) do
+    Enum.reduce_while(run_ids, {:ok, %{pending_nodes: []}}, fn run_id, {:ok, cleanup} ->
+      case cleanup_service_run(run_id) do
+        {:ok, result} ->
+          pending_nodes =
+            cleanup.pending_nodes
+            |> Kernel.++(Map.get(result, "cleanup_pending_nodes", []))
+            |> Kernel.++(Map.get(result, :cleanup_pending_nodes, []))
+            |> Enum.uniq()
+
+          {:cont, {:ok, %{pending_nodes: pending_nodes}}}
+
+        {:error, reason} ->
+          {:halt, {:error, {:service_run_cleanup_failed, run_id, reason}}}
+      end
+    end)
+  end
+
+  defp cleanup_service_run(run_id) do
+    case RedisStore.fetch_job(run_id) do
+      {:ok, %{"status" => status}} when status in @terminal_statuses ->
+        Runtime.clear_job_with_result(run_id)
+
+      {:ok, _active} ->
+        with {:ok, _status} <- MirrorNeuron.cancel(run_id),
+             {:ok, result} <- Runtime.clear_job_with_result(run_id) do
+          {:ok, result}
+        end
+
+      {:error, reason} ->
+        if missing_run?(run_id, reason) do
+          with :ok <- Runtime.cleanup_job_resources(run_id, nil),
+               :ok <- RedisStore.delete_job(run_id) do
+            {:ok, %{}}
+          end
+        else
+          {:error, reason}
+        end
+    end
+  end
+
+  defp do_scheduled_service_transition(definition, opts) do
+    opts = Keyword.put_new(opts, :run_id, scheduled_service_run_id(definition, opts))
+
+    with {:ok, records} <- service_run_records(definition) do
+      terminal = Enum.filter(records, &service_terminal_record?/1)
+      active = Enum.reject(records, &service_terminal_record?/1)
+
+      cond do
+        Enum.any?(active, &(&1["status"] == "cancelling")) ->
+          {:error, {:service_schedule_blocked, "cancellation in progress"}}
+
+        length(active) > 1 ->
+          {:error,
+           {:service_schedule_blocked,
+            "multiple active legacy runs require an explicit replacement"}}
+
+        true ->
+          with {:ok, definition, cleanup} <-
+                 clear_service_runs(definition, Enum.map(terminal, & &1["run_id"])) do
+            continue_scheduled_service_transition(definition, List.first(active), cleanup, opts)
+          end
+      end
+    end
+  end
+
+  defp continue_scheduled_service_transition(definition, nil, cleanup, opts) do
+    with {:ok, started} <- do_start_run_result(definition, opts) do
+      action = if cleanup.replaced_run_ids == [], do: "started", else: "replaced"
+
+      {:ok,
+       started
+       |> Map.put(:action, action)
+       |> Map.put(:replaced_run_ids, cleanup.replaced_run_ids)
+       |> Map.put(:cleanup_deferred, cleanup.cleanup_deferred)
+       |> Map.put(:cleanup_pending_nodes, cleanup.cleanup_pending_nodes)}
+    end
+  end
+
+  defp continue_scheduled_service_transition(
+         definition,
+         %{"status" => "paused"} = run,
+         cleanup,
+         _opts
+       ) do
+    case MirrorNeuron.resume(run["run_id"]) do
+      {:ok, status} ->
+        {:ok,
+         Map.merge(cleanup, %{
+           action: "resumed",
+           job_id: definition["job_id"],
+           run_id: run["run_id"],
+           status: status,
+           pid: nil
+         })}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp continue_scheduled_service_transition(
+         definition,
+         %{"status" => status} = run,
+         cleanup,
+         _opts
+       )
+       when status in ["pending", "validated", "scheduled", "running"] do
+    {:ok,
+     Map.merge(cleanup, %{
+       action: "already_running",
+       job_id: definition["job_id"],
+       run_id: run["run_id"],
+       status: run["status"],
+       pid: nil
+     })}
+  end
+
+  defp continue_scheduled_service_transition(_definition, run, _cleanup, _opts),
+    do: {:error, {:service_schedule_blocked, "run status #{run["status"]} cannot be resumed"}}
+
+  defp service_run_records(definition) do
+    definition
+    |> Map.get("run_ids", [])
+    |> Enum.uniq()
+    |> Enum.reduce_while({:ok, []}, fn run_id, {:ok, records} ->
+      case RedisStore.fetch_job(run_id) do
+        {:ok, run} ->
+          {:cont, {:ok, [Map.put(run, "run_id", run_id) | records]}}
+
+        {:error, reason} ->
+          if missing_run?(run_id, reason) do
+            {:cont, {:ok, [%{"run_id" => run_id, "status" => "missing"} | records]}}
+          else
+            {:halt, {:error, reason}}
+          end
+      end
+    end)
+    |> then(fn
+      {:ok, records} -> {:ok, Enum.reverse(records)}
+      error -> error
+    end)
+  end
+
+  defp service_terminal_record?(%{"status" => status}),
+    do: status in @terminal_statuses or status == "missing"
+
+  defp service_definition?(definition) do
+    (definition["type"] || get_in(definition, ["manifest", "type"])) == "service"
+  end
+
+  defp scheduled_service_run_id(definition, opts) do
+    metadata = Keyword.get(opts, :schedule_metadata, %{})
+
+    digest =
+      :crypto.hash(
+        :sha256,
+        Jason.encode!(%{
+          job_id: definition["job_id"],
+          schedule_id: metadata["schedule_id"],
+          scheduled_for: metadata["scheduled_for"],
+          reason: metadata["reason"],
+          event_id: get_in(metadata, ["event", "event_id"])
+        })
+      )
+      |> Base.url_encode64(padding: false)
+      |> binary_part(0, 24)
+
+    "service_#{digest}"
   end
 
   defp ensure_job_data_access(definition, requested_access) do

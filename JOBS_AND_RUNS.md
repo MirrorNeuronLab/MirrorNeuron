@@ -23,8 +23,9 @@ durable job: job-7f3a
   `mirrorneuron.job.v1.JobService`; package v1 contains the current durable
   job/run capability set and has no legacy companion service.
 
-Code must never infer that a job and a run are one-to-one. A job can have no
-runs, one run, or many runs. A run belongs to exactly one job.
+The executable manifest `type` is authoritative. A batch job can have no runs,
+one run, or many runs. A `type: service` job can have no run or exactly one
+attached run. A run belongs to exactly one job.
 
 ## Persistent and transient storage
 
@@ -133,12 +134,23 @@ Run operations:
 - inspect, pause, resume, and cancel by `run_id`;
 - confirmed deletion of an individual terminal run.
 
-Each manual or scheduled dispatch creates a fresh `run_id`. Retry and recovery
+Each manual batch dispatch creates a fresh `run_id`. A service start is rejected
+with `service_run_exists` whenever any run is already attached; the operator can
+pause, resume, cancel, delete, or explicitly replace that run. Replacement
+requires a fresh ID and permanently removes old run-scoped state and artifacts
+without deleting configuration, schedules, or shared job data. Retry and recovery
 advance attempt metadata while preserving the run identity, stable job-data
 mount, access mode, and data generation. Bundles prepared by a blueprint layer
 may contain a bootstrap/previous run ID; Core rebinds that ID throughout the
 manifest and merges the job's current resolved configuration into
 `MN_BLUEPRINT_CONFIG_JSON` before starting each run.
+
+Service schedules ensure lifecycle state instead of accumulating runs. An
+occurrence starts a missing run, resumes a paused run, records an
+`already_running` no-op for pending/running work, or clears terminal history and
+starts a deterministic fresh run. Cancelling or multiple legacy active runs are
+blocked. Schedule-window closure pauses the service, and overlapping windows do
+not pause it until the last window closes.
 
 ## Compatibility and migration
 
@@ -173,8 +185,9 @@ job-scoped collection.
 
 ## Verification focus
 
-Tests should prove one job can create multiple independent runs sharing one
-job-data directory, while two jobs built from the same blueprint remain
-isolated. They should also cover restart, scheduled dispatch, retries, stale
+Tests should prove one batch job can create multiple independent runs sharing
+one job-data directory, while a service job enforces one attached run and two
+jobs built from the same blueprint remain isolated. They should also cover
+service replacement and lifecycle scheduling, restart, scheduled dispatch, retries, stale
 generation handles, active-run lifecycle rejection, exact sandbox mounts,
 forged identifiers, migration idempotency, and v1 historical reads.

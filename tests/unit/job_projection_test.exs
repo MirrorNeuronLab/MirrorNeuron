@@ -116,4 +116,16 @@ defmodule MirrorNeuron.Grpc.JobProjectionTest do
     disabled = JobProjection.detail(%{"job_id" => "legacy", "manifest" => %{}})
     assert disabled["response_service"] == %{"state" => "disabled"}
   end
+
+  test "job projections derive service type from legacy stored manifests" do
+    legacy = %{
+      "job_id" => "legacy-service",
+      "status" => "active",
+      "manifest" => %{"type" => "service"},
+      "run_ids" => ["run-only"]
+    }
+
+    assert JobProjection.summary(legacy)["type"] == "service"
+    assert JobProjection.detail(legacy)["type"] == "service"
+  end
 end

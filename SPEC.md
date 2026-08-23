@@ -30,20 +30,32 @@ are compatibility-sensitive.
 
 A stable job definition owns a validated bundle, resolved configuration,
 schedules, storage declarations, owner node, lifecycle state, data generation,
-and persistent `job_id`. Each intentional execution creates a distinct
-`run_id`; retry and recovery attempts retain that run and use an independent
-attempt identity. Public stable-job responses are bounded projections: they
+and persistent `job_id`. Batch jobs retain one-to-many execution history and
+each intentional execution creates a distinct `run_id`. An executable manifest
+whose authoritative `type` is `service` instead retains at most one attached
+run; pause and resume preserve that run identity. Retry and recovery attempts
+retain their run and use an independent attempt identity. Public stable-job responses are bounded projections: they
 carry a durable bundle reference and lifecycle/configuration metadata, never
 the embedded expanded manifest, private runtime paths, or the full run-ID
 history. A submitted bundle is loaded, normalized, validated, checked
 for services and requirements, admitted to resources, and started under
 per-run supervision.
+The service workflow entrypoint has no implicit batch deadline or beacon
+deadline. An explicit entrypoint `timeout_seconds` and optional
+`beacon_timeout_ms` remain authoritative; downstream and batch steps retain
+their bounded defaults.
 An inactive stable job may atomically replace its executable bundle only when
 the graph and blueprint identities are unchanged. Replacement preserves job
 data, schedules, and run history. Run preparation rewrites only run/attempt
 identity and run-output locations; submission IDs, containers, input roots,
 and definition-owned resources remain immutable until a later bundle
 replacement retires them.
+Ordinary service starts fail with the stable `service_run_exists` conflict when
+any run is attached. Explicit replacement requires a fresh run ID, validates
+before cleanup, durably cancels active work, permanently clears every old
+run-scoped record and artifact, and then attaches one fresh run. Job data,
+configuration, schedules, and definition identity remain intact. Retried
+replacement with the already-attached fresh ID returns that run.
 An executable manifest may opt into one definition-scoped response service with
 the singular top-level `response_service: {"enabled": true}` declaration.
 Core starts it asynchronously on the owner node, routes bounded unary queries
@@ -100,6 +112,12 @@ operation. Acknowledgement removes the index entry but retains the durable
 cancellation record for audit.
 Pause, resume, cancel, backup, restore, deployment, and schedule operations
 preserve event/status coherence.
+Service schedules are lifecycle schedules: an occurrence starts when no run is
+attached, resumes a paused run, no-ops when it is already pending/running,
+replaces terminal history, and blocks while cancellation or ambiguous legacy
+active history remains. A window end pauses rather than cancels; overlapping
+windows pause only when the last window for that job/run closes. Dispatch audit
+records retain the action, old/new run IDs, and deferred cleanup state.
 Pausing a service terminates its owned HostLocal commands and sandboxes while
 retaining resumable workflow state. A retry-safe auxiliary service-agent
 failure reuses durable command redelivery while its healthy supervising agent

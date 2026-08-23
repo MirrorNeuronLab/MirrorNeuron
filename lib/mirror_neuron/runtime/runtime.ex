@@ -101,6 +101,25 @@ defmodule MirrorNeuron.Runtime do
   def error_message({:invalid_live_input, reason}), do: to_string(reason)
   def error_message({:inactive_run, status}), do: "run is inactive (status: #{status})"
 
+  def error_message({:service_run_exists, run_ids}) do
+    "MN_SERVICE_RUN_EXISTS: type: service job already has a run (#{Enum.join(run_ids, ", ")}); resume, pause, cancel, delete, or explicitly replace it"
+  end
+
+  def error_message(:replacement_requires_service_job),
+    do: "replace_existing_run is valid only for a type: service job"
+
+  def error_message(:replacement_run_id_required),
+    do: "a fresh explicit run_id is required when replacing a service run"
+
+  def error_message(:replacement_run_id_must_be_fresh),
+    do: "the replacement run_id must differ from every run being replaced"
+
+  def error_message({:service_run_cleanup_failed, run_id, reason}),
+    do: "failed to clean service run #{run_id}: #{error_message(reason)}"
+
+  def error_message({:service_schedule_blocked, reason}),
+    do: "service schedule is blocked: #{reason}"
+
   def error_message(reason) when is_binary(reason), do: reason
   def error_message(reason) when is_atom(reason), do: Atom.to_string(reason)
   def error_message(reason), do: inspect(reason)
