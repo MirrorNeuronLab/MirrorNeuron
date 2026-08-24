@@ -108,6 +108,30 @@ defmodule MirrorNeuron.Runner.DockerComposeTest do
     assert Jason.decode!(project_json)["project_name"] == "mn-compose-runner"
   end
 
+  test "event callback return values do not terminate the Compose runner" do
+    config = %{
+      "mn_docker_compose" => %{"project_name" => "mn-compose-runner"},
+      "compose" => %{
+        "context" => "docker_compose/turtlebot-maze",
+        "file" => "docker-compose.yaml",
+        "env_file" => "mirrorneuron/warehouse.env",
+        "services" => ["warehouse"]
+      }
+    }
+
+    assert {:error, "DockerCompose project is not healthy"} =
+             DockerCompose.run(%{}, config,
+               agent_id: "warehouse",
+               event_callback: fn _event_type, _payload ->
+                 {:agent_event, "warehouse", "docker_compose_ready", %{}}
+               end
+             )
+
+    assert_receive {:prepare, _prepare}
+    assert_receive {:status, _status}
+    assert_receive {:cleanup, _cleanup}
+  end
+
   test "cleanup can retire an already-prepared project during a service pause" do
     config = %{
       "mn_docker_compose" => %{

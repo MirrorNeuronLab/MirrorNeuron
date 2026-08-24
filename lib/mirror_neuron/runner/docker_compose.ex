@@ -159,7 +159,11 @@ defmodule MirrorNeuron.Runner.DockerCompose do
   defp emit(opts, event_type, payload) do
     case Keyword.get(opts, :event_callback) do
       callback when is_function(callback, 2) ->
-        callback.(event_type, Map.put(payload, "runner", "docker_compose"))
+        # `send/2` returns the sent message, while the runner lifecycle uses
+        # `:ok` as the callback contract.  Event delivery is best-effort and
+        # must never turn a healthy Compose startup into an executor result.
+        _ = callback.(event_type, Map.put(payload, "runner", "docker_compose"))
+        :ok
 
       _ ->
         :ok
