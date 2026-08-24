@@ -8,6 +8,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   alias MirrorNeuron.Artifacts.{SharedStorage, StagedArtifact}
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.{JobBundle, ServiceRegistry, ServiceSpec}
+  alias MirrorNeuron.Runner.DockerCompose
   alias MirrorNeuron.Scheduler
   alias MirrorNeuron.Sandbox.DockerJobSandbox
 
@@ -3240,8 +3241,29 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp publish_workflow_events(_state, _events), do: :ok
 
   defp cleanup_sandboxes(state) do
+    cleanup_prepared_compose_projects(state)
     _ = Runtime.cleanup_job_sandboxes(state.job_id)
     :ok
+  end
+
+  defp cleanup_prepared_compose_projects(state) do
+    state.nodes_by_id
+    |> Map.values()
+    |> Enum.each(fn
+      %{config: config} when is_map(config) ->
+        case DockerCompose.cleanup_prepared_project(config) do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning(
+              "failed to clean prepared DockerCompose project while stopping service #{state.job_id}: #{inspect(reason)}"
+            )
+        end
+
+      _node ->
+        :ok
+    end)
   end
 
   defp reset_prepared_service_containers(state) do

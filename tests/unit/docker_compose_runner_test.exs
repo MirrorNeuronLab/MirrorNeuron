@@ -107,4 +107,21 @@ defmodule MirrorNeuron.Runner.DockerComposeTest do
     assert [project_json] = cleanup.projects_json
     assert Jason.decode!(project_json)["project_name"] == "mn-compose-runner"
   end
+
+  test "cleanup can retire an already-prepared project during a service pause" do
+    config = %{
+      "mn_docker_compose" => %{
+        "project_name" => "mn-compose-runner",
+        "context_path" => "/owned/context",
+        "compose_file" => "/owned/context/docker-compose.yaml",
+        "generated_env_file" => "/owned/project.env",
+        "services" => ["warehouse"]
+      }
+    }
+
+    assert :ok = DockerCompose.cleanup_prepared_project(config)
+    assert_receive {:cleanup, cleanup}
+    assert [project_json] = cleanup.projects_json
+    assert Jason.decode!(project_json)["project_name"] == "mn-compose-runner"
+  end
 end

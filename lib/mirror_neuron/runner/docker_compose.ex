@@ -29,6 +29,16 @@ defmodule MirrorNeuron.Runner.DockerCompose do
 
   def run(_payload, _config, _opts), do: {:error, "DockerCompose config must be an object"}
 
+  @doc false
+  def cleanup_prepared_project(config) when is_map(config) do
+    with {:ok, project} <- project_record(config),
+         {:ok, _response} <- cleanup_project(project) do
+      :ok
+    end
+  end
+
+  def cleanup_prepared_project(_config), do: :ok
+
   defp prepare_project(config, opts) do
     with {:ok, record} <- project_record(config) do
       request = %PrepareDockerComposeRequest{
@@ -99,7 +109,14 @@ defmodule MirrorNeuron.Runner.DockerCompose do
 
   defp cleanup_project(project) do
     request = %CleanupDockerComposeRequest{projects_json: [Jason.encode!(project)], version: 1}
-    ModelServices.cleanup_docker_compose(request)
+
+    case Map.get(project, "node") do
+      node_name when is_binary(node_name) and node_name != "" ->
+        ModelServices.cleanup_docker_compose_on_node(node_name, request)
+
+      _ ->
+        ModelServices.cleanup_docker_compose(request)
+    end
   rescue
     _ -> :ok
   end
