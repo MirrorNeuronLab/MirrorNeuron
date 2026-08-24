@@ -117,6 +117,14 @@ defmodule MirrorNeuron.Grpc.JobProjectionTest do
     assert disabled["response_service"] == %{"state" => "disabled"}
   end
 
+  test "job response workers ignore transient transport messages" do
+    assert {:noreply, %{}} =
+             MirrorNeuron.Runtime.JobResponse.handle_info(
+               {:gun_down, self(), make_ref(), :closed, []},
+               %{}
+             )
+  end
+
   test "job projections derive service type from legacy stored manifests" do
     legacy = %{
       "job_id" => "legacy-service",

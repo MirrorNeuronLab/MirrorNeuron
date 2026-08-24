@@ -244,6 +244,9 @@ defmodule MirrorNeuron.Runtime.JobResponse do
   end
 
   @impl true
+  def handle_info(_message, state), do: {:noreply, state}
+
+  @impl true
   def handle_call(:status, _from, state), do: {:reply, public_state(state), state}
 
   @impl true
