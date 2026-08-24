@@ -124,4 +124,31 @@ defmodule MirrorNeuron.Runner.DockerComposeTest do
     assert [project_json] = cleanup.projects_json
     assert Jason.decode!(project_json)["project_name"] == "mn-compose-runner"
   end
+
+  test "cleanup reports native project errors instead of acknowledging a stale project" do
+    Application.put_env(
+      :mirror_neuron,
+      :native_sdk_grpc_cleanup_docker_compose_client,
+      fn _target, _request, _timeout ->
+        {:ok,
+         %CleanupDockerComposeResponse{
+           result_json: ~s({"removed":[],"errors":["owned source is missing"]}),
+           version: 1
+         }}
+      end
+    )
+
+    config = %{
+      "mn_docker_compose" => %{
+        "project_name" => "mn-compose-runner",
+        "context_path" => "/owned/context",
+        "compose_file" => "/owned/context/docker-compose.yaml",
+        "generated_env_file" => "/owned/project.env",
+        "services" => ["warehouse"]
+      }
+    }
+
+    assert {:error, reason} = DockerCompose.cleanup_prepared_project(config)
+    assert reason =~ "owned source is missing"
+  end
 end

@@ -110,15 +110,26 @@ defmodule MirrorNeuron.Runner.DockerCompose do
   defp cleanup_project(project) do
     request = %CleanupDockerComposeRequest{projects_json: [Jason.encode!(project)], version: 1}
 
-    case Map.get(project, "node") do
-      node_name when is_binary(node_name) and node_name != "" ->
-        ModelServices.cleanup_docker_compose_on_node(node_name, request)
+    result =
+      case Map.get(project, "node") do
+        node_name when is_binary(node_name) and node_name != "" ->
+          ModelServices.cleanup_docker_compose_on_node(node_name, request)
 
-      _ ->
-        ModelServices.cleanup_docker_compose(request)
+        _ ->
+          ModelServices.cleanup_docker_compose(request)
+      end
+
+    with {:ok, response} <- result,
+         {:ok, cleanup} <- decode(response.result_json, "cleanup"),
+         [] <- Map.get(cleanup, "errors", []) do
+      {:ok, cleanup}
+    else
+      errors when is_list(errors) -> {:error, "DockerCompose cleanup failed: #{inspect(errors)}"}
+      {:error, _reason} = error -> error
+      other -> {:error, "DockerCompose cleanup returned invalid response: #{inspect(other)}"}
     end
   rescue
-    _ -> :ok
+    error -> {:error, "DockerCompose cleanup failed: #{Exception.message(error)}"}
   end
 
   defp project_record(config) do
