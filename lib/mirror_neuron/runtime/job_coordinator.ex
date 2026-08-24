@@ -200,19 +200,23 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       end
     end
 
-    if job_type(state) == "service" do
-      reset_prepared_service_containers(state)
-      cleanup_sandboxes(state)
-      ServiceRegistry.deregister_job(state.job_id)
-    end
-
     next_state =
       state
       |> Map.merge(%{status: "paused", workflow_state: workflow_state})
       |> cancel_coordinator_delivery_timer()
       |> cancel_health_check_timer()
 
+    # Compose `down` can take longer than the RPC caller's default deadline.
+    # Persist and cancel health/recovery timers first so they cannot revive a
+    # service while its project-owned resources are being stopped.
     persist_job(next_state)
+
+    if job_type(next_state) == "service" do
+      reset_prepared_service_containers(next_state)
+      cleanup_sandboxes(next_state)
+      ServiceRegistry.deregister_job(next_state.job_id)
+    end
+
     EventBus.publish(state.job_id, %{type: :job_paused, timestamp: Runtime.timestamp()})
     publish_workflow_events(next_state, workflow_events)
     {:reply, {:ok, "paused"}, next_state}
