@@ -130,23 +130,43 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
 
   # A cancellation can be reconciled after its JobCoordinator has exited or
   # after Core has restarted.  The prepared Compose record lives in the
-  # persisted runtime topology, so use it rather than relying on a live
+  # persisted manifest/topology, so use it rather than relying on a live
   # runner process.  DockerCompose only ever tears down that exact project.
   defp cleanup_prepared_compose_projects(job_id) do
-    with {:ok, job} when is_map(job) <- RedisStore.fetch_job(job_id),
-         topology when is_map(topology) <- detail(job, "runtime_topology"),
-         nodes when is_list(nodes) <- detail(topology, "nodes") do
-      Enum.reduce_while(nodes, :ok, fn node, :ok ->
-        config = if is_map(node), do: detail(node, "config"), else: nil
+    case RedisStore.fetch_job(job_id) do
+      {:ok, job} when is_map(job) ->
+        job
+        |> compose_configs_from_job()
+        |> Enum.reduce_while(:ok, fn config, :ok ->
+          case DockerCompose.cleanup_prepared_project(config) do
+            :ok -> {:cont, :ok}
+            {:error, reason} -> {:halt, {:error, {:docker_compose_cleanup, reason}}}
+          end
+        end)
 
-        case DockerCompose.cleanup_prepared_project(config) do
-          :ok -> {:cont, :ok}
-          {:error, reason} -> {:halt, {:error, {:docker_compose_cleanup, reason}}}
-        end
-      end)
-    else
-      _ -> :ok
+      _ ->
+        :ok
     end
+  end
+
+  defp compose_configs_from_job(job) do
+    topology_nodes = fn topology -> List.wrap(detail(topology, "nodes")) end
+
+    [
+      detail(job, "runtime_topology") |> topology_nodes.(),
+      detail(job, "topology") |> topology_nodes.(),
+      job |> detail("manifest") |> detail("agents") |> topology_nodes.()
+    ]
+    |> List.flatten()
+    |> Enum.map(fn node -> if is_map(node), do: detail(node, "config"), else: nil end)
+    |> Enum.filter(fn config ->
+      is_map(config) and is_map(detail(config, "mn_docker_compose"))
+    end)
+    |> Enum.uniq_by(fn config ->
+      config
+      |> detail("mn_docker_compose")
+      |> detail("project_name")
+    end)
   end
 
   defp detail(map, "runtime_topology") when is_map(map),
@@ -157,6 +177,17 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
 
   defp detail(map, "config") when is_map(map),
     do: Map.get(map, "config") || Map.get(map, :config)
+
+  defp detail(map, "agents") when is_map(map),
+    do: Map.get(map, "agents") || Map.get(map, :agents)
+
+  defp detail(map, "mn_docker_compose") when is_map(map),
+    do: Map.get(map, "mn_docker_compose") || Map.get(map, :mn_docker_compose)
+
+  defp detail(map, "project_name") when is_map(map),
+    do: Map.get(map, "project_name") || Map.get(map, :project_name)
+
+  defp detail(_map, _key), do: nil
 
   defp ensure_checkpoint_lock do
     case Process.whereis(CheckpointLock) do
