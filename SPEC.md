@@ -62,6 +62,16 @@ Core starts it asynchronously on the owner node, routes bounded unary queries
 to that owner, reconciles and restarts failures with bounded backoff, and stops
 it for archive, reset, deletion, and definition replacement. Response queries
 never create Runs.
+Federated job and run controls resolve an owner on demand when a projection has
+not yet synchronized, so any connected Core can operate a remote durable
+definition or run. If a known remote owner is unavailable during archive, the
+submitting Core durably records an archive tombstone, hides the stale remote
+projection, and replays the archive when that peer reconnects. The tombstone is
+cleared after any reachable owner response, preventing later implicit retries
+of a rejected archive.
+Federated runtime-model and LiteLLM route controls honor their requested
+`node` owner through the same scoped Core-to-Core forwarding path, so SDK and
+CLI callers use any joined Core as a secure ingress rather than peer tokens.
 Runtime nodes are long-lived OTP processes. Generic built-ins and templates
 route messages and invoke configured runner behavior.
 

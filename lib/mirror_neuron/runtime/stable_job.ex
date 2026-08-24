@@ -176,16 +176,21 @@ defmodule MirrorNeuron.Runtime.StableJob do
   def archive(job_id, opts \\ []) do
     with_start_gate(job_id, fn ->
       with {:ok, definition} <- get(job_id),
-           :ok <- ensure_revision(definition, Keyword.get(opts, :expected_revision)),
-           :ok <- ensure_no_active_runs(definition),
-           :ok <- JobResponse.stop(definition),
-           {:ok, archived} <-
-             RedisStore.persist_job_definition(
-               job_id,
-               definition |> Map.put("status", "archived") |> increment_revision()
-             ),
-           :ok <- pause_job_schedules(job_id) do
-        {:ok, archived}
+           :ok <- ensure_revision(definition, Keyword.get(opts, :expected_revision)) do
+        if definition["status"] == "archived" do
+          {:ok, definition}
+        else
+          with :ok <- ensure_no_active_runs(definition),
+               :ok <- JobResponse.stop(definition),
+               {:ok, archived} <-
+                 RedisStore.persist_job_definition(
+                   job_id,
+                   definition |> Map.put("status", "archived") |> increment_revision()
+                 ),
+               :ok <- pause_job_schedules(job_id) do
+            {:ok, archived}
+          end
+        end
       end
     end)
   end

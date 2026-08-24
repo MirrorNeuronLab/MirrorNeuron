@@ -4,7 +4,14 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
   alias MirrorNeuron.Grpc.Handlers.Support
   alias MirrorNeuron.Grpc.JobProjection
   alias MirrorNeuron.Grpc.Validation
-  alias MirrorNeuron.Cluster.{FederationClient, FederationRegistry, NodeAdapter}
+
+  alias MirrorNeuron.Cluster.{
+    FederatedJobRouting,
+    FederationClient,
+    FederationRegistry,
+    NodeAdapter
+  }
+
   alias MirrorNeuron.Runtime.LiveInput
   alias MirrorNeuron.Runtime.Idempotency
   alias Mirrorneuron.Job.V1.JsonResponse
@@ -45,8 +52,15 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
 
   def get_job(request, stream) do
     case MirrorNeuron.get_job(request.job_id) do
-      {:ok, definition} -> response(JobProjection.detail(definition))
-      _error -> remote_read(request.job_id, :get_job, request, stream)
+      {:ok, definition} ->
+        response(JobProjection.detail(definition))
+
+      _error ->
+        if MirrorNeuron.Grpc.Auth.federation_hop(stream) > 0 do
+          respond({:error, :not_found})
+        else
+          remote_read(request.job_id, &remote_job_owner/1, :get_job, request, stream)
+        end
     end
   end
 
@@ -61,7 +75,13 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
           if Map.get(request, :local_only, false) do
             JobProjection.summaries(jobs)
           else
-            JobProjection.summaries(jobs) ++ FederationRegistry.projections()
+            remote_jobs =
+              FederationRegistry.projections()
+              |> Enum.reject(
+                &(not request.include_archived and Map.get(&1, "status") == "archived")
+              )
+
+            JobProjection.summaries(jobs) ++ remote_jobs
           end
 
         response(%{
@@ -75,7 +95,7 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
   end
 
   def update_job(request, stream) do
-    case remote_owner(request.job_id) do
+    case remote_job_owner(request.job_id) do
       nil -> update_local_job(request)
       owner -> forward_call(owner, :update_job, request, stream)
     end
@@ -103,26 +123,26 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
   end
 
   def archive_job(request, stream) do
-    case remote_owner(request.job_id) do
+    case remote_job_owner(request.job_id) do
       nil ->
         request.job_id
         |> MirrorNeuron.archive_job(expected_revision: request.expected_revision)
         |> respond_definition(:summary)
 
       owner ->
-        forward_call(owner, :archive_job, request, stream)
+        forward_archive_or_queue(owner, request, stream)
     end
   end
 
   def reset_job_data(request, stream) do
-    case remote_owner(request.job_id) do
+    case remote_job_owner(request.job_id) do
       nil -> request.job_id |> MirrorNeuron.reset_job_data() |> respond_definition(:summary)
       owner -> forward_call(owner, :reset_job_data, request, stream)
     end
   end
 
   def delete_job(request, stream) do
-    case remote_owner(request.job_id) do
+    case remote_job_owner(request.job_id) do
       nil -> delete_local_job(request)
       owner -> forward_call(owner, :delete_job, request, stream)
     end
@@ -146,7 +166,7 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
   end
 
   def start_run(request, stream) do
-    case remote_owner(request.job_id) do
+    case remote_job_owner(request.job_id) do
       nil -> start_local_run(request)
       owner -> forward_call(owner, :start_run, request, stream)
     end
@@ -181,7 +201,7 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
   end
 
   def list_runs(request, stream) do
-    case remote_owner(request.job_id) do
+    case remote_job_owner(request.job_id) do
       nil -> list_local_runs(request)
       owner -> remote_runs_read(owner, request, stream)
     end
@@ -206,8 +226,15 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
 
   def get_run(request, stream) do
     case MirrorNeuron.inspect_job(request.run_id) do
-      {:ok, run} -> response(JobProjection.run(run, request.run_id))
-      _error -> remote_read(request.run_id, :get_run, request, stream)
+      {:ok, run} ->
+        response(JobProjection.run(run, request.run_id))
+
+      _error ->
+        if MirrorNeuron.Grpc.Auth.federation_hop(stream) > 0 do
+          respond({:error, :not_found})
+        else
+          remote_read(request.run_id, &remote_run_owner/1, :get_run, request, stream)
+        end
     end
   end
 
@@ -221,7 +248,7 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     do: route_run_control(request, :cancel_run, &MirrorNeuron.cancel/1, stream)
 
   def delete_run(request, stream) do
-    case remote_owner(request.run_id) do
+    case remote_run_owner(request.run_id) do
       nil ->
         case MirrorNeuron.delete_run(request.run_id, confirmed: request.confirmed) do
           :ok -> response(%{"run_id" => request.run_id, "status" => "deleted"})
@@ -234,7 +261,7 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
   end
 
   def send_run_input(request, stream) do
-    case remote_owner(request.run_id) do
+    case remote_run_owner(request.run_id) do
       nil -> send_local_run_input(request)
       owner -> forward_call(owner, :send_run_input, request, stream)
     end
@@ -261,7 +288,7 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
   end
 
   def create_job_schedule(request, stream) do
-    case remote_owner(request.job_id) do
+    case remote_job_owner(request.job_id) do
       nil -> create_local_job_schedule(request)
       owner -> forward_call(owner, :create_job_schedule, request, stream)
     end
@@ -286,7 +313,7 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
   end
 
   def query_job_response(request, stream) do
-    case remote_owner(request.job_id) do
+    case remote_job_owner(request.job_id) do
       nil -> query_local_job_response(request)
       owner -> forward_call(owner, :query_job_response, request, stream)
     end
@@ -307,6 +334,34 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     end
   end
 
+  defp forward_archive_or_queue(owner, request, stream) do
+    try do
+      forward_call(owner, :archive_job, request, stream)
+    rescue
+      error in GRPC.RPCError ->
+        if FederationClient.availability_failure?(error) do
+          case FederationRegistry.queue_archive_tombstone(
+                 owner,
+                 request.job_id,
+                 request.expected_revision
+               ) do
+            {:ok, tombstone} ->
+              response(%{
+                "job_id" => request.job_id,
+                "owner_node" => owner,
+                "status" => "archive_pending",
+                "archive_tombstone" => tombstone
+              })
+
+            error ->
+              respond(error)
+          end
+        else
+          reraise error, __STACKTRACE__
+        end
+    end
+  end
+
   defp control_run(run_id, operation) do
     case operation.(run_id) do
       {:ok, status} -> response(%{"run_id" => run_id, "status" => status})
@@ -316,18 +371,17 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
   end
 
   defp route_run_control(request, function, operation, stream) do
-    case remote_owner(request.run_id) do
+    case remote_run_owner(request.run_id) do
       nil -> control_run(request.run_id, operation)
       owner -> forward_call(owner, function, request, stream)
     end
   end
 
-  defp remote_owner(resource_id) do
-    FederationRegistry.projection_owner(resource_id)
-  end
+  defp remote_job_owner(job_id), do: FederatedJobRouting.job_owner(job_id)
+  defp remote_run_owner(run_id), do: FederatedJobRouting.run_owner(run_id)
 
-  defp remote_read(resource_id, function, request, stream) do
-    case remote_owner(resource_id) do
+  defp remote_read(resource_id, owner_lookup, function, request, stream) do
+    case owner_lookup.(resource_id) do
       nil ->
         respond({:error, :not_found})
 

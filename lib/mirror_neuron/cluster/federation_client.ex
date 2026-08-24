@@ -5,7 +5,7 @@ defmodule MirrorNeuron.Cluster.FederationClient do
   alias MirrorNeuron.Cluster.NodeAdapter
   alias Mirrorneuron.Cluster.V1.ListServicesRequest
   alias Mirrorneuron.Cluster.V1.ClusterService.Stub, as: ClusterStub
-  alias Mirrorneuron.Job.V1.{JobRequest, ListJobsRequest}
+  alias Mirrorneuron.Job.V1.{JobRequest, ListJobsRequest, RunRequest}
   alias Mirrorneuron.Job.V1.JobService.Stub, as: JobStub
 
   @timeout 15_000
@@ -15,6 +15,29 @@ defmodule MirrorNeuron.Cluster.FederationClient do
     record_response(node_name, function, response)
     response
   end
+
+  @doc false
+  def call_cluster(node_name, function, request) when is_atom(function) do
+    rpc_call(node_name, ClusterStub, function, request)
+  end
+
+  @doc false
+  def discover_job_owner(job_id, options \\ [])
+
+  def discover_job_owner(job_id, options) when is_binary(job_id) do
+    discover_owner(job_id, :get_job, :job_id, options)
+  end
+
+  def discover_job_owner(_job_id, _options), do: nil
+
+  @doc false
+  def discover_run_owner(run_id, options \\ [])
+
+  def discover_run_owner(run_id, options) when is_binary(run_id) do
+    discover_owner(run_id, :get_run, :run_id, options)
+  end
+
+  def discover_run_owner(_run_id, _options), do: nil
 
   def list_services(node_name, opts \\ []) when is_list(opts) do
     request = %ListServicesRequest{
@@ -61,6 +84,34 @@ defmodule MirrorNeuron.Cluster.FederationClient do
     end
   end
 
+  defp discover_owner(resource_id, function, field, options) do
+    peers = Keyword.get(options, :peers, FederationRegistry.list())
+    invoke = Keyword.get(options, :call, &call/3)
+
+    Enum.reduce_while(peers, nil, fn peer, _owner ->
+      node_name = Map.get(peer, "node_name")
+
+      if is_binary(node_name) and String.trim(node_name) != "" do
+        try do
+          _response = invoke.(node_name, function, discovery_request(field, resource_id))
+          {:halt, node_name}
+        rescue
+          error in GRPC.RPCError ->
+            if error.status == GRPC.Status.not_found() or availability_failure?(error) do
+              {:cont, nil}
+            else
+              reraise error, __STACKTRACE__
+            end
+        end
+      else
+        {:cont, nil}
+      end
+    end)
+  end
+
+  defp discovery_request(:job_id, job_id), do: %JobRequest{job_id: job_id, version: 1}
+  defp discovery_request(:run_id, run_id), do: %RunRequest{run_id: run_id, version: 1}
+
   def sync_peer(node_name) do
     response =
       call(
@@ -94,6 +145,7 @@ defmodule MirrorNeuron.Cluster.FederationClient do
       end)
 
     _ = FederationRegistry.replace_run_projections(node_name, runs)
+    _ = replay_archive_tombstones(node_name)
     {:ok, %{jobs: length(jobs), runs: length(runs)}}
   rescue
     error ->
@@ -111,6 +163,54 @@ defmodule MirrorNeuron.Cluster.FederationClient do
   end
 
   def availability_failure?(_reason), do: true
+
+  @doc false
+  def replay_archive_tombstones(node_name, options \\ [])
+
+  def replay_archive_tombstones(node_name, options) when is_binary(node_name) do
+    registry = Keyword.get(options, :federation_registry, FederationRegistry)
+    invoke = Keyword.get(options, :call, &call/3)
+
+    with {:ok, tombstones} <- registry.archive_tombstones(node_name) do
+      outcomes =
+        Enum.map(tombstones, fn tombstone ->
+          replay_archive_tombstone(node_name, tombstone, registry, invoke)
+        end)
+
+      {:ok, outcomes}
+    end
+  end
+
+  def replay_archive_tombstones(_node_name, _options), do: {:error, :invalid_owner_node}
+
+  defp replay_archive_tombstone(node_name, tombstone, registry, invoke) do
+    job_id = Map.get(tombstone, "job_id")
+    expected_revision = Map.get(tombstone, "expected_revision", 0)
+
+    if is_binary(job_id) and is_integer(expected_revision) and expected_revision >= 0 do
+      request = %JobRequest{
+        job_id: job_id,
+        expected_revision: expected_revision,
+        version: 1
+      }
+
+      try do
+        _response = invoke.(node_name, :archive_job, request)
+        :ok = registry.clear_archive_tombstone(node_name, job_id)
+        %{job_id: job_id, status: :applied}
+      rescue
+        error in GRPC.RPCError ->
+          if availability_failure?(error) do
+            %{job_id: job_id, status: :pending}
+          else
+            :ok = registry.clear_archive_tombstone(node_name, job_id)
+            %{job_id: job_id, status: :rejected}
+          end
+      end
+    else
+      %{job_id: job_id, status: :invalid}
+    end
+  end
 
   defp connect(target, peer) do
     token = Map.get(peer, "peer_auth_token", "")

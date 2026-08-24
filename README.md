@@ -731,6 +731,15 @@ There are no operator/admin token scopes or credentials embedded in requests.
 definitions and their one-to-many runs; execution control and deletion always
 target `run_id`. Responses keep expanded manifests and histories in durable storage and
 return bounded lifecycle metadata plus bundle/artifact references.
+Any connected federated Core resolves a job or run owner on demand, so operators
+may issue JobService controls from a non-owner node. If `ArchiveJob` reaches a
+known but unavailable owner, the submitting Core records a durable archive
+tombstone, hides that stale projection, and replays the archive once the owner
+is reachable. A reachable owner response—success or a validation rejection—
+clears the tombstone rather than retrying unexpectedly later.
+Runtime-model preparation and LiteLLM route controls likewise forward to a
+joined requested `node`; callers keep one Core ingress and never receive peer
+credentials.
 `UpdateJobRequest` may include `manifest_json` and `payloads` to atomically
 replace an inactive definition's executable bundle without changing its graph
 or blueprint identity.

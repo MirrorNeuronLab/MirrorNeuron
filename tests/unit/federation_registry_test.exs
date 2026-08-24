@@ -3,7 +3,7 @@ defmodule MirrorNeuron.Cluster.FederationRegistryTest do
 
   import Bitwise
 
-  alias MirrorNeuron.Cluster.FederationRegistry
+  alias MirrorNeuron.Cluster.{FederationClient, FederationRegistry}
 
   defmodule NodeAdapterStub do
     def self, do: :mirror_neuron@local
@@ -181,6 +181,79 @@ defmodule MirrorNeuron.Cluster.FederationRegistryTest do
 
     path = Path.join([System.get_env("MN_HOME"), "federation", "peers.json"])
     refute File.read!(path) =~ "job-1"
+  end
+
+  test "archive tombstones hide a stale remote job until the owner confirms archival" do
+    assert {:ok, _peer, _status} =
+             FederationRegistry.register("mirror_neuron@peer", peer_info(), "scoped")
+
+    assert {:ok, _peer, _status} =
+             FederationRegistry.put_projection("mirror_neuron@peer", [
+               %{"job_id" => "job-archive", "status" => "active"}
+             ])
+
+    assert {:ok, tombstone} =
+             FederationRegistry.queue_archive_tombstone("mirror_neuron@peer", "job-archive", 0)
+
+    assert tombstone["status"] == "pending"
+    assert FederationRegistry.projection("job-archive")["status"] == "active"
+    assert FederationRegistry.projections() == []
+    assert {:ok, [^tombstone]} = FederationRegistry.archive_tombstones("mirror_neuron@peer")
+
+    assert {:ok, public_peer} = FederationRegistry.public_fetch("mirror_neuron@peer")
+    refute Map.has_key?(public_peer, "archive_tombstones")
+
+    assert :ok = FederationRegistry.clear_archive_tombstone("mirror_neuron@peer", "job-archive")
+    assert [%{"job_id" => "job-archive"}] = FederationRegistry.projections()
+  end
+
+  test "archive tombstones replay after a peer reconnects and remain on transport failure" do
+    assert {:ok, _peer, _status} =
+             FederationRegistry.register("mirror_neuron@peer", peer_info(), "scoped")
+
+    assert {:ok, _tombstone} =
+             FederationRegistry.queue_archive_tombstone("mirror_neuron@peer", "job-archive", 0)
+
+    assert {:ok, [%{job_id: "job-archive", status: :pending}]} =
+             FederationClient.replay_archive_tombstones("mirror_neuron@peer",
+               call: fn _node, :archive_job, _request ->
+                 raise GRPC.RPCError,
+                   status: GRPC.Status.unavailable(),
+                   message: "peer is offline"
+               end
+             )
+
+    assert {:ok, [_pending]} = FederationRegistry.archive_tombstones("mirror_neuron@peer")
+
+    assert {:ok, [%{job_id: "job-archive", status: :applied}]} =
+             FederationClient.replay_archive_tombstones("mirror_neuron@peer",
+               call: fn "mirror_neuron@peer", :archive_job, request ->
+                 send(self(), {:archive_replayed, request})
+                 :ok
+               end
+             )
+
+    assert_receive {:archive_replayed, %{job_id: "job-archive", expected_revision: 0, version: 1}}
+    assert {:ok, []} = FederationRegistry.archive_tombstones("mirror_neuron@peer")
+  end
+
+  test "a reachable archive rejection clears its tombstone instead of retrying later" do
+    assert {:ok, _peer, _status} =
+             FederationRegistry.register("mirror_neuron@peer", peer_info(), "scoped")
+
+    assert {:ok, _tombstone} =
+             FederationRegistry.queue_archive_tombstone("mirror_neuron@peer", "job-active", 0)
+
+    assert {:ok, [%{job_id: "job-active", status: :rejected}]} =
+             FederationClient.replay_archive_tombstones("mirror_neuron@peer",
+               call: fn _node, :archive_job, _request ->
+                 raise GRPC.RPCError,
+                   status: GRPC.Status.failed_precondition(),
+                   message: "job_has_active_runs"
+               end
+             )
+
+    assert {:ok, []} = FederationRegistry.archive_tombstones("mirror_neuron@peer")
   end
 
   defp peer_info do

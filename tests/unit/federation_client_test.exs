@@ -2,6 +2,35 @@ defmodule MirrorNeuron.Cluster.FederationClientTest do
   use ExUnit.Case, async: true
 
   alias MirrorNeuron.Cluster.FederationClient
+  alias Mirrorneuron.Job.V1.{JobRequest, RunRequest}
+
+  test "discovers connected job and run owners without a cached projection" do
+    peers = [
+      %{"node_name" => "mirror_neuron@offline"},
+      %{"node_name" => "mirror_neuron@spark"}
+    ]
+
+    not_found = GRPC.RPCError.exception(status: GRPC.Status.not_found(), message: "not found")
+
+    unavailable =
+      GRPC.RPCError.exception(status: GRPC.Status.unavailable(), message: "peer unavailable")
+
+    job_call = fn
+      "mirror_neuron@offline", :get_job, %JobRequest{job_id: "job-remote"} -> raise unavailable
+      "mirror_neuron@spark", :get_job, %JobRequest{job_id: "job-remote"} -> :found
+    end
+
+    run_call = fn
+      "mirror_neuron@offline", :get_run, %RunRequest{run_id: "run-remote"} -> raise not_found
+      "mirror_neuron@spark", :get_run, %RunRequest{run_id: "run-remote"} -> :found
+    end
+
+    assert FederationClient.discover_job_owner("job-remote", peers: peers, call: job_call) ==
+             "mirror_neuron@spark"
+
+    assert FederationClient.discover_run_owner("run-remote", peers: peers, call: run_call) ==
+             "mirror_neuron@spark"
+  end
 
   test "application errors do not mark a federated peer unavailable" do
     refute FederationClient.availability_failure?(

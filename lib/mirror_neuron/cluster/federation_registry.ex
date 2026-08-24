@@ -92,6 +92,83 @@ defmodule MirrorNeuron.Cluster.FederationRegistry do
     end
   end
 
+  @doc false
+  def queue_archive_tombstone(owner_node, job_id, expected_revision)
+      when is_binary(owner_node) and is_binary(job_id) and is_integer(expected_revision) do
+    owner_node = String.trim(owner_node)
+    job_id = String.trim(job_id)
+
+    with :ok <- require_peer_name(owner_node),
+         :ok <- require_job_id(job_id) do
+      update_registry(fn peers ->
+        with {:ok, peer} <- Map.fetch(peers, owner_node) do
+          tombstones = Map.get(peer, "archive_tombstones", %{})
+
+          tombstone =
+            Map.get(tombstones, job_id) ||
+              %{
+                "job_id" => job_id,
+                "owner_node" => owner_node,
+                "expected_revision" => expected_revision,
+                "status" => "pending",
+                "requested_at" => timestamp(),
+                "updated_at" => timestamp()
+              }
+
+          updated_peer =
+            Map.put(peer, "archive_tombstones", Map.put(tombstones, job_id, tombstone))
+
+          {:ok, Map.put(peers, owner_node, updated_peer), tombstone, "archive_queued"}
+        else
+          :error -> {:error, :peer_not_found}
+        end
+      end)
+      |> case do
+        {:ok, tombstone, _status} -> {:ok, tombstone}
+        error -> error
+      end
+    end
+  end
+
+  def queue_archive_tombstone(_owner_node, _job_id, _expected_revision),
+    do: {:error, :invalid_archive_tombstone}
+
+  @doc false
+  def archive_tombstones(owner_node) when is_binary(owner_node) do
+    with {:ok, peer} <- fetch(owner_node) do
+      tombstones =
+        peer
+        |> Map.get("archive_tombstones", %{})
+        |> Map.values()
+        |> Enum.filter(&(Map.get(&1, "status") == "pending"))
+        |> Enum.sort_by(&Map.get(&1, "job_id", ""))
+
+      {:ok, tombstones}
+    end
+  end
+
+  def archive_tombstones(_owner_node), do: {:error, :invalid_owner_node}
+
+  @doc false
+  def clear_archive_tombstone(owner_node, job_id)
+      when is_binary(owner_node) and is_binary(job_id) do
+    update_registry(fn peers ->
+      with {:ok, peer} <- Map.fetch(peers, owner_node) do
+        tombstones = Map.get(peer, "archive_tombstones", %{})
+        updated_peer = Map.put(peer, "archive_tombstones", Map.delete(tombstones, job_id))
+        {:ok, Map.put(peers, owner_node, updated_peer), nil, "archive_tombstone_cleared"}
+      else
+        :error -> {:error, :peer_not_found}
+      end
+    end)
+    |> case do
+      {:ok, _value, _status} -> :ok
+      error -> error
+    end
+  end
+
+  def clear_archive_tombstone(_owner_node, _job_id), do: {:error, :invalid_archive_tombstone}
+
   def put_projection(node_name, summaries) when is_list(summaries) do
     store_projections(node_name, summaries, :merge)
   end
@@ -234,9 +311,14 @@ defmodule MirrorNeuron.Cluster.FederationRegistry do
   def projections do
     list()
     |> Enum.flat_map(fn peer ->
-      case projection_store().list_federation_projections(Map.get(peer, "node_name"), "job") do
-        {:ok, projections} -> projections
-        _ -> []
+      node_name = Map.get(peer, "node_name")
+
+      case projection_store().list_federation_projections(node_name, "job") do
+        {:ok, projections} ->
+          Enum.reject(projections, &archive_tombstoned?(peer, Map.get(&1, "job_id")))
+
+        _ ->
+          []
       end
     end)
   end
@@ -244,9 +326,14 @@ defmodule MirrorNeuron.Cluster.FederationRegistry do
   def run_projections do
     list()
     |> Enum.flat_map(fn peer ->
-      case projection_store().list_federation_projections(Map.get(peer, "node_name"), "run") do
-        {:ok, projections} -> projections
-        _ -> []
+      node_name = Map.get(peer, "node_name")
+
+      case projection_store().list_federation_projections(node_name, "run") do
+        {:ok, projections} ->
+          Enum.reject(projections, &archive_tombstoned?(peer, Map.get(&1, "job_id")))
+
+        _ ->
+          []
       end
     end)
   end
@@ -321,6 +408,8 @@ defmodule MirrorNeuron.Cluster.FederationRegistry do
 
   defp require_peer_name(""), do: {:error, :missing_peer_name}
   defp require_peer_name(_node_name), do: :ok
+  defp require_job_id(""), do: {:error, :missing_job_id}
+  defp require_job_id(_job_id), do: :ok
   defp require_peer_token(""), do: {:error, :missing_peer_auth_token}
   defp require_peer_token(_token), do: :ok
 
@@ -373,7 +462,7 @@ defmodule MirrorNeuron.Cluster.FederationRegistry do
 
   defp public_peer(peer) do
     peer
-    |> Map.drop(["peer_auth_token", "job_projections", "run_projections"])
+    |> Map.drop(["peer_auth_token", "job_projections", "run_projections", "archive_tombstones"])
     |> Map.put("connection_mode", "federated")
   end
 
@@ -470,6 +559,12 @@ defmodule MirrorNeuron.Cluster.FederationRegistry do
       |> Map.put("projection_stale", true)
     end)
   end
+
+  defp archive_tombstoned?(peer, job_id) when is_binary(job_id) do
+    match?(%{"status" => "pending"}, get_in(peer, ["archive_tombstones", job_id]))
+  end
+
+  defp archive_tombstoned?(_peer, _job_id), do: false
 
   defp mark_peer_state(node_name, status, attrs) do
     existing =
