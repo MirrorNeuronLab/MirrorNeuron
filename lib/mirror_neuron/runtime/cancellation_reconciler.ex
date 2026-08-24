@@ -71,10 +71,13 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
     # A stale coordinator is allowed to receive the cancellation and stop, but
     # cannot persist a write after the request fence has advanced.
     try do
-      with :ok <- HostLocal.terminate_job(job_id),
+      # Compose teardown is independent of the legacy sandbox registry.  In
+      # particular, after a Core restart there may be no HostLocal process to
+      # terminate, but the persisted project must still be brought down.
+      with :ok <- cleanup_prepared_compose_projects(job_id),
+           :ok <- HostLocal.terminate_job(job_id),
            :ok <- stop_local_job(job_id),
            :ok <- ServiceRegistry.deregister_job(job_id),
-           :ok <- cleanup_prepared_compose_projects(job_id),
            :ok <- OpenShellJobSandbox.cleanup_job_local(job_id),
            :ok <- DockerJobSandbox.cleanup_job_local(job_id),
            :ok <- DiskCheckpoint.delete_job(job_id) do
