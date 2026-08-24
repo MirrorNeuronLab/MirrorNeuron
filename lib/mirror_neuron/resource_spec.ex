@@ -89,6 +89,9 @@ defmodule MirrorNeuron.ResourceSpec do
       String.ends_with?(runner_module, ".DockerWorker") ->
         "docker_worker"
 
+      String.ends_with?(runner_module, ".DockerCompose") ->
+        "docker_compose"
+
       true ->
         nil
     end

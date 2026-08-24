@@ -70,6 +70,12 @@ Internal worker communication does not independently complete a logical step.
 The workflow ledger and persisted job status are the durable account of
 progress; events are the observable account of transitions.
 
+`MirrorNeuron.Runner.DockerCompose` is a native-host runner for a declared,
+payload-relative Compose source tree. Core communicates with the selected
+node's SDK through prepare, status, and cleanup gRPC calls; the native service
+runs Docker only with the returned project record. It must never reuse the
+MirrorNeuron runtime Compose file or DockerWorker's generated worker project.
+
 ## Delivery Contract
 
 Messages have explicit identity, sender/recipient information, payload,
@@ -95,7 +101,7 @@ non-recoverable transition: durable cancellation intent revokes the old lease,
 rejects stale coordinator/agent writes, and prevents recovery, resume,
 scheduling, and drain migration until locally owned cleanup is acknowledged.
 Terminal-run clearing removes job-owned HostLocal processes, DockerWorker and
-OpenShell sandboxes, checkpoints, services, staged storage, artifacts, leases,
+DockerCompose projects, OpenShell sandboxes, checkpoints, services, staged storage, artifacts, leases,
 delivery state, and Redis records on every recorded runtime node before the run
 is reported as cleared. The legacy local-node identity `nonode@nohost` is
 normalized to the current local runtime during cleanup rather than treated as a

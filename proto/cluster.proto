@@ -27,6 +27,9 @@ service ClusterService {
   rpc PrepareRuntimeModel (SetResourceRequest) returns (SetResourceResponse);
   rpc PrepareDockerWorker (PrepareDockerWorkerRequest) returns (PrepareDockerWorkerResponse);
   rpc CleanupDockerWorker (CleanupDockerWorkerRequest) returns (CleanupDockerWorkerResponse);
+  rpc PrepareDockerCompose (PrepareDockerComposeRequest) returns (PrepareDockerComposeResponse);
+  rpc GetDockerComposeStatus (DockerComposeStatusRequest) returns (DockerComposeStatusResponse);
+  rpc CleanupDockerCompose (CleanupDockerComposeRequest) returns (CleanupDockerComposeResponse);
 }
 
 message NetworkHandshakeRequest {
@@ -105,6 +108,42 @@ message CleanupDockerWorkerRequest {
 }
 
 message CleanupDockerWorkerResponse {
+  string result_json = 1;
+  uint32 version = 2;
+}
+
+// Compose projects are distinct from DockerWorker's generated runtime compose
+// file. The project record identifies the one source tree and project that the
+// native SDK is allowed to inspect or tear down.
+message PrepareDockerComposeRequest {
+  string manifest_json = 1;
+  map<string, bytes> payloads = 2;
+  string submission_id = 3;
+  string node_name = 4;
+  uint32 version = 5;
+}
+
+message PrepareDockerComposeResponse {
+  string result_json = 1;
+  uint32 version = 2;
+}
+
+message DockerComposeStatusRequest {
+  string project_json = 1;
+  uint32 version = 2;
+}
+
+message DockerComposeStatusResponse {
+  string result_json = 1;
+  uint32 version = 2;
+}
+
+message CleanupDockerComposeRequest {
+  repeated string projects_json = 1;
+  uint32 version = 2;
+}
+
+message CleanupDockerComposeResponse {
   string result_json = 1;
   uint32 version = 2;
 }

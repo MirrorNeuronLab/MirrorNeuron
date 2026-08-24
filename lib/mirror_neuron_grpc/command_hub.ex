@@ -244,7 +244,12 @@ defmodule MirrorNeuron.Grpc.CommandHub do
                        MirrorNeuron.Grpc.Handlers.RuntimeModel,
                      {:cluster, :PrepareRuntimeModel} => MirrorNeuron.Grpc.Handlers.RuntimeModel,
                      {:cluster, :PrepareDockerWorker} => MirrorNeuron.Grpc.Handlers.DockerWorker,
-                     {:cluster, :CleanupDockerWorker} => MirrorNeuron.Grpc.Handlers.DockerWorker
+                     {:cluster, :CleanupDockerWorker} => MirrorNeuron.Grpc.Handlers.DockerWorker,
+                     {:cluster, :PrepareDockerCompose} =>
+                       MirrorNeuron.Grpc.Handlers.DockerCompose,
+                     {:cluster, :GetDockerComposeStatus} =>
+                       MirrorNeuron.Grpc.Handlers.DockerCompose,
+                     {:cluster, :CleanupDockerCompose} => MirrorNeuron.Grpc.Handlers.DockerCompose
                    })
                    |> Map.merge(
                      Map.new(

@@ -3,8 +3,15 @@ defmodule MirrorNeuron.ModelServices do
 
   alias MirrorNeuron.ServiceRegistry
   alias Mirrorneuron.Cluster.V1.ClusterService
-  alias Mirrorneuron.Cluster.V1.CleanupDockerWorkerRequest
-  alias Mirrorneuron.Cluster.V1.PrepareDockerWorkerRequest
+
+  alias Mirrorneuron.Cluster.V1.{
+    CleanupDockerComposeRequest,
+    CleanupDockerWorkerRequest,
+    DockerComposeStatusRequest,
+    PrepareDockerComposeRequest,
+    PrepareDockerWorkerRequest
+  }
+
   alias Mirrorneuron.Cluster.V1.SetResourceRequest
 
   @interface_version 1
@@ -138,6 +145,42 @@ defmodule MirrorNeuron.ModelServices do
     )
   end
 
+  @doc false
+  def prepare_docker_compose_on_node(node_name, request, timeout \\ 1_800_000) do
+    native_request_on_node(
+      node_name,
+      request,
+      timeout,
+      &prepare_docker_compose/2,
+      "DockerCompose preparation request",
+      "PrepareDockerCompose gRPC"
+    )
+  end
+
+  @doc false
+  def docker_compose_status_on_node(node_name, request, timeout \\ 30_000) do
+    native_request_on_node(
+      node_name,
+      request,
+      timeout,
+      &docker_compose_status/2,
+      "DockerCompose status request",
+      "GetDockerComposeStatus gRPC"
+    )
+  end
+
+  @doc false
+  def cleanup_docker_compose_on_node(node_name, request, timeout \\ 120_000) do
+    native_request_on_node(
+      node_name,
+      request,
+      timeout,
+      &cleanup_docker_compose/2,
+      "DockerCompose cleanup request",
+      "CleanupDockerCompose gRPC"
+    )
+  end
+
   defp native_command_on_node(node_name, attrs, timeout, local_fun, description, command_hint) do
     target_node = normalize_node_name(node_name)
     self_node = to_string(Node.self())
@@ -205,6 +248,39 @@ defmodule MirrorNeuron.ModelServices do
       :native_sdk_grpc_cleanup_docker_worker_client,
       &__MODULE__.grpc_cleanup_docker_worker/3,
       "native SDK DockerWorker cleanup"
+    )
+  end
+
+  @doc false
+  def prepare_docker_compose(%PrepareDockerComposeRequest{} = request, timeout \\ 1_800_000) do
+    native_sdk_proto_command(
+      request,
+      timeout,
+      :native_sdk_grpc_prepare_docker_compose_client,
+      &__MODULE__.grpc_prepare_docker_compose/3,
+      "native SDK DockerCompose preparation"
+    )
+  end
+
+  @doc false
+  def docker_compose_status(%DockerComposeStatusRequest{} = request, timeout \\ 30_000) do
+    native_sdk_proto_command(
+      request,
+      timeout,
+      :native_sdk_grpc_docker_compose_status_client,
+      &__MODULE__.grpc_docker_compose_status/3,
+      "native SDK DockerCompose status"
+    )
+  end
+
+  @doc false
+  def cleanup_docker_compose(%CleanupDockerComposeRequest{} = request, timeout \\ 120_000) do
+    native_sdk_proto_command(
+      request,
+      timeout,
+      :native_sdk_grpc_cleanup_docker_compose_client,
+      &__MODULE__.grpc_cleanup_docker_compose/3,
+      "native SDK DockerCompose cleanup"
     )
   end
 
@@ -309,6 +385,55 @@ defmodule MirrorNeuron.ModelServices do
 
       {:error, reason} ->
         {:error, "native SDK gRPC DockerWorker cleanup failed for #{target}: #{inspect(reason)}"}
+    end
+  end
+
+  @doc false
+  def grpc_prepare_docker_compose(target, request, timeout) do
+    with {:ok, channel} <- GRPC.Stub.connect(target, timeout: timeout),
+         {:ok, response} <-
+           ClusterService.Stub.prepare_docker_compose(channel, request, timeout: timeout) do
+      {:ok, response}
+    else
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error,
+         "native SDK gRPC DockerCompose preparation failed for #{target}: #{Exception.message(error)}"}
+
+      {:error, reason} ->
+        {:error,
+         "native SDK gRPC DockerCompose preparation failed for #{target}: #{inspect(reason)}"}
+    end
+  end
+
+  @doc false
+  def grpc_docker_compose_status(target, request, timeout) do
+    with {:ok, channel} <- GRPC.Stub.connect(target, timeout: timeout),
+         {:ok, response} <-
+           ClusterService.Stub.get_docker_compose_status(channel, request, timeout: timeout) do
+      {:ok, response}
+    else
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error,
+         "native SDK gRPC DockerCompose status failed for #{target}: #{Exception.message(error)}"}
+
+      {:error, reason} ->
+        {:error, "native SDK gRPC DockerCompose status failed for #{target}: #{inspect(reason)}"}
+    end
+  end
+
+  @doc false
+  def grpc_cleanup_docker_compose(target, request, timeout) do
+    with {:ok, channel} <- GRPC.Stub.connect(target, timeout: timeout),
+         {:ok, response} <-
+           ClusterService.Stub.cleanup_docker_compose(channel, request, timeout: timeout) do
+      {:ok, response}
+    else
+      {:error, %GRPC.RPCError{} = error} ->
+        {:error,
+         "native SDK gRPC DockerCompose cleanup failed for #{target}: #{Exception.message(error)}"}
+
+      {:error, reason} ->
+        {:error, "native SDK gRPC DockerCompose cleanup failed for #{target}: #{inspect(reason)}"}
     end
   end
 

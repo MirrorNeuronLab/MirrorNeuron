@@ -117,6 +117,12 @@ defmodule MirrorNeuron.ResourceSpecTest do
              })
   end
 
+  test "infers the isolated Docker Compose runtime driver" do
+    assert ResourceSpec.infer_runtime_driver(%{
+             "runner_module" => "MirrorNeuron.Runner.DockerCompose"
+           }) == "docker_compose"
+  end
+
   test "validates malformed rich resource specs" do
     errors =
       ResourceSpec.validate_node(%{
