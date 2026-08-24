@@ -5,8 +5,8 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
 
   require Logger
 
-  alias MirrorNeuron.Persistence.{CancellationStore, CheckpointLock, DiskCheckpoint}
-  alias MirrorNeuron.Runner.HostLocal
+  alias MirrorNeuron.Persistence.{CancellationStore, CheckpointLock, DiskCheckpoint, RedisStore}
+  alias MirrorNeuron.Runner.{DockerCompose, HostLocal}
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.EventBus
   alias MirrorNeuron.Sandbox.{DockerJobSandbox, OpenShellJobSandbox}
@@ -74,6 +74,7 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
       with :ok <- HostLocal.terminate_job(job_id),
            :ok <- stop_local_job(job_id),
            :ok <- ServiceRegistry.deregister_job(job_id),
+           :ok <- cleanup_prepared_compose_projects(job_id),
            :ok <- OpenShellJobSandbox.cleanup_job_local(job_id),
            :ok <- DockerJobSandbox.cleanup_job_local(job_id),
            :ok <- DiskCheckpoint.delete_job(job_id) do
@@ -126,6 +127,36 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
   defp stop_local_job(job_id) do
     Runtime.terminate_local_job(job_id)
   end
+
+  # A cancellation can be reconciled after its JobCoordinator has exited or
+  # after Core has restarted.  The prepared Compose record lives in the
+  # persisted runtime topology, so use it rather than relying on a live
+  # runner process.  DockerCompose only ever tears down that exact project.
+  defp cleanup_prepared_compose_projects(job_id) do
+    with {:ok, job} when is_map(job) <- RedisStore.fetch_job(job_id),
+         topology when is_map(topology) <- detail(job, "runtime_topology"),
+         nodes when is_list(nodes) <- detail(topology, "nodes") do
+      Enum.reduce_while(nodes, :ok, fn node, :ok ->
+        config = if is_map(node), do: detail(node, "config"), else: nil
+
+        case DockerCompose.cleanup_prepared_project(config) do
+          :ok -> {:cont, :ok}
+          {:error, reason} -> {:halt, {:error, {:docker_compose_cleanup, reason}}}
+        end
+      end)
+    else
+      _ -> :ok
+    end
+  end
+
+  defp detail(map, "runtime_topology") when is_map(map),
+    do: Map.get(map, "runtime_topology") || Map.get(map, :runtime_topology)
+
+  defp detail(map, "nodes") when is_map(map),
+    do: Map.get(map, "nodes") || Map.get(map, :nodes)
+
+  defp detail(map, "config") when is_map(map),
+    do: Map.get(map, "config") || Map.get(map, :config)
 
   defp ensure_checkpoint_lock do
     case Process.whereis(CheckpointLock) do
