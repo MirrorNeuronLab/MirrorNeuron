@@ -81,6 +81,9 @@ defmodule MirrorNeuron do
   def query_job_response(job_id, attrs),
     do: MirrorNeuron.Runtime.JobResponse.query(job_id, attrs)
 
+  def get_job_response_turn(job_id, turn_id),
+    do: MirrorNeuron.Runtime.JobResponse.get_turn(job_id, turn_id)
+
   def delete_run(run_id, opts \\ []), do: MirrorNeuron.Runtime.StableJob.delete_run(run_id, opts)
 
   def deploy_manifest(input, opts \\ []) do

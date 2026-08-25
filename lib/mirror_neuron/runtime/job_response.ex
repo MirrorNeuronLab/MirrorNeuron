@@ -150,6 +150,38 @@ defmodule MirrorNeuron.Runtime.JobResponse do
     end
   end
 
+  def get_turn(job_id, turn_id) when is_binary(job_id) and is_binary(turn_id) do
+    with :ok <- validate_turn_id(turn_id),
+         {:ok, definition} <- StableJob.get(job_id),
+         :ok <- ensure_queryable(definition),
+         :ok <- ensure_agent_enabled(definition) do
+      if local_owner?(definition) do
+        get_turn_local(job_id, turn_id)
+      else
+        get_turn_remote(definition, turn_id)
+      end
+    end
+  end
+
+  def get_turn(_job_id, _turn_id), do: {:error, :invalid_turn_id}
+
+  def get_turn_local(job_id, turn_id) do
+    with {:ok, definition} <- StableJob.get(job_id),
+         :ok <- ensure_queryable(definition),
+         :ok <- ensure_agent_enabled(definition),
+         :ok <- normalize_start_result(ensure_started(definition)) do
+      ModelServices.job_response_command(
+        %{
+          "kind" => "job_response",
+          "operation" => "turn",
+          "job_id" => job_id,
+          "turn_id" => turn_id
+        },
+        10_000
+      )
+    end
+  end
+
   def status(definition) when is_map(definition) do
     cond do
       not enabled?(definition) ->
@@ -383,6 +415,33 @@ defmodule MirrorNeuron.Runtime.JobResponse do
       not enabled?(definition) -> {:error, :response_service_disabled}
       definition["status"] != "active" -> {:error, :job_not_active}
       true -> :ok
+    end
+  end
+
+  defp ensure_agent_enabled(definition) do
+    if get_in(definition, ["manifest", "response_service", "agent", "kind"]) == "bounded_mcp",
+      do: :ok,
+      else: {:error, :response_agent_disabled}
+  end
+
+  defp validate_turn_id(turn_id) do
+    if valid_uuid?(turn_id), do: :ok, else: {:error, :invalid_turn_id}
+  end
+
+  defp get_turn_remote(definition, turn_id) do
+    with {:ok, owner} <- SafeAccess.node_name_to_atom(definition["owner_node"]) do
+      case NodeAdapter.rpc_call(
+             owner,
+             __MODULE__,
+             :get_turn_local,
+             [definition["job_id"], turn_id],
+             @rpc_timeout
+           ) do
+        {:badrpc, _reason} -> {:error, :owner_node_unavailable}
+        result -> result
+      end
+    else
+      _ -> {:error, :owner_node_unavailable}
     end
   end
 

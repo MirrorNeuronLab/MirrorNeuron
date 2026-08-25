@@ -8,6 +8,7 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
     CreateJobScheduleRequest,
     DeleteJobRequest,
     DeleteRunRequest,
+    GetJobResponseTurnRequest,
     JobRequest,
     JsonResponse,
     ListJobsRequest,
@@ -38,7 +39,8 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
     {:DeleteRun, :delete_run, DeleteRunRequest},
     {:SendRunInput, :send_run_input, SendRunInputRequest},
     {:CreateJobSchedule, :create_job_schedule, CreateJobScheduleRequest},
-    {:QueryJobResponse, :query_job_response, QueryJobResponseRequest}
+    {:QueryJobResponse, :query_job_response, QueryJobResponseRequest},
+    {:GetJobResponseTurn, :get_job_response_turn, GetJobResponseTurnRequest}
   ]
 
   @identity_commands @rpc_cases |> Enum.map(&elem(&1, 0)) |> MapSet.new()
@@ -67,7 +69,8 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
           :delete_run,
           :send_run_input,
           :create_job_schedule,
-          :query_job_response
+          :query_job_response,
+          :get_job_response_turn
         ] do
       def unquote(function)(request, stream) do
         if pid = Process.whereis(@test_pid_name),

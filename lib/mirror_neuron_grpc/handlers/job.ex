@@ -319,6 +319,20 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     end
   end
 
+  def get_job_response_turn(request, stream) do
+    case remote_job_owner(request.job_id) do
+      nil -> get_local_job_response_turn(request)
+      owner -> forward_call(owner, :get_job_response_turn, request, stream)
+    end
+  end
+
+  defp get_local_job_response_turn(request) do
+    case MirrorNeuron.get_job_response_turn(request.job_id, request.turn_id) do
+      {:ok, turn} -> response(turn)
+      {:error, reason} -> respond({:error, reason})
+    end
+  end
+
   defp query_local_job_response(request) do
     with {:ok, context} <- Validation.decode_json_map(request.context_json),
          {:ok, answer} <-

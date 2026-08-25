@@ -30,7 +30,8 @@ defmodule MirrorNeuron.JobData do
          :ok <- reject_existing_tree_symlinks(job_path),
          :ok <- File.mkdir_p(job_path),
          :ok <- seed_once(job_path, seed_paths),
-         :ok <- reject_symlinks_in_tree(job_path, :job_data_symlink_not_allowed) do
+         :ok <- reject_symlinks_in_tree(job_path, :job_data_symlink_not_allowed),
+         :ok <- handoff_directory(job_path) do
       {:ok, job_path}
     end
   end
@@ -41,7 +42,8 @@ defmodule MirrorNeuron.JobData do
          :ok <- reject_symlink(job_path),
          :ok <- remove_tree(job_path),
          :ok <- File.mkdir_p(job_path),
-         :ok <- seed_once(job_path, seed_paths) do
+         :ok <- seed_once(job_path, seed_paths),
+         :ok <- handoff_directory(job_path) do
       {:ok, job_path}
     end
   end
@@ -96,7 +98,8 @@ defmodule MirrorNeuron.JobData do
            true <- File.dir?(source),
            :ok <- reject_symlinks_in_tree(source, :seed_symlink_not_allowed),
            :ok <- File.mkdir_p(Path.dirname(destination)),
-           :ok <- File.cp_r(source, destination) |> copy_result() do
+           :ok <- File.cp_r(source, destination) |> copy_result(),
+           :ok <- handoff_directory(destination) do
         {:cont, :ok}
       else
         false -> {:halt, {:error, {:invalid_seed_path, name}}}
@@ -131,6 +134,25 @@ defmodule MirrorNeuron.JobData do
       reject_symlink(root())
     end
   end
+
+  # Core commonly creates bind-mounted Job data as root in Docker while
+  # stable native Job services run as the host user. Inherit the numeric owner
+  # of the mount root's parent for only the Job directory and declared seed
+  # roots. Contents are never traversed or reassigned.
+  defp handoff_directory(path) do
+    with {:ok, %File.Stat{uid: uid, gid: gid}} <- File.stat(Path.dirname(root())),
+         {:ok, %File.Stat{} = stat} <- File.stat(path),
+         :ok <- maybe_chown(path, stat.uid, uid),
+         :ok <- maybe_chgrp(path, stat.gid, gid) do
+      :ok
+    end
+  end
+
+  defp maybe_chown(_path, owner, owner), do: :ok
+  defp maybe_chown(path, _current, owner), do: File.chown(path, owner)
+
+  defp maybe_chgrp(_path, group, group), do: :ok
+  defp maybe_chgrp(path, _current, group), do: File.chgrp(path, group)
 
   defp reject_symlinks_in_tree(root, reason) do
     paths = [root | Path.wildcard(Path.join(root, "**/*"), match_dot: true)]

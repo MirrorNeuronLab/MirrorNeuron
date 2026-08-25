@@ -202,6 +202,19 @@ defmodule Mirrorneuron.Job.V1.QueryJobResponseRequest do
   field(:version, 6, type: :uint32)
 end
 
+defmodule Mirrorneuron.Job.V1.GetJobResponseTurnRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.GetJobResponseTurnRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:job_id, 1, type: :string, json_name: "jobId")
+  field(:turn_id, 2, type: :string, json_name: "turnId")
+  field(:version, 3, type: :uint32)
+end
+
 defmodule Mirrorneuron.Job.V1.JsonResponse do
   @moduledoc false
 
@@ -260,6 +273,12 @@ defmodule Mirrorneuron.Job.V1.JobService.Service do
   rpc(
     :QueryJobResponse,
     Mirrorneuron.Job.V1.QueryJobResponseRequest,
+    Mirrorneuron.Job.V1.JsonResponse
+  )
+
+  rpc(
+    :GetJobResponseTurn,
+    Mirrorneuron.Job.V1.GetJobResponseTurnRequest,
     Mirrorneuron.Job.V1.JsonResponse
   )
 end

@@ -47,6 +47,22 @@ defmodule MirrorNeuron.JobDataTest do
     refute File.exists?(copied)
   end
 
+  test "job and seeded resource roots inherit the bind mount owner", %{root: root} do
+    seed = Path.join(System.tmp_dir!(), "mn-job-owner-seed-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(seed)
+    File.write!(Path.join(seed, "knowledge.txt"), "seed")
+
+    on_exit(fn -> File.rm_rf(seed) end)
+
+    assert {:ok, path} = JobData.initialize("job_owner", %{"knowledge" => seed})
+    assert {:ok, owner} = File.stat(Path.dirname(root))
+    assert {:ok, job} = File.stat(path)
+    assert {:ok, resource} = File.stat(Path.join(path, "knowledge"))
+
+    assert {job.uid, job.gid} == {owner.uid, owner.gid}
+    assert {resource.uid, resource.gid} == {owner.uid, owner.gid}
+  end
+
   test "refuses a symlink job directory", %{root: root} do
     outside = Path.join(System.tmp_dir!(), "mn-job-outside-#{System.unique_integer([:positive])}")
     File.mkdir_p!(outside)

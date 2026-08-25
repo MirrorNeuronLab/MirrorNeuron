@@ -105,6 +105,7 @@ defmodule MirrorNeuron.Grpc.CommandPolicy do
                          {:job, :SendRunInput},
                          {:job, :CreateJobSchedule},
                          {:job, :QueryJobResponse},
+                         {:job, :GetJobResponseTurn},
                          {:cluster, :SetResource},
                          {:cluster, :AddNode},
                          {:cluster, :RemoveNode},
@@ -146,6 +147,7 @@ defmodule MirrorNeuron.Grpc.CommandPolicy do
                             {:job, :SendRunInput},
                             {:job, :CreateJobSchedule},
                             {:job, :QueryJobResponse},
+                            {:job, :GetJobResponseTurn},
                             {:cluster, :ReconcileNode},
                             {:cluster, :DrainNode},
                             {:cluster, :CancelNodeDrain},
@@ -224,7 +226,8 @@ defmodule MirrorNeuron.Grpc.CommandHub do
                          :DeleteRun,
                          :SendRunInput,
                          :CreateJobSchedule,
-                         :QueryJobResponse
+                         :QueryJobResponse,
+                         :GetJobResponseTurn
                        ],
                        &{{:job, &1}, MirrorNeuron.Grpc.Handlers.Job}
                      )

@@ -1032,6 +1032,75 @@ defmodule MirrorNeuron.ManifestTest do
     end
   end
 
+  test "validates the bounded Job response-agent allowlist" do
+    base =
+      flow_manifest(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "bounded-response-agent-test",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{"node_id" => "worker", "agent_type" => "executor", "role" => "root"}
+        ],
+        "edges" => [],
+        "response_service" => %{"enabled" => true, "agent" => bounded_response_agent()}
+      })
+
+    assert {:ok, manifest} = Manifest.load(base)
+    assert manifest.response_service["agent"]["kind"] == "bounded_mcp"
+
+    invalid =
+      put_in(
+        base,
+        ["response_service", "agent", "operations", "navigate_to_zone", "poll_argument"],
+        "undeclared_argument"
+      )
+
+    assert {:error, errors} = Manifest.load(invalid)
+    assert Enum.any?(errors, &String.contains?(&1, "operations must correlate"))
+  end
+
+  defp bounded_response_agent do
+    %{
+      "kind" => "bounded_mcp",
+      "service" => %{
+        "name" => "robot-mcp",
+        "path" => "/mcp",
+        "required_tags" => ["mcp", "robot"]
+      },
+      "tools" => %{
+        "user" => %{
+          "navigate_to_zone" => %{
+            "effect" => "motion",
+            "arguments" => %{
+              "zone" => %{"type" => "string", "enum" => ~w(zone_a zone_b zone_c)}
+            }
+          }
+        },
+        "internal" => %{
+          "get_navigation_operation" => %{
+            "arguments" => %{"operation_id" => %{"type" => "string"}}
+          }
+        }
+      },
+      "operations" => %{
+        "navigate_to_zone" => %{
+          "id_field" => "operation_id",
+          "poll_tool" => "get_navigation_operation",
+          "poll_argument" => "operation_id",
+          "poll_interval_ms" => 1_000,
+          "timeout_seconds" => 180
+        }
+      },
+      "memory" => %{
+        "enabled" => true,
+        "mode" => "explicit",
+        "path" => "knowledge/learned",
+        "types" => ~w(zone_alias control_constraint capability_note),
+        "max_active_records" => 500
+      }
+    }
+  end
+
   defp flow_manifest(manifest) do
     {nodes, manifest} = Map.pop(manifest, "nodes")
     {edges, manifest} = Map.pop(manifest, "edges")

@@ -886,7 +886,7 @@ defmodule MirrorNeuron.Manifest do
 
   defp validate_response_service(errors, %{response_service: response_service})
        when is_map(response_service) do
-    unknown = Map.keys(response_service) -- ["enabled"]
+    unknown = Map.keys(response_service) -- ["enabled", "agent"]
 
     errors
     |> maybe_add_error(
@@ -895,12 +895,158 @@ defmodule MirrorNeuron.Manifest do
     )
     |> maybe_add_error(
       unknown != [],
-      "response_service accepts only enabled"
+      "response_service accepts only enabled and agent"
     )
+    |> add_errors(validate_response_agent(response_service["agent"]))
   end
 
   defp validate_response_service(errors, _manifest) do
     ["response_service must be an object" | errors]
+  end
+
+  defp validate_response_agent(nil), do: []
+
+  defp validate_response_agent(agent) when is_map(agent) do
+    service = if is_map(agent["service"]), do: agent["service"], else: %{}
+    tools = if is_map(agent["tools"]), do: agent["tools"], else: %{}
+    user_tools = if is_map(tools["user"]), do: tools["user"], else: %{}
+    internal_tools = if is_map(tools["internal"]), do: tools["internal"], else: %{}
+    operations = if is_map(agent["operations"]), do: agent["operations"], else: %{}
+    memory = if is_map(agent["memory"]), do: agent["memory"], else: %{}
+
+    []
+    |> maybe_add_error(
+      MapSet.new(Map.keys(agent)) != MapSet.new(~w(kind service tools operations memory)),
+      "response_service.agent must contain exactly kind, service, tools, operations, and memory"
+    )
+    |> maybe_add_error(
+      agent["kind"] != "bounded_mcp",
+      "response_service.agent.kind must be bounded_mcp"
+    )
+    |> maybe_add_error(
+      MapSet.new(Map.keys(service)) != MapSet.new(~w(name path required_tags)) or
+        not nonempty_string?(service["name"]) or not safe_mcp_path?(service["path"]) or
+        not nonempty_unique_strings?(service["required_tags"]),
+      "response_service.agent.service must declare an exact name, path, and required_tags"
+    )
+    |> maybe_add_error(
+      MapSet.new(Map.keys(tools)) != MapSet.new(~w(user internal)) or user_tools == %{} or
+        internal_tools == %{},
+      "response_service.agent.tools must contain non-empty user and internal tool maps"
+    )
+    |> add_errors(validate_response_agent_tools(user_tools, true))
+    |> add_errors(validate_response_agent_tools(internal_tools, false))
+    |> maybe_add_error(
+      MapSet.size(
+        MapSet.intersection(
+          MapSet.new(Map.keys(user_tools)),
+          MapSet.new(Map.keys(internal_tools))
+        )
+      ) > 0,
+      "response_service.agent user and internal tool names must be distinct"
+    )
+    |> add_errors(validate_response_agent_operations(operations, user_tools, internal_tools))
+    |> maybe_add_error(
+      MapSet.new(Map.keys(memory)) != MapSet.new(~w(enabled mode path types max_active_records)) or
+        memory["enabled"] !== true or memory["mode"] != "explicit" or
+        not safe_relative_path?(memory["path"]) or
+        not allowed_memory_types?(memory["types"]) or
+        not (is_integer(memory["max_active_records"]) and memory["max_active_records"] in 1..500),
+      "response_service.agent.memory must declare bounded explicit Job memory"
+    )
+  end
+
+  defp validate_response_agent(_agent), do: ["response_service.agent must be an object"]
+
+  defp validate_response_agent_tools(tools, user?) do
+    Enum.flat_map(tools, fn {name, specification} ->
+      allowed = if user?, do: ~w(arguments effect), else: ~w(arguments)
+
+      arguments =
+        if is_map(specification) and is_map(specification["arguments"]),
+          do: specification["arguments"],
+          else: nil
+
+      []
+      |> maybe_add_error(
+        not nonempty_string?(name),
+        "response_service.agent tool names must be non-empty strings"
+      )
+      |> maybe_add_error(
+        not is_map(specification) or Map.keys(specification) -- allowed != [] or is_nil(arguments),
+        "response_service.agent tool declarations have invalid fields"
+      )
+      |> maybe_add_error(
+        user? and is_map(specification) and specification["effect"] not in ~w(read motion),
+        "response_service.agent user tool effects must be read or motion"
+      )
+      |> add_errors(validate_response_agent_arguments(arguments || %{}))
+    end)
+  end
+
+  defp validate_response_agent_arguments(arguments) do
+    Enum.flat_map(arguments, fn {name, schema} ->
+      valid_schema =
+        is_map(schema) and Map.keys(schema) -- ~w(type enum) == [] and
+          (schema["type"] == "string" or nonempty_unique_strings?(schema["enum"])) and
+          (is_nil(schema["type"]) or schema["type"] == "string") and
+          (is_nil(schema["enum"]) or nonempty_unique_strings?(schema["enum"]))
+
+      if nonempty_string?(name) and valid_schema,
+        do: [],
+        else: ["response_service.agent tool arguments must declare string or enum schemas"]
+    end)
+  end
+
+  defp validate_response_agent_operations(operations, user_tools, internal_tools)
+       when map_size(operations) > 0 do
+    Enum.flat_map(operations, fn {tool_name, operation} ->
+      expected = MapSet.new(~w(id_field poll_tool poll_argument poll_interval_ms timeout_seconds))
+      motion_tool = get_in(user_tools, [tool_name, "effect"]) == "motion"
+      poll_tool = if is_map(operation), do: operation["poll_tool"], else: nil
+      poll_arguments = get_in(internal_tools, [poll_tool, "arguments"]) || %{}
+
+      valid =
+        motion_tool and is_map(operation) and MapSet.new(Map.keys(operation)) == expected and
+          Map.has_key?(internal_tools, poll_tool) and nonempty_string?(operation["id_field"]) and
+          nonempty_string?(operation["poll_argument"]) and
+          Map.has_key?(poll_arguments, operation["poll_argument"]) and
+          is_integer(operation["poll_interval_ms"]) and
+          operation["poll_interval_ms"] in 250..10_000 and
+          is_integer(operation["timeout_seconds"]) and operation["timeout_seconds"] in 1..600
+
+      if valid,
+        do: [],
+        else: [
+          "response_service.agent operations must correlate declared motion tools with internal polling tools"
+        ]
+    end)
+  end
+
+  defp validate_response_agent_operations(_operations, _user_tools, _internal_tools),
+    do: ["response_service.agent.operations must be a non-empty object"]
+
+  defp nonempty_unique_strings?(value) when is_list(value) and value != [] do
+    Enum.all?(value, &nonempty_string?/1) and length(value) == length(Enum.uniq(value))
+  end
+
+  defp nonempty_unique_strings?(_value), do: false
+
+  defp safe_mcp_path?(value),
+    do:
+      nonempty_string?(value) and String.starts_with?(value, "/") and
+        not String.contains?(value, "://")
+
+  defp safe_relative_path?(value) do
+    nonempty_string?(value) and Path.type(value) == :relative and ".." not in Path.split(value)
+  end
+
+  defp allowed_memory_types?(value) do
+    nonempty_unique_strings?(value) and
+      MapSet.subset?(
+        MapSet.new(value),
+        MapSet.new(~w(zone_alias control_constraint capability_note))
+      )
   end
 
   defp normalize_node(raw) do

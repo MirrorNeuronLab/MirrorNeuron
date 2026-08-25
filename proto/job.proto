@@ -20,6 +20,7 @@ service JobService {
   rpc SendRunInput (SendRunInputRequest) returns (JsonResponse);
   rpc CreateJobSchedule (CreateJobScheduleRequest) returns (JsonResponse);
   rpc QueryJobResponse (QueryJobResponseRequest) returns (JsonResponse);
+  rpc GetJobResponseTurn (GetJobResponseTurnRequest) returns (JsonResponse);
 }
 
 message CreateJobRequest {
@@ -109,6 +110,12 @@ message QueryJobResponseRequest {
   string request_id = 4;
   string context_json = 5;
   uint32 version = 6;
+}
+
+message GetJobResponseTurnRequest {
+  string job_id = 1;
+  string turn_id = 2;
+  uint32 version = 3;
 }
 
 message JsonResponse {
