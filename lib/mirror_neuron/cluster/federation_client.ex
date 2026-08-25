@@ -196,8 +196,15 @@ defmodule MirrorNeuron.Cluster.FederationClient do
 
       try do
         _response = invoke.(node_name, :archive_job, request)
-        :ok = registry.clear_archive_tombstone(node_name, job_id)
-        %{job_id: job_id, status: :applied}
+
+        case registry.mark_job_archived(node_name, job_id) do
+          {:ok, _projection} ->
+            :ok = registry.clear_archive_tombstone(node_name, job_id)
+            %{job_id: job_id, status: :applied}
+
+          {:error, _reason} ->
+            %{job_id: job_id, status: :pending}
+        end
       rescue
         error in GRPC.RPCError ->
           if availability_failure?(error) do

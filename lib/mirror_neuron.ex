@@ -6,9 +6,9 @@ defmodule MirrorNeuron do
   alias MirrorNeuron.Monitor
   alias MirrorNeuron.Operations
   alias MirrorNeuron.Persistence.{CancellationStore, RedisStore}
-  alias MirrorNeuron.Runner.DockerCompose
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.CancellationReconciler
+  alias MirrorNeuron.Runtime.RunnerResources
 
   @cluster_job_control_timeout_ms 8_000
 
@@ -427,7 +427,7 @@ defmodule MirrorNeuron do
         with {:ok, target_nodes} <- cancellation_target_nodes(job_id, job),
              {:ok, _request_state, cancellation} <-
                CancellationStore.request(job_id, target_nodes) do
-          case cleanup_persisted_compose_projects(job) do
+          case RunnerResources.cleanup_prepared_compose_projects(job) do
             :ok ->
               local_node = to_string(Node.self())
 
@@ -481,31 +481,6 @@ defmodule MirrorNeuron do
       |> Enum.uniq()
 
     {:ok, if(targets == [], do: [to_string(Node.self())], else: targets)}
-  end
-
-  defp cleanup_persisted_compose_projects(job) when is_map(job) do
-    job
-    |> persisted_compose_configs()
-    |> Enum.reduce_while(:ok, fn config, :ok ->
-      case DockerCompose.cleanup_prepared_project(config) do
-        :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-  end
-
-  defp persisted_compose_configs(job) do
-    nodes =
-      job
-      |> Map.get("manifest", %{})
-      |> Map.get("agents", %{})
-      |> Map.get("nodes", [])
-
-    nodes
-    |> List.wrap()
-    |> Enum.map(fn node -> if is_map(node), do: Map.get(node, "config"), else: nil end)
-    |> Enum.filter(&(is_map(&1) and is_map(Map.get(&1, "mn_docker_compose"))))
-    |> Enum.uniq_by(&get_in(&1, ["mn_docker_compose", "project_name"]))
   end
 
   defp scheduler_placements(job) do

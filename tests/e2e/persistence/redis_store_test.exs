@@ -12,6 +12,11 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
   alias MirrorNeuron.Runtime.EventBus
   alias MirrorNeuron.ServiceRegistry
 
+  alias Mirrorneuron.Cluster.V1.{
+    CleanupDockerComposeResponse,
+    CleanupDockerWorkerResponse
+  }
+
   defmodule CleanupNodeAdapterStub do
     import Kernel, except: [self: 0]
 
@@ -1270,7 +1275,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert File.dir?(outside_submission)
   end
 
-  test "stable job deletion removes every terminal run and its runtime resources" do
+  test "stable job deletion cancels active runs and removes every run and runtime resource" do
     suffix = System.unique_integer([:positive])
     stable_job_id = "stable-delete-#{suffix}"
     run_ids = ["stable-delete-run-a-#{suffix}", "stable-delete-run-b-#{suffix}"]
@@ -1278,15 +1283,53 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     old_checkpoint_root = System.get_env("MN_CHECKPOINT_ROOT")
     old_artifact_root = System.get_env("MN_JOB_ARTIFACT_ROOT")
     old_shared_root = System.get_env("MN_RUNTIME_SHARED_STORAGE_ROOT")
+    old_native_target = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
+
+    old_worker_cleanup =
+      Application.get_env(:mirror_neuron, :native_sdk_grpc_cleanup_docker_worker_client)
+
+    old_compose_cleanup =
+      Application.get_env(:mirror_neuron, :native_sdk_grpc_cleanup_docker_compose_client)
+
     root = Path.join(System.tmp_dir!(), "mn_stable_delete_#{suffix}")
     shared_root = Path.join(root, "shared")
     definition_submission = Path.join([shared_root, "submissions", stable_job_id])
+    parent = self()
 
     System.put_env("MN_JOB_DATA_ROOT", Path.join(root, "job-data"))
     System.put_env("MN_CHECKPOINT_ROOT", Path.join(root, "checkpoints"))
     System.put_env("MN_JOB_ARTIFACT_ROOT", Path.join(root, "artifacts"))
     System.put_env("MN_RUNTIME_SHARED_STORAGE_ROOT", shared_root)
+    System.put_env("MN_NATIVE_SDK_GRPC_TARGET", "127.0.0.1:55052")
     File.mkdir_p!(definition_submission)
+
+    Application.put_env(
+      :mirror_neuron,
+      :native_sdk_grpc_cleanup_docker_worker_client,
+      fn _target, request, _timeout ->
+        send(parent, {:docker_worker_cleanup, request})
+
+        {:ok,
+         %CleanupDockerWorkerResponse{
+           result_json: ~s({"removed":1,"errors":[]}),
+           version: 1
+         }}
+      end
+    )
+
+    Application.put_env(
+      :mirror_neuron,
+      :native_sdk_grpc_cleanup_docker_compose_client,
+      fn _target, request, _timeout ->
+        send(parent, {:docker_compose_cleanup, request})
+
+        {:ok,
+         %CleanupDockerComposeResponse{
+           result_json: ~s({"removed":["mn-compose-job"],"errors":[]}),
+           version: 1
+         }}
+      end
+    )
 
     on_exit(fn ->
       Enum.each(run_ids, &RedisStore.delete_job/1)
@@ -1295,6 +1338,9 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
       restore_system_env("MN_CHECKPOINT_ROOT", old_checkpoint_root)
       restore_system_env("MN_JOB_ARTIFACT_ROOT", old_artifact_root)
       restore_system_env("MN_RUNTIME_SHARED_STORAGE_ROOT", old_shared_root)
+      restore_system_env("MN_NATIVE_SDK_GRPC_TARGET", old_native_target)
+      restore_env(:native_sdk_grpc_cleanup_docker_worker_client, old_worker_cleanup)
+      restore_env(:native_sdk_grpc_cleanup_docker_compose_client, old_compose_cleanup)
       File.rm_rf(root)
     end)
 
@@ -1316,13 +1362,30 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
                "manifest" => %{"metadata" => retired_resources}
              })
 
-    for run_id <- run_ids do
+    runs = [
+      {"stable-delete-run-a-#{suffix}", "running",
+       %{
+         "runner_module" => "MirrorNeuron.Runner.DockerCompose",
+         "mn_docker_compose" => %{
+           "project_name" => "mn-compose-job",
+           "context_path" => "/owned/context",
+           "compose_file" => "/owned/context/docker-compose.yaml"
+         }
+       }},
+      {"stable-delete-run-b-#{suffix}", "completed",
+       %{
+         "runner_module" => "MirrorNeuron.Runner.DockerWorker",
+         "docker_worker_container_name" => "mn-worker-job"
+       }}
+    ]
+
+    for {run_id, status, config} <- runs do
       assert {:ok, _job} =
-               RedisStore.persist_terminal_job(run_id, %{
+               RedisStore.persist_job(run_id, %{
                  "job_id" => run_id,
                  "stable_job_id" => stable_job_id,
-                 "status" => "completed",
-                 "manifest" => %{}
+                 "status" => status,
+                 "manifest" => %{"flow" => %{"nodes" => [%{"config" => config}]}}
                })
 
       assert :ok = DiskCheckpoint.persist_job(run_id, %{"job_id" => run_id})
@@ -1340,6 +1403,13 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert {:ok, %{"metadata" => ^retired_resources}} =
              StableJob.delete(stable_job_id, confirmed: true)
 
+    assert_receive {:docker_worker_cleanup, worker_request}
+    assert worker_request.job_id == "stable-delete-run-b-#{suffix}"
+
+    assert_receive {:docker_compose_cleanup, compose_request}
+    assert [project_json] = compose_request.projects_json
+    assert Jason.decode!(project_json)["project_name"] == "mn-compose-job"
+
     assert {:error, _reason} = RedisStore.fetch_job_definition(stable_job_id)
     refute File.exists?(Path.join(MirrorNeuron.JobData.root(), stable_job_id))
     refute File.exists?(definition_submission)
@@ -1350,6 +1420,150 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
       assert {:ok, artifact_path} = JobStore.job_path(run_id)
       refute File.exists?(artifact_path)
       assert {:ok, []} = ServiceRegistry.list(job_id: run_id)
+    end
+  end
+
+  test "run deletion cancels active DockerWorker and DockerCompose runs and detaches them" do
+    suffix = System.unique_integer([:positive])
+    previous_target = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
+
+    previous_worker_cleanup =
+      Application.get_env(:mirror_neuron, :native_sdk_grpc_cleanup_docker_worker_client)
+
+    previous_compose_cleanup =
+      Application.get_env(:mirror_neuron, :native_sdk_grpc_cleanup_docker_compose_client)
+
+    parent = self()
+    System.put_env("MN_NATIVE_SDK_GRPC_TARGET", "127.0.0.1:55052")
+
+    Application.put_env(
+      :mirror_neuron,
+      :native_sdk_grpc_cleanup_docker_worker_client,
+      fn _target, request, _timeout ->
+        send(parent, {:docker_worker_cleanup, request})
+
+        {:ok,
+         %CleanupDockerWorkerResponse{
+           result_json: ~s({"removed":1,"errors":[]}),
+           version: 1
+         }}
+      end
+    )
+
+    Application.put_env(
+      :mirror_neuron,
+      :native_sdk_grpc_cleanup_docker_compose_client,
+      fn _target, request, _timeout ->
+        send(parent, {:docker_compose_cleanup, request})
+
+        {:ok,
+         %CleanupDockerComposeResponse{
+           result_json: ~s({"removed":["mn-compose-run"],"errors":[]}),
+           version: 1
+         }}
+      end
+    )
+
+    runs = [
+      {"run-delete-worker-#{suffix}",
+       %{
+         "runner_module" => "MirrorNeuron.Runner.DockerWorker",
+         "docker_worker_container_name" => "mn-worker-run"
+       }},
+      {"run-delete-compose-#{suffix}",
+       %{
+         "runner_module" => "MirrorNeuron.Runner.DockerCompose",
+         "mn_docker_compose" => %{
+           "project_name" => "mn-compose-run",
+           "context_path" => "/owned/context",
+           "compose_file" => "/owned/context/docker-compose.yaml"
+         }
+       }}
+    ]
+
+    on_exit(fn ->
+      Enum.each(runs, fn {run_id, _config} ->
+        _ = RedisStore.delete_job(run_id)
+        _ = RedisStore.delete_job_definition("job-#{run_id}")
+      end)
+
+      restore_system_env("MN_NATIVE_SDK_GRPC_TARGET", previous_target)
+      restore_env(:native_sdk_grpc_cleanup_docker_worker_client, previous_worker_cleanup)
+      restore_env(:native_sdk_grpc_cleanup_docker_compose_client, previous_compose_cleanup)
+    end)
+
+    for {run_id, config} <- runs do
+      stable_job_id = "job-#{run_id}"
+
+      assert {:ok, _definition} =
+               RedisStore.persist_job_definition(stable_job_id, %{
+                 "job_id" => stable_job_id,
+                 "status" => "active",
+                 "run_ids" => [run_id]
+               })
+
+      assert {:ok, _run} =
+               RedisStore.persist_job(run_id, %{
+                 "job_id" => run_id,
+                 "stable_job_id" => stable_job_id,
+                 "status" => "running",
+                 "manifest" => %{"flow" => %{"nodes" => [%{"config" => config}]}}
+               })
+
+      assert :ok = StableJob.delete_run(run_id, confirmed: true)
+      assert {:error, _reason} = RedisStore.fetch_job(run_id)
+      assert {:ok, definition} = RedisStore.fetch_job_definition(stable_job_id)
+      assert definition["run_ids"] == []
+    end
+
+    assert_receive {:docker_worker_cleanup, worker_request}
+    assert worker_request.job_id == "run-delete-worker-#{suffix}"
+
+    assert_receive {:docker_compose_cleanup, compose_request}
+    assert [project_json] = compose_request.projects_json
+    assert Jason.decode!(project_json)["project_name"] == "mn-compose-run"
+  end
+
+  test "archiving terminal DockerWorker and DockerCompose jobs retains their runs" do
+    suffix = System.unique_integer([:positive])
+
+    jobs = [
+      {"archive-worker-#{suffix}", %{"runner_module" => "MirrorNeuron.Runner.DockerWorker"}},
+      {"archive-compose-#{suffix}",
+       %{
+         "runner_module" => "MirrorNeuron.Runner.DockerCompose",
+         "mn_docker_compose" => %{"project_name" => "mn-compose-archive"}
+       }}
+    ]
+
+    on_exit(fn ->
+      Enum.each(jobs, fn {job_id, _config} ->
+        _ = RedisStore.delete_job("run-#{job_id}")
+        _ = RedisStore.delete_job_definition(job_id)
+      end)
+    end)
+
+    for {job_id, config} <- jobs do
+      run_id = "run-#{job_id}"
+
+      assert {:ok, _definition} =
+               RedisStore.persist_job_definition(job_id, %{
+                 "job_id" => job_id,
+                 "status" => "active",
+                 "run_ids" => [run_id],
+                 "manifest" => %{"flow" => %{"nodes" => [%{"config" => config}]}}
+               })
+
+      assert {:ok, _run} =
+               RedisStore.persist_terminal_job(run_id, %{
+                 "job_id" => run_id,
+                 "stable_job_id" => job_id,
+                 "status" => "completed"
+               })
+
+      assert {:ok, archived} = StableJob.archive(job_id)
+      assert archived["status"] == "archived"
+      assert {:ok, %{"status" => "completed"}} = RedisStore.fetch_job(run_id)
     end
   end
 

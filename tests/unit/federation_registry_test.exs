@@ -183,7 +183,7 @@ defmodule MirrorNeuron.Cluster.FederationRegistryTest do
     refute File.read!(path) =~ "job-1"
   end
 
-  test "archive tombstones hide a stale remote job until the owner confirms archival" do
+  test "archive tombstones project a pending state until the owner confirms archival" do
     assert {:ok, _peer, _status} =
              FederationRegistry.register("mirror_neuron@peer", peer_info(), "scoped")
 
@@ -196,8 +196,11 @@ defmodule MirrorNeuron.Cluster.FederationRegistryTest do
              FederationRegistry.queue_archive_tombstone("mirror_neuron@peer", "job-archive", 0)
 
     assert tombstone["status"] == "pending"
-    assert FederationRegistry.projection("job-archive")["status"] == "active"
-    assert FederationRegistry.projections() == []
+    assert FederationRegistry.projection("job-archive")["status"] == "archive_pending"
+
+    assert [%{"job_id" => "job-archive", "status" => "archive_pending"}] =
+             FederationRegistry.projections()
+
     assert {:ok, [^tombstone]} = FederationRegistry.archive_tombstones("mirror_neuron@peer")
 
     assert {:ok, public_peer} = FederationRegistry.public_fetch("mirror_neuron@peer")
@@ -205,6 +208,22 @@ defmodule MirrorNeuron.Cluster.FederationRegistryTest do
 
     assert :ok = FederationRegistry.clear_archive_tombstone("mirror_neuron@peer", "job-archive")
     assert [%{"job_id" => "job-archive"}] = FederationRegistry.projections()
+  end
+
+  test "a confirmed remote archive immediately updates its local projection" do
+    assert {:ok, _peer, _status} =
+             FederationRegistry.register("mirror_neuron@peer", peer_info(), "scoped")
+
+    assert {:ok, _peer, _status} =
+             FederationRegistry.put_projection("mirror_neuron@peer", [
+               %{"job_id" => "job-archive", "status" => "active"}
+             ])
+
+    assert {:ok, %{"status" => "archived"}} =
+             FederationRegistry.mark_job_archived("mirror_neuron@peer", "job-archive")
+
+    assert [%{"job_id" => "job-archive", "status" => "archived"}] =
+             FederationRegistry.projections()
   end
 
   test "archive tombstones replay after a peer reconnects and remain on transport failure" do

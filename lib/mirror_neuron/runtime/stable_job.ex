@@ -273,7 +273,6 @@ defmodule MirrorNeuron.Runtime.StableJob do
       with_start_gate(job_id, fn ->
         with {:ok, definition} <- get(job_id),
              :ok <- ensure_revision(definition, Keyword.get(opts, :expected_revision)),
-             :ok <- ensure_no_active_runs(definition),
              :ok <- JobResponse.stop(definition),
              :ok <- delete_job_schedules(job_id),
              :ok <- delete_historical_runs(definition),
@@ -293,7 +292,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
       with {:ok, run} <- RedisStore.fetch_job(run_id),
            stable_job_id <-
              run["stable_job_id"] || get_in(run, ["manifest", "metadata", "job_id"]),
-           :ok <- Runtime.clear_job(run_id),
+           {:ok, _cleanup} <- cleanup_run(run_id),
            :ok <- detach_run(stable_job_id, run_id) do
         :ok
       end
@@ -799,7 +798,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
 
   defp cleanup_service_run_ids(run_ids) do
     Enum.reduce_while(run_ids, {:ok, %{pending_nodes: []}}, fn run_id, {:ok, cleanup} ->
-      case cleanup_service_run(run_id) do
+      case cleanup_run(run_id) do
         {:ok, result} ->
           pending_nodes =
             cleanup.pending_nodes
@@ -815,7 +814,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
     end)
   end
 
-  defp cleanup_service_run(run_id) do
+  defp cleanup_run(run_id) do
     case RedisStore.fetch_job(run_id) do
       {:ok, %{"status" => status}} when status in @terminal_statuses ->
         Runtime.clear_job_with_result(run_id)
@@ -1082,19 +1081,9 @@ defmodule MirrorNeuron.Runtime.StableJob do
   end
 
   defp delete_historical_run(run_id) do
-    case RedisStore.fetch_job(run_id) do
-      {:ok, _run} ->
-        Runtime.clear_job(run_id)
-
-      {:error, reason} ->
-        if missing_run?(run_id, reason) do
-          with :ok <- Runtime.cleanup_job_resources(run_id, nil),
-               :ok <- RedisStore.delete_job(run_id) do
-            :ok
-          end
-        else
-          {:error, reason}
-        end
+    case cleanup_run(run_id) do
+      {:ok, _result} -> :ok
+      {:error, _reason} = error -> error
     end
   end
 

@@ -6,7 +6,8 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
   require Logger
 
   alias MirrorNeuron.Persistence.{CancellationStore, CheckpointLock, DiskCheckpoint, RedisStore}
-  alias MirrorNeuron.Runner.{DockerCompose, HostLocal}
+  alias MirrorNeuron.Runner.HostLocal
+  alias MirrorNeuron.Runtime.RunnerResources
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.EventBus
   alias MirrorNeuron.Sandbox.{DockerJobSandbox, OpenShellJobSandbox}
@@ -71,10 +72,12 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
     # A stale coordinator is allowed to receive the cancellation and stop, but
     # cannot persist a write after the request fence has advanced.
     try do
-      # Compose teardown is independent of the legacy sandbox registry.  In
-      # particular, after a Core restart there may be no HostLocal process to
-      # terminate, but the persisted project must still be brought down.
+      # Native Docker resources are independent of the legacy sandbox
+      # registry. In particular, after a Core restart there may be no
+      # HostLocal process to terminate, but persisted DockerWorker containers
+      # and DockerCompose projects must still be brought down.
       with :ok <- cleanup_prepared_compose_projects(job_id),
+           :ok <- cleanup_docker_worker(job_id),
            :ok <- HostLocal.terminate_job(job_id),
            :ok <- stop_local_job(job_id),
            :ok <- ServiceRegistry.deregister_job(job_id),
@@ -138,59 +141,24 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
   defp cleanup_prepared_compose_projects(job_id) do
     case RedisStore.fetch_job(job_id) do
       {:ok, job} when is_map(job) ->
-        job
-        |> compose_configs_from_job()
-        |> Enum.reduce_while(:ok, fn config, :ok ->
-          case DockerCompose.cleanup_prepared_project(config) do
-            :ok -> {:cont, :ok}
-            {:error, reason} -> {:halt, {:error, {:docker_compose_cleanup, reason}}}
-          end
-        end)
+        RunnerResources.cleanup_prepared_compose_projects(job)
 
       _ ->
         :ok
     end
   end
 
-  defp compose_configs_from_job(job) do
-    topology_nodes = fn topology -> List.wrap(detail(topology, "nodes")) end
+  defp cleanup_docker_worker(job_id) do
+    case RedisStore.fetch_job(job_id) do
+      {:ok, job} when is_map(job) ->
+        if RunnerResources.docker_worker?(job),
+          do: RunnerResources.cleanup_docker_worker(job_id),
+          else: :ok
 
-    [
-      detail(job, "runtime_topology") |> topology_nodes.(),
-      detail(job, "topology") |> topology_nodes.(),
-      job |> detail("manifest") |> detail("agents") |> topology_nodes.()
-    ]
-    |> List.flatten()
-    |> Enum.map(fn node -> if is_map(node), do: detail(node, "config"), else: nil end)
-    |> Enum.filter(fn config ->
-      is_map(config) and is_map(detail(config, "mn_docker_compose"))
-    end)
-    |> Enum.uniq_by(fn config ->
-      config
-      |> detail("mn_docker_compose")
-      |> detail("project_name")
-    end)
+      _ ->
+        :ok
+    end
   end
-
-  defp detail(map, "runtime_topology") when is_map(map),
-    do: Map.get(map, "runtime_topology") || Map.get(map, :runtime_topology)
-
-  defp detail(map, "nodes") when is_map(map),
-    do: Map.get(map, "nodes") || Map.get(map, :nodes)
-
-  defp detail(map, "config") when is_map(map),
-    do: Map.get(map, "config") || Map.get(map, :config)
-
-  defp detail(map, "agents") when is_map(map),
-    do: Map.get(map, "agents") || Map.get(map, :agents)
-
-  defp detail(map, "mn_docker_compose") when is_map(map),
-    do: Map.get(map, "mn_docker_compose") || Map.get(map, :mn_docker_compose)
-
-  defp detail(map, "project_name") when is_map(map),
-    do: Map.get(map, "project_name") || Map.get(map, :project_name)
-
-  defp detail(_map, _key), do: nil
 
   defp ensure_checkpoint_lock do
     case Process.whereis(CheckpointLock) do

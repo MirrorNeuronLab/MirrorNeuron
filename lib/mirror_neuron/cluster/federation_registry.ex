@@ -169,6 +169,33 @@ defmodule MirrorNeuron.Cluster.FederationRegistry do
 
   def clear_archive_tombstone(_owner_node, _job_id), do: {:error, :invalid_archive_tombstone}
 
+  @doc false
+  def mark_job_archived(owner_node, job_id)
+      when is_binary(owner_node) and is_binary(job_id) do
+    case projection_store().fetch_federation_projection(owner_node, "job", job_id) do
+      {:ok, projection} ->
+        archived =
+          projection
+          |> Map.put("status", "archived")
+          |> Map.put("owner_available", true)
+          |> Map.put("projection_stale", false)
+          |> Map.put("updated_at", timestamp())
+
+        case projection_store().put_federation_projections(owner_node, "job", [archived]) do
+          {:ok, _saved} -> {:ok, archived}
+          {:error, _reason} = error -> error
+        end
+
+      {:error, :not_found} ->
+        {:ok, nil}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  def mark_job_archived(_owner_node, _job_id), do: {:error, :invalid_job_projection}
+
   def put_projection(node_name, summaries) when is_list(summaries) do
     store_projections(node_name, summaries, :merge)
   end
@@ -315,7 +342,7 @@ defmodule MirrorNeuron.Cluster.FederationRegistry do
 
       case projection_store().list_federation_projections(node_name, "job") do
         {:ok, projections} ->
-          Enum.reject(projections, &archive_tombstoned?(peer, Map.get(&1, "job_id")))
+          Enum.map(projections, &project_archive_status(peer, &1))
 
         _ ->
           []
@@ -356,7 +383,7 @@ defmodule MirrorNeuron.Cluster.FederationRegistry do
 
       case projection_store().fetch_federation_projection(node_name, "job", resource_id) do
         {:ok, projection} ->
-          projection
+          project_archive_status(peer, projection)
 
         _ ->
           case projection_store().fetch_federation_projection(node_name, "run", resource_id) do
@@ -565,6 +592,18 @@ defmodule MirrorNeuron.Cluster.FederationRegistry do
   end
 
   defp archive_tombstoned?(_peer, _job_id), do: false
+
+  defp project_archive_status(peer, projection) do
+    case get_in(peer, ["archive_tombstones", Map.get(projection, "job_id")]) do
+      %{"status" => "pending"} = tombstone ->
+        projection
+        |> Map.put("status", "archive_pending")
+        |> Map.put("updated_at", tombstone["updated_at"] || tombstone["requested_at"])
+
+      _ ->
+        projection
+    end
+  end
 
   defp mark_peer_state(node_name, status, attrs) do
     existing =

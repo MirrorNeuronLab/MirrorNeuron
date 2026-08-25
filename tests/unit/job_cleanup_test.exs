@@ -3,7 +3,7 @@ defmodule MirrorNeuron.Runtime.JobCleanupTest do
 
   alias MirrorNeuron.Persistence.DiskCheckpoint
   alias MirrorNeuron.Runner.HostLocal
-  alias MirrorNeuron.Runtime.JobCleanup
+  alias MirrorNeuron.Runtime.{JobCleanup, RunnerResources}
   alias MirrorNeuron.Sandbox.{DockerJobSandbox, OpenShellJobSandbox}
 
   defmodule NodeAdapterStub do
@@ -94,6 +94,23 @@ defmodule MirrorNeuron.Runtime.JobCleanupTest do
 
     assert_receive {:cleanup_rpc, :control@lab, DockerJobSandbox, :cleanup_job_local, ["run-2"],
                     15_000}
+  end
+
+  test "runtime cleanup retires DockerWorker resources through every owning node" do
+    NodeAdapterStub.reset(self())
+
+    job = %{
+      "manifest" => %{
+        "metadata" => %{"mn_docker_workers" => %{"submission_id" => "submission-1"}}
+      }
+    }
+
+    assert :ok = JobCleanup.cleanup_runtime_resources("docker-worker-run", job, [])
+
+    for node <- [:control@lab, :connected@lab] do
+      assert_receive {:cleanup_rpc, ^node, RunnerResources, :cleanup_docker_worker,
+                      ["docker-worker-run"], 15_000}
+    end
   end
 
   test "sandbox cleanup also terminates owned HostLocal commands without deleting checkpoints" do

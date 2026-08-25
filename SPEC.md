@@ -65,10 +65,12 @@ never create Runs.
 Federated job and run controls resolve an owner on demand when a projection has
 not yet synchronized, so any connected Core can operate a remote durable
 definition or run. If a known remote owner is unavailable during archive, the
-submitting Core durably records an archive tombstone, hides the stale remote
-projection, and replays the archive when that peer reconnects. The tombstone is
+submitting Core durably records an archive tombstone, projects the stale remote
+definition with status `archive_pending`, and replays the archive when that peer
+reconnects. The tombstone is
 cleared after any reachable owner response, preventing later implicit retries
-of a rejected archive.
+of a rejected archive. A confirmed archive immediately updates the submitting
+Core's projection instead of waiting for the next federation sync.
 Federated runtime-model and LiteLLM route controls honor their requested
 `node` owner through the same scoped Core-to-Core forwarding path, so SDK and
 CLI callers use any joined Core as a secure ingress rather than peer tokens.
@@ -104,8 +106,10 @@ Stable-job, run, and agent lifecycle transitions are validated and persisted.
 Persistent shared data is derived as `$MN_HOME/job-data/<job-id>` and is never
 owned by run retention or cleanup. Run state, submissions, sandboxes, logs, and
 artifacts are run-scoped. Archive retains job data; reset advances the data
-generation; confirmed job deletion waits for or rejects active runs before
-removing the definition and data. Terminal run
+generation; confirmed job deletion durably cancels and clears all active runs
+before removing the definition and data. Confirmed run deletion likewise
+durably cancels and clears an active run before detaching it from its definition.
+Terminal run
 states are completed, failed, or cancelled. `cancelling` is a fenced,
 non-recoverable transition: durable cancellation intent revokes the old lease,
 rejects stale coordinator/agent writes, and prevents recovery, resume,

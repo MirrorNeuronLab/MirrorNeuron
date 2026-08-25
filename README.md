@@ -734,8 +734,8 @@ return bounded lifecycle metadata plus bundle/artifact references.
 Any connected federated Core resolves a job or run owner on demand, so operators
 may issue JobService controls from a non-owner node. If `ArchiveJob` reaches a
 known but unavailable owner, the submitting Core records a durable archive
-tombstone, hides that stale projection, and replays the archive once the owner
-is reachable. A reachable owner response—success or a validation rejection—
+tombstone, marks that stale projection `archive_pending`, and replays the archive
+once the owner is reachable. A reachable owner response—success or a validation rejection—
 clears the tombstone rather than retrying unexpectedly later.
 Runtime-model preparation and LiteLLM route controls likewise forward to a
 joined requested `node`; callers keep one Core ingress and never receive peer

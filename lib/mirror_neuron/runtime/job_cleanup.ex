@@ -6,6 +6,7 @@ defmodule MirrorNeuron.Runtime.JobCleanup do
   alias MirrorNeuron.Cluster.NodeAdapter
   alias MirrorNeuron.Persistence.DiskCheckpoint
   alias MirrorNeuron.Runner.HostLocal
+  alias MirrorNeuron.Runtime.RunnerResources
   alias MirrorNeuron.SafeAccess
   alias MirrorNeuron.Sandbox.{DockerJobSandbox, OpenShellJobSandbox}
 
@@ -26,7 +27,7 @@ defmodule MirrorNeuron.Runtime.JobCleanup do
   ]
 
   def cleanup_runtime_resources(job_id, job, agents) when is_list(agents) do
-    cleanup(job_id, job, agents, @runtime_resources)
+    cleanup(job_id, job, agents, runtime_resources(job))
   end
 
   def cleanup_sandboxes(job_id, job, agents) when is_list(agents) do
@@ -54,6 +55,14 @@ defmodule MirrorNeuron.Runtime.JobCleanup do
       end)
 
     if failures == [], do: :ok, else: {:error, failures}
+  end
+
+  defp runtime_resources(job) do
+    if RunnerResources.docker_worker?(job) do
+      @runtime_resources ++ [{RunnerResources, :cleanup_docker_worker, "DockerWorker native SDK"}]
+    else
+      @runtime_resources
+    end
   end
 
   defp cleanup_nodes(job, agents) do
