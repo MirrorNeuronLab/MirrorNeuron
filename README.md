@@ -503,6 +503,12 @@ asynchronously, routes bounded unary questions to it, and stops it before Job
 data reset or deletion. It remains available before the first Run and between
 Runs. Asking it a question never creates or keeps alive a Run.
 
+An executable declaration may additionally include one validated `bounded_mcp`
+agent. Its optional `preflight` binds selected effects to a declared read-only
+tool, an exact argument set, and scalar result requirements. This lets the
+response agent require a fresh live safety check before an effect without
+granting arbitrary tool or predicate execution.
+
 ---
 
 ## Adaptive runtime reliability

@@ -57,7 +57,11 @@ run-scoped record and artifact, and then attaches one fresh run. Job data,
 configuration, schedules, and definition identity remain intact. Retried
 replacement with the already-attached fresh ID returns that run.
 An executable manifest may opt into one definition-scoped response service with
-the singular top-level `response_service: {"enabled": true}` declaration.
+the singular top-level `response_service` declaration. A declaration may be the
+literal `{"enabled": true}` or include one validated bounded MCP agent. That
+agent may declare an optional live read preflight for selected effects; the
+preflight must name a declared read tool, match its arguments exactly, and
+require only scalar result fields.
 Core starts it asynchronously on the owner node, routes bounded unary queries
 to that owner, reconciles and restarts failures with bounded backoff, and stops
 it for archive, reset, deletion, and definition replacement. Response queries

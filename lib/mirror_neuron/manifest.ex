@@ -916,8 +916,8 @@ defmodule MirrorNeuron.Manifest do
 
     []
     |> maybe_add_error(
-      MapSet.new(Map.keys(agent)) != MapSet.new(~w(kind service tools operations memory)),
-      "response_service.agent must contain exactly kind, service, tools, operations, and memory"
+      not valid_response_agent_keys?(Map.keys(agent)),
+      "response_service.agent must contain kind, service, tools, operations, and memory, with optional preflight"
     )
     |> maybe_add_error(
       agent["kind"] != "bounded_mcp",
@@ -945,6 +945,7 @@ defmodule MirrorNeuron.Manifest do
       ) > 0,
       "response_service.agent user and internal tool names must be distinct"
     )
+    |> add_errors(validate_response_agent_preflight(agent, user_tools))
     |> add_errors(validate_response_agent_operations(operations, user_tools, internal_tools))
     |> maybe_add_error(
       MapSet.new(Map.keys(memory)) != MapSet.new(~w(enabled mode path types max_active_records)) or
@@ -957,6 +958,58 @@ defmodule MirrorNeuron.Manifest do
   end
 
   defp validate_response_agent(_agent), do: ["response_service.agent must be an object"]
+
+  defp valid_response_agent_keys?(keys) do
+    required = MapSet.new(~w(kind service tools operations memory))
+    actual = MapSet.new(keys)
+    allowed = MapSet.put(required, "preflight")
+
+    MapSet.subset?(required, actual) and MapSet.subset?(actual, allowed)
+  end
+
+  defp validate_response_agent_preflight(agent, user_tools) do
+    if Map.has_key?(agent, "preflight") do
+      validate_response_agent_preflight_contract(agent["preflight"], user_tools)
+    else
+      []
+    end
+  end
+
+  defp validate_response_agent_preflight_contract(preflight, user_tools)
+       when is_map(preflight) do
+    expected = MapSet.new(~w(required_for_effects tool arguments required_result))
+    effects = preflight["required_for_effects"]
+    tool_name = preflight["tool"]
+    arguments = preflight["arguments"]
+    required_result = preflight["required_result"]
+
+    declared_tool =
+      case Map.get(user_tools, tool_name) do
+        value when is_map(value) -> value
+        _value -> %{}
+      end
+
+    declared_arguments = Map.get(declared_tool, "arguments")
+
+    valid =
+      MapSet.new(Map.keys(preflight)) == expected and
+        nonempty_unique_strings?(effects) and
+        MapSet.subset?(MapSet.new(effects), MapSet.new(~w(read motion))) and
+        nonempty_string?(tool_name) and declared_tool["effect"] == "read" and
+        is_map(arguments) and is_map(declared_arguments) and
+        MapSet.new(Map.keys(arguments)) == MapSet.new(Map.keys(declared_arguments)) and
+        is_map(required_result) and map_size(required_result) > 0 and
+        Enum.all?(required_result, fn {key, value} ->
+          nonempty_string?(key) and safe_preflight_scalar?(value)
+        end)
+
+    if valid,
+      do: [],
+      else: ["response_service.agent.preflight must declare a bounded live read check"]
+  end
+
+  defp validate_response_agent_preflight_contract(_preflight, _user_tools),
+    do: ["response_service.agent.preflight must declare a bounded live read check"]
 
   defp validate_response_agent_tools(tools, user?) do
     Enum.flat_map(tools, fn {name, specification} ->
@@ -1031,6 +1084,9 @@ defmodule MirrorNeuron.Manifest do
   end
 
   defp nonempty_unique_strings?(_value), do: false
+
+  defp safe_preflight_scalar?(value),
+    do: is_binary(value) or is_integer(value) or is_float(value) or is_boolean(value)
 
   defp safe_mcp_path?(value),
     do:

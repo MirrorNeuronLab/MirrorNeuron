@@ -1048,6 +1048,24 @@ defmodule MirrorNeuron.ManifestTest do
     assert {:ok, manifest} = Manifest.load(base)
     assert manifest.response_service["agent"]["kind"] == "bounded_mcp"
 
+    with_preflight =
+      put_in(
+        base,
+        ["response_service", "agent", "preflight"],
+        %{
+          "required_for_effects" => ["motion"],
+          "tool" => "get_robot_status",
+          "arguments" => %{},
+          "required_result" => %{"connected" => true}
+        }
+      )
+
+    assert {:ok, manifest} = Manifest.load(with_preflight)
+
+    assert manifest.response_service["agent"]["preflight"]["required_result"] == %{
+             "connected" => true
+           }
+
     invalid =
       put_in(
         base,
@@ -1057,6 +1075,36 @@ defmodule MirrorNeuron.ManifestTest do
 
     assert {:error, errors} = Manifest.load(invalid)
     assert Enum.any?(errors, &String.contains?(&1, "operations must correlate"))
+
+    for invalid_preflight <- [
+          Map.put(with_preflight, "response_service", %{
+            "enabled" => true,
+            "agent" =>
+              put_in(
+                bounded_response_agent(),
+                ["preflight"],
+                %{
+                  "required_for_effects" => ["motion"],
+                  "tool" => "navigate_to_zone",
+                  "arguments" => %{"zone" => "zone_a"},
+                  "required_result" => %{"connected" => true}
+                }
+              )
+          }),
+          put_in(
+            with_preflight,
+            ["response_service", "agent", "preflight", "required_result"],
+            %{"connected" => %{"nested" => true}}
+          ),
+          put_in(
+            with_preflight,
+            ["response_service", "agent", "preflight", "arguments"],
+            %{"undeclared" => "value"}
+          )
+        ] do
+      assert {:error, errors} = Manifest.load(invalid_preflight)
+      assert Enum.any?(errors, &String.contains?(&1, "preflight"))
+    end
   end
 
   defp bounded_response_agent do
@@ -1069,6 +1117,10 @@ defmodule MirrorNeuron.ManifestTest do
       },
       "tools" => %{
         "user" => %{
+          "get_robot_status" => %{
+            "effect" => "read",
+            "arguments" => %{}
+          },
           "navigate_to_zone" => %{
             "effect" => "motion",
             "arguments" => %{
