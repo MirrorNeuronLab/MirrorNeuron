@@ -164,15 +164,19 @@ defmodule MirrorNeuron.Cluster.FederationClient do
   end
 
   @doc false
-  def availability_failure?(%GRPC.RPCError{status: status}) do
+  def availability_failure?(%GRPC.RPCError{status: status} = error) do
     status in [
       GRPC.Status.deadline_exceeded(),
       GRPC.Status.unauthenticated(),
       GRPC.Status.unavailable()
-    ]
+    ] or
+      (status == GRPC.Status.internal() and closed_peer_stream?(Exception.message(error)))
   end
 
   def availability_failure?(_reason), do: true
+
+  defp closed_peer_stream?(message) when is_binary(message),
+    do: String.contains?(message, ":stream_error: :closed")
 
   @doc false
   def replay_archive_tombstones(node_name, options \\ [])
