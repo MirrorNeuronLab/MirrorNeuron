@@ -14,7 +14,7 @@ defmodule MirrorNeuron.ManifestTest do
 
   test "rejects retired and missing api versions" do
     assert {:error, retired_errors} =
-             Manifest.load(%{"apiVersion" => "mn.workflow/v2", "graph_id" => "legacy"})
+             Manifest.load(%{"apiVersion" => "mn.workflow/unsupported", "graph_id" => "legacy"})
 
     assert Enum.any?(retired_errors, &String.contains?(&1, "apiVersion must be mn.workflow/v1"))
 
