@@ -410,8 +410,7 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
         MirrorNeuron.Config.optional_string(
           "MN_LITELLM_GATEWAY_PORT",
           :litellm_gateway_port
-        ) ||
-        MirrorNeuron.Config.optional_string("MN_LITELLM_PORT", :litellm_port)
+        )
 
     if value, do: parse_integer(value, "MN_LITELLM_ADVERTISE_PORT"), else: 4_000
   end

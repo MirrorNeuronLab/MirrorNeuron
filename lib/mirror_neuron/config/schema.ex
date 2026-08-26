@@ -68,7 +68,6 @@ defmodule MirrorNeuron.Config.Schema do
       spec("MN_JOB_LEASE_RENEW_INTERVAL_MS", :job_lease_renew_interval_ms, :integer,
         default: 10_000
       ),
-      spec("MN_JOB_SNAPSHOT_INTERVAL_MS", :job_snapshot_interval_ms, :integer, default: 0),
       spec("MN_JOB_CALL_TIMEOUT_MS", :job_call_timeout_ms, :integer, default: 15_000),
       spec("MN_CANCEL_JOB_CALL_TIMEOUT_MS", :cancel_job_call_timeout_ms, :integer,
         default: 5_000
@@ -133,7 +132,6 @@ defmodule MirrorNeuron.Config.Schema do
       spec("MN_MAX_ARTIFACT_BYTES", :max_artifact_bytes, :integer, default: 1_048_576),
       spec("MN_MAX_FAN_OUT", :max_fan_out, :integer),
       spec("MN_TEMP_DIR", :temp_dir, :path, default: @default_temp_dir),
-      spec("MN_CHECKPOINT_ROOT", :checkpoint_root, :path, default: {:home, ".mn/checkpoints"}),
       spec("MN_BLOB_STORE_ROOT", :blob_store_root, :path, default: {:home, ".mn/blobs"}),
       spec("MN_JOB_ARTIFACT_ROOT", :job_artifact_root, :path, default: {:job_artifact_root}),
       spec("MN_JOB_DATA_ROOT", :job_data_root, :path, default: {:job_data_root}),

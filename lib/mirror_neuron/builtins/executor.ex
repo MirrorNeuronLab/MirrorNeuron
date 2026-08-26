@@ -202,20 +202,6 @@ defmodule MirrorNeuron.Builtins.Executor do
     })
   end
 
-  @impl true
-  def recover(%{last_output_payload: payload} = state, _context) when is_map(payload) do
-    {:ok, state,
-     [
-       {:event, :executor_output_not_replayed,
-        %{
-          "reason" => "completed_output_already_recorded",
-          "agent_id" => payload["agent_id"]
-        }}
-     ]}
-  end
-
-  def recover(state, _context), do: {:ok, state, []}
-
   defp default_output_actions(config, payload) do
     output_actions =
       case Map.fetch(config, "output_message_type") do
@@ -439,11 +425,11 @@ defmodule MirrorNeuron.Builtins.Executor do
   defp decode_structured_result(result) do
     with {:ok, decoded} <- decoded_result_payload(result) do
       cond do
-        legacy_completion_payload?(decoded) ->
+        retired_completion_payload?(decoded) ->
           {:error,
            %{
              "error" => "unsupported structured output key",
-             "unsupported_keys" => legacy_completion_keys(decoded),
+             "unsupported_keys" => retired_completion_keys(decoded),
              "message" => "Use complete_step or complete_run instead of complete_job"
            }}
 
@@ -479,13 +465,13 @@ defmodule MirrorNeuron.Builtins.Executor do
 
   defp structured_payload?(_decoded), do: false
 
-  defp legacy_completion_payload?(decoded) when is_map(decoded) do
+  defp retired_completion_payload?(decoded) when is_map(decoded) do
     Enum.any?(["complete_job", "complete_job?"], &Map.has_key?(decoded, &1))
   end
 
-  defp legacy_completion_payload?(_decoded), do: false
+  defp retired_completion_payload?(_decoded), do: false
 
-  defp legacy_completion_keys(decoded) when is_map(decoded) do
+  defp retired_completion_keys(decoded) when is_map(decoded) do
     Enum.filter(["complete_job", "complete_job?"], &Map.has_key?(decoded, &1))
   end
 

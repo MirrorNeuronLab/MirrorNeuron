@@ -158,14 +158,6 @@ defmodule MirrorNeuron do
     end
   end
 
-  def create_schedule(input, schedule \\ %{}, opts \\ []) do
-    if control_node?() do
-      Control.call(__MODULE__, :create_schedule, [input, schedule, opts])
-    else
-      MirrorNeuron.Runtime.ScheduleDispatcher.create_schedule(input, schedule, opts)
-    end
-  end
-
   def create_job_schedule(job_id, schedule \\ %{}, opts \\ []) do
     if control_node?() do
       Control.call(__MODULE__, :create_job_schedule, [job_id, schedule, opts])
@@ -272,22 +264,6 @@ defmodule MirrorNeuron do
     end
   end
 
-  def add_node(node_name) do
-    if control_node?() do
-      Control.call(MirrorNeuron.Cluster.Manager, :add_node, [node_name])
-    else
-      MirrorNeuron.Cluster.Manager.add_node(node_name)
-    end
-  end
-
-  def remove_node(node_name) do
-    if control_node?() do
-      Control.call(MirrorNeuron.Cluster.Manager, :remove_node, [node_name])
-    else
-      MirrorNeuron.Cluster.Manager.remove_node(node_name)
-    end
-  end
-
   def reconcile_node(node_name, opts \\ []) do
     if control_node?() do
       Control.call(__MODULE__, :reconcile_node, [node_name, opts])
@@ -295,7 +271,7 @@ defmodule MirrorNeuron do
       with {:ok, operation} <-
              start_operation("reconcile_node", Keyword.put(opts, :node_name, node_name)),
            {:ok, settled} <- Operations.await_settled(operation["operation_id"], 30_000) do
-        {:ok, Operations.legacy_reconcile_result(settled)}
+        {:ok, Operations.reconcile_operation_result(settled)}
       end
     end
   end
@@ -307,7 +283,7 @@ defmodule MirrorNeuron do
       with {:ok, operation} <-
              start_operation("drain_node", Keyword.put(opts, :node_name, node_name)),
            {:ok, settled} <- Operations.await_settled(operation["operation_id"], 30_000) do
-        {:ok, Operations.legacy_drain_result(settled)}
+        {:ok, Operations.drain_operation_result(settled)}
       end
     end
   end
@@ -389,14 +365,13 @@ defmodule MirrorNeuron do
 
   # Cancellation intent is written to the shared store before any work is
   # routed. In particular, do not forward this through a control node: an
-  # unavailable owner must produce `cancellation_pending` immediately instead
-  # of consuming the legacy job-control timeout.
+  # unavailable owner must produce `cancellation_pending` immediately.
   def cancel(job_id), do: request_durable_cancellation(job_id)
 
   def cancel_all do
     with {:ok, operation} <- start_operation("cancel_all_jobs"),
          {:ok, completed} <- Operations.await(operation["operation_id"], 30_000) do
-      {:ok, Operations.legacy_cancel_all_result(completed)}
+      {:ok, Operations.cancel_all_result(completed)}
     end
   end
 

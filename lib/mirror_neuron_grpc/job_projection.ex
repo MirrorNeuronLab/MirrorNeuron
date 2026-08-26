@@ -41,8 +41,7 @@ defmodule MirrorNeuron.Grpc.JobProjection do
   def run(record, run_id \\ nil) when is_map(record) do
     resolved_run_id = run_id || record["run_id"] || record["job_id"]
 
-    stable_job_id =
-      record["stable_job_id"] || get_in(record, ["manifest", "metadata", "job_id"])
+    stable_job_id = record["stable_job_id"]
 
     record
     |> Map.take(@run_fields)
@@ -56,7 +55,7 @@ defmodule MirrorNeuron.Grpc.JobProjection do
 
   def schedule(record) when is_map(record) do
     record
-    |> Map.drop(["manifest", "dispatches", "active_job_ids", "active_run_ids"])
+    |> Map.drop(["manifest", "dispatches", "active_run_ids"])
     |> Map.put("dispatch_count", list_count(record["dispatches"]))
     |> Map.put("active_run_count", active_run_count(record))
     |> compact_bundle_ref()
@@ -69,8 +68,7 @@ defmodule MirrorNeuron.Grpc.JobProjection do
   end
 
   defp put_definition_type(projected, definition) do
-    type = definition["type"] || get_in(definition, ["manifest", "type"])
-    Map.put(projected, "type", type)
+    Map.put(projected, "type", definition["type"])
   end
 
   defp put_recent_run_ids(projected, definition) do
@@ -107,7 +105,7 @@ defmodule MirrorNeuron.Grpc.JobProjection do
   defp active_run_count(record) do
     case record["active_run_ids"] do
       run_ids when is_list(run_ids) -> length(run_ids)
-      _missing -> list_count(record["active_job_ids"])
+      _missing -> 0
     end
   end
 

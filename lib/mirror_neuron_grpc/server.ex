@@ -46,8 +46,6 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
         prepare_docker_compose: :PrepareDockerCompose,
         get_docker_compose_status: :GetDockerComposeStatus,
         cleanup_docker_compose: :CleanupDockerCompose,
-        add_node: :AddNode,
-        remove_node: :RemoveNode,
         register_federated_peer: :RegisterFederatedPeer,
         get_federated_peer: :GetFederatedPeer,
         remove_federated_peer: :RemoveFederatedPeer,

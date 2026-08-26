@@ -1096,20 +1096,17 @@ defmodule MirrorNeuron.Runner.HostLocal do
     with {:ok, spec} <- python_environment_spec(config, opts) do
       case spec do
         nil -> {:ok, nil}
-        spec -> prepared_or_legacy_python_environment(config, spec)
+        _spec -> prepared_python_environment_result(config)
       end
     end
   end
 
-  defp prepared_or_legacy_python_environment(config, spec) do
-    cond do
-      native_prep_enabled?() ->
-        ensure_cached_python_environment(spec)
-
-      prepared_python_env = prepared_python_environment(config) ->
+  defp prepared_python_environment_result(config) do
+    case prepared_python_environment(config) do
+      prepared_python_env when is_map(prepared_python_env) ->
         {:ok, prepared_python_env}
 
-      true ->
+      _ ->
         {:error,
          "python_environment preparation is owned by mn-python-sdk/API/CLI; prepare the environment before submission and provide python_environment.path, MN_PYTHON_ENV, or VIRTUAL_ENV"}
     end
@@ -1127,13 +1124,6 @@ defmodule MirrorNeuron.Runner.HostLocal do
     if is_binary(dir) and dir != "" do
       python_environment(Path.expand(dir))
     end
-  end
-
-  defp native_prep_enabled? do
-    System.get_env("MN_CORE_ALLOW_NATIVE_RESOURCE_PREP")
-    |> to_string()
-    |> String.downcase()
-    |> then(&(&1 in ["1", "true", "yes", "on"]))
   end
 
   defp python_environment_spec(config, opts) do
@@ -1261,191 +1251,11 @@ defmodule MirrorNeuron.Runner.HostLocal do
     end
   end
 
-  defp ensure_cached_python_environment(%{python: python} = spec) do
-    with {:ok, python_version} <- python_version(python) do
-      fingerprint = python_environment_fingerprint(spec, python_version)
-      root = python_environment_cache_root()
-      env_dir = Path.join(root, fingerprint)
-      ready_file = Path.join(env_dir, ".ready")
-
-      if python_environment_ready?(env_dir, ready_file) do
-        _ = write_python_environment_metadata(env_dir, spec, python_version, fingerprint)
-        {:ok, python_environment(env_dir)}
-      else
-        build_with_python_environment_lock(env_dir, ready_file, spec, python_version, fingerprint)
-      end
-    end
-  end
-
-  defp build_with_python_environment_lock(env_dir, ready_file, spec, python_version, fingerprint) do
-    lock_dir = env_dir <> ".lock"
-    File.mkdir_p!(Path.dirname(lock_dir))
-
-    with :ok <- acquire_python_environment_lock(lock_dir) do
-      try do
-        if python_environment_ready?(env_dir, ready_file) do
-          _ = write_python_environment_metadata(env_dir, spec, python_version, fingerprint)
-          {:ok, python_environment(env_dir)}
-        else
-          build_python_environment(env_dir, ready_file, spec, python_version, fingerprint)
-        end
-      after
-        File.rm_rf(lock_dir)
-      end
-    end
-  end
-
-  defp acquire_python_environment_lock(lock_dir) do
-    deadline =
-      System.monotonic_time(:millisecond) +
-        python_environment_setup_timeout_ms()
-
-    acquire_python_environment_lock(lock_dir, deadline)
-  end
-
-  defp acquire_python_environment_lock(lock_dir, deadline) do
-    case File.mkdir(lock_dir) do
-      :ok ->
-        :ok
-
-      {:error, :eexist} ->
-        if System.monotonic_time(:millisecond) >= deadline do
-          {:error, "timed out waiting for python_environment setup lock: #{lock_dir}"}
-        else
-          Process.sleep(200)
-          acquire_python_environment_lock(lock_dir, deadline)
-        end
-
-      {:error, reason} ->
-        {:error, "failed to create python_environment setup lock #{lock_dir}: #{reason}"}
-    end
-  end
-
-  defp build_python_environment(env_dir, ready_file, spec, python_version, fingerprint) do
-    File.rm_rf(env_dir)
-    File.mkdir_p!(Path.dirname(env_dir))
-
-    with {:ok, _output} <-
-           run_python_setup_command(
-             spec.python,
-             ["-m", "venv", env_dir],
-             "create python_environment virtualenv"
-           ),
-         :ok <- write_requirements_snapshot(env_dir, spec),
-         {:ok, _output} <- install_python_environment_dependencies(env_dir, spec),
-         :ok <- write_python_environment_metadata(env_dir, spec, python_version, fingerprint),
-         :ok <- File.write(ready_file, MirrorNeuron.Runtime.timestamp() <> "\n") do
-      {:ok, python_environment(env_dir)}
-    else
-      {:error, reason} ->
-        File.rm_rf(env_dir)
-        {:error, reason}
-    end
-  end
-
-  defp write_requirements_snapshot(_env_dir, %{requirements: nil}), do: :ok
-
-  defp write_requirements_snapshot(env_dir, %{requirements: requirements}) do
-    File.mkdir_p!(env_dir)
-    File.write(Path.join(env_dir, "requirements.txt"), requirements.content)
-  end
-
-  defp install_python_environment_dependencies(env_dir, spec) do
-    python = Path.join([env_dir, "bin", "python"])
-
-    requirement_args =
-      case spec.requirements do
-        nil ->
-          []
-
-        %{install_path: install_path} when is_binary(install_path) ->
-          ["-r", install_path]
-
-        _ ->
-          ["-r", Path.join(env_dir, "requirements.txt")]
-      end
-
-    args = ["-m", "pip", "install"] ++ requirement_args ++ spec.packages
-    run_python_setup_command(python, args, "install python_environment dependencies")
-  end
-
-  defp run_python_setup_command(executable, args, action) do
-    case System.cmd(executable, args,
-           stderr_to_stdout: true,
-           env: [
-             {"PIP_DISABLE_PIP_VERSION_CHECK", "1"},
-             {"PIP_NO_INPUT", "1"}
-           ]
-         ) do
-      {output, 0} ->
-        {:ok, output}
-
-      {output, status} ->
-        {:error,
-         "#{action} failed with exit code #{status}: #{truncate_setup_output(String.trim(output))}"}
-    end
-  rescue
-    error in ErlangError ->
-      {:error, "#{action} failed: #{Exception.message(error)}"}
-  end
-
   defp python_environment(env_dir) do
     %{
       dir: env_dir,
       bin: Path.join(env_dir, "bin"),
       python: Path.join([env_dir, "bin", "python"])
-    }
-  end
-
-  defp python_environment_ready?(env_dir, ready_file) do
-    File.exists?(ready_file) and File.exists?(Path.join([env_dir, "bin", "python"]))
-  end
-
-  defp python_environment_fingerprint(spec, python_version) do
-    requirements_content =
-      case spec.requirements do
-        nil -> ""
-        requirements -> requirements.content
-      end
-
-    :crypto.hash(:sha256, [
-      "mirror-neuron-python-env-v2",
-      "\0",
-      spec.blueprint_id || "",
-      "\0",
-      python_version,
-      "\0",
-      requirements_content,
-      "\0",
-      Jason.encode!(spec.packages)
-    ])
-    |> Base.encode16(case: :lower)
-  end
-
-  defp write_python_environment_metadata(env_dir, spec, python_version, fingerprint) do
-    metadata = %{
-      "schema_version" => 1,
-      "resource_type" => "python_venv",
-      "blueprint_id" => spec.blueprint_id,
-      "fingerprint" => fingerprint,
-      "python_version" => python_version,
-      "requirements" => requirements_metadata(spec.requirements),
-      "packages" => spec.packages,
-      "last_used_at" => MirrorNeuron.Runtime.timestamp()
-    }
-
-    File.write(
-      Path.join(env_dir, ".mn-blueprint-resource.json"),
-      Jason.encode!(metadata, pretty: true)
-    )
-  end
-
-  defp requirements_metadata(nil), do: nil
-
-  defp requirements_metadata(requirements) do
-    %{
-      "path" => requirements.path,
-      "sha256" => :crypto.hash(:sha256, requirements.content) |> Base.encode16(case: :lower)
     }
   end
 
@@ -1476,18 +1286,6 @@ defmodule MirrorNeuron.Runner.HostLocal do
     end
   end
 
-  defp python_environment_cache_root do
-    Config.optional_string("MN_BLUEPRINT_PYTHON_ENVS_DIR", :blueprint_python_envs_dir) ||
-      Path.join(System.user_home!(), ".mn/cache/blueprint-python-envs")
-  end
-
-  defp python_environment_setup_timeout_ms do
-    Config.integer(
-      "MN_BLUEPRINT_PYTHON_ENV_SETUP_TIMEOUT_MS",
-      :blueprint_python_env_setup_timeout_ms
-    )
-  end
-
   defp apply_python_environment_env(env, nil), do: env
 
   defp apply_python_environment_env(env, python_env) do
@@ -1509,16 +1307,6 @@ defmodule MirrorNeuron.Runner.HostLocal do
       not String.starts_with?(path, "..") and
       not String.contains?(path, "/../") and
       path not in ["", "."]
-  end
-
-  defp truncate_setup_output(output) do
-    max_bytes = 4_000
-
-    if byte_size(output) > max_bytes do
-      binary_part(output, 0, max_bytes) <> "\n[truncated]"
-    else
-      output
-    end
   end
 
   defp get_config(config, key) when is_map(config) do

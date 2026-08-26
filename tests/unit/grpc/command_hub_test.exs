@@ -130,7 +130,7 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
     stream = authenticated_stream()
 
     for {_command, function, request_module} <- @rpc_cases do
-      request = struct(request_module)
+      request = struct(request_module, version: 1)
       assert %JsonResponse{version: 1} = apply(JobServer, function, [request, stream])
       assert_receive {:called, ^function, ^request, ^stream}
     end
@@ -166,11 +166,11 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
   end
 
   test "network-only policy rejects v1 job commands before handler dispatch" do
-    System.put_env("MN_NETWORK_ONLY", "true")
+    Application.put_env(:mirror_neuron, :network_only, true)
 
     error =
       assert_raise GRPC.RPCError, fn ->
-        JobServer.create_job(%CreateJobRequest{}, authenticated_stream())
+        JobServer.create_job(%CreateJobRequest{version: 1}, authenticated_stream())
       end
 
     assert Exception.message(error) == "CreateJob is disabled while MN_NETWORK_ONLY=true"
@@ -180,20 +180,34 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
   test "all v1 commands require the configured client identity" do
     error =
       assert_raise GRPC.RPCError, fn ->
-        JobServer.cancel_run(%RunRequest{run_id: "run-1"}, nil)
+        JobServer.cancel_run(%RunRequest{run_id: "run-1", version: 1}, nil)
       end
 
     assert Exception.message(error) == "gRPC client identity is required for this RPC"
 
     assert %JsonResponse{version: 1} =
              JobServer.cancel_run(
-               %RunRequest{run_id: "run-1"},
+               %RunRequest{run_id: "run-1", version: 1},
                authenticated_stream()
              )
 
     assert_raise GRPC.RPCError, fn ->
-      JobServer.get_job(%JobRequest{job_id: "job-1"}, nil)
+      JobServer.get_job(%JobRequest{job_id: "job-1", version: 1}, nil)
     end
+  end
+
+  test "version-zero requests are rejected before command dispatch" do
+    error =
+      assert_raise GRPC.RPCError, fn ->
+        JobServer.get_job(%JobRequest{job_id: "job-1"}, authenticated_stream())
+      end
+
+    assert error.status == GRPC.Status.invalid_argument()
+
+    assert Exception.message(error) ==
+             "unsupported MirrorNeuron interface version 0; expected 1"
+
+    refute_received {:called, :get_job, _, _}
   end
 
   defp authenticated_stream do

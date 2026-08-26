@@ -21,40 +21,6 @@ defmodule MirrorNeuron.Builtins.Module do
   end
 
   @impl true
-  def recover(state, context) do
-    case state.delegate.recover(state.delegate_state, context) do
-      {:ok, next_delegate_state, actions} ->
-        {:ok, %{state | delegate_state: next_delegate_state}, actions}
-
-      {:error, reason, next_delegate_state} ->
-        {:error, reason, %{state | delegate_state: next_delegate_state}}
-    end
-  end
-
-  @impl true
-  def snapshot_state(%{delegate: delegate, delegate_state: delegate_state} = state) do
-    %{
-      "delegate" => Atom.to_string(delegate),
-      "delegate_state" => delegate.snapshot_state(delegate_state),
-      "config" => state.config
-    }
-  end
-
-  @impl true
-  def restore_state(%{
-        "delegate" => delegate_name,
-        "delegate_state" => snapshot,
-        "config" => config
-      }) do
-    with {:ok, delegate} <- resolve_delegate(%{"module" => delegate_name}),
-         {:ok, delegate_state} <- delegate.restore_state(snapshot) do
-      {:ok, %{delegate: delegate, delegate_state: delegate_state, config: config}}
-    end
-  end
-
-  def restore_state(snapshot), do: {:error, {:invalid_module_snapshot, snapshot}}
-
-  @impl true
   def inspect_state(%{delegate: delegate, delegate_state: delegate_state, config: config}) do
     %{
       "delegate" => Atom.to_string(delegate),

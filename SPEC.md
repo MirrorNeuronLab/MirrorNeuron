@@ -126,11 +126,9 @@ non-recoverable transition: durable cancellation intent revokes the old lease,
 rejects stale coordinator/agent writes, and prevents recovery, resume,
 scheduling, and drain migration until locally owned cleanup is acknowledged.
 Terminal-run clearing removes job-owned HostLocal processes, DockerWorker and
-DockerCompose projects, OpenShell sandboxes, checkpoints, services, staged storage, artifacts, leases,
+DockerCompose projects, OpenShell sandboxes, services, staged storage, artifacts, leases,
 delivery state, and Redis records on every recorded runtime node before the run
-is reported as cleared. The legacy local-node identity `nonode@nohost` is
-normalized to the current local runtime during cleanup rather than treated as a
-remote cluster node. A durably fenced `cancelling` run is the exception:
+is reported as cleared. A durably fenced `cancelling` run is the exception:
 public state and global artifacts may be cleared while an internal cancellation
 tombstone retains pending runtime nodes and the write fence. Rejoining nodes
 finish local cleanup by run ID, and the final acknowledgement releases the
@@ -145,7 +143,7 @@ Pause, resume, cancel, backup, restore, deployment, and schedule operations
 preserve event/status coherence.
 Service schedules are lifecycle schedules: an occurrence starts when no run is
 attached, resumes a paused run, no-ops when it is already pending/running,
-replaces terminal history, and blocks while cancellation or ambiguous legacy
+replaces terminal history, and blocks while cancellation or ambiguous
 active history remains. A window end pauses rather than cancels; overlapping
 windows pause only when the last window for that job/run closes. Dispatch audit
 records retain the action, old/new run IDs, and deferred cleanup state.
@@ -157,7 +155,7 @@ live job does not enter operator review solely because an auxiliary endpoint
 restarted.
 Job backup and restore use the breaking `mn.backup.v2` contract. Core owns the
 durable runtime snapshot and bundle map; adapters may add verified
-content-addressed payload blobs, wheels, images, and compatibility metadata for
+content-addressed payload blobs, wheels, images, and verified transport metadata for
 air-gapped transport. Core does not implement or accept `mn.backup.v1`.
 
 Fixed server-defined group-operation kinds persist their immutable target
@@ -219,15 +217,10 @@ it through `MN_PORT_<LABEL>`, and resolves agent service templates from that
 same allocation. Runtime nodes may constrain the allocatable range with
 `MN_AUTO_PORT_START` and `MN_AUTO_PORT_END` when their container or firewall
 publishes only a bounded port range.
-The legacy run-scoped job-collaboration service contract is
-`mn-job-collaboration` with
-tags `mcp` and `job-collaboration`, loopback Streamable HTTP at `/mcp`, and
-blueprint/job/run/goal identity metadata. It is run-scoped and read-only;
-distributed authenticated discovery and job mutation are outside this
-contract. Response-enabled Jobs instead use the owner-node, definition-scoped
-response supervisor. The MCP transport at `/api/v1/jobs/{job_id}/mcp` remains
-owned by `mn-api`; it projects stable Core state and dispatches response
-questions through the bounded Core RPC without extending a Run.
+Response-enabled Jobs use the owner-node, definition-scoped response
+supervisor. The MCP transport at `/api/v1/jobs/{job_id}/mcp` is owned by
+`mn-api`; it projects stable Core state and dispatches response questions
+through the bounded Core RPC without extending a Run.
 Every Redis namespace carries an opaque coordination-store identity. Runtime
 nodes advertise that identity, Redis role, and writable-primary status.
 If Redis is still loading or its status cannot be read, self-advertisement
@@ -288,9 +281,9 @@ work. Secrets never appear in events or ordinary logs.
 
 `mirrorneuron.job.v1.JobService` is the sole authoritative protobuf contract.
 It exposes durable definition, optional definition-response queries, and
-explicit run operations only; no legacy
-submission, deployment, general-schedule, backup/restore, bulk-cancel, clear,
-alias, or dual-registration surface is provided. Runtime environment code must
+explicit run operations only. Submission, deployment, general-schedule,
+backup/restore, bulk-cancel, clear, alias, and dual-registration operations are
+not part of this service. Runtime environment code must
 not interpret `MN_JOB_ID` as a run identity; it uses `MN_RUN_ID` and
 `MN_ATTEMPT_ID` explicitly. See `JOBS_AND_RUNS.md` for the complete contract.
 

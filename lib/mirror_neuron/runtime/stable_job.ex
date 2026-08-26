@@ -850,8 +850,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
 
         length(active) > 1 ->
           {:error,
-           {:service_schedule_blocked,
-            "multiple active legacy runs require an explicit replacement"}}
+           {:service_schedule_blocked, "multiple active runs require an explicit replacement"}}
 
         true ->
           with {:ok, definition, cleanup} <-
@@ -944,7 +943,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
     do: status in @terminal_statuses or status == "missing"
 
   defp service_definition?(definition) do
-    (definition["type"] || get_in(definition, ["manifest", "type"])) == "service"
+    definition["type"] == "service"
   end
 
   defp scheduled_service_run_id(definition, opts) do

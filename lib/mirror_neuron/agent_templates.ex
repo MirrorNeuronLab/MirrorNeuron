@@ -10,10 +10,6 @@ defmodule MirrorNeuron.AgentTemplates do
     "batch" => AgentTemplates.Batch
   }
 
-  @compatibility_aliases %{
-    "accumulator" => "reduce"
-  }
-
   @agent_template_support %{
     "router" => ["generic", "map"],
     "executor" => ["generic", "stream", "map", "reduce", "batch"],
@@ -51,7 +47,7 @@ defmodule MirrorNeuron.AgentTemplates do
   def canonical_type(nil), do: default_type()
   def canonical_type(""), do: default_type()
   def canonical_type(type) when is_atom(type), do: type |> Atom.to_string() |> canonical_type()
-  def canonical_type(type) when is_binary(type), do: Map.get(@compatibility_aliases, type, type)
+  def canonical_type(type) when is_binary(type), do: type
   def canonical_type(_type), do: default_type()
 
   def supported_for_agent_type?(template_type, agent_type) do

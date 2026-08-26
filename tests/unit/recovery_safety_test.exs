@@ -8,14 +8,14 @@ defmodule MirrorNeuron.Runtime.RecoverySafetyTest do
     manifest = %Manifest{nodes: [%{node_id: "worker", agent_type: "router", config: %{}}]}
     job = %{"status" => "running", "recovery_policy" => "local_restart"}
 
-    corrupt_legacy_observation = %{
+    corrupt_retired_observation = %{
       "agent_id" => "worker",
       "metadata" => %{"recovery_state" => "not-base64"},
-      "inflight_message" => %{"legacy" => true}
+      "inflight_message" => %{"retired" => true}
     }
 
     assert {:auto, reason} =
-             RecoverySafety.decision(job, manifest, [corrupt_legacy_observation])
+             RecoverySafety.decision(job, manifest, [corrupt_retired_observation])
 
     assert reason =~ "clean job attempt"
   end

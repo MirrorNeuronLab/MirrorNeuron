@@ -68,6 +68,7 @@ defmodule MirrorNeuron.Runtime.DeploymentPolicyTest do
     Map.merge(
       %{
         "apiVersion" => "mn.workflow/v1",
+        "kind" => "Workflow",
         "manifest_version" => "1.0",
         "graph_id" => "deploy-policy-test",
         "entrypoints" => ["worker"],

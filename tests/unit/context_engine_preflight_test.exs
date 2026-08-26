@@ -16,7 +16,7 @@ defmodule MirrorNeuron.ContextEnginePreflightTest do
 
     try do
       assert {:error, reason} = ContextEnginePreflight.ensure_available(true)
-      assert reason =~ "requiredContextEngine=true"
+      assert reason =~ "required_context_engine=true"
       assert reason =~ "CONTEXT_ENGINE_ADDR"
       assert reason =~ "127.0.0.1:1"
     after

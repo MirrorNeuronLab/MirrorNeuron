@@ -2,6 +2,7 @@ defmodule MirrorNeuron.Builtins.SensorTest do
   use ExUnit.Case, async: true
 
   alias MirrorNeuron.Builtins.Sensor
+  alias MirrorNeuron.Message
 
   test "init sets up state correctly" do
     node = %{
@@ -20,13 +21,11 @@ defmodule MirrorNeuron.Builtins.SensorTest do
 
     {:ok, state} = Sensor.init(node)
 
-    msg = %{
-      "message_id" => "msg1",
-      "payload" => %{"data" => 123},
-      "headers" => %{"x-test" => "1"},
-      "content_type" => "application/json",
-      "content_encoding" => "identity"
-    }
+    msg =
+      Message.new("job-1", "source", "sensor", "observation", %{"data" => 123},
+        message_id: "msg1",
+        headers: %{"x-test" => "1"}
+      )
 
     assert {:ok, next_state, actions} = Sensor.handle_message(msg, state, %{})
     assert next_state.observations == 1
@@ -53,7 +52,7 @@ defmodule MirrorNeuron.Builtins.SensorTest do
 
     {:ok, state} = Sensor.init(node)
 
-    msg = %{"message_id" => "m", "payload" => "hello"}
+    msg = Message.new("job-1", "source", "sensor", "observation", "hello", message_id: "m")
 
     # First observation
     {:ok, state1, actions1} = Sensor.handle_message(msg, state, %{})

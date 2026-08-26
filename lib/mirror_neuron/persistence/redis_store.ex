@@ -2,7 +2,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   alias MirrorNeuron.Artifacts.{BlobRef, JobStore, SharedStorage}
   alias MirrorNeuron.Cluster.NodeAdapter
   alias MirrorNeuron.Config
-  alias MirrorNeuron.JobId
 
   require Logger
 
@@ -712,7 +711,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   def list_job_ids do
     case command(["SMEMBERS", key(@jobs_set)]) do
-      {:ok, job_ids} -> {:ok, Enum.sort(compact_legacy_job_ids(job_ids))}
+      {:ok, job_ids} -> {:ok, Enum.sort(job_ids)}
       {:error, reason} -> {:error, format_reason(reason)}
     end
   end
@@ -733,7 +732,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   Persists a stable job definition independently from execution records.
 
   Execution records intentionally remain under `job:<run_id>` for the v1
-  compatibility surface. Stable definitions use `job-definition:<job_id>` so
+  service surface. Stable definitions use `job-definition:<job_id>` so
   the two identities can never overwrite one another during migration.
   """
   def persist_job_definition(job_id, definition) when is_map(definition) do
@@ -1537,7 +1536,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
          {:ok, blob_result} <- sweep_blob_ref_index(),
          {:ok, service_result} <- sweep_service_instance_index(),
          {:ok, schedule_result} <- sweep_schedule_index(),
-         {:ok, trigger_result} <- sweep_legacy_trigger_event_keys(),
          {:ok, deployment_result} <- sweep_deployment_indexes() do
       result =
         Enum.reduce(job_ids, %{deleted_jobs: [], stale_job_ids: []}, fn job_id, acc ->
@@ -1621,8 +1619,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
          stale_service_instances: Map.get(service_result, :stale_service_instances, []),
          stale_schedule_count: Map.get(schedule_result, :stale_schedule_count, 0),
          stale_schedules: Map.get(schedule_result, :stale_schedules, []),
-         stale_trigger_event_key_count:
-           Map.get(trigger_result, :stale_trigger_event_key_count, 0),
          stale_deployment_count: Map.get(deployment_result, :stale_deployment_count, 0),
          stale_deployments: Map.get(deployment_result, :stale_deployments, []),
          stale_deployment_version_count:
@@ -2400,84 +2396,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
-  defp compact_legacy_job_ids(job_ids) do
-    Enum.map(job_ids, fn job_id ->
-      if JobId.legacy?(job_id), do: compact_legacy_job_id(job_id), else: job_id
-    end)
-  end
-
-  defp compact_legacy_job_id(job_id) do
-    with {:ok, compact_id} <- JobId.compact_legacy(job_id),
-         {:ok, final_id} <- available_compact_id(compact_id, job_id),
-         :ok <- rename_job_keys(job_id, final_id) do
-      final_id
-    else
-      _ -> job_id
-    end
-  end
-
-  defp available_compact_id(compact_id, job_id) do
-    case command(["EXISTS", key("job", compact_id)]) do
-      {:ok, 0} -> {:ok, compact_id}
-      {:ok, 1} when compact_id == job_id -> {:ok, compact_id}
-      {:ok, 1} -> {:ok, "#{compact_id}-#{System.unique_integer([:positive])}"}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp rename_job_keys(job_id, compact_id) do
-    with {:ok, job} <- fetch_job(job_id),
-         {:ok, agent_ids} <- command(["SMEMBERS", key("job", job_id, "agents")]),
-         {:ok, _job} <- persist_job(compact_id, Map.put(job, "job_id", compact_id)),
-         :ok <- copy_key(key("job", job_id, "events"), key("job", compact_id, "events")),
-         :ok <- copy_key(key("job", job_id, "agents"), key("job", compact_id, "agents")),
-         :ok <- copy_agent_keys(job_id, compact_id, agent_ids) do
-      delete_legacy_job_keys(job_id, agent_ids)
-    end
-  end
-
-  defp copy_agent_keys(job_id, compact_id, agent_ids) do
-    Enum.reduce_while(agent_ids, :ok, fn agent_id, :ok ->
-      case copy_key(
-             key("job", job_id, "agent", agent_id),
-             key("job", compact_id, "agent", agent_id)
-           ) do
-        :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-  end
-
-  defp copy_key(source, target) do
-    case command(["DUMP", source]) do
-      {:ok, nil} ->
-        :ok
-
-      {:ok, serialized} ->
-        case command(["RESTORE", target, "0", serialized, "REPLACE"]) do
-          {:ok, "OK"} -> :ok
-          {:error, reason} -> {:error, reason}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp delete_legacy_job_keys(job_id, agent_ids) do
-    keys =
-      [
-        key("job", job_id),
-        key("job", job_id, "summary"),
-        key("job", job_id, "events"),
-        key("job", job_id, "agents")
-      ] ++ Enum.map(agent_ids, &key("job", job_id, "agent", &1))
-
-    _ = command(["DEL" | keys])
-    _ = command(["SREM", key(@jobs_set), job_id])
-    :ok
-  end
-
   defp fetch_jobs([]), do: {:ok, []}
 
   defp fetch_jobs(job_ids) do
@@ -2506,8 +2424,8 @@ defmodule MirrorNeuron.Persistence.RedisStore do
                 _ -> nil
               end
 
-            {job_id, _missing} ->
-              fetch_and_store_job_summary(job_id)
+            {_job_id, _missing} ->
+              nil
           end)
           |> Enum.reject(&is_nil/1)
 
@@ -2515,28 +2433,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
       {:error, reason} ->
         {:error, format_reason(reason)}
-    end
-  end
-
-  defp fetch_and_store_job_summary(job_id) do
-    case fetch_job(job_id) do
-      {:ok, job} when is_map(job) ->
-        summary = job_summary(job_id, job)
-        _ = store_job_summary(job_id, summary, Map.get(summary, "status"))
-        summary
-
-      _ ->
-        nil
-    end
-  end
-
-  defp store_job_summary(job_id, summary, status) do
-    with {:ok, "OK"} <- command(["SET", key("job", job_id, "summary"), Jason.encode!(summary)]) do
-      if terminal_status?(status) do
-        expire_key(key("job", job_id, "summary"), terminal_job_ttl_seconds())
-      else
-        persist_key(key("job", job_id, "summary"))
-      end
     end
   end
 
@@ -3495,20 +3391,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end)
   end
 
-  defp sweep_legacy_trigger_event_keys do
-    with {:ok, keys} <- scan_keys(key("trigger", "event", "*")),
-         {:ok, deleted} <- delete_redis_keys(keys),
-         :ok <- maybe_wait_for_deleted_keys(deleted) do
-      {:ok, %{stale_trigger_event_key_count: deleted}}
-    else
-      {:error, reason} -> {:error, format_reason(reason)}
-      other -> {:error, format_reason(other)}
-    end
-  end
-
-  defp delete_redis_keys([]), do: {:ok, 0}
-  defp delete_redis_keys(keys), do: command(["DEL" | keys])
-
   defp maybe_wait_for_deleted_keys(0), do: :ok
   defp maybe_wait_for_deleted_keys(_deleted), do: wait_for_replicas()
 
@@ -3703,9 +3585,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     keys = Enum.map(agent_ids, &key("job", job_id, "agent_summary", &1))
 
     with {:ok, encoded_summaries} <- command(["MGET" | keys]),
-         {summaries, missing_ids} <- decode_agent_summaries(agent_ids, encoded_summaries),
-         {:ok, backfilled} <- backfill_agent_summaries(job_id, missing_ids) do
-      summaries = Map.merge(summaries, backfilled)
+         {summaries, _missing_ids} <- decode_agent_summaries(agent_ids, encoded_summaries) do
       {:ok, Enum.flat_map(agent_ids, &List.wrap(Map.get(summaries, &1)))}
     else
       {:error, reason} -> {:error, format_reason(reason)}
@@ -3729,35 +3609,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
         {summaries, [agent_id | missing_ids]}
     end)
     |> then(fn {summaries, missing_ids} -> {summaries, Enum.reverse(missing_ids)} end)
-  end
-
-  defp backfill_agent_summaries(_job_id, []), do: {:ok, %{}}
-
-  defp backfill_agent_summaries(job_id, agent_ids) do
-    with {:ok, agents} <- fetch_agents(job_id, agent_ids) do
-      summaries =
-        Map.new(agents, fn agent ->
-          summary = agent_monitor_record(agent)
-          {Map.get(summary, "agent_id"), summary}
-        end)
-
-      commands =
-        Enum.flat_map(summaries, fn {agent_id, summary} ->
-          [["SET", key("job", job_id, "agent_summary", agent_id), Jason.encode!(summary)]] ++
-            agent_summary_retention_commands(job_id, agent_id)
-        end)
-
-      case pipeline(commands) do
-        {:ok, results} ->
-          case Enum.find(results, &match?(%Redix.Error{}, &1)) do
-            nil -> {:ok, summaries}
-            %Redix.Error{} = error -> {:error, format_reason(error)}
-          end
-
-        {:error, reason} ->
-          {:error, format_reason(reason)}
-      end
-    end
   end
 
   defp fetch_recovery_evals([]), do: {:ok, []}
@@ -4111,33 +3962,10 @@ defmodule MirrorNeuron.Persistence.RedisStore do
         Jason.decode(encoded)
 
       {:ok, nil} ->
-        backfill_job_guard(job_id)
+        {:error, "job #{job_id} guard was not found"}
 
       {:error, reason} ->
         {:error, format_reason(reason)}
-    end
-  end
-
-  defp backfill_job_guard(job_id) do
-    with {:ok, job} <- fetch_job(job_id) do
-      guard = job_guard(job_id, job)
-
-      case command(["SET", key("job", job_id, "guard"), Jason.encode!(guard)]) do
-        {:ok, "OK"} ->
-          if terminal_status?(Map.get(guard, "status")) do
-            expire_key(key("job", job_id, "guard"), terminal_job_ttl_seconds())
-          else
-            persist_key(key("job", job_id, "guard"))
-          end
-
-          {:ok, guard}
-
-        {:error, reason} ->
-          {:error, format_reason(reason)}
-
-        other ->
-          {:error, format_reason(other)}
-      end
     end
   end
 
@@ -4256,26 +4084,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     maybe_expire_key_command(key("job", job_id, "agent", agent_id), ttl_seconds) ++
       maybe_expire_key_command(key("job", job_id, "agent_summary", agent_id), ttl_seconds) ++
       maybe_expire_key_command(key("job", job_id, "agents"), ttl_seconds)
-  end
-
-  defp agent_summary_retention_commands(job_id, agent_id) do
-    case fetch_job_guard(job_id) do
-      {:ok, job} ->
-        if terminal_status?(Map.get(job, "status")) do
-          maybe_expire_key_command(
-            key("job", job_id, "agent_summary", agent_id),
-            agent_snapshot_ttl_seconds()
-          )
-        else
-          [["PERSIST", key("job", job_id, "agent_summary", agent_id)]]
-        end
-
-      {:error, _reason} ->
-        maybe_expire_key_command(
-          key("job", job_id, "agent_summary", agent_id),
-          agent_snapshot_ttl_seconds()
-        )
-    end
   end
 
   defp agent_snapshot_retention_commands(job_id, agent_id, job_guard_result) do
@@ -5144,7 +4952,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     metadata = Map.get(snapshot, "metadata") || %{}
 
     %{
-      "agent_id" => Map.get(snapshot, "agent_id") || Map.get(snapshot, "node_id"),
+      "agent_id" => Map.get(snapshot, "agent_id"),
       "node_id" => Map.get(snapshot, "node_id"),
       "agent_type" => Map.get(snapshot, "agent_type"),
       "type" => Map.get(snapshot, "type"),
@@ -5160,8 +4968,8 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       "metadata" => %{
         "paused" => Map.get(metadata, "paused", false),
         "backpressure" => Map.get(metadata, "backpressure") || %{},
-        "lease_epoch" => Map.get(metadata, "lease_epoch") || Map.get(snapshot, "lease_epoch"),
-        "lease_owner" => Map.get(metadata, "lease_owner") || Map.get(snapshot, "lease_owner"),
+        "lease_epoch" => Map.get(metadata, "lease_epoch"),
+        "lease_owner" => Map.get(metadata, "lease_owner"),
         "pending_message_count" => Map.get(metadata, "pending_message_count", 0),
         "execution_profile" => Map.get(metadata, "execution_profile")
       }

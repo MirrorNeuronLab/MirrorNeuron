@@ -12,16 +12,9 @@ defmodule MirrorNeuron.AgentRegistry do
     "module" => Builtins.Module
   }
 
-  @compatibility_aliases %{
-    "relay" => "router",
-    "sandbox_worker" => "executor",
-    "collector" => "aggregator"
-  }
-
   def supported_types, do: Map.keys(@builtins)
 
-  def supported_type?(type),
-    do: Map.has_key?(@builtins, type) or Map.has_key?(@compatibility_aliases, type)
+  def supported_type?(type), do: Map.has_key?(@builtins, type)
 
   def fetch(type) do
     type
@@ -36,5 +29,5 @@ defmodule MirrorNeuron.AgentRegistry do
     end
   end
 
-  def canonical_type(type), do: Map.get(@compatibility_aliases, type, type)
+  def canonical_type(type), do: type
 end

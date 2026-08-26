@@ -42,6 +42,7 @@ defmodule MirrorNeuron.BundleUpdateTest do
 
     manifest = %{
       "apiVersion" => "mn.workflow/v1",
+      "kind" => "Workflow",
       "manifest_version" => "1.0",
       "graph_id" => graph_id,
       "reload" => %{"mode" => reload_mode, "interval_seconds" => interval},
@@ -92,7 +93,6 @@ defmodule MirrorNeuron.BundleUpdateTest do
                resources: %{},
                constraints: [],
                policies: %{},
-               checkpoint_policy: %{},
                retry_policy: %{},
                spawn_policy: %{},
                tool_bindings: [],
@@ -105,6 +105,7 @@ defmodule MirrorNeuron.BundleUpdateTest do
     # Update the manifest file
     new_manifest = %{
       "apiVersion" => "mn.workflow/v1",
+      "kind" => "Workflow",
       "manifest_version" => "1.0",
       # Must match
       "graph_id" => "update_test_bundle",

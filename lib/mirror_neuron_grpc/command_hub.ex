@@ -107,8 +107,6 @@ defmodule MirrorNeuron.Grpc.CommandPolicy do
                          {:job, :QueryJobResponse},
                          {:job, :GetJobResponseTurn},
                          {:cluster, :SetResource},
-                         {:cluster, :AddNode},
-                         {:cluster, :RemoveNode},
                          {:cluster, :ReconcileNode},
                          {:cluster, :DrainNode},
                          {:cluster, :CancelNodeDrain},
@@ -169,7 +167,9 @@ defmodule MirrorNeuron.Grpc.CommandPolicy do
                             {:operations, :StreamOperationEvents}
                           ])
 
-  def enforce!(service, command, _request, stream) do
+  def enforce!(service, command, request, stream) do
+    MirrorNeuron.Grpc.Handlers.Support.require_interface_version!(request)
+
     if network_only_denied?(service, command) do
       MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!(command_name(command))
     end
@@ -257,8 +257,6 @@ defmodule MirrorNeuron.Grpc.CommandHub do
                    |> Map.merge(
                      Map.new(
                        [
-                         :AddNode,
-                         :RemoveNode,
                          :RegisterFederatedPeer,
                          :GetFederatedPeer,
                          :RemoveFederatedPeer,

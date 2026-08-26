@@ -3,12 +3,12 @@ defmodule MirrorNeuron.ResourceSpecTest do
 
   alias MirrorNeuron.ResourceSpec
 
-  test "normalizes rich resource requests while preserving legacy scalar fields" do
+  test "normalizes the current rich resource request" do
     spec =
       ResourceSpec.normalize_request(%{
-        "cpu" => 1500,
-        "memory_gb" => 8,
-        "disk_gb" => 20,
+        "cpu_cores" => 1.5,
+        "memory_mb" => 8192,
+        "disk_mb" => 20_480,
         "devices" => [
           %{
             "kind" => "gpu",

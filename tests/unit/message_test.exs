@@ -3,8 +3,8 @@ defmodule MirrorNeuron.MessageTest do
 
   alias MirrorNeuron.Message
 
-  test "normalizes a legacy payload map into the v1 message shape" do
-    legacy = %{
+  test "rejects flat messages without the mn-msg/1 envelope" do
+    flat = %{
       "message_id" => "msg-1",
       "from" => "router",
       "to" => "sink",
@@ -12,12 +12,8 @@ defmodule MirrorNeuron.MessageTest do
       "payload" => %{"value" => 42}
     }
 
-    assert {:ok, normalized} = Message.normalize(legacy, job_id: "job-1")
-    assert normalized["envelope"]["spec_version"] == "mn-msg/1"
-    assert normalized["envelope"]["job_id"] == "job-1"
-    assert normalized["body"] == %{"value" => 42}
-    assert normalized["headers"] == %{}
-    assert normalized["artifacts"] == []
+    assert {:error, "message must use the mn-msg/1 envelope"} =
+             Message.normalize(flat, job_id: "job-1")
   end
 
   test "preserves envelope headers artifacts and stream in spec messages" do

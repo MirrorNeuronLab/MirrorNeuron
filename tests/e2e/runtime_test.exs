@@ -3409,62 +3409,6 @@ defmodule MirrorNeuron.RuntimeTest do
     RedisStore.delete_job(job_id)
   end
 
-  test "agent startup and heartbeats never create disk checkpoints" do
-    job_id = "agent-startup-no-checkpoint-#{System.unique_integer([:positive])}"
-    agent_id = "startup_agent"
-    checkpoint_root = Path.join(System.tmp_dir!(), "#{job_id}-checkpoints")
-    previous_root = System.get_env("MN_CHECKPOINT_ROOT")
-    System.put_env("MN_CHECKPOINT_ROOT", checkpoint_root)
-
-    on_exit(fn ->
-      restore_system_env("MN_CHECKPOINT_ROOT", previous_root)
-      File.rm_rf!(checkpoint_root)
-    end)
-
-    assert {:ok, _job} =
-             RedisStore.persist_job(job_id, %{
-               "job_id" => job_id,
-               "graph_id" => "agent-startup-no-checkpoint",
-               "status" => "pending",
-               "updated_at" => Runtime.timestamp()
-             })
-
-    parent = self()
-
-    node = %{
-      node_id: agent_id,
-      agent_type: "module",
-      role: "root",
-      config: %{"module" => ExplicitCheckpointAgent}
-    }
-
-    runtime_context = %{
-      graph_id: "agent-startup-no-checkpoint",
-      job_name: "agent-startup-no-checkpoint",
-      entrypoints: [agent_id],
-      placement_policy: "local",
-      recovery_policy: "local_restart",
-      submitted_at: Runtime.timestamp(),
-      manifest_version: "1.0"
-    }
-
-    worker =
-      Task.async(fn ->
-        AgentWorker.start_link({job_id, node, [], [], parent, runtime_context})
-      end)
-
-    assert {:ok, {:ok, pid}} = Task.yield(worker, 1_000)
-
-    send(pid, :heartbeat)
-    assert %{"agent_id" => ^agent_id} = GenServer.call(pid, :pressure_snapshot, 1_000)
-
-    assert {:ok, %{"agent_id" => ^agent_id}} = RedisStore.fetch_agent(job_id, agent_id)
-    refute File.exists?(checkpoint_root)
-
-    GenServer.stop(pid)
-    RedisStore.delete_job(job_id)
-  end
-
   test "restarts a missing agent and replays its inflight message" do
     {:ok, counter_pid} = start_supervised(CrashOnceCounter)
 

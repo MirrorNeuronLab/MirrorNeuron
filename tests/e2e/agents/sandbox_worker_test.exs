@@ -4,6 +4,7 @@ defmodule MirrorNeuron.ExecutorTest do
   alias MirrorNeuron.Builtins.Executor
   alias MirrorNeuron.Execution.LeaseManager
   alias MirrorNeuron.Artifacts.StagedArtifact
+  alias MirrorNeuron.Message
 
   defmodule FlakyRunner do
     def run(_payload, _config, _opts) do
@@ -174,7 +175,7 @@ defmodule MirrorNeuron.ExecutorTest do
     end
   end
 
-  defmodule LegacyCompletionRunner do
+  defmodule RetiredCompletionRunner do
     def run(_payload, _config, _opts) do
       {:ok,
        %{
@@ -214,7 +215,7 @@ defmodule MirrorNeuron.ExecutorTest do
     }
 
     {:ok, next_state, actions} =
-      Executor.handle_message(%{type: "prime_chunk_request", payload: %{}}, state, context)
+      Executor.handle_message(message("job-1", "prime_chunk_request", %{}), state, context)
 
     assert Process.get(:sandbox_worker_attempt) == 2
     assert next_state.last_result["attempts"] == 2
@@ -272,7 +273,7 @@ defmodule MirrorNeuron.ExecutorTest do
     }
 
     assert {:ok, _state, actions} =
-             Executor.handle_message(%{type: "request", payload: original}, state, context)
+             Executor.handle_message(message("job-1", "request", original), state, context)
 
     assert {:emit, "large_result", payload, _opts} =
              Enum.find(actions, &match?({:emit, _, _, _}, &1))
@@ -320,7 +321,7 @@ defmodule MirrorNeuron.ExecutorTest do
     }
 
     assert {:ok, _state, actions} =
-             Executor.handle_message(%{type: "request", payload: %{}}, state, context)
+             Executor.handle_message(message("job-1", "request", %{}), state, context)
 
     assert {:emit, "shared_result", payload, _opts} =
              Enum.find(actions, &match?({:emit, _, _, _}, &1))
@@ -357,7 +358,7 @@ defmodule MirrorNeuron.ExecutorTest do
 
     assert {:error, reason, failed_state} =
              Executor.handle_message(
-               %{type: "prime_chunk_request", payload: %{}},
+               message("job-2", "prime_chunk_request", %{}),
                state,
                context
              )
@@ -397,7 +398,11 @@ defmodule MirrorNeuron.ExecutorTest do
     }
 
     assert {:error, reason, failed_state} =
-             Executor.handle_message(%{type: "tick", payload: %{}}, state, context)
+             Executor.handle_message(
+               message("job-beacon-watchdog", "tick", %{}),
+               state,
+               context
+             )
 
     assert Process.get(:beacon_miss_attempt) == 2
     assert reason["error"] == "agent beacon deadline exceeded"
@@ -438,7 +443,7 @@ defmodule MirrorNeuron.ExecutorTest do
     }
 
     assert {:ok, next_state, actions} =
-             Executor.handle_message(%{type: "tick", payload: %{}}, state, context)
+             Executor.handle_message(message("job-beacon-ok", "tick", %{}), state, context)
 
     assert next_state.last_result["attempts"] == 1
     assert Enum.any?(actions, &match?({:event, :sandbox_job_completed, _}, &1))
@@ -474,7 +479,7 @@ defmodule MirrorNeuron.ExecutorTest do
     }
 
     {:ok, state1, actions1} =
-      Executor.handle_message(%{type: "tick", payload: %{}}, state0, context)
+      Executor.handle_message(message("job-structured", "tick", %{}), state0, context)
 
     assert state1.agent_state["count"] == 1
     assert Enum.any?(actions1, &match?({:event, :custom_metric, _}, &1))
@@ -482,20 +487,20 @@ defmodule MirrorNeuron.ExecutorTest do
     refute Enum.any?(actions1, &match?({:complete_run, _}, &1))
 
     {:ok, state2, actions2} =
-      Executor.handle_message(%{type: "tick", payload: %{}}, state1, context)
+      Executor.handle_message(message("job-structured", "tick", %{}), state1, context)
 
     assert state2.agent_state["count"] == 2
     assert {:complete_run, %{"count" => 2}} = Enum.find(actions2, &match?({:complete_run, _}, &1))
   end
 
-  test "legacy complete_job structured stdout fails the attempt" do
+  test "retired complete_job structured stdout fails the attempt" do
     lease_manager =
       start_supervised!({LeaseManager, name: unique_name(), capacities: %{"default" => 1}})
 
     node = %{
-      node_id: "legacy_completion_worker",
+      node_id: "retired_completion_worker",
       config: %{
-        :runner_module => LegacyCompletionRunner,
+        :runner_module => RetiredCompletionRunner,
         :lease_manager => lease_manager,
         "output_message_type" => nil
       }
@@ -504,8 +509,8 @@ defmodule MirrorNeuron.ExecutorTest do
     {:ok, state0} = Executor.init(node)
 
     context = %{
-      job_id: "job-legacy-completion-output",
-      node: %{node_id: "legacy_completion_worker"},
+      job_id: "job-retired-completion-output",
+      node: %{node_id: "retired_completion_worker"},
       coordinator: self(),
       bundle_root: "/tmp",
       manifest_path: "/tmp/manifest.json",
@@ -513,7 +518,11 @@ defmodule MirrorNeuron.ExecutorTest do
     }
 
     assert {:error, reason, state1} =
-             Executor.handle_message(%{type: "tick", payload: %{}}, state0, context)
+             Executor.handle_message(
+               message("job-retired-completion-output", "tick", %{}),
+               state0,
+               context
+             )
 
     assert reason["error"] == "unsupported structured output key"
     assert reason["unsupported_keys"] == ["complete_job"]
@@ -545,7 +554,11 @@ defmodule MirrorNeuron.ExecutorTest do
     }
 
     assert {:ok, state1, actions} =
-             Executor.handle_message(%{type: "tick", payload: %{}}, state0, context)
+             Executor.handle_message(
+               message("job-invalid-structured-output", "tick", %{}),
+               state0,
+               context
+             )
 
     assert state1.runs == 1
     assert state1.agent_state == %{}
@@ -563,43 +576,8 @@ defmodule MirrorNeuron.ExecutorTest do
            ]
   end
 
-  test "recovery records completed executor output without replaying downstream actions" do
-    node = %{
-      node_id: "recover_worker",
-      config: %{
-        "output_message_type" => "executor_done",
-        "terminal_sink" => true,
-        "complete_run" => true
-      }
-    }
-
-    {:ok, state} = Executor.init(node)
-
-    payload = %{
-      "agent_id" => "recover_worker",
-      "sandbox" => %{"exit_code" => 0},
-      "input" => %{"value" => 1}
-    }
-
-    recovered_state = %{state | last_output_payload: payload}
-
-    assert {:ok, ^recovered_state, actions} =
-             Executor.recover(recovered_state, %{
-               job_id: "job-recover-output",
-               node: %{node_id: "recover_worker"},
-               coordinator: self()
-             })
-
-    assert actions == [
-             {:event, :executor_output_not_replayed,
-              %{
-                "agent_id" => "recover_worker",
-                "reason" => "completed_output_already_recorded"
-              }}
-           ]
-
-    refute Enum.any?(actions, &match?({:emit, _, _, _}, &1))
-    refute Enum.any?(actions, &match?({:complete_run, _}, &1))
+  defp message(job_id, type, body) do
+    Message.new(job_id, "test_source", "executor", type, body)
   end
 
   defp unique_name do

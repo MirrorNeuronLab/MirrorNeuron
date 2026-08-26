@@ -1,7 +1,6 @@
 defmodule MirrorNeuron.Runtime.JobCleanupTest do
   use ExUnit.Case, async: false
 
-  alias MirrorNeuron.Persistence.DiskCheckpoint
   alias MirrorNeuron.Runner.HostLocal
   alias MirrorNeuron.Runtime.{JobCleanup, RunnerResources}
   alias MirrorNeuron.Sandbox.{DockerJobSandbox, OpenShellJobSandbox}
@@ -67,8 +66,7 @@ defmodule MirrorNeuron.Runtime.JobCleanupTest do
         {module, function} <- [
           {HostLocal, :terminate_job},
           {OpenShellJobSandbox, :cleanup_job_local},
-          {DockerJobSandbox, :cleanup_job_local},
-          {DiskCheckpoint, :delete_job}
+          {DockerJobSandbox, :cleanup_job_local}
         ] do
       assert_receive {:cleanup_rpc, ^node, ^module, ^function, ["run-1"], 15_000}
     end
@@ -78,8 +76,7 @@ defmodule MirrorNeuron.Runtime.JobCleanupTest do
 
   test "runtime cleanup attempts every resource and reports all failures" do
     failures = %{
-      {:control@lab, HostLocal} => {:error, :host_timeout},
-      {:control@lab, DiskCheckpoint} => {:error, :checkpoint_busy}
+      {:control@lab, HostLocal} => {:error, :host_timeout}
     }
 
     NodeAdapterStub.reset(self(), failures)
@@ -87,7 +84,7 @@ defmodule MirrorNeuron.Runtime.JobCleanupTest do
     assert {:error, cleanup_failures} =
              JobCleanup.cleanup_runtime_resources("run-2", nil, [])
 
-    assert Enum.map(cleanup_failures, & &1.resource) == ["HostLocal", "checkpoint"]
+    assert Enum.map(cleanup_failures, & &1.resource) == ["HostLocal"]
 
     assert_receive {:cleanup_rpc, :control@lab, OpenShellJobSandbox, :cleanup_job_local,
                     ["run-2"], 15_000}
@@ -113,7 +110,7 @@ defmodule MirrorNeuron.Runtime.JobCleanupTest do
     end
   end
 
-  test "sandbox cleanup also terminates owned HostLocal commands without deleting checkpoints" do
+  test "sandbox cleanup also terminates owned HostLocal commands" do
     NodeAdapterStub.reset(self())
 
     assert :ok = JobCleanup.cleanup_sandboxes("paused-service", nil, [])
@@ -127,37 +124,6 @@ defmodule MirrorNeuron.Runtime.JobCleanupTest do
       assert_receive {:cleanup_rpc, ^node, ^module, ^function, ["paused-service"], 15_000}
     end
 
-    refute_receive {:cleanup_rpc, _node, DiskCheckpoint, :delete_job, _args, _timeout}
-    refute_receive {:cleanup_rpc, _node, _module, _function, _args, _timeout}
-  end
-
-  test "runtime cleanup treats legacy nonode records as the current local node" do
-    NodeAdapterStub.reset(self())
-
-    job = %{
-      "scheduler" => %{
-        "placements" => [
-          %{"node" => "nonode@nohost"},
-          %{"node" => :nonode@nohost}
-        ]
-      }
-    }
-
-    agents = [%{"assigned_node" => "nonode@nohost"}]
-
-    assert :ok = JobCleanup.cleanup_runtime_resources("legacy-run", job, agents)
-
-    for node <- [:control@lab, :connected@lab],
-        {module, function} <- [
-          {HostLocal, :terminate_job},
-          {OpenShellJobSandbox, :cleanup_job_local},
-          {DockerJobSandbox, :cleanup_job_local},
-          {DiskCheckpoint, :delete_job}
-        ] do
-      assert_receive {:cleanup_rpc, ^node, ^module, ^function, ["legacy-run"], 15_000}
-    end
-
-    refute_receive {:cleanup_rpc, :nonode@nohost, _module, _function, _args, _timeout}
     refute_receive {:cleanup_rpc, _node, _module, _function, _args, _timeout}
   end
 end

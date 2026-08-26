@@ -9,8 +9,6 @@ service ClusterService {
   rpc GetRuntimeStatuses (GetResourceRequest) returns (GetResourceResponse);
   rpc PublishRuntimeStatus (SetResourceRequest) returns (SetResourceResponse);
   rpc AckRuntimeStatusEvents (SetResourceRequest) returns (SetResourceResponse);
-  rpc AddNode (AddNodeRequest) returns (AddNodeResponse);
-  rpc RemoveNode (RemoveNodeRequest) returns (RemoveNodeResponse);
   rpc RegisterFederatedPeer (RegisterFederatedPeerRequest) returns (RegisterFederatedPeerResponse);
   rpc GetFederatedPeer (GetFederatedPeerRequest) returns (GetFederatedPeerResponse);
   rpc RemoveFederatedPeer (RemoveFederatedPeerRequest) returns (RemoveFederatedPeerResponse);
@@ -146,29 +144,6 @@ message CleanupDockerComposeRequest {
 message CleanupDockerComposeResponse {
   string result_json = 1;
   uint32 version = 2;
-}
-
-message AddNodeRequest {
-  string node_name = 1;
-  string token = 2;
-  uint32 version = 3;
-}
-
-message AddNodeResponse {
-  string node_name = 1;
-  string status = 2;
-  uint32 version = 3;
-}
-
-message RemoveNodeRequest {
-  string node_name = 1;
-  uint32 version = 2;
-}
-
-message RemoveNodeResponse {
-  string node_name = 1;
-  string status = 2;
-  uint32 version = 3;
 }
 
 message RegisterFederatedPeerRequest {

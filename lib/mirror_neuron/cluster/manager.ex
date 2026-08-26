@@ -64,41 +64,6 @@ defmodule MirrorNeuron.Cluster.Manager do
     |> Enum.reject(&is_nil/1)
   end
 
-  def add_node(node_name) when is_binary(node_name) do
-    with {:ok, atom_name} <- MirrorNeuron.SafeAccess.node_name_to_atom(node_name),
-         true <- NodeAdapter.connect(atom_name) do
-      NodeState.mark_connected(node_name, %{
-        "operator_disconnect" => false,
-        "scheduling_eligible" => true
-      })
-
-      MirrorNeuron.Runtime.HordeCluster.refresh()
-
-      {:ok, %{name: node_name, status: "connected"}}
-    else
-      false -> {:error, "failed to connect to #{node_name}"}
-      {:error, reason} -> {:error, "invalid node name #{inspect(node_name)}: #{reason}"}
-    end
-  end
-
-  def remove_node(node_name) when is_binary(node_name) do
-    case MirrorNeuron.SafeAccess.node_name_to_atom(node_name) do
-      {:ok, atom_name} ->
-        NodeState.mark(node_name, "disconnected", %{
-          "operator_disconnect" => true,
-          "scheduling_eligible" => false,
-          "reason" => "operator requested disconnect"
-        })
-
-        _ = NodeAdapter.disconnect(atom_name)
-        MirrorNeuron.Runtime.HordeCluster.refresh()
-        {:ok, %{name: node_name, status: "disconnected"}}
-
-      {:error, reason} ->
-        {:error, "invalid node name #{inspect(node_name)}: #{reason}"}
-    end
-  end
-
   defp fetch_node_info(_node, %{"connection_mode" => "federated"} = state) do
     {:ok, {Map.get(state, "executor_pools", %{}), Map.get(state, "hardware", %{})}}
   end
@@ -271,7 +236,6 @@ defmodule MirrorNeuron.Cluster.Manager do
       port =
         Config.optional_string("MN_LITELLM_ADVERTISE_PORT", :litellm_advertise_port) ||
           Config.optional_string("MN_LITELLM_GATEWAY_PORT", :litellm_gateway_port) ||
-          Config.optional_string("MN_LITELLM_PORT", :litellm_port) ||
           "4000"
 
       %{

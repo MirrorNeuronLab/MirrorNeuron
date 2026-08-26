@@ -126,58 +126,9 @@ defmodule MirrorNeuron.ServiceCheck do
     end
   end
 
-  defp script_check(check, service, opts) do
-    if not legacy_script_checks_enabled?() do
-      {:error,
-       "script service checks are owned by mn-python-sdk/API/CLI; advertise a concrete service health result before Core checks it"}
-    else
-      legacy_script_check(check, service, opts)
-    end
-  end
-
-  defp legacy_script_check(check, service, opts) do
-    with {:ok, command} <- normalize_command(Map.get(check, "command")),
-         {:ok, root_path} <- script_root(check, service, opts) do
-      timeout = timeout_ms(check)
-      env = script_env(check, service)
-
-      task =
-        Task.async(fn ->
-          [executable | args] = command
-          executable = executable_path(executable, root_path)
-
-          try do
-            System.cmd(executable, args,
-              cd: root_path,
-              env: env,
-              stderr_to_stdout: true
-            )
-          rescue
-            error in ErlangError -> {:error, Exception.message(error)}
-          end
-        end)
-
-      case Task.yield(task, timeout) || Task.shutdown(task, :brutal_kill) do
-        {:ok, {:error, reason}} ->
-          {:error, "script failed: #{reason}"}
-
-        {:ok, {output, 0}} ->
-          {:ok, %{"output" => truncate(output)}}
-
-        {:ok, {output, status}} ->
-          {:error, "script exited #{status}: #{truncate(output)}"}
-
-        nil ->
-          {:error, "script timed out after #{timeout}ms"}
-      end
-    end
-  end
-
-  defp legacy_script_checks_enabled? do
-    System.get_env("MN_CORE_ALLOW_SCRIPT_CHECKS")
-    |> to_string()
-    |> String.downcase()
-    |> then(&(&1 in ["1", "true", "yes", "on"]))
+  defp script_check(_check, _service, _opts) do
+    {:error,
+     "script service checks are owned by mn-python-sdk/API/CLI; advertise a concrete service health result before Core checks it"}
   end
 
   defp grpc_check(check, service) do
@@ -422,50 +373,6 @@ defmodule MirrorNeuron.ServiceCheck do
     end)
   end
 
-  defp script_root(check, service, opts) do
-    root =
-      Map.get(check, "root_path") ||
-        Map.get(service, "bundle_root") ||
-        Keyword.get(opts, :bundle_root)
-
-    cond do
-      is_binary(root) and root != "" -> {:ok, root}
-      true -> {:error, "script service check requires bundle root"}
-    end
-  end
-
-  defp script_env(check, service) do
-    base =
-      %{
-        "MN_SERVICE_NAME" => Map.get(service, "name", ""),
-        "MN_SERVICE_ADDRESS" => Map.get(service, "address", ""),
-        "MN_SERVICE_PORT" => to_string(Map.get(service, "port", ""))
-      }
-
-    check
-    |> Map.get("env", %{})
-    |> stringify_map()
-    |> Enum.reduce(base, fn {key, value}, acc ->
-      Map.put(acc, key, to_string(value))
-    end)
-    |> Enum.map(fn {key, value} -> {key, value} end)
-  end
-
-  defp normalize_command(command) when is_list(command) do
-    if command != [] and Enum.all?(command, &(is_binary(&1) and &1 != "")),
-      do: {:ok, command},
-      else: {:error, "script check command must be a non-empty command list"}
-  end
-
-  defp normalize_command(command) when is_binary(command) and command != "",
-    do: {:ok, String.split(command)}
-
-  defp normalize_command(_command), do: {:error, "script check command is required"}
-
-  defp executable_path(executable, root_path) do
-    if String.contains?(executable, "/"), do: Path.expand(executable, root_path), else: executable
-  end
-
   defp timeout_ms(check), do: parse_int(Map.get(check, "timeout_ms"), @default_timeout_ms)
 
   defp check_specs_by_name(checks) when is_list(checks) do
@@ -569,11 +476,6 @@ defmodule MirrorNeuron.ServiceCheck do
   defp stringify_value(value) when is_map(value), do: stringify_map(value)
   defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
   defp stringify_value(value), do: value
-
-  defp truncate(value) do
-    value = to_string(value)
-    if String.length(value) > 1_000, do: String.slice(value, 0, 1_000) <> "...", else: value
-  end
 
   defp timestamp,
     do: DateTime.utc_now() |> DateTime.truncate(:millisecond) |> DateTime.to_iso8601()

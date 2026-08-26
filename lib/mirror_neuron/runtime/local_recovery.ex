@@ -429,7 +429,7 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
       "requested_recovery_policy" => job["requested_recovery_policy"] || "auto",
       "recovery_policy" => job["recovery_policy"] || "local_restart",
       "reliability_degraded" => job["reliability_degraded"] || false,
-      "reliability" => job["reliability"] || legacy_reliability(job),
+      "reliability" => job["reliability"],
       "manifest" => job["manifest"],
       "manifest_ref" => job["manifest_ref"] || %{},
       "submitted_at" => job["submitted_at"] || now
@@ -470,17 +470,6 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
 
   defp cluster_recoverable_policy?(job) do
     Map.get(job, "recovery_policy", "local_restart") == "cluster_recover"
-  end
-
-  defp legacy_reliability(job) do
-    %{
-      "mode" => "single_node",
-      "effective_recovery_policy" => job["recovery_policy"] || "local_restart",
-      "degraded" => job["reliability_degraded"] || false,
-      "reason" => "legacy job without reliability metadata",
-      "observed_nodes" => [to_string(Node.self())],
-      "observed_at" => Runtime.timestamp()
-    }
   end
 
   defp active_lease?(job_id) do

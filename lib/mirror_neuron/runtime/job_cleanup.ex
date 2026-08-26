@@ -4,20 +4,17 @@ defmodule MirrorNeuron.Runtime.JobCleanup do
   require Logger
 
   alias MirrorNeuron.Cluster.NodeAdapter
-  alias MirrorNeuron.Persistence.DiskCheckpoint
   alias MirrorNeuron.Runner.HostLocal
   alias MirrorNeuron.Runtime.RunnerResources
   alias MirrorNeuron.SafeAccess
   alias MirrorNeuron.Sandbox.{DockerJobSandbox, OpenShellJobSandbox}
 
   @cleanup_timeout_ms 15_000
-  @legacy_local_node :nonode@nohost
 
   @runtime_resources [
     {HostLocal, :terminate_job, "HostLocal"},
     {OpenShellJobSandbox, :cleanup_job_local, "OpenShell"},
-    {DockerJobSandbox, :cleanup_job_local, "DockerWorker"},
-    {DiskCheckpoint, :delete_job, "checkpoint"}
+    {DockerJobSandbox, :cleanup_job_local, "DockerWorker"}
   ]
 
   @sandbox_resources [
@@ -90,11 +87,6 @@ defmodule MirrorNeuron.Runtime.JobCleanup do
     |> Enum.reverse()
   end
 
-  # Jobs persisted before distributed node naming was enabled record the local
-  # runtime as nonode@nohost. That identity is not a remote Erlang node, so its
-  # resources belong to the current local runtime during cleanup.
-  defp cleanup_node(@legacy_local_node), do: {:ok, NodeAdapter.self()}
-  defp cleanup_node("nonode@nohost"), do: {:ok, NodeAdapter.self()}
   defp cleanup_node(node) when is_atom(node), do: {:ok, node}
 
   defp cleanup_node(node) when is_binary(node) do

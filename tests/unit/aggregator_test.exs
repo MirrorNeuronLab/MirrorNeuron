@@ -2,6 +2,7 @@ defmodule MirrorNeuron.AggregatorTest do
   use ExUnit.Case, async: true
 
   alias MirrorNeuron.Builtins.Aggregator
+  alias MirrorNeuron.Message
 
   test "emits a collected aggregate result when output_message_type is configured" do
     node = %{
@@ -15,10 +16,7 @@ defmodule MirrorNeuron.AggregatorTest do
 
     {:ok, state1, actions1} =
       Aggregator.handle_message(
-        %{
-          type: "prime_chunk_result",
-          payload: %{"value" => 1}
-        },
+        message("prime_chunk_result", %{"value" => 1}),
         state0,
         %{}
       )
@@ -27,10 +25,7 @@ defmodule MirrorNeuron.AggregatorTest do
 
     {:ok, _state2, actions2} =
       Aggregator.handle_message(
-        %{
-          type: "prime_chunk_result",
-          payload: %{"value" => 2}
-        },
+        message("prime_chunk_result", %{"value" => 2}),
         state1,
         %{}
       )
@@ -55,7 +50,7 @@ defmodule MirrorNeuron.AggregatorTest do
 
     {:ok, state1, actions1} =
       Aggregator.handle_message(
-        %{type: "executor_result", payload: %{"agent_id" => "worker-1", "value" => 1}},
+        message("executor_result", %{"agent_id" => "worker-1", "value" => 1}),
         state0,
         %{}
       )
@@ -64,7 +59,7 @@ defmodule MirrorNeuron.AggregatorTest do
 
     {:ok, state2, actions2} =
       Aggregator.handle_message(
-        %{type: "executor_result", payload: %{"agent_id" => "worker-1", "value" => 1}},
+        message("executor_result", %{"agent_id" => "worker-1", "value" => 1}),
         state1,
         %{}
       )
@@ -74,7 +69,7 @@ defmodule MirrorNeuron.AggregatorTest do
 
     {:ok, _state3, actions3} =
       Aggregator.handle_message(
-        %{type: "executor_result", payload: %{"agent_id" => "worker-2", "value" => 2}},
+        message("executor_result", %{"agent_id" => "worker-2", "value" => 2}),
         state2,
         %{}
       )
@@ -98,7 +93,7 @@ defmodule MirrorNeuron.AggregatorTest do
 
     {:ok, _state1, actions} =
       Aggregator.handle_message(
-        %{type: "executor_result", payload: %{"agent_id" => "worker-1", "value" => 1}},
+        message("executor_result", %{"agent_id" => "worker-1", "value" => 1}),
         state0,
         %{workflow: %{"step_id" => "join_step"}}
       )
@@ -112,4 +107,6 @@ defmodule MirrorNeuron.AggregatorTest do
 
     assert emitted == result
   end
+
+  defp message(type, body), do: Message.new("job-1", "worker", "join", type, body)
 end

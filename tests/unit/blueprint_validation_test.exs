@@ -120,6 +120,7 @@ defmodule MirrorNeuron.BlueprintValidationTest do
 
     manifest_map = %{
       "apiVersion" => "mn.workflow/v1",
+      "kind" => "Workflow",
       "manifest_version" => "1.0",
       "graph_id" => "validation",
       "entrypoints" => ["worker"],

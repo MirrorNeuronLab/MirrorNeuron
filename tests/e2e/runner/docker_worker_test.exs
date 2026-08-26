@@ -10,13 +10,11 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     previous_buildkit = System.get_env("DOCKER_BUILDKIT")
     previous_worker_buildkit = System.get_env("MN_DOCKER_WORKER_BUILDKIT")
     previous_node_runtime_models = System.get_env("MN_NODE_RUNTIME_MODELS")
-    previous_native_prep = System.get_env("MN_CORE_ALLOW_NATIVE_SANDBOX_PREP")
 
     tmp_dir =
       Path.join(System.tmp_dir!(), "mn-docker-worker-test-#{System.unique_integer([:positive])}")
 
     File.mkdir_p!(tmp_dir)
-    System.put_env("MN_CORE_ALLOW_NATIVE_SANDBOX_PREP", "1")
 
     on_exit(fn ->
       if is_nil(previous_skills_root),
@@ -38,10 +36,6 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
       if is_nil(previous_node_runtime_models),
         do: System.delete_env("MN_NODE_RUNTIME_MODELS"),
         else: System.put_env("MN_NODE_RUNTIME_MODELS", previous_node_runtime_models)
-
-      if is_nil(previous_native_prep),
-        do: System.delete_env("MN_CORE_ALLOW_NATIVE_SANDBOX_PREP"),
-        else: System.put_env("MN_CORE_ALLOW_NATIVE_SANDBOX_PREP", previous_native_prep)
 
       File.rm_rf(tmp_dir)
     end)

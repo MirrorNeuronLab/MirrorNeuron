@@ -46,7 +46,7 @@ defmodule MirrorNeuron.Operations do
     await_settled_until(operation_id, deadline)
   end
 
-  def legacy_cancel_all_result(operation) do
+  def cancel_all_result(operation) do
     results =
       operation
       |> Map.get("items", %{})
@@ -72,18 +72,7 @@ defmodule MirrorNeuron.Operations do
     }
   end
 
-  def legacy_clear_result(operation) do
-    items = Map.values(Map.get(operation, "items", %{}))
-
-    %{
-      "operation_id" => operation["operation_id"],
-      "cleared_count" => Enum.count(items, &(&1["status"] == "cleared")),
-      "failed_count" => Enum.count(items, &(&1["status"] == "failed")),
-      "results" => Enum.map(items, &Map.take(&1, ["item_id", "status", "result", "error"]))
-    }
-  end
-
-  def legacy_reconcile_result(operation) do
+  def reconcile_operation_result(operation) do
     jobs =
       operation
       |> Map.get("items", %{})
@@ -113,7 +102,7 @@ defmodule MirrorNeuron.Operations do
     )
   end
 
-  def legacy_drain_result(operation) do
+  def drain_operation_result(operation) do
     actions =
       operation
       |> Map.get("items", %{})
@@ -124,7 +113,7 @@ defmodule MirrorNeuron.Operations do
 
     %{
       "node" => operation["node_name"] || operation["node"],
-      "status" => legacy_drain_status(operation, counters),
+      "status" => drain_status(operation, counters),
       "actions" => actions,
       "counters" => Map.put(counters, "checked", length(actions)),
       "operation_id" => operation["operation_id"]
@@ -349,7 +338,7 @@ defmodule MirrorNeuron.Operations do
   defp stringify(list) when is_list(list), do: Enum.map(list, &stringify/1)
   defp stringify(value), do: value
 
-  defp legacy_drain_status(operation, counters) do
+  defp drain_status(operation, counters) do
     cond do
       Map.get(operation, "status") == "waiting" -> "draining"
       Map.get(counters, "failed", 0) > 0 -> "blocked_no_placement"

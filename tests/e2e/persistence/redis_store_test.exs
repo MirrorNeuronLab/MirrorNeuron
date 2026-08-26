@@ -5,7 +5,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
   alias MirrorNeuron.Artifacts.JobStore
   alias MirrorNeuron.JobBundle
   alias MirrorNeuron.Message
-  alias MirrorNeuron.Persistence.{DiskCheckpoint, RedisStore}
+  alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.StableJob
   alias MirrorNeuron.Runtime.Delivery
@@ -375,12 +375,11 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert {:ok, 0} = RedisStore.delivery_pending_count(job_id, agent_id)
   end
 
-  test "trigger events use the bounded list and retention removes legacy standalone keys", %{
+  test "trigger events use only the bounded list", %{
     namespace: namespace
   } do
     suspend_retention()
     event_id = "trigger-event-#{System.unique_integer([:positive])}"
-    legacy_id = "legacy-trigger-event-#{System.unique_integer([:positive])}"
 
     assert {:ok, event} =
              RedisStore.append_trigger_event(event_id, %{
@@ -396,22 +395,6 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
              Redix.command(MirrorNeuron.Redis.Connection, [
                "GET",
                redis_key(namespace, ["trigger", "event", event_id])
-             ])
-
-    assert {:ok, "OK"} =
-             Redix.command(MirrorNeuron.Redis.Connection, [
-               "SET",
-               redis_key(namespace, ["trigger", "event", legacy_id]),
-               Jason.encode!(event)
-             ])
-
-    assert {:ok, result} = RedisStore.sweep_retention()
-    assert result.stale_trigger_event_key_count == 1
-
-    assert {:ok, nil} =
-             Redix.command(MirrorNeuron.Redis.Connection, [
-               "GET",
-               redis_key(namespace, ["trigger", "event", legacy_id])
              ])
   end
 
@@ -1280,7 +1263,6 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     stable_job_id = "stable-delete-#{suffix}"
     run_ids = ["stable-delete-run-a-#{suffix}", "stable-delete-run-b-#{suffix}"]
     old_job_data_root = System.get_env("MN_JOB_DATA_ROOT")
-    old_checkpoint_root = System.get_env("MN_CHECKPOINT_ROOT")
     old_artifact_root = System.get_env("MN_JOB_ARTIFACT_ROOT")
     old_shared_root = System.get_env("MN_RUNTIME_SHARED_STORAGE_ROOT")
     old_native_target = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
@@ -1297,7 +1279,6 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     parent = self()
 
     System.put_env("MN_JOB_DATA_ROOT", Path.join(root, "job-data"))
-    System.put_env("MN_CHECKPOINT_ROOT", Path.join(root, "checkpoints"))
     System.put_env("MN_JOB_ARTIFACT_ROOT", Path.join(root, "artifacts"))
     System.put_env("MN_RUNTIME_SHARED_STORAGE_ROOT", shared_root)
     System.put_env("MN_NATIVE_SDK_GRPC_TARGET", "127.0.0.1:55052")
@@ -1335,7 +1316,6 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
       Enum.each(run_ids, &RedisStore.delete_job/1)
       RedisStore.delete_job_definition(stable_job_id)
       restore_system_env("MN_JOB_DATA_ROOT", old_job_data_root)
-      restore_system_env("MN_CHECKPOINT_ROOT", old_checkpoint_root)
       restore_system_env("MN_JOB_ARTIFACT_ROOT", old_artifact_root)
       restore_system_env("MN_RUNTIME_SHARED_STORAGE_ROOT", old_shared_root)
       restore_system_env("MN_NATIVE_SDK_GRPC_TARGET", old_native_target)
@@ -1388,7 +1368,6 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
                  "manifest" => %{"flow" => %{"nodes" => [%{"config" => config}]}}
                })
 
-      assert :ok = DiskCheckpoint.persist_job(run_id, %{"job_id" => run_id})
       assert {:ok, artifact_path} = JobStore.ensure_job_dir(run_id)
       File.write!(Path.join(artifact_path, "result.txt"), "terminal output")
 
@@ -1416,7 +1395,6 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
 
     for run_id <- run_ids do
       assert {:error, _reason} = RedisStore.fetch_job(run_id)
-      assert {:error, :enoent} = DiskCheckpoint.load_job(run_id)
       assert {:ok, artifact_path} = JobStore.job_path(run_id)
       refute File.exists?(artifact_path)
       assert {:ok, []} = ServiceRegistry.list(job_id: run_id)
@@ -1881,34 +1859,6 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert repaired["eval_id"] == eval_id
   end
 
-  test "legacy recovery evals with embedded jobs can still be fetched", %{namespace: namespace} do
-    eval_id = "legacy-job-eval-#{System.unique_integer([:positive])}"
-
-    legacy_eval = %{
-      "eval_id" => eval_id,
-      "job_id" => "legacy-job",
-      "status" => "complete",
-      "job" => %{"job_id" => "legacy-job", "manifest" => %{"graph_id" => "legacy"}}
-    }
-
-    assert {:ok, "OK"} =
-             Redix.command(MirrorNeuron.Redis.Connection, [
-               "SET",
-               redis_key(namespace, ["recovery", "eval", eval_id]),
-               Jason.encode!(legacy_eval)
-             ])
-
-    assert {:ok, 1} =
-             Redix.command(MirrorNeuron.Redis.Connection, [
-               "SADD",
-               redis_key(namespace, ["recovery", "evals"]),
-               eval_id
-             ])
-
-    assert {:ok, fetched} = RedisStore.fetch_recovery_eval(eval_id)
-    assert fetched["job"]["manifest"]["graph_id"] == "legacy"
-  end
-
   test "terminal recovery evals receive ttl and active evals persist", %{namespace: namespace} do
     System.put_env("MN_RECOVERY_EVAL_TTL_SECONDS", "120")
     complete_id = "ttl-complete-eval-#{System.unique_integer([:positive])}"
@@ -2162,9 +2112,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
              ])
   end
 
-  test "list_job_summaries returns compact records and backfills legacy jobs", %{
-    namespace: namespace
-  } do
+  test "list_job_summaries returns compact records" do
     job_id = "summary-job-#{System.unique_integer([:positive])}"
     large_payload = String.duplicate("x", 64_000)
 
@@ -2184,24 +2132,6 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert summary["graph_id"] == "summary_demo"
     refute Map.has_key?(summary, "manifest")
     refute Map.has_key?(summary, "workflow")
-
-    assert {:ok, 1} =
-             Redix.command(MirrorNeuron.Redis.Connection, [
-               "DEL",
-               redis_key(namespace, ["job", job_id, "summary"])
-             ])
-
-    assert {:ok, [backfilled]} = RedisStore.list_job_summaries()
-    assert backfilled["job_id"] == job_id
-
-    assert {:ok, encoded_summary} =
-             Redix.command(MirrorNeuron.Redis.Connection, [
-               "GET",
-               redis_key(namespace, ["job", job_id, "summary"])
-             ])
-
-    assert is_binary(encoded_summary)
-    assert byte_size(encoded_summary) < 2_000
 
     RedisStore.delete_job(job_id)
   end

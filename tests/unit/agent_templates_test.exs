@@ -15,11 +15,12 @@ defmodule MirrorNeuron.AgentTemplatesTest do
     assert defaults.custom == 1
   end
 
-  test "template registry normalizes defaults and compatibility aliases" do
+  test "template registry accepts only current template names" do
     assert AgentTemplates.default_type() == "generic"
     assert AgentTemplates.canonical_type(nil) == "generic"
     assert AgentTemplates.canonical_type("") == "generic"
-    assert AgentTemplates.canonical_type("accumulator") == "reduce"
+    assert AgentTemplates.canonical_type("accumulator") == "accumulator"
+    refute AgentTemplates.supported_type?("accumulator")
     assert AgentTemplates.supported_type?("batch")
     assert AgentTemplates.supported_for_agent_type?("map", "router")
     assert AgentTemplates.supported_for_agent_type?("generic", "step_source")

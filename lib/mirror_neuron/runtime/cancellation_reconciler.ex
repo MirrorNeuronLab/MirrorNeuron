@@ -5,7 +5,7 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
 
   require Logger
 
-  alias MirrorNeuron.Persistence.{CancellationStore, CheckpointLock, DiskCheckpoint, RedisStore}
+  alias MirrorNeuron.Persistence.{CancellationStore, RedisStore}
   alias MirrorNeuron.Runner.HostLocal
   alias MirrorNeuron.Runtime.RunnerResources
   alias MirrorNeuron.Runtime
@@ -33,14 +33,8 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
 
   @impl true
   def init(_opts) do
-    case ensure_checkpoint_lock() do
-      :ok ->
-        Process.send_after(self(), :scan, 250)
-        {:ok, :ok}
-
-      {:error, reason} ->
-        {:stop, reason}
-    end
+    Process.send_after(self(), :scan, 250)
+    {:ok, :ok}
   end
 
   @impl true
@@ -72,8 +66,8 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
     # A stale coordinator is allowed to receive the cancellation and stop, but
     # cannot persist a write after the request fence has advanced.
     try do
-      # Native Docker resources are independent of the legacy sandbox
-      # registry. In particular, after a Core restart there may be no
+      # Native Docker resources are independent of the sandbox registry. In
+      # particular, after a Core restart there may be no
       # HostLocal process to terminate, but persisted DockerWorker containers
       # and DockerCompose projects must still be brought down.
       with :ok <- cleanup_prepared_compose_projects(job_id),
@@ -82,8 +76,7 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
            :ok <- stop_local_job(job_id),
            :ok <- ServiceRegistry.deregister_job(job_id),
            :ok <- OpenShellJobSandbox.cleanup_job_local(job_id),
-           :ok <- DockerJobSandbox.cleanup_job_local(job_id),
-           :ok <- DiskCheckpoint.delete_job(job_id) do
+           :ok <- DockerJobSandbox.cleanup_job_local(job_id) do
         case CancellationStore.acknowledge(job_id, local_node) do
           {:ok, :completed, _cancellation} ->
             EventBus.publish_if_job_exists(job_id, %{
@@ -157,20 +150,6 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
 
       _ ->
         :ok
-    end
-  end
-
-  defp ensure_checkpoint_lock do
-    case Process.whereis(CheckpointLock) do
-      pid when is_pid(pid) ->
-        :ok
-
-      nil ->
-        case CheckpointLock.start_link([]) do
-          {:ok, _pid} -> :ok
-          {:error, {:already_started, _pid}} -> :ok
-          {:error, reason} -> {:error, reason}
-        end
     end
   end
 end

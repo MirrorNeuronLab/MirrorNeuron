@@ -8,6 +8,17 @@ defmodule MirrorNeuron.Grpc.Handlers.Support do
 
   def interface_version, do: @interface_version
 
+  def require_interface_version!(%{version: @interface_version}), do: :ok
+
+  def require_interface_version!(request) do
+    version = if is_map(request), do: Map.get(request, :version), else: nil
+
+    raise GRPC.RPCError,
+      status: GRPC.Status.invalid_argument(),
+      message:
+        "unsupported MirrorNeuron interface version #{inspect(version)}; expected #{@interface_version}"
+  end
+
   def write_payloads(_payloads_dir, nil), do: :ok
 
   def write_payloads(payloads_dir, payloads) do

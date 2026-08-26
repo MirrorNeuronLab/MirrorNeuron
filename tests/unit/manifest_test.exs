@@ -263,7 +263,7 @@ defmodule MirrorNeuron.ManifestTest do
     manifest = %{
       "manifest_version" => "1.0",
       "graph_id" => "simple",
-      "requiredContextEngine" => true,
+      "required_context_engine" => true,
       "entrypoints" => ["router"],
       "nodes" => [
         %{
@@ -538,7 +538,7 @@ defmodule MirrorNeuron.ManifestTest do
     assert Enum.any?(errors, &String.contains?(&1, "nodes.worker.policies.reschedule.unlimited"))
   end
 
-  test "defaults requiredContextEngine to false" do
+  test "defaults required_context_engine to false" do
     manifest = %{
       "manifest_version" => "1.0",
       "graph_id" => "simple",
@@ -591,11 +591,11 @@ defmodule MirrorNeuron.ManifestTest do
     assert "job_name must be a non-empty string" in job_name_errors
   end
 
-  test "rejects non-boolean requiredContextEngine" do
+  test "rejects non-boolean required_context_engine" do
     manifest = %{
       "manifest_version" => "1.0",
       "graph_id" => "simple",
-      "requiredContextEngine" => "yes",
+      "required_context_engine" => "yes",
       "entrypoints" => ["sink"],
       "nodes" => [%{"node_id" => "sink", "agent_type" => "aggregator"}],
       "edges" => [],
@@ -603,7 +603,7 @@ defmodule MirrorNeuron.ManifestTest do
     }
 
     assert {:error, errors} = Manifest.load(flow_manifest(manifest))
-    assert "requiredContextEngine must be a boolean" in errors
+    assert "required_context_engine must be a boolean" in errors
   end
 
   test "rejects legacy daemon manifests" do
@@ -1199,8 +1199,11 @@ defmodule MirrorNeuron.ManifestTest do
       manifest
       |> Map.put("flow", flow)
       |> Map.put_new("apiVersion", "mn.workflow/v1")
+      |> Map.put_new("kind", "Workflow")
     else
-      Map.put_new(manifest, "apiVersion", "mn.workflow/v1")
+      manifest
+      |> Map.put_new("apiVersion", "mn.workflow/v1")
+      |> Map.put_new("kind", "Workflow")
     end
   end
 

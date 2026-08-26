@@ -284,7 +284,7 @@ defmodule MirrorNeuron.Config do
 
       if cookie == "mirrorneuron" do
         raise ArgumentError,
-              "MN_COOKIE must not use the legacy default secret when MN_ENV=prod"
+              "MN_COOKIE must not use the retired default secret when MN_ENV=prod"
       end
     end
   end
@@ -343,12 +343,10 @@ defmodule MirrorNeuron.Config do
   end
 
   defp validate_runtime_efficiency! do
-    optional_positive_int!("MN_AGENT_SNAPSHOT_PENDING_LIMIT")
     optional_positive_int!("MN_LEASE_QUEUE_TIMEOUT_MS")
     optional_nonnegative_int!("MN_LEASE_MAX_QUEUE_LENGTH")
     optional_positive_int!("MN_JOB_CALL_TIMEOUT_MS")
     optional_positive_int!("MN_CANCEL_JOB_CALL_TIMEOUT_MS")
-    optional_nonnegative_int!("MN_JOB_SNAPSHOT_INTERVAL_MS")
     optional_positive_int!("MN_MESSAGE_DEFAULT_TTL_SECONDS")
     optional_positive_int!("MN_MESSAGE_MAX_TTL_SECONDS")
     optional_positive_int!("MN_MESSAGE_ACK_RECEIPT_TTL_SECONDS")

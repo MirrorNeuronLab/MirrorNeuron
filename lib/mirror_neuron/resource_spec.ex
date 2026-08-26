@@ -17,22 +17,11 @@ defmodule MirrorNeuron.ResourceSpec do
     volumes = normalize_volumes(Map.get(resources, "volumes", []))
 
     scalar = %{
-      "cpu_cores" =>
-        first_number(resources, ["cpu_cores", "cores"]) ||
-          cpu_value(first_number(resources, ["cpu", "cpu_millis", "cpu_mcores"])) ||
-          0.0,
-      "memory_mb" =>
-        first_number(resources, ["memory_mb", "memory"]) ||
-          gb_to_mb(first_number(resources, ["memory_gb"])) ||
-          0.0,
-      "disk_mb" =>
-        first_number(resources, ["disk_mb", "disk"]) ||
-          gb_to_mb(first_number(resources, ["disk_gb"])) ||
-          0.0,
+      "cpu_cores" => number_value(Map.get(resources, "cpu_cores")) || 0.0,
+      "memory_mb" => number_value(Map.get(resources, "memory_mb")) || 0.0,
+      "disk_mb" => number_value(Map.get(resources, "disk_mb")) || 0.0,
       "gpu_count" =>
-        first_number(resources, ["gpu_count", "gpus", "gpu"]) ||
-          gpu_device_count(devices) ||
-          0
+        number_value(Map.get(resources, "gpu_count")) || gpu_device_count(devices) || 0
     }
 
     %{
@@ -639,19 +628,6 @@ defmodule MirrorNeuron.ResourceSpec do
       |> Enum.sum()
 
     if count > 0, do: count, else: nil
-  end
-
-  defp cpu_value(nil), do: nil
-  defp cpu_value(value) when value > 64, do: Float.round(value / 1000, 3)
-  defp cpu_value(value), do: value
-
-  defp gb_to_mb(nil), do: nil
-  defp gb_to_mb(value), do: value * 1024
-
-  defp first_number(map, keys) when is_map(map) do
-    Enum.find_value(keys, fn key ->
-      map_get(map, key) |> number_value()
-    end)
   end
 
   defp number_value(value) when is_integer(value), do: value

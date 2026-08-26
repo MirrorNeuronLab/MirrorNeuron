@@ -13,18 +13,11 @@ defmodule MirrorNeuron.Grpc.Handlers.Node do
     DrainNodeResponse,
     GetNodeDrainStatusResponse,
     ReconcileNodeResponse,
-    RemoveNodeResponse,
     RegisterFederatedPeerResponse,
     GetFederatedPeerResponse,
     RemoveFederatedPeerResponse,
     SetNodeMaintenanceResponse
   }
-
-  def add_node(_request, _stream) do
-    raise GRPC.RPCError,
-      status: GRPC.Status.failed_precondition(),
-      message: "AddNode is a legacy distributed-cluster RPC; use RegisterFederatedPeer"
-  end
 
   def register_federated_peer(request, _stream) do
     with {:ok, peer_info} <- decode_peer_info(request.peer_info_json),
@@ -133,23 +126,6 @@ defmodule MirrorNeuron.Grpc.Handlers.Node do
   @doc false
   def clear_join_claim(owner_node_name) do
     JoinClaim.clear(owner_node_name)
-  end
-
-  def remove_node(request, _stream) do
-    case FederationRegistry.remove(request.node_name) do
-      {:ok, status} ->
-        _ = disconnect_peer(request.node_name)
-        _ = clear_join_claim(request.node_name)
-
-        %RemoveNodeResponse{
-          node_name: request.node_name,
-          status: status,
-          version: @interface_version
-        }
-
-      {:error, reason} ->
-        raise_federation_error!(reason)
-    end
   end
 
   defp decode_peer_info(json) when is_binary(json) do

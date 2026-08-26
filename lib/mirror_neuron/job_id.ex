@@ -2,7 +2,6 @@ defmodule MirrorNeuron.JobId do
   @moduledoc false
 
   @hash_length 8
-  @legacy_pattern ~r/^(.+)-\d{10,}-([a-f0-9]{8,})$/
 
   def generate(graph_id) do
     hash =
@@ -15,21 +14,6 @@ defmodule MirrorNeuron.JobId do
 
     "#{graph_initials(graph_id)}-#{hash}"
   end
-
-  def legacy?(job_id) when is_binary(job_id), do: Regex.match?(@legacy_pattern, job_id)
-  def legacy?(_job_id), do: false
-
-  def compact_legacy(job_id) when is_binary(job_id) do
-    case Regex.run(@legacy_pattern, job_id) do
-      [_, graph_id, hash] ->
-        {:ok, "#{graph_initials(graph_id)}-#{String.slice(hash, 0, @hash_length)}"}
-
-      _ ->
-        :error
-    end
-  end
-
-  def compact_legacy(_job_id), do: :error
 
   def graph_initials(graph_id) do
     graph_id

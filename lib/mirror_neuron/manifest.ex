@@ -55,16 +55,12 @@ defmodule MirrorNeuron.Manifest do
                           "contract",
                           "flow",
                           "runtime",
-                          "requiredContextEngine",
                           "required_context_engine",
                           "requirements",
-                          "requirments",
                           "skill_dependencies",
                           "input_validation",
-                          "inputValidation",
                           "services",
                           "required_services",
-                          "requiredServices",
                           "deployment",
                           "schedule",
                           "triggers",
@@ -157,7 +153,6 @@ defmodule MirrorNeuron.Manifest do
   end
 
   defp normalize_and_validate(raw) do
-    raw = materialize_flow_topology(raw)
     raw_nodes = raw_nodes(raw)
     raw_edges = raw_edges(raw)
 
@@ -172,17 +167,13 @@ defmodule MirrorNeuron.Manifest do
       flow: normalize_optional_map(Map.get(raw, "flow")),
       runtime: normalize_optional_map(Map.get(raw, "runtime")),
       required_context_engine:
-        normalize_required_context_engine(
-          Map.get(raw, "requiredContextEngine", Map.get(raw, "required_context_engine", false))
-        ),
-      requirements: Map.get(raw, "requirements", Map.get(raw, "requirments", %{})),
+        normalize_required_context_engine(Map.get(raw, "required_context_engine", false)),
+      requirements: Map.get(raw, "requirements", %{}),
       skill_dependencies: normalize_optional_list(Map.get(raw, "skill_dependencies", [])),
-      input_validation: Map.get(raw, "input_validation", Map.get(raw, "inputValidation", %{})),
+      input_validation: Map.get(raw, "input_validation", %{}),
       services: ServiceSpec.normalize_services(Map.get(raw, "services", [])),
       required_services:
-        ServiceSpec.normalize_required_services(
-          Map.get(raw, "required_services", Map.get(raw, "requiredServices", []))
-        ),
+        ServiceSpec.normalize_required_services(Map.get(raw, "required_services", [])),
       deployment: normalize_deployment(Map.get(raw, "deployment", %{})),
       schedule: normalize_schedule(Map.get(raw, "schedule", %{})),
       triggers: normalize_triggers(Map.get(raw, "triggers", [])),
@@ -198,190 +189,13 @@ defmodule MirrorNeuron.Manifest do
       extensions: extension_fields(raw)
     }
 
-    legacy_errors = legacy_manifest_errors(raw)
+    retired_errors = retired_manifest_errors(raw)
 
-    case {legacy_errors, validate(manifest)} do
+    case {retired_errors, validate(manifest)} do
       {[], :ok} -> {:ok, manifest}
       {errors, :ok} -> {:error, Enum.reverse(errors)}
       {[], {:error, errors}} -> {:error, errors}
-      {legacy_errors, {:error, errors}} -> {:error, errors ++ Enum.reverse(legacy_errors)}
-    end
-  end
-
-  defp materialize_flow_topology(%{} = raw) do
-    if raw_nodes(raw) != [] do
-      raw
-    else
-      topology = runtime_binding_topology(raw)
-
-      if topology.nodes != [] do
-        entrypoints = workflow_entrypoints(raw, topology.bindings, topology.nodes)
-
-        raw
-        |> put_flow_topology(topology.nodes, topology.edges)
-        |> Map.put("entrypoints", entrypoints)
-        |> Map.put(
-          "initial_inputs",
-          topology.initial_inputs
-        )
-      else
-        raw
-      end
-    end
-  end
-
-  defp materialize_flow_topology(raw), do: raw
-
-  defp runtime_binding_topology(raw) do
-    bindings =
-      raw
-      |> get_in(["runtime", "bindings"])
-      |> case do
-        bindings when is_map(bindings) -> bindings
-        _ -> %{}
-      end
-
-    {nodes, edges, initial_inputs} =
-      bindings
-      |> Enum.reduce({[], [], %{}}, fn {step_id, binding}, {nodes, edges, inputs} ->
-        binding = if is_map(binding), do: binding, else: %{}
-        workers = Map.get(binding, "workers", [])
-        worker_nodes = Enum.map(List.wrap(workers), &workflow_worker_to_node/1)
-        routes = Map.get(binding, "routes", Map.get(binding, "worker_edges", []))
-        binding_inputs = Map.get(binding, "seed_inputs", Map.get(binding, "initial_inputs", %{}))
-
-        {
-          nodes ++ worker_nodes,
-          edges ++ normalize_binding_routes(routes),
-          Map.merge(inputs, normalize_binding_initial_inputs(step_id, binding_inputs))
-        }
-      end)
-
-    %{
-      bindings: bindings,
-      nodes: Enum.uniq_by(nodes, &Map.get(&1, "node_id")),
-      edges: edges,
-      initial_inputs: initial_inputs
-    }
-  end
-
-  defp normalize_binding_routes(routes) when is_list(routes), do: routes
-  defp normalize_binding_routes(_routes), do: []
-
-  defp normalize_binding_initial_inputs(_step_id, inputs) when is_map(inputs), do: inputs
-
-  defp normalize_binding_initial_inputs(step_id, inputs) when is_list(inputs),
-    do: %{step_id => inputs}
-
-  defp normalize_binding_initial_inputs(_step_id, _inputs), do: %{}
-
-  defp put_flow_topology(raw, nodes, edges) do
-    flow =
-      raw
-      |> Map.get("flow", %{})
-      |> case do
-        flow when is_map(flow) -> flow
-        _ -> %{}
-      end
-      |> Map.put("nodes", nodes)
-      |> Map.put("edges", edges)
-
-    Map.put(raw, "flow", flow)
-  end
-
-  defp workflow_worker_to_node(%{} = worker) do
-    config = Map.get(worker, "with", Map.get(worker, "config", %{}))
-    uses = Map.get(worker, "uses", "")
-    kind = Map.get(worker, "kind", "")
-    role = Map.get(config, "role", Map.get(worker, "role"))
-
-    %{
-      "node_id" => Map.get(worker, "node_id", Map.get(worker, "node", Map.get(worker, "id"))),
-      "agent_type" => workflow_agent_type(uses, kind, role),
-      "type" => workflow_node_type(config, uses, kind),
-      "role" => role,
-      "config" => config,
-      "resources" => Map.get(worker, "resources", %{}),
-      "constraints" => Map.get(worker, "constraints", []),
-      "tool_bindings" => Map.get(worker, "tool_bindings", []),
-      "retry_policy" => Map.get(worker, "retry_policy", %{}),
-      "checkpoint_policy" => Map.get(worker, "checkpoint_policy", %{}),
-      "spawn_policy" => Map.get(worker, "spawn_policy", %{}),
-      "policies" => Map.get(worker, "policies", %{}),
-      "services" => Map.get(worker, "services", []),
-      "requires_services" => Map.get(worker, "requires_services", [])
-    }
-  end
-
-  defp workflow_worker_to_node(worker), do: workflow_worker_to_node(%{"id" => inspect(worker)})
-
-  defp workflow_agent_type(uses, kind, role) do
-    role = role |> to_string() |> String.downcase()
-
-    cond do
-      String.contains?(to_string(uses), "control_router") -> "router"
-      String.contains?(to_string(uses), "control_join") -> "aggregator"
-      String.contains?(to_string(uses), "data_module") -> "module"
-      role == "router" -> "router"
-      role in ["aggregator", "sink", "join"] -> "aggregator"
-      kind == "stream" -> "module"
-      true -> "executor"
-    end
-  end
-
-  defp workflow_node_type(config, uses, kind) do
-    cond do
-      is_map(config) and is_binary(Map.get(config, "node_type")) -> Map.get(config, "node_type")
-      String.contains?(to_string(uses), "control_router") -> "map"
-      String.contains?(to_string(uses), "control_join") -> "reduce"
-      kind == "stream" -> "stream"
-      true -> "generic"
-    end
-  end
-
-  defp workflow_entrypoints(raw, bindings, nodes) when is_map(raw) and is_map(bindings) do
-    explicit = Map.get(raw, "entrypoints")
-    flow = Map.get(raw, "flow", %{})
-    flow_entrypoint = if is_map(flow), do: Map.get(flow, "entrypoint"), else: nil
-    binding = Map.get(bindings, flow_entrypoint, %{})
-
-    cond do
-      is_list(explicit) and explicit != [] ->
-        explicit
-
-      is_binary(explicit) and explicit != "" ->
-        [explicit]
-
-      is_map(binding) ->
-        binding_entrypoints(binding, nodes)
-
-      true ->
-        default_workflow_entrypoints(nodes)
-    end
-  end
-
-  defp workflow_entrypoints(_raw, _bindings, nodes), do: default_workflow_entrypoints(nodes)
-
-  defp binding_entrypoints(binding, nodes) when is_map(binding) do
-    case Map.get(binding, "start_workers", Map.get(binding, "entrypoints")) do
-      entrypoints when is_list(entrypoints) and entrypoints != [] ->
-        entrypoints
-
-      entrypoint when is_binary(entrypoint) ->
-        [entrypoint]
-
-      _ ->
-        default_workflow_entrypoints(nodes)
-    end
-  end
-
-  defp default_workflow_entrypoints(nodes) do
-    nodes
-    |> Enum.filter(&(Map.get(&1, "role") in ["root", "root_coordinator"]))
-    |> Enum.map(&Map.get(&1, "node_id"))
-    |> case do
-      [] -> nodes |> List.first(%{}) |> Map.get("node_id") |> List.wrap()
-      entrypoints -> entrypoints
+      {retired_errors, {:error, errors}} -> {:error, errors ++ Enum.reverse(retired_errors)}
     end
   end
 
@@ -403,7 +217,7 @@ defmodule MirrorNeuron.Manifest do
     end
   end
 
-  defp legacy_manifest_errors(raw) do
+  defp retired_manifest_errors(raw) do
     []
     |> maybe_collect_error(
       Map.has_key?(raw, "nodes"),
@@ -416,6 +230,13 @@ defmodule MirrorNeuron.Manifest do
     |> maybe_collect_error(
       Map.has_key?(raw, "daemon"),
       "daemon is no longer supported; use type service"
+    )
+    |> maybe_collect_error(Map.has_key?(raw, "requirments"), "use requirements")
+    |> maybe_collect_error(Map.has_key?(raw, "inputValidation"), "use input_validation")
+    |> maybe_collect_error(Map.has_key?(raw, "requiredServices"), "use required_services")
+    |> maybe_collect_error(
+      Map.has_key?(raw, "requiredContextEngine"),
+      "use required_context_engine"
     )
   end
 
@@ -450,6 +271,7 @@ defmodule MirrorNeuron.Manifest do
       manifest.api_version != @api_version,
       "apiVersion must be #{@api_version}"
     )
+    |> maybe_add_error(manifest.kind != "Workflow", "kind must be Workflow")
     |> maybe_add_error(is_nil(manifest.manifest_version), "manifest_version is required")
     |> maybe_add_error(
       not nonempty_string?(manifest.graph_id),
@@ -807,7 +629,7 @@ defmodule MirrorNeuron.Manifest do
     maybe_add_error(
       errors,
       not is_boolean(manifest.required_context_engine),
-      "requiredContextEngine must be a boolean"
+      "required_context_engine must be a boolean"
     )
   end
 
@@ -1115,29 +937,21 @@ defmodule MirrorNeuron.Manifest do
 
   defp normalize_node(raw) do
     %{
-      node_id: Map.get(raw, "node_id", Map.get(raw, "id")),
-      agent_type: Map.get(raw, "agent_type", Map.get(raw, "agentType")),
-      type: AgentTemplates.canonical_type(Map.get(raw, "type", Map.get(raw, "kind"))),
+      node_id: Map.get(raw, "node_id"),
+      agent_type: Map.get(raw, "agent_type"),
+      type: AgentTemplates.canonical_type(Map.get(raw, "type")),
       role: Map.get(raw, "role"),
       config: Map.get(raw, "config", %{}),
-      resources: Map.get(raw, "resources", get_in(raw, ["config", "resources"]) || %{}),
-      constraints: Map.get(raw, "constraints", get_in(raw, ["config", "constraints"]) || []),
-      placement_requirements:
-        Map.get(
-          raw,
-          "placement_requirements",
-          get_in(raw, ["config", "placement_requirements"]) || %{}
-        ),
+      resources: Map.get(raw, "resources", %{}),
+      constraints: Map.get(raw, "constraints", []),
+      placement_requirements: Map.get(raw, "placement_requirements", %{}),
       tool_bindings: Map.get(raw, "tool_bindings", []),
       retry_policy: Map.get(raw, "retry_policy", %{}),
-      checkpoint_policy: Map.get(raw, "checkpoint_policy", %{}),
       spawn_policy: Map.get(raw, "spawn_policy", %{}),
       policies: Map.get(raw, "policies", %{}),
       services: ServiceSpec.normalize_services(Map.get(raw, "services", [])),
       requires_services:
-        ServiceSpec.normalize_requires_services(
-          Map.get(raw, "requires_services", Map.get(raw, "requiresServices", []))
-        )
+        ServiceSpec.normalize_requires_services(Map.get(raw, "requires_services", []))
     }
   end
 
@@ -1153,7 +967,6 @@ defmodule MirrorNeuron.Manifest do
       "placement_requirements" => json_safe(Map.get(node, :placement_requirements, %{})),
       "tool_bindings" => json_safe(node.tool_bindings),
       "retry_policy" => json_safe(node.retry_policy),
-      "checkpoint_policy" => json_safe(node.checkpoint_policy),
       "spawn_policy" => json_safe(node.spawn_policy),
       "policies" => json_safe(Map.get(node, :policies, %{})),
       "services" => json_safe(Map.get(node, :services, [])),
@@ -1174,10 +987,10 @@ defmodule MirrorNeuron.Manifest do
 
   defp normalize_edge(raw) do
     %{
-      edge_id: Map.get(raw, "edge_id", Map.get(raw, "id")),
-      from_node: Map.get(raw, "from_node", Map.get(raw, "from")),
-      to_node: Map.get(raw, "to_node", Map.get(raw, "to")),
-      message_type: Map.get(raw, "message_type", Map.get(raw, "event")),
+      edge_id: Map.get(raw, "edge_id"),
+      from_node: Map.get(raw, "from_node"),
+      to_node: Map.get(raw, "to_node"),
+      message_type: Map.get(raw, "message_type"),
       routing_mode: Map.get(raw, "routing_mode", "broadcast"),
       conditions: Map.get(raw, "conditions", %{})
     }

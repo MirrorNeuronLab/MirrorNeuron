@@ -6,8 +6,6 @@ defmodule MirrorNeuron.NativeResourceBoundaryTest do
 
   setup do
     keys = [
-      "MN_CORE_ALLOW_NATIVE_RESOURCE_PREP",
-      "MN_CORE_ALLOW_NATIVE_SANDBOX_PREP",
       "MN_DOCKER_WORKER_CONTAINER_NAME",
       "MN_OPENSHELL_SANDBOX_NAME",
       "MN_OPENSHELL_SSH_HOST"
@@ -41,8 +39,7 @@ defmodule MirrorNeuron.NativeResourceBoundaryTest do
     assert sandbox["image"] == "worker:latest"
   end
 
-  test "SDK-prepared DockerWorker remains authoritative when legacy native prep is enabled" do
-    System.put_env("MN_CORE_ALLOW_NATIVE_SANDBOX_PREP", "1")
+  test "SDK-prepared DockerWorker does not create a Core-owned sandbox process" do
     job_id = "prepared-boundary-#{System.unique_integer([:positive])}"
 
     config = %{

@@ -239,42 +239,19 @@ defmodule MirrorNeuron.BlueprintValidation do
        )}
 
   defp run_command_rule(rule, %JobBundle{}) do
-    if legacy_command_validation_enabled?() do
-      {:error,
-       issue(
-         "validator.command_legacy_disabled",
-         "#{rule_name(rule)} must be validated before Core submission",
-         help:
-           map_get(rule, "help") || map_get(rule, "fix") ||
-             "Run command input validation in mn-python-sdk/API/CLI and submit only after it passes.",
-         source: "validator",
-         path: map_get(rule, "path") || map_get(rule, "input") || "",
-         expected: "prevalidated command rule",
-         actual: "command rule reached Core",
-         rule: rule_ref(rule)
-       )}
-    else
-      {:error,
-       issue(
-         "validator.command_prevalidation_required",
-         "#{rule_name(rule)} must be validated before Core submission",
-         help:
-           map_get(rule, "help") || map_get(rule, "fix") ||
-             "Run command input validation in mn-python-sdk/API/CLI and submit only after it passes.",
-         source: "validator",
-         path: map_get(rule, "path") || map_get(rule, "input") || "",
-         expected: "prevalidated command rule",
-         actual: "command rule reached Core",
-         rule: rule_ref(rule)
-       )}
-    end
-  end
-
-  defp legacy_command_validation_enabled? do
-    System.get_env("MN_CORE_ALLOW_COMMAND_VALIDATION")
-    |> to_string()
-    |> String.downcase()
-    |> then(&(&1 in ["1", "true", "yes", "on"]))
+    {:error,
+     issue(
+       "validator.command_prevalidation_required",
+       "#{rule_name(rule)} must be validated before Core submission",
+       help:
+         map_get(rule, "help") || map_get(rule, "fix") ||
+           "Run command input validation in mn-python-sdk/API/CLI and submit only after it passes.",
+       source: "validator",
+       path: map_get(rule, "path") || map_get(rule, "input") || "",
+       expected: "prevalidated command rule",
+       actual: "command rule reached Core",
+       rule: rule_ref(rule)
+     )}
   end
 
   defp validation_report(issues) do

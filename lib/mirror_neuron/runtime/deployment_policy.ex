@@ -51,12 +51,6 @@ defmodule MirrorNeuron.Runtime.DeploymentPolicy do
       present?(get_in(manifest.metadata || %{}, ["deployment_key"])) ->
         to_string(get_in(manifest.metadata, ["deployment_key"]))
 
-      present?(get_in(manifest.metadata || %{}, ["mn_deployment_key"])) ->
-        to_string(get_in(manifest.metadata, ["mn_deployment_key"]))
-
-      present?(get_in(manifest.metadata || %{}, ["mn_cli", "deployment_key"])) ->
-        to_string(get_in(manifest.metadata, ["mn_cli", "deployment_key"]))
-
       present?(get_in(manifest.deployment || %{}, ["key"])) ->
         to_string(get_in(manifest.deployment, ["key"]))
 

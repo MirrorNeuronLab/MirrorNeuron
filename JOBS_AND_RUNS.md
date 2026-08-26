@@ -20,8 +20,8 @@ durable job: job-7f3a
   `run_id`; it does not create another execution.
 - The canonical REST API uses `/api/v1/jobs/{id}` for durable definitions and
   `/api/v1/runs/{id}` for executions. The sole internal contract is
-  `mirrorneuron.job.v1.JobService`; package v1 contains the current durable
-  job/run capability set and has no legacy companion service.
+  `mirrorneuron.job.v1.JobService`; package v1 contains the complete durable
+  job/run capability set.
 
 The executable manifest `type` is authoritative. A batch job can have no runs,
 one run, or many runs. A `type: service` job can have no run or exactly one
@@ -148,29 +148,9 @@ manifest and merges the job's current resolved configuration into
 Service schedules ensure lifecycle state instead of accumulating runs. An
 occurrence starts a missing run, resumes a paused run, records an
 `already_running` no-op for pending/running work, or clears terminal history and
-starts a deterministic fresh run. Cancelling or multiple legacy active runs are
+starts a deterministic fresh run. Cancelling or multiple active runs are
 blocked. Schedule-window closure pauses the service, and overlapping windows do
 not pause it until the last window closes.
-
-## Compatibility and migration
-
-The REST reset is a clean break. First-party clients use only `/api/v1`;
-historical execution-oriented aliases and `/api/v2` are not mounted. Existing
-internal gRPC/domain version labels remain unchanged and new pagination or
-revision fields are added to those messages without renaming their packages.
-
-Desktop co-worker records migrate as follows:
-
-- the old runtime `jobId` becomes `legacyExecutionId` on the latest run;
-- the stable `jobId` is populated when the co-worker is next created or run;
-- runtime control uses `legacyExecutionId` for old records and `runId` for v2;
-- schedules retain the stable job and replace only the latest run identity.
-
-Blueprint-scoped Milvus Lite data is not guessed when multiple destination
-jobs are possible. An explicitly confirmed migration copies an unambiguous
-inactive database to the job directory, verifies a checksum, and atomically
-activates it. The legacy copy is removed only after a later open validates the
-job-scoped collection.
 
 ## Safety invariants
 
@@ -190,4 +170,4 @@ one job-data directory, while a service job enforces one attached run and two
 jobs built from the same blueprint remain isolated. They should also cover
 service replacement and lifecycle scheduling, restart, scheduled dispatch, retries, stale
 generation handles, active-run lifecycle rejection, exact sandbox mounts,
-forged identifiers, migration idempotency, and v1 historical reads.
+and forged identifiers.

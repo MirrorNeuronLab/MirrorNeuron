@@ -536,19 +536,6 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     continue_or_complete_workflow(next_state)
   end
 
-  def handle_info({:agent_checkpoint, agent_id, snapshot}, state) do
-    EventBus.publish(state.job_id, %{
-      type: :agent_checkpoint_ignored,
-      agent_id: agent_id,
-      mode: "clean_restart",
-      metadata:
-        if(is_map(snapshot), do: Map.get(snapshot, :metadata) || snapshot["metadata"], else: nil),
-      timestamp: Runtime.timestamp()
-    })
-
-    {:noreply, state}
-  end
-
   def handle_info({:agent_pressure, agent_id, pressure}, state) do
     previous = Map.get(state.pressure, agent_id)
     next_state = put_in(state.pressure[agent_id], pressure)
@@ -3463,7 +3450,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       "requested_recovery_policy" => requested,
       "effective_recovery_policy" => effective,
       "degraded" => false,
-      "reason" => "legacy job without reliability metadata",
+      "reason" => "single-node runtime policy",
       "observed_nodes" => [to_string(Node.self())],
       "observed_at" => Runtime.timestamp()
     }

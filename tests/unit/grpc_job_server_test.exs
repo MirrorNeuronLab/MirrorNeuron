@@ -6,10 +6,8 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
   alias MirrorNeuron.Cluster.NodeState
 
   alias Mirrorneuron.Cluster.V1.{
-    AddNodeRequest,
     CheckServicesRequest,
     NetworkHandshakeRequest,
-    RemoveNodeRequest,
     SetResourceRequest
   }
 
@@ -362,6 +360,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       response =
         ClusterServer.prepare_runtime_model(
           %SetResourceRequest{
+            version: 1,
             resource_json:
               Jason.encode!(%{
                 "node" => self_node,
@@ -414,6 +413,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       response =
         ClusterServer.prepare_runtime_model(
           %SetResourceRequest{
+            version: 1,
             resource_json: Jason.encode!(%{"purpose" => "knowledge_rag"})
           },
           nil
@@ -442,6 +442,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     response =
       ClusterServer.publish_runtime_status(
         %SetResourceRequest{
+          version: 1,
           resource_json:
             Jason.encode!(%{
               "domain" => "models",
@@ -485,7 +486,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
     response =
       ClusterServer.get_runtime_statuses(
-        %Mirrorneuron.Cluster.V1.GetResourceRequest{},
+        %Mirrorneuron.Cluster.V1.GetResourceRequest{version: 1},
         identity_stream("runtime-status-test")
       )
 
@@ -518,6 +519,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     response =
       ClusterServer.ack_runtime_status_events(
         %SetResourceRequest{
+          version: 1,
           resource_json: Jason.encode!(%{"event_ids" => ["1-0", "2-0", "1-0"]})
         },
         identity_stream("runtime-status-test")
@@ -551,7 +553,10 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       error =
         assert_raise GRPC.RPCError, fn ->
           ClusterServer.prepare_runtime_model(
-            %SetResourceRequest{resource_json: Jason.encode!(%{"model" => "nemotron3"})},
+            %SetResourceRequest{
+              version: 1,
+              resource_json: Jason.encode!(%{"model" => "nemotron3"})
+            },
             nil
           )
         end
@@ -590,6 +595,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     response =
       ClusterServer.network_handshake(
         %NetworkHandshakeRequest{
+          version: 1,
           token: "join-secret",
           node_name: "mirror_neuron@192.168.4.20"
         },
@@ -633,6 +639,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     response =
       ClusterServer.network_handshake(
         %NetworkHandshakeRequest{
+          version: 1,
           token: "join-secret",
           node_name: "mirror_neuron@192.168.4.20"
         },
@@ -653,6 +660,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     response =
       ClusterServer.network_handshake(
         %NetworkHandshakeRequest{
+          version: 1,
           token: "join-secret",
           node_name: "mirror_neuron@192.168.4.20"
         },
@@ -672,6 +680,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     _response =
       ClusterServer.network_handshake(
         %NetworkHandshakeRequest{
+          version: 1,
           token: "join-secret",
           node_name: joining_node,
           node_info_json: Jason.encode!(%{"address" => "10.0.0.90"})
@@ -691,7 +700,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
     response =
       ClusterServer.network_handshake(
-        %NetworkHandshakeRequest{token: "join-secret", node_name: owner_a},
+        %NetworkHandshakeRequest{version: 1, token: "join-secret", node_name: owner_a},
         nil
       )
 
@@ -700,7 +709,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
     retry =
       ClusterServer.network_handshake(
-        %NetworkHandshakeRequest{token: "join-secret", node_name: owner_a},
+        %NetworkHandshakeRequest{version: 1, token: "join-secret", node_name: owner_a},
         nil
       )
 
@@ -709,7 +718,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     error =
       assert_raise GRPC.RPCError, fn ->
         ClusterServer.network_handshake(
-          %NetworkHandshakeRequest{token: "join-secret", node_name: owner_b},
+          %NetworkHandshakeRequest{version: 1, token: "join-secret", node_name: owner_b},
           nil
         )
       end
@@ -750,7 +759,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
     response =
       ClusterServer.network_handshake(
-        %NetworkHandshakeRequest{token: "join-secret", node_name: new_owner},
+        %NetworkHandshakeRequest{version: 1, token: "join-secret", node_name: new_owner},
         nil
       )
 
@@ -785,6 +794,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     _response =
       ClusterServer.network_handshake(
         %NetworkHandshakeRequest{
+          version: 1,
           token: "join-secret",
           node_name: joining_node,
           node_info_json: Jason.encode!(node_info)
@@ -825,6 +835,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     _response =
       ClusterServer.network_handshake(
         %NetworkHandshakeRequest{
+          version: 1,
           token: "join-secret",
           node_name: node_name,
           node_info_json:
@@ -867,6 +878,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       _response =
         ClusterServer.network_handshake(
           %NetworkHandshakeRequest{
+            version: 1,
             token: "join-secret",
             node_name: node_name,
             node_info_json:
@@ -897,44 +909,10 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
 
     error =
       assert_raise GRPC.RPCError, fn ->
-        ClusterServer.network_handshake(%NetworkHandshakeRequest{token: "wrong"}, nil)
+        ClusterServer.network_handshake(%NetworkHandshakeRequest{version: 1, token: "wrong"}, nil)
       end
 
     assert Exception.message(error) =~ "valid MN_NETWORK_JOIN_TOKEN is required"
-  end
-
-  test "legacy add_node rejects BEAM cluster membership without connecting" do
-    node_name = "mirror_neuron@10.0.0.42"
-    remote_node = String.to_atom(node_name)
-
-    error =
-      assert_raise GRPC.RPCError, fn ->
-        ClusterServer.add_node(%AddNodeRequest{node_name: node_name, token: "join-secret"}, nil)
-      end
-
-    assert error.status == GRPC.Status.failed_precondition()
-    refute_receive {:connect, ^remote_node}
-    refute_receive {:set_cookie, ^remote_node, _cookie}
-  end
-
-  test "legacy remove_node delegates to the local federation registry only" do
-    node_name = "mirror_neuron@10.0.0.42"
-    remote_node = String.to_atom(node_name)
-
-    response = ClusterServer.remove_node(%RemoveNodeRequest{node_name: node_name}, nil)
-
-    assert response.node_name == node_name
-    assert response.status == "not_found"
-
-    assert_receive {:node_state_persisted, ^node_name,
-                    %{
-                      "status" => "disconnected",
-                      "operator_disconnect" => true,
-                      "scheduling_eligible" => false
-                    }}
-
-    refute_receive {:disconnect, ^remote_node}
-    refute_receive {:rpc_call, ^remote_node, ClusterServer, :clear_join_claim, _, _}
   end
 
   test "cluster peer helpers tolerate absent peer links" do
@@ -959,6 +937,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     response =
       ClusterServer.check_services(
         %CheckServicesRequest{
+          version: 1,
           services_json:
             Jason.encode!([
               %{

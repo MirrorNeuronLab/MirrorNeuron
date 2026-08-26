@@ -271,57 +271,6 @@ defmodule Mirrorneuron.Cluster.V1.CleanupDockerComposeResponse do
   field(:version, 2, type: :uint32)
 end
 
-defmodule Mirrorneuron.Cluster.V1.AddNodeRequest do
-  @moduledoc false
-
-  use Protobuf,
-    full_name: "mirrorneuron.cluster.v1.AddNodeRequest",
-    protoc_gen_elixir_version: "0.16.0",
-    syntax: :proto3
-
-  field(:node_name, 1, type: :string, json_name: "nodeName")
-  field(:token, 2, type: :string)
-  field(:version, 3, type: :uint32)
-end
-
-defmodule Mirrorneuron.Cluster.V1.AddNodeResponse do
-  @moduledoc false
-
-  use Protobuf,
-    full_name: "mirrorneuron.cluster.v1.AddNodeResponse",
-    protoc_gen_elixir_version: "0.16.0",
-    syntax: :proto3
-
-  field(:node_name, 1, type: :string, json_name: "nodeName")
-  field(:status, 2, type: :string)
-  field(:version, 3, type: :uint32)
-end
-
-defmodule Mirrorneuron.Cluster.V1.RemoveNodeRequest do
-  @moduledoc false
-
-  use Protobuf,
-    full_name: "mirrorneuron.cluster.v1.RemoveNodeRequest",
-    protoc_gen_elixir_version: "0.16.0",
-    syntax: :proto3
-
-  field(:node_name, 1, type: :string, json_name: "nodeName")
-  field(:version, 2, type: :uint32)
-end
-
-defmodule Mirrorneuron.Cluster.V1.RemoveNodeResponse do
-  @moduledoc false
-
-  use Protobuf,
-    full_name: "mirrorneuron.cluster.v1.RemoveNodeResponse",
-    protoc_gen_elixir_version: "0.16.0",
-    syntax: :proto3
-
-  field(:node_name, 1, type: :string, json_name: "nodeName")
-  field(:status, 2, type: :string)
-  field(:version, 3, type: :uint32)
-end
-
 defmodule Mirrorneuron.Cluster.V1.RegisterFederatedPeerRequest do
   @moduledoc false
 
@@ -651,14 +600,6 @@ defmodule Mirrorneuron.Cluster.V1.ClusterService.Service do
     :AckRuntimeStatusEvents,
     Mirrorneuron.Cluster.V1.SetResourceRequest,
     Mirrorneuron.Cluster.V1.SetResourceResponse
-  )
-
-  rpc(:AddNode, Mirrorneuron.Cluster.V1.AddNodeRequest, Mirrorneuron.Cluster.V1.AddNodeResponse)
-
-  rpc(
-    :RemoveNode,
-    Mirrorneuron.Cluster.V1.RemoveNodeRequest,
-    Mirrorneuron.Cluster.V1.RemoveNodeResponse
   )
 
   rpc(

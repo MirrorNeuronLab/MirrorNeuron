@@ -404,11 +404,11 @@ defmodule MirrorNeuron.RuntimeReliabilityTest do
     end
   end
 
-  test "legacy clear discovers a fenced cancellation when its summary is stale" do
+  test "clear discovers a fenced cancellation when its summary is stale" do
     if redis_available?() do
       with_isolated_redis_namespace(fn ->
-        job_id = unique_id("legacy-tombstone-clear-job")
-        remote_node = "mirror_neuron@offline-legacy"
+        job_id = unique_id("tombstone-clear-job")
+        remote_node = "mirror_neuron@offline"
 
         assert {:ok, _job} = RedisStore.persist_job(job_id, active_job(job_id))
 

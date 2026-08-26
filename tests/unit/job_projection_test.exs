@@ -113,7 +113,7 @@ defmodule MirrorNeuron.Grpc.JobProjectionTest do
     refute Map.has_key?(projected["response_service"], "endpoint")
     refute Map.has_key?(projected["response_service"], "token")
 
-    disabled = JobProjection.detail(%{"job_id" => "legacy", "manifest" => %{}})
+    disabled = JobProjection.detail(%{"job_id" => "job-disabled"})
     assert disabled["response_service"] == %{"state" => "disabled"}
   end
 
@@ -123,17 +123,5 @@ defmodule MirrorNeuron.Grpc.JobProjectionTest do
                {:gun_down, self(), make_ref(), :closed, []},
                %{}
              )
-  end
-
-  test "job projections derive service type from legacy stored manifests" do
-    legacy = %{
-      "job_id" => "legacy-service",
-      "status" => "active",
-      "manifest" => %{"type" => "service"},
-      "run_ids" => ["run-only"]
-    }
-
-    assert JobProjection.summary(legacy)["type"] == "service"
-    assert JobProjection.detail(legacy)["type"] == "service"
   end
 end

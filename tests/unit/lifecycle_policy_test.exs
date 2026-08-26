@@ -53,7 +53,7 @@ defmodule MirrorNeuron.Runtime.LifecyclePolicyTest do
     assert reschedule["enabled"] == false
   end
 
-  test "legacy max_agent_restart_attempts is a fallback when restart attempts are absent" do
+  test "restart attempts use only the current nested restart policy" do
     {:ok, manifest} =
       manifest(%{
         "policies" => %{
@@ -63,21 +63,7 @@ defmodule MirrorNeuron.Runtime.LifecyclePolicyTest do
       })
       |> Manifest.load()
 
-    assert LifecyclePolicy.restart_policy(manifest, "batch", "local_restart")["attempts"] == 7
-  end
-
-  test "explicit restart attempts override legacy max_agent_restart_attempts" do
-    {:ok, manifest} =
-      manifest(%{
-        "policies" => %{
-          "recovery_mode" => "local_restart",
-          "max_agent_restart_attempts" => 7,
-          "restart" => %{"attempts" => 2}
-        }
-      })
-      |> Manifest.load()
-
-    assert LifecyclePolicy.restart_policy(manifest, "batch", "local_restart")["attempts"] == 2
+    assert LifecyclePolicy.restart_policy(manifest, "batch", "local_restart")["attempts"] == 3
   end
 
   test "per-agent policy overrides job-level policy" do
@@ -150,6 +136,7 @@ defmodule MirrorNeuron.Runtime.LifecyclePolicyTest do
   defp manifest(overrides \\ %{}) do
     %{
       "apiVersion" => "mn.workflow/v1",
+      "kind" => "Workflow",
       "manifest_version" => "1.0",
       "graph_id" => "policy-test",
       "entrypoints" => ["worker"],

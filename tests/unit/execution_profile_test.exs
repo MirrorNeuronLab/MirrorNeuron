@@ -197,7 +197,17 @@ defmodule MirrorNeuron.Execution.ProfileTest do
     }
 
     assert {:ok, next_state, actions} =
-             Executor.handle_message(%{type: "inspect", payload: %{}}, state, context)
+             Executor.handle_message(
+               MirrorNeuron.Message.new(
+                 "profile-runtime-test",
+                 "source",
+                 "video_guardian",
+                 "inspect",
+                 %{}
+               ),
+               state,
+               context
+             )
 
     assert next_state.last_result["lease"]["pool"] == "opencv_cpu"
     assert next_state.last_result["lease"]["slots"] == 2

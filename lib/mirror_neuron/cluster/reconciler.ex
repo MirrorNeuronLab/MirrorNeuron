@@ -462,66 +462,23 @@ defmodule MirrorNeuron.Cluster.Reconciler do
   end
 
   defp list_recovery_evals(opts, statuses) do
-    store = redis_store(opts)
-
-    cond do
-      statuses != :all and function_exported?(store, :list_recovery_evals, 1) ->
-        store.list_recovery_evals(statuses)
-
-      function_exported?(store, :list_recovery_evals, 0) ->
-        with {:ok, evals} <- store.list_recovery_evals() do
-          {:ok, filter_eval_statuses(evals, statuses)}
-        end
-
-      true ->
-        {:ok, []}
-    end
-  end
-
-  defp filter_eval_statuses(evals, :all), do: evals
-
-  defp filter_eval_statuses(evals, statuses) do
-    statuses = MapSet.new(Enum.map(List.wrap(statuses), &to_string/1))
-    Enum.filter(evals, &(Map.get(&1, "status") in statuses))
+    redis_store(opts).list_recovery_evals(statuses)
   end
 
   defp persist_recovery_eval(%{"eval_id" => eval_id} = eval, opts) do
-    store = redis_store(opts)
-
-    if function_exported?(store, :persist_recovery_eval, 2) do
-      store.persist_recovery_eval(eval_id, eval)
-    else
-      {:ok, eval}
-    end
+    redis_store(opts).persist_recovery_eval(eval_id, eval)
   end
 
   defp update_recovery_eval(eval_id, updates, opts) do
-    store = redis_store(opts)
-
-    if function_exported?(store, :update_recovery_eval, 2) do
-      store.update_recovery_eval(eval_id, updates)
-    else
-      {:ok, updates}
-    end
+    redis_store(opts).update_recovery_eval(eval_id, updates)
   end
 
   defp fetch_eval_job(eval, opts) do
-    store = redis_store(opts)
     job_id = Map.get(eval, "job_id")
-
-    cond do
-      function_exported?(store, :fetch_job, 1) ->
-        store.fetch_job(job_id)
-
-      is_map(Map.get(eval, "job")) ->
-        {:ok, Map.get(eval, "job")}
-
-      true ->
-        {:error, :missing_eval_job}
-    end
+    redis_store(opts).fetch_job(job_id)
   end
 
-  defp eval_job(eval), do: Map.get(eval, "job") || %{"job_id" => Map.get(eval, "job_id")}
+  defp eval_job(eval), do: %{"job_id" => Map.get(eval, "job_id")}
 
   defp due_eval?(eval) do
     Map.get(eval, "status") in @eval_retry_statuses and wait_due?(Map.get(eval, "wait_until"))

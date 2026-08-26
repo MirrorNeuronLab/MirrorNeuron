@@ -589,11 +589,6 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     end
   end
 
-  defp execute_action({:checkpoint, snapshot}, _incoming, state, _action_index) do
-    send(state.coordinator, {:agent_checkpoint, state.node.node_id, snapshot})
-    :ok
-  end
-
   defp execute_action({:complete_step, result}, incoming, state, action_index) do
     enqueue_coordinator_report(
       state,

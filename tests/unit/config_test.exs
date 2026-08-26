@@ -15,7 +15,6 @@ defmodule MirrorNeuron.ConfigTest do
     "MN_NETWORK_JOIN_TOKEN",
     "MN_GRPC_AUTH_TOKEN",
     "MN_COOKIE",
-    "MN_CHECKPOINT_ROOT",
     "MN_BLUEPRINT_PYTHON_ENVS_DIR",
     "MN_SYNCTHING_RESCAN_INTERVAL_SECONDS",
     "MN_AUTO_PORT_START",
@@ -162,12 +161,9 @@ defmodule MirrorNeuron.ConfigTest do
     end
   end
 
-  test "node-local caches and checkpoints are the unset defaults" do
+  test "node-local caches use the current unset defaults" do
     assert Schema.value!(Schema.spec_by_env("MN_BLUEPRINT_PYTHON_ENVS_DIR")) ==
              Path.join(System.user_home!(), ".mn/cache/blueprint-python-envs")
-
-    assert Schema.value!(Schema.spec_by_env("MN_CHECKPOINT_ROOT")) ==
-             Path.join(System.user_home!(), ".mn/checkpoints")
 
     assert Schema.value!(Schema.spec_by_env("MN_SYNCTHING_RESCAN_INTERVAL_SECONDS")) == 3_600
   end

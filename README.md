@@ -481,16 +481,6 @@ declarations can reference the resolved value with an environment template such
 as `"${env.MN_PORT_API}"`. Containerized nodes can set `MN_AUTO_PORT_START` and
 `MN_AUTO_PORT_END` to the bounded range published by their runtime.
 
-Legacy Job-scoped co-worker collaboration uses a supervised agent service with the
-exact name `mn-job-collaboration`, tags `mcp` and `job-collaboration`, loopback
-binding, an automatic port, and Streamable HTTP path `/mcp`. Its service
-metadata identifies the blueprint, stable job, current run, and optional shared
-goal. The service is registered only for the active run and exposes the
-read-only job snapshot, updates, and record tools; peer selection remains an
-explicit client policy. It is the runtime peer-collaboration surface, not the
-persistent supervisory MCP exposed by `mn-api` at
-`/api/v1/jobs/{job_id}/mcp`.
-
 An opt-in manifest can instead declare one always-warm response service outside
 the run DAG:
 
@@ -533,7 +523,7 @@ are emitted instead.
 
 Redis is the only durable coordination source. Core does not write or restore
 agent-memory, workflow-ledger, pending-policy, or disk-checkpoint snapshots.
-`local_restart`, `cluster_recover`, and `manual_recover` remain compatible policy
+`local_restart`, `cluster_recover`, and `manual_recover` are the supported policy
 names, but they now select clean-attempt placement or approval behavior rather
 than process-state restoration.
 
@@ -644,8 +634,6 @@ present. Production does not require any `.env` file.
 | `MN_JOB_LEASE_DURATION_MS` | Job lease duration for fenced runtime ownership; defaults to 60000. |
 | `MN_JOB_LEASE_RENEW_INTERVAL_MS` | Job lease renewal cadence; defaults to 10000. |
 | `MN_JOB_DATA_ROOT` | Root for persistent stable-job data; defaults to `$MN_HOME/job-data`. Each job is a validated direct child. |
-| `MN_JOB_SNAPSHOT_INTERVAL_MS` | Deprecated compatibility setting; ignored because Core no longer writes resumable active-job snapshots. Removed in the next major release. |
-| `MN_AGENT_SNAPSHOT_PENDING_LIMIT` | Deprecated compatibility setting; ignored because pending payload copies are not persisted. Removed in the next major release. |
 | `MN_JOB_CALL_TIMEOUT_MS` | Timeout for runtime job control calls such as pause, resume, pressure, and external message submit; defaults to 15000. |
 | `MN_CANCEL_JOB_CALL_TIMEOUT_MS` | Local coordinator cancellation call timeout; unavailable remote ownership is recorded as durable `cancellation_pending` instead of waiting for this timeout. Defaults to 5000. |
 | `MN_MESSAGE_DEFAULT_TTL_SECONDS` | Default lifetime for an agent message; defaults to 86400. |
@@ -659,7 +647,6 @@ present. Production does not require any `.env` file.
 | `MN_MESSAGE_DELIVERY_MAX_ATTEMPTS` | Processing attempts before dead-lettering; defaults to 10. |
 | `MN_MESSAGE_DELIVERY_POLL_MS` | Redis delivery polling interval when no wake-up signal arrives; defaults to 1000. |
 | `MN_RELIABILITY_STRATEGY` | Conservative runtime strategy resolver for new jobs. |
-| `MN_CHECKPOINT_ROOT` | Deprecated local checkpoint/cleanup root; defaults to `$MN_HOME/checkpoints` and is ignored as a recovery authority. Redis is the job-state database. |
 | `MN_NODE_RECONNECT_ATTEMPTS` | Runtime node reconnect attempts before jobs are paused for manual restart. |
 | `MN_NODE_EXECUTION_PROFILES` | Comma-separated execution profiles this runtime node may advertise after warmup. |
 | `MN_NODE_CAPABILITIES` | Comma-separated runtime capabilities such as `video-codec:h264` or `ffmpeg`. |

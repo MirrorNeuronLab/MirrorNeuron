@@ -487,14 +487,7 @@ defmodule MirrorNeuron.Monitor do
   end
 
   defp recovery_summary(job) do
-    Map.get(job, "recovery") ||
-      %{
-        "status" => Map.get(job, "recovery_status"),
-        "reason" => Map.get(job, "recovery_reason"),
-        "requires_review" => Map.get(job, "recovery_requires_review", false),
-        "can_resume" => Map.get(job, "status") == "paused",
-        "updated_at" => Map.get(job, "updated_at")
-      }
+    Map.get(job, "recovery")
   end
 
   defp scheduler_summary(%{"scheduler" => scheduler}) when is_map(scheduler) do
@@ -607,20 +600,18 @@ defmodule MirrorNeuron.Monitor do
   defp compact_value(value), do: value
 
   defp summarize_agent(agent) do
-    current_state = Map.get(agent, "current_state", %{})
     agent_type = Map.get(agent, "agent_type")
-    legacy_result = get_in(current_state, ["last_result"]) || %{}
-    lease = Map.get(agent, "lease") || Map.get(legacy_result, "lease") || %{}
+    lease = Map.get(agent, "lease") || %{}
     sandbox = Map.get(agent, "sandbox") || %{}
-    last_error = Map.get(agent, "last_error") || Map.get(current_state, "last_error")
+    last_error = Map.get(agent, "last_error")
     processed_messages = Map.get(agent, "processed_messages", 0)
     mailbox_depth = Map.get(agent, "mailbox_depth", 0)
     paused? = get_in(agent, ["metadata", "paused"]) || false
-    sandbox_name = Map.get(sandbox, "name") || Map.get(legacy_result, "sandbox_name")
+    sandbox_name = Map.get(sandbox, "name")
     sandbox_status = Map.get(sandbox, "status")
 
     %{
-      "agent_id" => Map.get(agent, "agent_id") || Map.get(agent, "node_id"),
+      "agent_id" => Map.get(agent, "agent_id"),
       "agent_type" => agent_type,
       "assigned_node" => Map.get(agent, "assigned_node"),
       "processed_messages" => processed_messages,

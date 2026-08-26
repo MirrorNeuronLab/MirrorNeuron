@@ -26,12 +26,7 @@ defmodule MirrorNeuron.Runtime.LifecyclePolicy do
     job_type = normalize_job_type(job_type)
     recovery_policy = normalize_recovery_policy(recovery_policy)
 
-    defaults =
-      restart_defaults(
-        job_type,
-        recovery_policy,
-        legacy_attempts(manifest)
-      )
+    defaults = restart_defaults(job_type, recovery_policy)
 
     defaults
     |> merge_policy(policy_map(manifest.policies, "restart"))
@@ -60,7 +55,7 @@ defmodule MirrorNeuron.Runtime.LifecyclePolicy do
     else
       _ ->
         Map.get(job, "restart_policy") ||
-          restart_defaults(job_type(job), recovery_policy(job), nil)
+          restart_defaults(job_type(job), recovery_policy(job))
     end
   end
 
@@ -197,7 +192,7 @@ defmodule MirrorNeuron.Runtime.LifecyclePolicy do
   def supported_restart_modes, do: @restart_modes
   def supported_delay_functions, do: @delay_functions
 
-  defp restart_defaults(_job_type, "manual_recover", _legacy_attempts) do
+  defp restart_defaults(_job_type, "manual_recover") do
     %{
       "type" => "restart",
       "enabled" => false,
@@ -210,12 +205,12 @@ defmodule MirrorNeuron.Runtime.LifecyclePolicy do
     }
   end
 
-  defp restart_defaults(job_type, recovery_policy, legacy_attempts)
+  defp restart_defaults(job_type, recovery_policy)
        when job_type in ["service", "system"] do
     %{
       "type" => "restart",
       "enabled" => true,
-      "attempts" => legacy_attempts || 3,
+      "attempts" => 3,
       "interval_ms" => @service_restart_interval_ms,
       "delay_ms" => @restart_delay_ms,
       "delay_function" => "exponential",
@@ -224,11 +219,11 @@ defmodule MirrorNeuron.Runtime.LifecyclePolicy do
     }
   end
 
-  defp restart_defaults(_job_type, _recovery_policy, legacy_attempts) do
+  defp restart_defaults(_job_type, _recovery_policy) do
     %{
       "type" => "restart",
       "enabled" => true,
-      "attempts" => legacy_attempts || 3,
+      "attempts" => 3,
       "interval_ms" => @batch_restart_interval_ms,
       "delay_ms" => @restart_delay_ms,
       "delay_function" => "exponential",
@@ -327,21 +322,6 @@ defmodule MirrorNeuron.Runtime.LifecyclePolicy do
   end
 
   defp merge_policy(policy, _override), do: policy
-
-  defp legacy_attempts(%Manifest{policies: policies}) when is_map(policies) do
-    if is_map(Map.get(policies, "restart")) and
-         Map.has_key?(Map.get(policies, "restart"), "attempts") do
-      nil
-    else
-      case Map.get(policies, "max_agent_restart_attempts") do
-        value when is_integer(value) and value >= 0 -> value
-        value when is_binary(value) -> parse_integer(value)
-        _ -> nil
-      end
-    end
-  end
-
-  defp legacy_attempts(_manifest), do: nil
 
   defp agent_policy(_manifest, nil, _kind), do: %{}
 

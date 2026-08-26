@@ -15,7 +15,7 @@ defmodule MirrorNeuron.ContextEnginePreflight do
 
       {:error, attempts} ->
         {:error,
-         "Context Engine is required by manifest requiredContextEngine=true, but it is not reachable. " <>
+         "Context Engine is required by manifest required_context_engine=true, but it is not reachable. " <>
            "Start it on port 50052 or set CONTEXT_ENGINE_ADDR. Tried: #{format_attempts(attempts)}"}
     end
   end

@@ -22,11 +22,4 @@ defmodule MirrorNeuron.RuntimeIdTest do
     assert second =~ ~r/^prt-[a-f0-9]{8}$/
     refute first == second
   end
-
-  test "recognizes and compacts legacy timestamp job ids" do
-    legacy = "financial_compliance_audit_v1-1777493377766-40d7bef7975a"
-
-    assert MirrorNeuron.JobId.legacy?(legacy)
-    assert MirrorNeuron.JobId.compact_legacy(legacy) == {:ok, "fcav-40d7bef7"}
-  end
 end

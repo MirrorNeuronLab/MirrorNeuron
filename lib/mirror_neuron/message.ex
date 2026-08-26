@@ -9,29 +9,6 @@ defmodule MirrorNeuron.Message do
                           "application/jsonl",
                           "application/ndjson"
                         ])
-  @legacy_reserved_keys MapSet.new([
-                          "message_id",
-                          "job_id",
-                          "from",
-                          "to",
-                          "type",
-                          "class",
-                          "timestamp",
-                          "correlation_id",
-                          "causation_id",
-                          "attempt",
-                          "priority",
-                          "ttl_ms",
-                          "content_type",
-                          "content_encoding",
-                          "headers",
-                          "artifacts",
-                          "stream",
-                          "payload",
-                          "body",
-                          "envelope"
-                        ])
-
   def spec_version, do: @spec_version
 
   def normalize(message, opts \\ [])
@@ -43,11 +20,11 @@ defmodule MirrorNeuron.Message do
       else
         stringified = stringify_keys(message)
 
-        if Map.has_key?(stringified, "envelope") do
-          normalize_spec_message(stringified, opts)
-        else
-          normalize_legacy_message(stringified, opts)
+        if not Map.has_key?(stringified, "envelope") do
+          raise ArgumentError, "message must use the mn-msg/1 envelope"
         end
+
+        normalize_spec_message(stringified, opts)
       end
 
     {:ok, normalized}
@@ -214,43 +191,6 @@ defmodule MirrorNeuron.Message do
       "envelope" => envelope,
       "headers" => normalize_headers(Map.get(message, "headers", %{})),
       "body" => normalize_body(Map.get(message, "body")),
-      "artifacts" => normalize_artifacts(Map.get(message, "artifacts", [])),
-      "stream" => normalize_stream(Map.get(message, "stream"))
-    }
-  end
-
-  defp normalize_legacy_message(message, opts) do
-    payload =
-      cond do
-        Map.has_key?(message, "body") -> Map.get(message, "body")
-        Map.has_key?(message, "payload") -> Map.get(message, "payload")
-        true -> Map.drop(message, MapSet.to_list(@legacy_reserved_keys))
-      end
-
-    envelope =
-      message
-      |> Map.take([
-        "message_id",
-        "job_id",
-        "from",
-        "to",
-        "type",
-        "class",
-        "timestamp",
-        "correlation_id",
-        "causation_id",
-        "attempt",
-        "priority",
-        "ttl_ms",
-        "content_type",
-        "content_encoding"
-      ])
-      |> fill_envelope_defaults(opts)
-
-    %{
-      "envelope" => envelope,
-      "headers" => normalize_headers(Map.get(message, "headers", %{})),
-      "body" => normalize_body(payload),
       "artifacts" => normalize_artifacts(Map.get(message, "artifacts", [])),
       "stream" => normalize_stream(Map.get(message, "stream"))
     }

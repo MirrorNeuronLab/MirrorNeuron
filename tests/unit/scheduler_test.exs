@@ -1259,7 +1259,6 @@ defmodule MirrorNeuron.SchedulerTest do
                 "MN_CONTEXT_ENGINE_MODEL" => "gemma4:e2b",
                 "MN_LLM_MODEL" => "ollama/nemotron3:33b",
                 "OLLAMA_MODEL" => "ollama/nemotron3:33b",
-                "LITELLM_MODEL" => "ollama/nemotron3:33b",
                 "VL_MODEL_NAME" => "ollama/nemotron3:33b"
               }
             }

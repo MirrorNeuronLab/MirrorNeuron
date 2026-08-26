@@ -2,12 +2,10 @@ defmodule MirrorNeuron.Runner.DockerWorker do
   @moduledoc false
 
   alias MirrorNeuron.Config
-  alias MirrorNeuron.Artifacts.SharedStorage
   alias MirrorNeuron.Message
   alias MirrorNeuron.Sandbox.DockerJobSandbox
 
   @default_container_workdir "/mn/job"
-  @default_payloads_dir "/mn/payloads"
   @default_agent_event_prefix "__MN_EVENT__"
   @prepared_model_env_vars [
     "MN_NODE_RUNTIME_MODELS",
@@ -83,131 +81,10 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     end
   end
 
-  defp build_worker_image(base_dir, build_source, image, config, opts) do
-    if not native_prep_enabled?() do
-      {:error,
-       "docker_worker image build is owned by mn-python-sdk/API/CLI; submit a prepared image via config.image or config.docker.image instead of docker_worker_image/build"}
-    else
-      legacy_build_worker_image(base_dir, build_source, image, config, opts)
-    end
+  defp build_worker_image(_base_dir, _build_source, _image, _config, _opts) do
+    {:error,
+     "docker_worker image build is owned by mn-python-sdk/API/CLI; submit a prepared image via config.image or config.docker.image instead of docker_worker_image/build"}
   end
-
-  defp legacy_build_worker_image(base_dir, build_source, image, config, opts) do
-    with {:ok, source_path} <- resolve_build_source(base_dir, build_source),
-         image_ref <- build_image_ref(source_path, image),
-         :ok <-
-           emit_runner_event(opts, "docker_worker_build_started", %{
-             "category" => "system",
-             "message" => "DockerWorker image build started",
-             "status" => "started",
-             "runner" => "docker_worker",
-             "target" => build_source,
-             "image" => image_ref
-           }),
-         {output, exit_code} <-
-           System.cmd(docker_bin(config), ["build", "-t", image_ref, source_path],
-             stderr_to_stdout: true,
-             env: docker_build_env(config)
-           ) do
-      if exit_code == 0 do
-        emit_runner_event(opts, "docker_worker_build_completed", %{
-          "category" => "system",
-          "message" => "DockerWorker image build completed",
-          "status" => "completed",
-          "runner" => "docker_worker",
-          "target" => build_source,
-          "image" => image_ref,
-          "result_summary" => compact_output_tail(output)
-        })
-
-        {:ok, image_ref}
-      else
-        emit_runner_event(opts, "docker_worker_build_failed", %{
-          "category" => "error",
-          "message" => "DockerWorker image build failed",
-          "status" => "failed",
-          "runner" => "docker_worker",
-          "target" => build_source,
-          "image" => image_ref,
-          "result_summary" => compact_output_tail(output),
-          "details" => %{"exit_code" => exit_code}
-        })
-
-        {:error,
-         "failed to build docker_worker image from #{build_source}: #{String.trim(output)}"}
-      end
-    end
-  rescue
-    error ->
-      emit_runner_event(opts, "docker_worker_build_failed", %{
-        "category" => "error",
-        "message" => "DockerWorker image build failed",
-        "status" => "failed",
-        "runner" => "docker_worker",
-        "target" => build_source,
-        "result_summary" => Exception.message(error)
-      })
-
-      {:error,
-       "failed to build docker_worker image from #{build_source}: #{Exception.message(error)}"}
-  end
-
-  defp resolve_build_source(base_dir, build_source) do
-    root = Path.expand(base_dir)
-
-    candidate =
-      if Path.type(build_source) == :absolute do
-        Path.expand(build_source)
-      else
-        Path.expand(build_source, root)
-      end
-
-    cond do
-      not inside_path?(candidate, root) ->
-        {:error, "docker_worker build source must stay inside staged payloads: #{build_source}"}
-
-      File.dir?(candidate) and File.regular?(Path.join(candidate, "Dockerfile")) ->
-        {:ok, candidate}
-
-      File.regular?(candidate) and Path.basename(candidate) == "Dockerfile" ->
-        {:ok, Path.dirname(candidate)}
-
-      true ->
-        {:error, "docker_worker build source does not contain a Dockerfile: #{build_source}"}
-    end
-  end
-
-  defp build_image_ref(_source_path, image) when is_binary(image) and image != "", do: image
-
-  defp build_image_ref(source_path, _image) do
-    digest =
-      :crypto.hash(:sha256, source_path) |> Base.encode16(case: :lower) |> binary_part(0, 12)
-
-    "mirror-neuron/docker-worker:#{digest}"
-  end
-
-  defp docker_build_env(config) do
-    buildkit =
-      Map.get(config, "docker_buildkit") ||
-        get_in(config, ["docker", "buildkit"]) ||
-        Config.optional_string("MN_DOCKER_WORKER_BUILDKIT", :docker_worker_buildkit) ||
-        "0"
-
-    [{"DOCKER_BUILDKIT", docker_buildkit_value(buildkit)}]
-  end
-
-  defp docker_buildkit_value(value) when value in [true, 1, "1"], do: "1"
-
-  defp docker_buildkit_value(value) when is_binary(value) do
-    case String.downcase(String.trim(value)) do
-      "true" -> "1"
-      "yes" -> "1"
-      "on" -> "1"
-      _ -> "0"
-    end
-  end
-
-  defp docker_buildkit_value(_value), do: "0"
 
   defp ensure_docker_model_runner_model(config, opts) do
     env = extra_env(config)
@@ -455,41 +332,8 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     end
   end
 
-  defp build_docker_args(image, base_dir, config, opts) do
-    container_name = docker_name(config, opts)
-    container_workdir = container_workdir(config)
-    payloads_dir = @default_payloads_dir
-    command = normalize_command(Map.get(config, "command")) |> wrap_runtime_bootstrap_command()
-    env = runtime_env(container_workdir, payloads_dir, config, opts)
-
-    args =
-      ["run", "--rm", "--name", container_name]
-      |> put_network_args(config)
-      |> put_host_gateway_args(config)
-      |> put_gpu_args(config, opts)
-      |> Kernel.++(["-v", "#{Path.expand(base_dir)}:#{@default_container_workdir}:rw"])
-      |> put_shared_storage_mount(config)
-      |> put_job_data_mount(config)
-      |> put_payload_mount(opts)
-      |> put_allocation_volumes(config, opts)
-      |> Kernel.++(["-w", container_workdir])
-      |> put_env_args(env)
-      |> Kernel.++([image])
-      |> Kernel.++(command)
-
-    {:ok, args, container_name}
-  end
-
   defp run_worker_command(image, base_dir, config, opts) do
-    if DockerJobSandbox.prepared_container?(config) or shared_container?(config, opts) or
-         not native_sandbox_prep_enabled?() do
-      run_shared_docker(image, base_dir, config, opts)
-    else
-      with {:ok, docker_args, command_name} <- build_docker_args(image, base_dir, config, opts),
-           {:ok, output, exit_code} <- run_docker(docker_args, command_name, config, opts) do
-        {:ok, output, exit_code, command_name}
-      end
-    end
+    run_shared_docker(image, base_dir, config, opts)
   end
 
   defp run_shared_docker(image, base_dir, config, opts) do
@@ -614,7 +458,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
          payloads_dir,
          config,
          opts,
-         bundle_root \\ @default_container_workdir
+         bundle_root
        ) do
     allocation =
       Keyword.get(opts, :allocation) || Map.get(config, "__mirror_neuron_allocation", %{})
@@ -639,175 +483,8 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     |> Map.put("MN_EXECUTION_NODE", to_string(Node.self()))
   end
 
-  defp shared_container?(config, opts) do
-    shared? =
-      Map.get(config, "reuse_shared_container", Map.get(config, "shared_container", true))
-
-    Keyword.get(opts, :job_id) not in [nil, ""] and truthy?(shared?)
-  end
-
   defp cleanup_remote_dir?(config) do
     Map.get(config, "cleanup_remote_dir", true) |> truthy?()
-  end
-
-  defp put_network_args(args, config) do
-    docker = Map.get(config, "docker", %{})
-    environment = extra_env(config)
-    configured_network = Map.get(docker, "network") || Map.get(config, "network")
-
-    network =
-      if is_binary(configured_network) do
-        configured_network
-      else
-        nonempty_string(Map.get(environment, "MN_DOCKER_WORKER_NETWORK")) ||
-          Config.optional_string("MN_DOCKER_WORKER_NETWORK", :docker_worker_network) ||
-          "bridge"
-      end
-
-    if is_binary(network) and network != "" do
-      args ++ ["--network", network]
-    else
-      args
-    end
-  end
-
-  defp nonempty_string(value) when is_binary(value) do
-    value = String.trim(value)
-    if value == "", do: nil, else: value
-  end
-
-  defp nonempty_string(_value), do: nil
-
-  defp put_host_gateway_args(args, config) do
-    docker = Map.get(config, "docker", %{})
-    enabled = Map.get(docker, "add_host_gateway", Map.get(config, "add_host_gateway", true))
-
-    if truthy?(enabled) do
-      args ++ ["--add-host", "host.docker.internal:host-gateway"]
-    else
-      args
-    end
-  end
-
-  defp put_gpu_args(args, config, opts) do
-    allocation =
-      Keyword.get(opts, :allocation) || Map.get(config, "__mirror_neuron_allocation", %{})
-
-    devices = Map.get(allocation || %{}, "devices", [])
-    docker = Map.get(config, "docker", %{})
-    gpus = Map.get(docker, "gpus", Map.get(config, "gpus"))
-
-    cond do
-      is_binary(gpus) and gpus != "" ->
-        args ++ ["--gpus", gpus]
-
-      gpus in [true, "true", "1", "yes", "all"] ->
-        args ++ ["--gpus", "all"]
-
-      Enum.any?(devices, &gpu_device?/1) ->
-        args ++ ["--gpus", "all"]
-
-      true ->
-        args
-    end
-  end
-
-  defp put_payload_mount(args, opts) do
-    case Keyword.get(opts, :payloads_path) do
-      path when is_binary(path) ->
-        expanded = Path.expand(path)
-
-        if File.dir?(expanded) do
-          args ++ ["-v", "#{expanded}:#{@default_payloads_dir}:ro"]
-        else
-          args
-        end
-
-      _ ->
-        args
-    end
-  end
-
-  defp put_shared_storage_mount(args, config) do
-    env = extra_env(config)
-
-    case if(stable_job_run?(env), do: nil, else: runtime_shared_storage_root(env)) do
-      nil ->
-        args
-
-      target_root ->
-        source_root = host_shared_storage_root()
-        File.mkdir_p(source_root)
-        args ++ ["-v", "#{source_root}:#{target_root}:rw"]
-    end
-  end
-
-  defp stable_job_run?(env) do
-    job_id = Map.get(env, "MN_JOB_ID")
-    run_id = Map.get(env, "MN_RUN_ID")
-
-    is_binary(job_id) and job_id != "" and is_binary(run_id) and run_id != "" and
-      job_id != run_id
-  end
-
-  defp put_job_data_mount(args, config) do
-    env = extra_env(config)
-    job_id = Map.get(env, "MN_JOB_ID")
-
-    with target when is_binary(target) and target != "" <- Map.get(env, "MN_JOB_DATA_DIR"),
-         {:ok, source} <- MirrorNeuron.JobData.path(job_id),
-         true <- Path.expand(target) == source do
-      mode =
-        if Map.get(env, "MN_JOB_DATA_ACCESS") in ["read", "read_only", "ro"],
-          do: "ro",
-          else: "rw"
-
-      File.mkdir_p!(source)
-      args ++ ["-v", "#{source}:#{target}:#{mode}"]
-    else
-      _ -> args
-    end
-  end
-
-  defp host_shared_storage_root do
-    (Config.optional_string("MN_HOST_SHARED_STORAGE_ROOT", :host_shared_storage_root) ||
-       Config.optional_string("MN_SHARED_STORAGE_ROOT", :shared_storage_root) ||
-       SharedStorage.root())
-    |> Path.expand()
-  end
-
-  defp runtime_shared_storage_root(env) do
-    env
-    |> Map.get("MN_JOB_SHARED_STORAGE_ROOT")
-    |> case do
-      value when is_binary(value) and value != "" ->
-        value
-        |> Path.dirname()
-        |> Path.dirname()
-
-      _ ->
-        nil
-    end
-  end
-
-  defp put_allocation_volumes(args, config, opts) do
-    allocation =
-      Keyword.get(opts, :allocation) ||
-        Map.get(config, "__mirror_neuron_allocation", %{})
-
-    allocation
-    |> Map.get("volumes", [])
-    |> Enum.reduce(args, fn volume, acc ->
-      source = Map.get(volume, "source")
-      target = Map.get(volume, "target")
-      mode = Map.get(volume, "mode", "ro")
-
-      if is_binary(source) and is_binary(target) do
-        acc ++ ["-v", "#{source}:#{target}:#{mode}"]
-      else
-        acc
-      end
-    end)
   end
 
   defp put_env_args(args, env) do
@@ -1460,8 +1137,6 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     end
   end
 
-  defp docker_name(config, opts), do: "mn-#{build_runner_name(config, opts)}"
-
   defp safe_name(value) do
     value
     |> to_string()
@@ -1477,15 +1152,6 @@ defmodule MirrorNeuron.Runner.DockerWorker do
       System.find_executable("docker") ||
       "docker"
   end
-
-  defp native_prep_enabled? do
-    System.get_env("MN_CORE_ALLOW_NATIVE_SANDBOX_PREP")
-    |> to_string()
-    |> String.downcase()
-    |> then(&(&1 in ["1", "true", "yes", "on"]))
-  end
-
-  defp native_sandbox_prep_enabled?, do: native_prep_enabled?()
 
   defp timeout_ms(config) do
     case Map.get(config, "timeout_seconds") do
@@ -1510,14 +1176,6 @@ defmodule MirrorNeuron.Runner.DockerWorker do
       _ ->
         %{}
     end
-  end
-
-  defp gpu_device?(device) do
-    kind = String.downcase(to_string(Map.get(device, "kind") || Map.get(device, :kind)))
-    type = String.downcase(to_string(Map.get(device, "type") || Map.get(device, :type)))
-    caps = Map.get(device, "capabilities") || Map.get(device, :capabilities) || []
-
-    kind == "gpu" or String.contains?(type, "gpu") or "gpu" in Enum.map(caps, &to_string/1)
   end
 
   defp truthy?(value) when value in [true, 1], do: true

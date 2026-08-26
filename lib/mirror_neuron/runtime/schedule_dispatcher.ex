@@ -19,29 +19,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
   @state_lease_retry_ms 10
   @terminal_statuses ["completed", "failed", "cancelled"]
 
-  def create_schedule(input, schedule_attrs \\ %{}, opts \\ []) do
-    with {:ok, bundle} <- JobBundle.load(input),
-         {:ok, schedule} <- normalize_schedule(bundle, schedule_attrs, opts),
-         {:ok, schedule} <- maybe_attach_resource_availability(schedule, bundle.manifest) do
-      schedule_id = Keyword.get(opts, :schedule_id) || generate_schedule_id()
-      manifest_map = Manifest.to_map(bundle.manifest)
-      bundle_ref = Runtime.bundle_ref(bundle.manifest, bundle)
-
-      record =
-        schedule
-        |> Map.put("schedule_id", schedule_id)
-        |> Map.put("manifest", manifest_map)
-        |> Map.put("bundle_ref", bundle_ref)
-        |> Map.put("source", stringify(Keyword.get(opts, :source, %{})))
-        |> Map.put("dispatches", [])
-        |> Map.put("active_job_ids", [])
-        |> Map.put("counters", %{"dispatched" => 0, "missed" => 0, "failed" => 0})
-
-      RedisStore.persist_schedule(schedule_id, record)
-    end
-  end
-
-  @doc "Creates a v2 schedule whose target is a stable job, not a prior run."
+  @doc "Creates a schedule whose target is a stable job."
   def create_job_schedule(job_id, schedule_attrs \\ %{}, opts \\ []) do
     with {:ok, definition} <- StableJob.get(job_id),
          :ok <- ensure_stable_job_active(definition),
@@ -61,7 +39,6 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
         |> Map.put("source", stringify(Keyword.get(opts, :source, %{})))
         |> Map.put("dispatches", [])
         |> Map.put("active_run_ids", [])
-        |> Map.put("active_job_ids", [])
         |> Map.put("counters", %{"dispatched" => 0, "missed" => 0, "failed" => 0})
 
       with {:ok, persisted} <- RedisStore.persist_schedule(schedule_id, record) do
@@ -96,7 +73,6 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
              "source",
              "dispatches",
              "active_run_ids",
-             "active_job_ids",
              "counters",
              "created_at"
            ])
@@ -472,10 +448,9 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
 
     mutate_schedule_with_lock(schedule["schedule_id"], state_lock, fn current ->
       current
-      |> prune_inactive_job_ids()
+      |> prune_inactive_run_ids()
       |> prepend_dispatch(dispatch)
       |> Map.update("active_run_ids", [run_id], &Enum.uniq([run_id | &1]))
-      |> Map.update("active_job_ids", [run_id], &Enum.uniq([run_id | &1]))
       |> increment_counter("dispatched")
       |> maybe_complete_one_shot()
     end)
@@ -512,7 +487,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
 
     mutate_schedule_with_lock(schedule["schedule_id"], state_lock, fn current ->
       current
-      |> prune_inactive_job_ids()
+      |> prune_inactive_run_ids()
       |> prepend_dispatch(dispatch)
       |> increment_counter("failed")
     end)
@@ -786,12 +761,11 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
   defp maybe_remove_closed_run(schedule, run_id, _service?, _pause?) do
     schedule
     |> Map.update("active_run_ids", [], &List.delete(&1, run_id))
-    |> Map.update("active_job_ids", [], &List.delete(&1, run_id))
   end
 
   defp overlap_blocked?(%{"prohibit_overlap" => true} = schedule) do
     schedule
-    |> Map.get("active_job_ids", [])
+    |> Map.get("active_run_ids", [])
     |> Enum.any?(fn job_id ->
       case RedisStore.fetch_job(job_id) do
         {:ok, %{"status" => status}} -> status not in @terminal_statuses
@@ -803,7 +777,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
   defp overlap_blocked?(_schedule), do: false
 
   defp service_schedule?(schedule) do
-    schedule["target_type"] == "service" or get_in(schedule, ["manifest", "type"]) == "service"
+    schedule["target_type"] == "service"
   end
 
   defp window_end_at(schedule, submitted_at) do
@@ -968,24 +942,24 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     :ok
   end
 
-  defp prune_inactive_job_ids(schedule) do
-    active_job_ids =
+  defp prune_inactive_run_ids(schedule) do
+    active_run_ids =
       schedule
-      |> Map.get("active_job_ids", [])
-      |> Enum.filter(&active_job_id?/1)
+      |> Map.get("active_run_ids", [])
+      |> Enum.filter(&active_run_id?/1)
 
-    Map.put(schedule, "active_job_ids", active_job_ids)
+    Map.put(schedule, "active_run_ids", active_run_ids)
   end
 
-  defp active_job_id?(job_id) when is_binary(job_id) do
-    case RedisStore.fetch_job(job_id) do
+  defp active_run_id?(run_id) when is_binary(run_id) do
+    case RedisStore.fetch_job(run_id) do
       {:ok, %{"status" => status}} -> status not in @terminal_statuses
       {:error, reason} when is_binary(reason) -> not String.contains?(reason, "was not found")
       {:error, _reason} -> true
     end
   end
 
-  defp active_job_id?(_job_id), do: false
+  defp active_run_id?(_run_id), do: false
 
   defp increment_counter(schedule, key) do
     counters = Map.get(schedule, "counters", %{})

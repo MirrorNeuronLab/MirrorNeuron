@@ -236,6 +236,7 @@ defmodule MirrorNeuron.Runtime.ReliabilityStrategyTest do
     {:ok, manifest} =
       Manifest.load(%{
         "apiVersion" => "mn.workflow/v1",
+        "kind" => "Workflow",
         "manifest_version" => "1.0",
         "graph_id" => "adaptive-reliability-test",
         "entrypoints" => ["worker"],
