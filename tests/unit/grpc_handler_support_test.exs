@@ -66,6 +66,19 @@ defmodule MirrorNeuron.Grpc.Handlers.SupportTest do
     assert File.dir?(Archive.cache_path(fingerprint))
   end
 
+  test "stable job atoms use semantic gRPC statuses" do
+    assert runtime_error(:not_found).status == GRPC.Status.not_found()
+    assert runtime_error(:job_already_exists).status == GRPC.Status.already_exists()
+    assert runtime_error(:run_already_exists).status == GRPC.Status.already_exists()
+    assert runtime_error(:confirmation_required).status == GRPC.Status.failed_precondition()
+    assert runtime_error(:job_not_active).status == GRPC.Status.failed_precondition()
+    assert runtime_error(:invalid_job_update).status == GRPC.Status.invalid_argument()
+  end
+
+  defp runtime_error(reason) do
+    assert_raise GRPC.RPCError, fn -> Support.raise_runtime_error!(reason) end
+  end
+
   defp restore_system_env(key, nil), do: System.delete_env(key)
   defp restore_system_env(key, value), do: System.put_env(key, value)
 end

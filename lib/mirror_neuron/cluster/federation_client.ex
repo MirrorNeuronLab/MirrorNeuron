@@ -10,6 +10,7 @@ defmodule MirrorNeuron.Cluster.FederationClient do
 
   @timeout 15_000
   @job_response_timeout 60_000
+  @destructive_job_timeout 300_000
 
   def call(node_name, function, request) when is_atom(function) do
     response = rpc_call(node_name, JobStub, function, request)
@@ -87,6 +88,10 @@ defmodule MirrorNeuron.Cluster.FederationClient do
 
   @doc false
   def request_timeout(:query_job_response), do: @job_response_timeout
+
+  def request_timeout(function) when function in [:delete_job, :delete_run],
+    do: @destructive_job_timeout
+
   def request_timeout(_function), do: @timeout
 
   defp discover_owner(resource_id, function, field, options) do

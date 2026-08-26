@@ -745,6 +745,11 @@ known but unavailable owner, the submitting Core records a durable archive
 tombstone, marks that stale projection `archive_pending`, and replays the archive
 once the owner is reachable. A reachable owner response—success or a validation rejection—
 clears the tombstone rather than retrying unexpectedly later.
+`DeleteJob` and `DeleteRun` keep the normal 15-second peer connection bound but
+allow up to five minutes for the forwarded owner request, since confirmed
+cleanup may cancel runs and retire multiple bounded runtime resources.
+Missing job/run lookups return gRPC `NOT_FOUND`, allowing owner discovery to
+continue across peers and giving clients a stable missing-resource error.
 Runtime-model preparation and LiteLLM route controls likewise forward to a
 joined requested `node`; callers keep one Core ingress and never receive peer
 credentials.

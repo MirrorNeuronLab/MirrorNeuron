@@ -118,6 +118,14 @@ defmodule MirrorNeuron.Grpc.Handlers.Support do
 
   defp runtime_error_status({:job_not_running, _job_id}), do: GRPC.Status.not_found()
   defp runtime_error_status({:agent_not_running, _details}), do: GRPC.Status.not_found()
+  defp runtime_error_status(:not_found), do: GRPC.Status.not_found()
+
+  defp runtime_error_status(reason) when reason in [:job_already_exists, :run_already_exists],
+    do: GRPC.Status.already_exists()
+
+  defp runtime_error_status(:confirmation_required), do: GRPC.Status.failed_precondition()
+  defp runtime_error_status(:job_not_active), do: GRPC.Status.failed_precondition()
+  defp runtime_error_status(:invalid_job_update), do: GRPC.Status.invalid_argument()
 
   defp runtime_error_status({:job_call_timeout, _job_id, _timeout_ms}),
     do: GRPC.Status.deadline_exceeded()

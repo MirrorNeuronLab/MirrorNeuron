@@ -6,6 +6,8 @@ defmodule MirrorNeuron.Cluster.FederationClientTest do
 
   test "uses a bounded extended timeout only for semantic Job responses" do
     assert FederationClient.request_timeout(:query_job_response) == 60_000
+    assert FederationClient.request_timeout(:delete_job) == 300_000
+    assert FederationClient.request_timeout(:delete_run) == 300_000
     assert FederationClient.request_timeout(:get_job_response_turn) == 15_000
     assert FederationClient.request_timeout(:get_job) == 15_000
   end

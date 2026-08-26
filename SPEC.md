@@ -75,6 +75,13 @@ reconnects. The tombstone is
 cleared after any reachable owner response, preventing later implicit retries
 of a rejected archive. A confirmed archive immediately updates the submitting
 Core's projection instead of waiting for the next federation sync.
+Owner-forwarded job and run deletion use a bounded five-minute request deadline
+instead of the ordinary 15-second federation request deadline. Connection
+establishment remains bounded by the ordinary deadline, while confirmed cleanup
+has time to cancel runs and retire each owned runtime resource.
+Stable-job lookup and lifecycle atoms map to semantic gRPC statuses (`NOT_FOUND`,
+`ALREADY_EXISTS`, `FAILED_PRECONDITION`, or `INVALID_ARGUMENT`); a missing
+resource on one peer must not surface as `INTERNAL` or abort owner discovery.
 Federated runtime-model and LiteLLM route controls honor their requested
 `node` owner through the same scoped Core-to-Core forwarding path, so SDK and
 CLI callers use any joined Core as a secure ingress rather than peer tokens.
