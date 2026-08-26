@@ -248,6 +248,7 @@ defmodule MirrorNeuron.Runtime.JobResponse do
         now = Runtime.timestamp()
         latency = System.monotonic_time(:millisecond) - started
         log_event(state.definition["job_id"], "warm", service_state, latency)
+        retry_ms = maybe_retry_degraded_warm(service_state, state.retry_ms)
 
         {:noreply,
          %{
@@ -256,7 +257,7 @@ defmodule MirrorNeuron.Runtime.JobResponse do
              ready_at: if(service_state in ["ready", "degraded"], do: now, else: state.ready_at),
              updated_at: now,
              safe_error_code: nil,
-             retry_ms: 1_000
+             retry_ms: retry_ms
          }}
 
       {:error, reason} ->
@@ -277,6 +278,13 @@ defmodule MirrorNeuron.Runtime.JobResponse do
 
   @impl true
   def handle_info(_message, state), do: {:noreply, state}
+
+  defp maybe_retry_degraded_warm("degraded", retry_ms) do
+    Process.send_after(self(), :warm, retry_ms)
+    min(retry_ms * 2, @max_retry_ms)
+  end
+
+  defp maybe_retry_degraded_warm(_service_state, _retry_ms), do: 1_000
 
   @impl true
   def handle_call(:status, _from, state), do: {:reply, public_state(state), state}

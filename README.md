@@ -501,7 +501,9 @@ the run DAG:
 Core supervises this definition-scoped service on the Job owner node, starts it
 asynchronously, routes bounded unary questions to it, and stops it before Job
 data reset or deletion. It remains available before the first Run and between
-Runs. Asking it a question never creates or keeps alive a Run.
+Runs. Asking it a question never creates or keeps alive a Run. A degraded
+dependency warm-up is retried with bounded backoff, allowing the service to
+recover after Core or a model gateway finishes starting.
 
 An executable declaration may additionally include one validated `bounded_mcp`
 agent. Its optional `preflight` binds selected effects to a declared read-only

@@ -76,6 +76,58 @@ defmodule MirrorNeuron.Runtime.JobResponseTest do
     assert Registry.lookup(MirrorNeuron.Runtime.JobResponseRegistry, job_id) == []
   end
 
+  test "a degraded warm-up retries and recovers without a definition change" do
+    job_id = "job-response-recovery-#{System.unique_integer([:positive])}"
+    parent = self()
+    {:ok, responses} = Agent.start_link(fn -> ["degraded", "ready"] end)
+
+    Application.put_env(
+      :mirror_neuron,
+      :native_sdk_grpc_job_response_client,
+      fn _target, request, _timeout ->
+        attrs = Jason.decode!(request.resource_json)
+        send(parent, {:job_response_recovery_command, attrs})
+
+        state =
+          Agent.get_and_update(responses, fn
+            [next | remaining] -> {next, remaining}
+            [] -> {"ready", []}
+          end)
+
+        {:ok,
+         %Mirrorneuron.Cluster.V1.SetResourceResponse{
+           resource_json: Jason.encode!(%{"state" => state}),
+           version: 1
+         }}
+      end
+    )
+
+    definition = %{
+      "job_id" => job_id,
+      "blueprint_id" => "example",
+      "job_name" => "Example",
+      "owner_node" => to_string(MirrorNeuron.Cluster.NodeAdapter.self()),
+      "status" => "active",
+      "revision" => 1,
+      "data_dir" => "/tmp/#{job_id}",
+      "resolved_configuration" => %{},
+      "manifest" => %{"response_service" => %{"enabled" => true}}
+    }
+
+    assert :ok = JobResponse.ensure_started(definition)
+
+    assert_receive {:job_response_recovery_command,
+                    %{"operation" => "start", "job_id" => ^job_id}}
+
+    assert %{state: "degraded"} = await_state(job_id, "degraded")
+
+    assert_receive {:job_response_recovery_command,
+                    %{"operation" => "start", "job_id" => ^job_id}},
+                   2_000
+
+    assert %{state: "ready"} = await_state(job_id, "ready")
+  end
+
   defp await_state(job_id, expected, attempts \\ 50)
 
   defp await_state(job_id, _expected, 0), do: JobResponse.status_local(job_id)
