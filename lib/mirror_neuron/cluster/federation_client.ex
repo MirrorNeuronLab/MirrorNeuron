@@ -9,6 +9,7 @@ defmodule MirrorNeuron.Cluster.FederationClient do
   alias Mirrorneuron.Job.V1.JobService.Stub, as: JobStub
 
   @timeout 15_000
+  @job_response_timeout 60_000
 
   def call(node_name, function, request) when is_atom(function) do
     response = rpc_call(node_name, JobStub, function, request)
@@ -65,7 +66,7 @@ defmodule MirrorNeuron.Cluster.FederationClient do
     with {:ok, peer} <- FederationRegistry.fetch(node_name),
          {:ok, target} <- target(peer),
          {:ok, channel} <- connect(target, peer),
-         result <- apply(stub, function, [channel, request, [timeout: @timeout]]) do
+         result <- apply(stub, function, [channel, request, [timeout: request_timeout(function)]]) do
       _ = GRPC.Stub.disconnect(channel)
 
       case result do
@@ -83,6 +84,10 @@ defmodule MirrorNeuron.Cluster.FederationClient do
       {:error, reason} -> unavailable!(node_name, reason)
     end
   end
+
+  @doc false
+  def request_timeout(:query_job_response), do: @job_response_timeout
+  def request_timeout(_function), do: @timeout
 
   defp discover_owner(resource_id, function, field, options) do
     peers = Keyword.get(options, :peers, FederationRegistry.list())

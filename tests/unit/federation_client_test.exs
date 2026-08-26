@@ -4,6 +4,12 @@ defmodule MirrorNeuron.Cluster.FederationClientTest do
   alias MirrorNeuron.Cluster.FederationClient
   alias Mirrorneuron.Job.V1.{JobRequest, RunRequest}
 
+  test "uses a bounded extended timeout only for semantic Job responses" do
+    assert FederationClient.request_timeout(:query_job_response) == 60_000
+    assert FederationClient.request_timeout(:get_job_response_turn) == 15_000
+    assert FederationClient.request_timeout(:get_job) == 15_000
+  end
+
   test "discovers connected job and run owners without a cached projection" do
     peers = [
       %{"node_name" => "mirror_neuron@offline"},

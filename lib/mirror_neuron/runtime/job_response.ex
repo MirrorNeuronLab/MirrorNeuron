@@ -12,8 +12,8 @@ defmodule MirrorNeuron.Runtime.JobResponse do
 
   @registry MirrorNeuron.Runtime.JobResponseRegistry
   @supervisor MirrorNeuron.Runtime.JobResponseSupervisor
-  @query_timeout 21_000
-  @rpc_timeout 23_000
+  @query_timeout 50_000
+  @rpc_timeout 55_000
   @warm_timeout 1_230_000
   @max_question_chars 8_000
   @max_request_id_chars 128
@@ -427,9 +427,13 @@ defmodule MirrorNeuron.Runtime.JobResponse do
   end
 
   defp ensure_agent_enabled(definition) do
-    if get_in(definition, ["manifest", "response_service", "agent", "kind"]) == "bounded_mcp",
+    if bounded_agent?(definition),
       do: :ok,
       else: {:error, :response_agent_disabled}
+  end
+
+  defp bounded_agent?(definition) do
+    get_in(definition, ["manifest", "response_service", "agent", "kind"]) == "bounded_mcp"
   end
 
   defp validate_turn_id(turn_id) do
@@ -526,7 +530,7 @@ defmodule MirrorNeuron.Runtime.JobResponse do
         "\n\n"
       )
 
-    %{
+    response = %{
       "schema_version" => "mn.mcp.job_answer.v1",
       "answer" => String.slice(answer, 0, 12_000),
       "conversation_id" => attrs["conversation_id"] || uuid(),
@@ -545,7 +549,23 @@ defmodule MirrorNeuron.Runtime.JobResponse do
       "model" => %{"used" => false, "fallback" => true},
       "conversation_persisted" => false
     }
-    |> fit_fallback()
+
+    response =
+      if bounded_agent?(definition) do
+        Map.merge(response, %{
+          "schema_version" => "mn.mcp.job_answer.v3",
+          "turn" => %{
+            "turn_id" => uuid(),
+            "state" => "completed",
+            "updated_at" => Runtime.timestamp()
+          },
+          "effects" => []
+        })
+      else
+        response
+      end
+
+    fit_fallback(response)
   end
 
   defp fit_fallback(answer) do

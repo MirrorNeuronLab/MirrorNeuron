@@ -307,7 +307,7 @@ defmodule MirrorNeuron.ModelServices do
   end
 
   @doc false
-  def job_response_command(attrs, timeout \\ 25_000) when is_map(attrs) do
+  def job_response_command(attrs, timeout \\ 60_000) when is_map(attrs) do
     native_sdk_json_command(
       attrs,
       timeout,
