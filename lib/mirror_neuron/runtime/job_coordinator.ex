@@ -1597,12 +1597,12 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       result =
         Enum.reduce_while(payloads, :ok, fn payload, :ok ->
           message =
-            Message.normalize!(
+            Message.new(
+              state.job_id,
+              "runtime",
+              agent_id,
+              "init",
               payload,
-              job_id: state.job_id,
-              from: "runtime",
-              to: agent_id,
-              type: "init",
               class: "command",
               correlation_id: unique_id()
             )
@@ -3022,17 +3022,44 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp build_external_message(state, agent_id, message) do
-    Message.normalize!(
-      message,
-      job_id: state.job_id,
-      from: "external",
-      to: agent_id,
-      type: "command",
-      class: "command",
-      correlation_id: unique_id()
-    )
+    if envelope_message?(message) do
+      Message.normalize!(
+        message,
+        job_id: state.job_id,
+        from: "external",
+        to: agent_id,
+        type: "command",
+        class: "command",
+        correlation_id: unique_id()
+      )
+    else
+      {type, body} = external_message_body(message)
+
+      Message.new(
+        state.job_id,
+        "external",
+        agent_id,
+        type,
+        body,
+        class: "command",
+        correlation_id: unique_id()
+      )
+    end
     |> put_attempt_epoch(state)
   end
+
+  defp envelope_message?(message) when is_map(message),
+    do: Map.has_key?(message, "envelope") or Map.has_key?(message, :envelope)
+
+  defp envelope_message?(_message), do: false
+
+  defp external_message_body(%{"type" => type, "payload" => body}) when is_binary(type),
+    do: {type, body}
+
+  defp external_message_body(%{type: type, payload: body}) when is_binary(type),
+    do: {type, body}
+
+  defp external_message_body(message), do: {"command", message}
 
   defp put_attempt_epoch(message, state) do
     case get_in(Keyword.get(state.opts, :job_lease, %{}), ["epoch"]) do

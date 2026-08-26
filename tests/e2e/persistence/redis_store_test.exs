@@ -2709,6 +2709,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
 
     manifest = %{
       "apiVersion" => "mn.workflow/v1",
+      "kind" => "Workflow",
       "manifest_version" => "1.0",
       "graph_id" => graph_id,
       "flow" => %{

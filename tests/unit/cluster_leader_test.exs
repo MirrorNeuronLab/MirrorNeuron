@@ -5,8 +5,15 @@ defmodule MirrorNeuron.ClusterLeaderTest do
 
   setup do
     previous = Application.get_env(:mirror_neuron, :network_only)
+    previous_home = System.get_env("MN_HOME")
+    home = Path.join(System.tmp_dir!(), "mn-cluster-leader-#{System.unique_integer([:positive])}")
+
+    System.put_env("MN_HOME", home)
 
     on_exit(fn ->
+      File.rm_rf!(home)
+      restore_system_env("MN_HOME", previous_home)
+
       if is_nil(previous) do
         Application.delete_env(:mirror_neuron, :network_only)
       else
@@ -64,4 +71,7 @@ defmodule MirrorNeuron.ClusterLeaderTest do
       node_sweep_timers: %{}
     }
   end
+
+  defp restore_system_env(key, nil), do: System.delete_env(key)
+  defp restore_system_env(key, value), do: System.put_env(key, value)
 end

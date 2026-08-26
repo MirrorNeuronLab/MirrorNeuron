@@ -4,6 +4,7 @@ defmodule TestFetchJob do
     job_id = "test-job-1"
     raw_manifest = %{
       "apiVersion" => "mn.workflow/v1",
+      "kind" => "Workflow",
       "graph_id" => "graph-1",
       "job_name" => "Test Job",
       "type" => "batch",

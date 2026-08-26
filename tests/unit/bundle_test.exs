@@ -30,6 +30,7 @@ defmodule MirrorNeuron.BundleTest do
 
     manifest = %{
       "apiVersion" => "mn.workflow/v1",
+      "kind" => "Workflow",
       "manifest_version" => "1.0",
       "graph_id" => graph_id,
       "reload" => %{"mode" => reload_mode, "interval_seconds" => 1},

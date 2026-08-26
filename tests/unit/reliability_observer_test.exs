@@ -189,6 +189,7 @@ defmodule MirrorNeuron.Runtime.ReliabilityObserverTest do
     {:ok, manifest} =
       Manifest.load(%{
         "apiVersion" => "mn.workflow/v1",
+        "kind" => "Workflow",
         "manifest_version" => "1.0",
         "graph_id" => "observer-reliability-test",
         "entrypoints" => ["worker"],

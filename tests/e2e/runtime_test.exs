@@ -3198,7 +3198,7 @@ defmodule MirrorNeuron.RuntimeTest do
       "nodes" => [
         %{
           "node_id" => "video_guardian",
-          "agent_type" => "sandbox_worker",
+          "agent_type" => "executor",
           "role" => "root",
           "config" => %{
             "execution_profile" => profile,
@@ -4006,6 +4006,7 @@ defmodule MirrorNeuron.RuntimeTest do
 
   defp flow_manifest(%{} = manifest) do
     manifest = Map.put_new(manifest, "apiVersion", "mn.workflow/v1")
+    manifest = Map.put_new(manifest, "kind", "Workflow")
     {nodes, manifest} = Map.pop(manifest, "nodes")
     {edges, manifest} = Map.pop(manifest, "edges")
 

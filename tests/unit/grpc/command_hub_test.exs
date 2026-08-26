@@ -89,11 +89,14 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
     previous_network_only = Application.get_env(:mirror_neuron, :network_only)
     previous_network_only_env = System.get_env("MN_NETWORK_ONLY")
     previous_auth_token = System.get_env("MN_GRPC_AUTH_TOKEN")
+    previous_home = System.get_env("MN_HOME")
+    home = Path.join(System.tmp_dir!(), "mn-command-hub-#{System.unique_integer([:positive])}")
 
     Application.put_env(:mirror_neuron, :grpc_command_dependencies, %{job: FakeJobCommands})
     Application.put_env(:mirror_neuron, :network_only, false)
     System.delete_env("MN_NETWORK_ONLY")
     System.put_env("MN_GRPC_AUTH_TOKEN", @identity_token)
+    System.put_env("MN_HOME", home)
 
     on_exit(fn ->
       if Process.whereis(@test_pid_name), do: Process.unregister(@test_pid_name)
@@ -101,6 +104,8 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
       restore_app_env(:network_only, previous_network_only)
       restore_system_env("MN_NETWORK_ONLY", previous_network_only_env)
       restore_system_env("MN_GRPC_AUTH_TOKEN", previous_auth_token)
+      restore_system_env("MN_HOME", previous_home)
+      File.rm_rf!(home)
     end)
 
     :ok

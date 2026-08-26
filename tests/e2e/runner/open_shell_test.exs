@@ -667,6 +667,7 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
       "no_auto_providers" => true,
       "tty" => false,
       "name_prefix" => "shared-test",
+      "sandbox_name" => "prepared-shared-test",
       "reuse_shared_sandbox" => true
     }
 
@@ -703,13 +704,11 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
       assert result1["stdout"] =~ "\"seen\": \"first\""
       assert result2["stdout"] =~ "\"seen\": \"second\""
       assert File.dir?(Path.join(sandboxes_dir, result1["sandbox_name"]))
-      policy_text = args_log |> logged_arg_after("--policy") |> File.read!()
-      assert policy_text =~ "network_policies:"
-      assert policy_text =~ "/dev/null"
+      assert File.read!(args_log) =~ "sandbox upload prepared-shared-test"
 
       assert :ok = OpenShellJobSandbox.cleanup_job_local("job-shared-1")
-      refute File.exists?(Path.join(sandboxes_dir, result1["sandbox_name"]))
-      assert File.read!(deleted_log) =~ result1["sandbox_name"]
+      assert File.exists?(Path.join(sandboxes_dir, result1["sandbox_name"]))
+      refute File.exists?(deleted_log)
     after
       Enum.each(env_backup, fn
         {key, nil} -> System.delete_env(key)
@@ -720,7 +719,7 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
     end
   end
 
-  test "shared sandbox cleanup removes owned local OpenShell Docker containers when gateway delete fails" do
+  test "does not clean SDK-owned OpenShell containers when gateway deletion fails" do
     Application.ensure_all_started(:mirror_neuron)
 
     tmp_dir =
@@ -825,6 +824,7 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
       "sandbox_cli" => fake_cli,
       "no_auto_providers" => true,
       "tty" => false,
+      "sandbox_name" => "prepared-docker-cleanup",
       "reuse_shared_sandbox" => true
     }
 
@@ -846,15 +846,15 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
       File.touch!(Path.join(containers_dir, container_name))
 
       assert :ok = OpenShellJobSandbox.cleanup_job_local(job_id)
-      refute File.exists?(Path.join(containers_dir, container_name))
-      assert File.read!(removed_log) =~ container_name
+      assert File.exists?(Path.join(containers_dir, container_name))
+      refute File.exists?(removed_log)
 
       changed_node_container_name =
         "openshell-mirror-neuron-job-#{String.downcase(job_id)}-old-node-port-mapping"
 
       File.touch!(Path.join(containers_dir, changed_node_container_name))
       assert :ok = OpenShellJobSandbox.cleanup_job_local(job_id, config)
-      refute File.exists?(Path.join(containers_dir, changed_node_container_name))
+      assert File.exists?(Path.join(containers_dir, changed_node_container_name))
     after
       OpenShellJobSandbox.cleanup_job_local(job_id)
 
@@ -867,7 +867,7 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
     end
   end
 
-  test "failed shared-sandbox cleanup retains its owner and configuration for retry" do
+  test "does not retain local ownership of SDK-prepared OpenShell sandboxes" do
     Application.ensure_all_started(:mirror_neuron)
 
     tmp_dir =
@@ -935,21 +935,16 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
       "sandbox_cli" => fake_cli,
       "shared_sandbox_prefix" => "custom-cleanup-prefix",
       "no_auto_providers" => true,
-      "tty" => false
+      "tty" => false,
+      "sandbox_name" => "prepared-cleanup-retry"
     }
 
     try do
-      assert {:ok, _sandbox} = OpenShellJobSandbox.ensure(job_id, config)
-      assert [{owner, _meta}] = Registry.lookup(MirrorNeuron.Sandbox.Registry, job_id)
+      assert {:ok, %{"sandbox_name" => "prepared-cleanup-retry"}} =
+               OpenShellJobSandbox.ensure(job_id, config)
 
-      assert {:error, _reason} = OpenShellJobSandbox.cleanup_job_local(job_id)
-      assert Process.alive?(owner)
-      assert :sys.get_state(owner).config["shared_sandbox_prefix"] == "custom-cleanup-prefix"
-      assert :sys.get_state(owner).cleanup_required? == true
-
-      File.touch!(allow_delete)
       assert :ok = OpenShellJobSandbox.cleanup_job_local(job_id)
-      refute Process.alive?(owner)
+      assert Registry.lookup(MirrorNeuron.Sandbox.Registry, job_id) == []
     after
       File.touch!(allow_delete)
       OpenShellJobSandbox.cleanup_job_local(job_id, config)
@@ -1136,6 +1131,7 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
       "no_auto_providers" => true,
       "tty" => false,
       "name_prefix" => "persistent-test",
+      "sandbox_name" => "prepared-persistent-test",
       "reuse_shared_sandbox" => true,
       "persistent_workspace" => true
     }

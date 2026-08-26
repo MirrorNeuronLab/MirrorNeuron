@@ -28,6 +28,7 @@ defmodule MirrorNeuron.SchedulerTest do
 
   defp load_manifest(raw) when is_map(raw) do
     raw = Map.put_new(raw, "apiVersion", "mn.workflow/v1")
+    raw = Map.put_new(raw, "kind", "Workflow")
 
     raw =
       if Map.has_key?(raw, "flow") do
@@ -483,8 +484,8 @@ defmodule MirrorNeuron.SchedulerTest do
             "agent_type" => "executor",
             "role" => "root",
             "resources" => %{
-              "cpu" => 1000,
-              "memory_gb" => 4,
+              "cpu_cores" => 1,
+              "memory_mb" => 4096,
               "devices" => [%{"type" => "nvidia/gpu", "count" => 2}]
             }
           }
@@ -503,7 +504,7 @@ defmodule MirrorNeuron.SchedulerTest do
              %{
                "agent_id" => "worker",
                "node" => "multi-gpu@lab",
-               "resources" => %{"cpu_cores" => 1.0, "memory_mb" => 4096, "gpu_count" => 2}
+               "resources" => %{"cpu_cores" => 1, "memory_mb" => 4096, "gpu_count" => 2}
              }
            ] = plan["placements"]
   end

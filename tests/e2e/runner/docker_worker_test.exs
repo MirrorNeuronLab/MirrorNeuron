@@ -10,6 +10,10 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     previous_buildkit = System.get_env("DOCKER_BUILDKIT")
     previous_worker_buildkit = System.get_env("MN_DOCKER_WORKER_BUILDKIT")
     previous_node_runtime_models = System.get_env("MN_NODE_RUNTIME_MODELS")
+    previous_prepared_container = System.get_env("MN_DOCKER_WORKER_CONTAINER_NAME")
+    prepared_container = "mn-test-prepared-#{System.unique_integer([:positive])}"
+
+    System.put_env("MN_DOCKER_WORKER_CONTAINER_NAME", prepared_container)
 
     tmp_dir =
       Path.join(System.tmp_dir!(), "mn-docker-worker-test-#{System.unique_integer([:positive])}")
@@ -37,13 +41,20 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
         do: System.delete_env("MN_NODE_RUNTIME_MODELS"),
         else: System.put_env("MN_NODE_RUNTIME_MODELS", previous_node_runtime_models)
 
+      if is_nil(previous_prepared_container),
+        do: System.delete_env("MN_DOCKER_WORKER_CONTAINER_NAME"),
+        else: System.put_env("MN_DOCKER_WORKER_CONTAINER_NAME", previous_prepared_container)
+
       File.rm_rf(tmp_dir)
     end)
 
-    {:ok, tmp_dir: tmp_dir}
+    {:ok, tmp_dir: tmp_dir, prepared_container: prepared_container}
   end
 
-  test "runs docker worker without publishing host ports", %{tmp_dir: tmp_dir} do
+  test "runs in an SDK-prepared worker without publishing host ports", %{
+    tmp_dir: tmp_dir,
+    prepared_container: prepared_container
+  } do
     fake_docker = Path.join(tmp_dir, "fake-docker")
     args_log = Path.join(tmp_dir, "args.log")
 
@@ -114,20 +125,15 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
 
     args = File.read!(args_log)
     calls = docker_calls(args_log)
-    run_call = Enum.find(calls, &(List.first(&1) == "run"))
 
-    assert args =~ "run\n"
-    assert args =~ "-d\n"
     assert args =~ "exec\n"
     assert args =~ "cp\n"
-    assert args =~ "--name\n"
+    assert result["container_name"] == prepared_container
+    assert Enum.any?(calls, &("MN_EXECUTION_NODE=#{Node.self()}" in &1))
 
-    assert "MN_EXECUTION_NODE=#{Node.self()}" in run_call or
-             Enum.any?(calls, &("MN_EXECUTION_NODE=#{Node.self()}" in &1))
-
+    refute Enum.any?(calls, &(List.first(&1) == "run"))
     refute args =~ "--rm\n"
-    refute "-p" in run_call
-    refute "--publish" in run_call
+    refute args =~ "--publish\n"
   end
 
   test "executes in the Compose-prepared worker instead of creating a second container", %{
@@ -186,7 +192,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     if [ "$1" = "model" ]; then
       exit 9
     fi
-    if [ "$1" = "run" ]; then
+    if [ "$1" = "exec" ] && [ "$2" = "-w" ]; then
       echo "worker output"
       exit 0
     fi
@@ -225,7 +231,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     assert result["stdout"] =~ "worker output"
 
     calls = docker_calls(args_log)
-    assert Enum.any?(calls, &(List.first(&1) == "run"))
+    refute Enum.any?(calls, &(List.first(&1) == "run"))
     refute Enum.any?(calls, &(List.first(&1) == "model"))
   end
 
@@ -242,7 +248,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     if [ "$1" = "model" ]; then
       exit 9
     fi
-    if [ "$1" = "run" ]; then
+    if [ "$1" = "exec" ] && [ "$2" = "-w" ]; then
       echo '__MN_EVENT__{"type":"runtime_model_install_started","payload":{"category":"system","message":"Installing gemma4:e2b on mirror_neuron@10.0.4.27.","model":"gemma4:e2b","node":"mirror_neuron@10.0.4.27","status":"started"}}'
       echo '__MN_EVENT__{"type":"runtime_model_ready","payload":{"category":"system","message":"Runtime model gemma4:e2b is ready on mirror_neuron@10.0.4.27.","model":"gemma4:e2b","node":"mirror_neuron@10.0.4.27","status":"installed"}}'
       echo "worker output"
@@ -301,7 +307,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     refute_received {:docker_event, "docker_worker_model_not_prepared", _payload}
 
     calls = docker_calls(args_log)
-    assert Enum.any?(calls, &(List.first(&1) == "run"))
+    refute Enum.any?(calls, &(List.first(&1) == "run"))
     refute Enum.any?(calls, &(List.first(&1) == "model"))
   end
 
@@ -316,7 +322,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     if [ "$1" = "model" ]; then
       exit 9
     fi
-    if [ "$1" = "run" ]; then
+    if [ "$1" = "exec" ] && [ "$2" = "-w" ]; then
       echo "worker output"
       exit 0
     fi
@@ -346,11 +352,11 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     assert result["stdout"] =~ "worker output"
 
     calls = docker_calls(args_log)
-    assert Enum.any?(calls, &(List.first(&1) == "run"))
+    refute Enum.any?(calls, &(List.first(&1) == "run"))
     refute Enum.any?(calls, &(List.first(&1) == "model"))
   end
 
-  test "mounts shared storage into shared docker containers", %{tmp_dir: tmp_dir} do
+  test "passes shared storage paths to an SDK-prepared docker container", %{tmp_dir: tmp_dir} do
     fake_docker = Path.join(tmp_dir, "fake-docker-shared-storage")
     args_log = Path.join(tmp_dir, "shared-storage-args.log")
     host_shared = Path.join(tmp_dir, "host-shared")
@@ -426,11 +432,19 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
 
     assert result["stdout"] =~ "worker output"
 
-    run_call = Enum.find(docker_calls(args_log), &(List.first(&1) == "run"))
-    assert "#{host_shared}:/runtime/shared:rw" in run_call
+    calls = docker_calls(args_log)
+    refute Enum.any?(calls, &(List.first(&1) == "run"))
+
+    assert Enum.any?(
+             calls,
+             &("MN_JOB_SHARED_STORAGE_ROOT=/runtime/shared/submissions/submission-1" in &1)
+           )
   end
 
-  test "reuses one shared Docker container for multiple agents in a job", %{tmp_dir: tmp_dir} do
+  test "uses one SDK-prepared Docker container for multiple agents in a job", %{
+    tmp_dir: tmp_dir,
+    prepared_container: prepared_container
+  } do
     fake_docker = Path.join(tmp_dir, "fake-docker-reuse")
     args_log = Path.join(tmp_dir, "reuse-args.log")
 
@@ -468,7 +482,8 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     config = %{
       "image" => "example/worker:latest",
       "command" => ["sh", "-lc", "echo worker output"],
-      "docker_bin" => fake_docker
+      "docker_bin" => fake_docker,
+      "docker_worker_container_name" => prepared_container
     }
 
     assert {:ok, _first} =
@@ -480,32 +495,20 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     assert :ok = DockerJobSandbox.cleanup_job_local("job-1", config)
 
     calls = docker_calls(args_log)
-    assert Enum.count(calls, &(List.first(&1) == "run")) == 1
+    refute Enum.any?(calls, &(List.first(&1) == "run"))
     assert Enum.count(calls, &(List.first(&1) == "cp")) == 2
     assert Enum.count(calls, &(Enum.take(&1, 2) == ["exec", "-w"])) == 2
-    assert Enum.any?(calls, &(Enum.take(&1, 2) == ["rm", "-f"]))
+    refute Enum.any?(calls, &(Enum.take(&1, 2) == ["rm", "-f"]))
   end
 
-  test "cleanup discovers orphaned shared containers by job labels", %{tmp_dir: tmp_dir} do
+  test "does not clean SDK-owned prepared containers", %{tmp_dir: tmp_dir} do
     fake_docker = Path.join(tmp_dir, "fake-docker-orphan-cleanup")
     args_log = Path.join(tmp_dir, "orphan-cleanup-args.log")
-    orphan_id = String.duplicate("a", 64)
 
     File.write!(fake_docker, """
     #!/usr/bin/env bash
     printf '%s\n' "$@" >> #{args_log}
     printf -- '---\n' >> #{args_log}
-    if [ "$1" = "ps" ]; then
-      echo "#{orphan_id}"
-      exit 0
-    fi
-    if [ "$1" = "rm" ] && [ "$2" = "-f" ] && [ "$3" = "#{orphan_id}" ]; then
-      exit 0
-    fi
-    if [ "$1" = "rm" ] && [ "$2" = "-f" ]; then
-      echo "No such container" >&2
-      exit 1
-    fi
     exit 0
     """)
 
@@ -520,69 +523,29 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
                }
              )
 
-    calls = docker_calls(args_log)
-
-    assert Enum.any?(calls, fn call ->
-             List.first(call) == "ps" and
-               "label=mirror-neuron.kind=docker_worker" in call and
-               "label=mirror-neuron.job_id=job-orphan-cleanup" in call
-           end)
-
-    assert Enum.any?(calls, &(&1 == ["rm", "-f", orphan_id]))
+    refute File.exists?(args_log)
   end
 
-  test "failed shared-container cleanup retains its owner for retry", %{tmp_dir: tmp_dir} do
+  test "does not retain local ownership of SDK-prepared containers", %{tmp_dir: tmp_dir} do
     fake_docker = Path.join(tmp_dir, "fake-docker-cleanup-retry")
-    allow_remove = Path.join(tmp_dir, "allow-remove")
     job_id = "job-cleanup-retry"
 
     File.write!(fake_docker, """
     #!/usr/bin/env bash
-    if [ "$1" = "inspect" ]; then
-      echo "No such container" >&2
-      exit 1
-    fi
-    if [ "$1" = "run" ]; then
-      echo "container-id"
-      exit 0
-    fi
-    if [ "$1" = "ps" ]; then
-      exit 0
-    fi
-    if [ "$1" = "rm" ] && [ "$2" = "-f" ]; then
-      if [ -f "#{allow_remove}" ]; then
-        exit 0
-      fi
-      echo "container is busy" >&2
-      exit 9
-    fi
     exit 0
     """)
 
     File.chmod!(fake_docker, 0o755)
-    config = %{"docker_bin" => fake_docker}
+    config = %{"docker_bin" => fake_docker, "docker_worker_container_name" => "prepared"}
 
-    on_exit(fn ->
-      File.touch!(allow_remove)
-      DockerJobSandbox.cleanup_job_local(job_id, config)
-    end)
-
-    assert {:ok, _sandbox} =
+    assert {:ok, %{"container_name" => "prepared"}} =
              DockerJobSandbox.ensure(job_id, "example/worker:latest", config)
 
-    assert [{owner, _meta}] =
-             Registry.lookup(MirrorNeuron.Sandbox.Registry, {:docker_worker, job_id})
-
-    assert {:error, _reason} = DockerJobSandbox.cleanup_job_local(job_id, config)
-    assert Process.alive?(owner)
-    assert :sys.get_state(owner).cleanup_required? == true
-
-    File.touch!(allow_remove)
     assert :ok = DockerJobSandbox.cleanup_job_local(job_id, config)
-    refute Process.alive?(owner)
+    assert Registry.lookup(MirrorNeuron.Sandbox.Registry, {:docker_worker, job_id}) == []
   end
 
-  test "emits compact lifecycle events when docker worker image build fails", %{tmp_dir: tmp_dir} do
+  test "rejects unprepared DockerWorker image builds", %{tmp_dir: tmp_dir} do
     fake_docker = Path.join(tmp_dir, "fake-docker-build-fails")
     payloads_dir = Path.join(tmp_dir, "payloads")
     docker_worker_dir = Path.join([payloads_dir, "bundle", "docker_worker"])
@@ -602,7 +565,6 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     """)
 
     File.chmod!(fake_docker, 0o755)
-    parent = self()
 
     assert {:error, reason} =
              DockerWorker.run(
@@ -616,27 +578,13 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
                },
                job_id: "job-build-fail",
                agent_id: "worker-build",
-               payloads_path: payloads_dir,
-               event_callback: fn event_type, payload ->
-                 send(parent, {:docker_event, event_type, payload})
-               end
+               payloads_path: payloads_dir
              )
 
-    assert reason =~ "failed to build docker_worker image"
-    assert_receive {:docker_event, "docker_worker_build_started", %{"category" => "system"}}
-
-    assert_receive {:docker_event, "docker_worker_build_failed",
-                    %{
-                      "category" => "error",
-                      "message" => "DockerWorker image build failed",
-                      "result_summary" => summary
-                    }}
-
-    assert summary =~ "No matching distribution found for mirrorneuron-blueprint-support-skill"
-    refute String.starts_with?(summary, "very long build prelude")
+    assert reason =~ "docker_worker image build is owned by mn-python-sdk/API/CLI"
   end
 
-  test "docker worker image builds disable BuildKit by default", %{tmp_dir: tmp_dir} do
+  test "rejects DockerWorker image builds before invoking Docker", %{tmp_dir: tmp_dir} do
     fake_docker = Path.join(tmp_dir, "fake-docker-build-env")
     buildkit_log = Path.join(tmp_dir, "buildkit.log")
     payloads_dir = Path.join(tmp_dir, "payloads")
@@ -663,7 +611,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     System.put_env("DOCKER_BUILDKIT", "1")
     System.delete_env("MN_DOCKER_WORKER_BUILDKIT")
 
-    assert {:ok, result} =
+    assert {:error, reason} =
              DockerWorker.run(
                %{},
                %{
@@ -679,11 +627,13 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
                payloads_path: payloads_dir
              )
 
-    assert result["stdout"] =~ "worker output"
-    assert File.read!(buildkit_log) == "0"
+    assert reason =~ "docker_worker image build is owned by mn-python-sdk/API/CLI"
+    refute File.exists?(buildkit_log)
   end
 
-  test "copies skills root build context uploads before building image", %{tmp_dir: tmp_dir} do
+  test "rejects skills build-context uploads until the SDK prepares the image", %{
+    tmp_dir: tmp_dir
+  } do
     fake_docker = Path.join(tmp_dir, "fake-docker-build-context")
     payloads_dir = Path.join(tmp_dir, "payloads")
     docker_worker_dir = Path.join([payloads_dir, "bundle", "docker_worker"])
@@ -713,7 +663,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     File.chmod!(fake_docker, 0o755)
     System.delete_env("MN_SKILLS_ROOT")
 
-    assert {:ok, result} =
+    assert {:error, reason} =
              DockerWorker.run(
                %{},
                %{
@@ -737,10 +687,12 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
                payloads_path: payloads_dir
              )
 
-    assert result["stdout"] =~ "worker output"
+    assert reason =~ "docker_worker image build is owned by mn-python-sdk/API/CLI"
   end
 
-  test "copies workspace root build context uploads before building image", %{tmp_dir: tmp_dir} do
+  test "rejects workspace build-context uploads until the SDK prepares the image", %{
+    tmp_dir: tmp_dir
+  } do
     fake_docker = Path.join(tmp_dir, "fake-docker-workspace-context")
     payloads_dir = Path.join(tmp_dir, "payloads")
     docker_worker_dir = Path.join([payloads_dir, "bundle", "docker_worker"])
@@ -774,7 +726,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     File.chmod!(fake_docker, 0o755)
     System.delete_env("MN_WORKSPACE_ROOT")
 
-    assert {:ok, result} =
+    assert {:error, reason} =
              DockerWorker.run(
                %{},
                %{
@@ -798,7 +750,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
                payloads_path: payloads_dir
              )
 
-    assert result["stdout"] =~ "worker output"
+    assert reason =~ "docker_worker image build is owned by mn-python-sdk/API/CLI"
   end
 
   defp cleanup_docker_job_on_exit(job_id, fake_docker) do

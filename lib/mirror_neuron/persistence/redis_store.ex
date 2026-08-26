@@ -4968,8 +4968,8 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       "metadata" => %{
         "paused" => Map.get(metadata, "paused", false),
         "backpressure" => Map.get(metadata, "backpressure") || %{},
-        "lease_epoch" => Map.get(metadata, "lease_epoch"),
-        "lease_owner" => Map.get(metadata, "lease_owner"),
+        "lease_epoch" => Map.get(metadata, "lease_epoch") || Map.get(snapshot, "lease_epoch"),
+        "lease_owner" => Map.get(metadata, "lease_owner") || Map.get(snapshot, "lease_owner"),
         "pending_message_count" => Map.get(metadata, "pending_message_count", 0),
         "execution_profile" => Map.get(metadata, "execution_profile")
       }

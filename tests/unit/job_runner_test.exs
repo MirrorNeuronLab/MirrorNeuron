@@ -106,6 +106,7 @@ defmodule MirrorNeuron.Runtime.JobRunnerTest do
     assert {:ok, bundle} =
              JobBundle.load(%{
                "apiVersion" => "mn.workflow/v1",
+               "kind" => "Workflow",
                "manifest_version" => "1.0",
                "graph_id" => "runner_start_failure",
                "entrypoints" => ["root"],

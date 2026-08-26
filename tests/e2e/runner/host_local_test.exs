@@ -453,7 +453,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
     end
   end
 
-  test "installs blueprint python requirements into a cached virtualenv" do
+  test "rejects unprepared blueprint python requirements" do
     tmp_dir =
       Path.join(
         System.tmp_dir!(),
@@ -504,7 +504,8 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
         }
       }
 
-      assert {:ok, first_result} =
+      assert {:error,
+              "python_environment preparation is owned by mn-python-sdk/API/CLI; prepare the environment before submission and provide python_environment.path, MN_PYTHON_ENV, or VIRTUAL_ENV"} =
                HostLocal.run(
                  %{},
                  config,
@@ -513,41 +514,6 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
                  bundle_root: bundle_dir,
                  payloads_path: payloads_dir
                )
-
-      assert {:ok, second_result} =
-               HostLocal.run(
-                 %{},
-                 config,
-                 job_id: "job-python-env",
-                 agent_id: "agent-python-env",
-                 bundle_root: bundle_dir,
-                 payloads_path: payloads_dir
-               )
-
-      first_payload = Jason.decode!(String.trim(first_result["stdout"]))
-      second_payload = Jason.decode!(String.trim(second_result["stdout"]))
-
-      assert first_payload["value"] == "from-wheel"
-
-      assert normalized_path(first_payload["mn_python_env"]) ==
-               normalized_path(first_payload["virtual_env"])
-
-      assert normalized_path(first_payload["mn_python_env"]) ==
-               normalized_path(first_payload["prefix"])
-
-      assert first_payload["mn_python_env"] == second_payload["mn_python_env"]
-      assert String.starts_with?(first_payload["mn_python_env"], env_root)
-      assert File.exists?(Path.join(first_payload["mn_python_env"], ".ready"))
-
-      metadata =
-        first_payload["mn_python_env"]
-        |> Path.join(".mn-blueprint-resource.json")
-        |> File.read!()
-        |> Jason.decode!()
-
-      assert metadata["resource_type"] == "python_venv"
-      assert metadata["blueprint_id"] == "test_python_env_blueprint"
-      assert metadata["requirements"]["path"] == "bundle/requirements.txt"
     after
       restore_env("MN_BLUEPRINT_PYTHON_ENVS_DIR", old_env_root)
       restore_env("MN_CORE_ALLOW_NATIVE_RESOURCE_PREP", old_native_prep)
@@ -1071,8 +1037,6 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
 
     {:ok, _path} = :zip.create(String.to_charlist(path), files)
   end
-
-  defp normalized_path(path), do: String.replace_prefix(path, "/private/var/", "/var/")
 
   defp wait_until(predicate, attempts \\ 100)
 
