@@ -1053,7 +1053,7 @@ defmodule MirrorNeuron.ManifestTest do
         base,
         ["response_service", "agent", "preflight"],
         %{
-          "required_for_effects" => ["motion"],
+          "required_for_effects" => ["dispatch"],
           "tool" => "get_robot_status",
           "arguments" => %{},
           "required_result" => %{"connected" => true}
@@ -1084,7 +1084,7 @@ defmodule MirrorNeuron.ManifestTest do
                 bounded_response_agent(),
                 ["preflight"],
                 %{
-                  "required_for_effects" => ["motion"],
+                  "required_for_effects" => ["dispatch"],
                   "tool" => "navigate_to_zone",
                   "arguments" => %{"zone" => "zone_a"},
                   "required_result" => %{"connected" => true}
@@ -1105,6 +1105,37 @@ defmodule MirrorNeuron.ManifestTest do
       assert {:error, errors} = Manifest.load(invalid_preflight)
       assert Enum.any?(errors, &String.contains?(&1, "preflight"))
     end
+
+    arbitrary_contract =
+      base
+      |> put_in(
+        ["response_service", "agent", "tools", "user", "navigate_to_zone", "effect"],
+        "notify"
+      )
+      |> put_in(
+        ["response_service", "agent", "memory", "types"],
+        ~w(recipient_alias control_constraint)
+      )
+
+    assert {:ok, _manifest} = Manifest.load(arbitrary_contract)
+
+    undeclared_preflight_effect =
+      put_in(
+        with_preflight,
+        ["response_service", "agent", "preflight", "required_for_effects"],
+        ["notify"]
+      )
+
+    assert {:error, errors} = Manifest.load(undeclared_preflight_effect)
+    assert Enum.any?(errors, &String.contains?(&1, "preflight"))
+
+    for path <- [
+          ["response_service", "agent", "tools", "user", "navigate_to_zone", "effect"],
+          ["response_service", "agent", "memory", "types"]
+        ] do
+      invalid_value = if List.last(path) == "effect", do: "unsafe-effect", else: ["unsafe-type"]
+      assert {:error, _errors} = Manifest.load(put_in(base, path, invalid_value))
+    end
   end
 
   defp bounded_response_agent do
@@ -1122,7 +1153,7 @@ defmodule MirrorNeuron.ManifestTest do
             "arguments" => %{}
           },
           "navigate_to_zone" => %{
-            "effect" => "motion",
+            "effect" => "dispatch",
             "arguments" => %{
               "zone" => %{"type" => "string", "enum" => ~w(zone_a zone_b zone_c)}
             }
@@ -1147,7 +1178,7 @@ defmodule MirrorNeuron.ManifestTest do
         "enabled" => true,
         "mode" => "explicit",
         "path" => "knowledge/learned",
-        "types" => ~w(zone_alias control_constraint capability_note),
+        "types" => ~w(destination_alias control_constraint capability_note),
         "max_active_records" => 500
       }
     }

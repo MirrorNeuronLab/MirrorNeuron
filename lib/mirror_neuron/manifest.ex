@@ -951,7 +951,7 @@ defmodule MirrorNeuron.Manifest do
       MapSet.new(Map.keys(memory)) != MapSet.new(~w(enabled mode path types max_active_records)) or
         memory["enabled"] !== true or memory["mode"] != "explicit" or
         not safe_relative_path?(memory["path"]) or
-        not allowed_memory_types?(memory["types"]) or
+        not safe_memory_types?(memory["types"]) or
         not (is_integer(memory["max_active_records"]) and memory["max_active_records"] in 1..500),
       "response_service.agent.memory must declare bounded explicit Job memory"
     )
@@ -994,7 +994,10 @@ defmodule MirrorNeuron.Manifest do
     valid =
       MapSet.new(Map.keys(preflight)) == expected and
         nonempty_unique_strings?(effects) and
-        MapSet.subset?(MapSet.new(effects), MapSet.new(~w(read motion))) and
+        MapSet.subset?(
+          MapSet.new(effects),
+          MapSet.new(Enum.map(user_tools, fn {_name, tool} -> tool["effect"] end))
+        ) and
         nonempty_string?(tool_name) and declared_tool["effect"] == "read" and
         is_map(arguments) and is_map(declared_arguments) and
         MapSet.new(Map.keys(arguments)) == MapSet.new(Map.keys(declared_arguments)) and
@@ -1030,8 +1033,8 @@ defmodule MirrorNeuron.Manifest do
         "response_service.agent tool declarations have invalid fields"
       )
       |> maybe_add_error(
-        user? and is_map(specification) and specification["effect"] not in ~w(read motion),
-        "response_service.agent user tool effects must be read or motion"
+        user? and is_map(specification) and not safe_contract_identifier?(specification["effect"]),
+        "response_service.agent user tool effects must be safe lowercase identifiers"
       )
       |> add_errors(validate_response_agent_arguments(arguments || %{}))
     end)
@@ -1055,12 +1058,16 @@ defmodule MirrorNeuron.Manifest do
        when map_size(operations) > 0 do
     Enum.flat_map(operations, fn {tool_name, operation} ->
       expected = MapSet.new(~w(id_field poll_tool poll_argument poll_interval_ms timeout_seconds))
-      motion_tool = get_in(user_tools, [tool_name, "effect"]) == "motion"
+
+      effectful_tool =
+        nonempty_string?(get_in(user_tools, [tool_name, "effect"])) and
+          get_in(user_tools, [tool_name, "effect"]) != "read"
+
       poll_tool = if is_map(operation), do: operation["poll_tool"], else: nil
       poll_arguments = get_in(internal_tools, [poll_tool, "arguments"]) || %{}
 
       valid =
-        motion_tool and is_map(operation) and MapSet.new(Map.keys(operation)) == expected and
+        effectful_tool and is_map(operation) and MapSet.new(Map.keys(operation)) == expected and
           Map.has_key?(internal_tools, poll_tool) and nonempty_string?(operation["id_field"]) and
           nonempty_string?(operation["poll_argument"]) and
           Map.has_key?(poll_arguments, operation["poll_argument"]) and
@@ -1071,7 +1078,7 @@ defmodule MirrorNeuron.Manifest do
       if valid,
         do: [],
         else: [
-          "response_service.agent operations must correlate declared motion tools with internal polling tools"
+          "response_service.agent operations must correlate declared effectful tools with internal polling tools"
         ]
     end)
   end
@@ -1097,12 +1104,13 @@ defmodule MirrorNeuron.Manifest do
     nonempty_string?(value) and Path.type(value) == :relative and ".." not in Path.split(value)
   end
 
-  defp allowed_memory_types?(value) do
-    nonempty_unique_strings?(value) and
-      MapSet.subset?(
-        MapSet.new(value),
-        MapSet.new(~w(zone_alias control_constraint capability_note))
-      )
+  defp safe_memory_types?(value) do
+    nonempty_unique_strings?(value) and Enum.all?(value, &safe_contract_identifier?/1)
+  end
+
+  defp safe_contract_identifier?(value) do
+    nonempty_string?(value) and String.length(value) <= 80 and
+      Regex.match?(~r/^[a-z][a-z0-9_]*$/, value)
   end
 
   defp normalize_node(raw) do
