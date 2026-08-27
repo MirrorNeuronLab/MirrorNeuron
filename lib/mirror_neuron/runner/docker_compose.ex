@@ -44,12 +44,14 @@ defmodule MirrorNeuron.Runner.DockerCompose do
       request = %PrepareDockerComposeRequest{
         manifest_json:
           Jason.encode!(%{
-            "nodes" => [
-              %{
-                "node_id" => Keyword.get(opts, :agent_id, "docker-compose"),
-                "config" => config
-              }
-            ]
+            "agents" => %{
+              "nodes" => [
+                %{
+                  "node_id" => Keyword.get(opts, :agent_id, "docker-compose"),
+                  "config" => config
+                }
+              ]
+            }
           }),
         submission_id: record["project_name"],
         version: 1
