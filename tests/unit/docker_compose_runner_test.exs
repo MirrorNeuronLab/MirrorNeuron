@@ -99,8 +99,9 @@ defmodule MirrorNeuron.Runner.DockerComposeTest do
 
     assert_receive {:prepare, prepare}
 
-    assert Jason.decode!(prepare.manifest_json)["nodes"] |> hd() |> Map.fetch!("node_id") ==
-             "warehouse"
+    manifest = Jason.decode!(prepare.manifest_json)
+    assert manifest["agents"]["nodes"] |> hd() |> Map.fetch!("node_id") == "warehouse"
+    refute Map.has_key?(manifest, "nodes")
 
     assert_receive {:status, _status}
     assert_receive {:cleanup, cleanup}
