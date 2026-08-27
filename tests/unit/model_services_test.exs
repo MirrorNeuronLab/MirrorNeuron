@@ -139,7 +139,7 @@ defmodule MirrorNeuron.ModelServicesTest do
       {%{"model" => "default"}, "gemma4:e2b"},
       {%{"purpose" => "context_engine"}, "hf.co/homerquan/mn-context-engine-model-v-Q4_K_M"},
       {%{"purpose" => "knowledge_rag"},
-       "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M"}
+       "huggingface.co/zenmagnets/Nemotron-3-Embed-1B-Q4_K_M-GGUF:Q4_K_M"}
     ]
 
     try do

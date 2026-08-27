@@ -426,9 +426,9 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
                       %{
                         "purpose" => "knowledge_rag",
                         "model" =>
-                          "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M",
+                          "huggingface.co/zenmagnets/Nemotron-3-Embed-1B-Q4_K_M-GGUF:Q4_K_M",
                         "runtime_model" =>
-                          "huggingface.co/jinaai/jina-embeddings-v5-text-small-retrieval:Q4_K_M"
+                          "huggingface.co/zenmagnets/Nemotron-3-Embed-1B-Q4_K_M-GGUF:Q4_K_M"
                       }, _timeout}
     after
       restore_env("MN_NATIVE_SDK_GRPC_TARGET", previous_target)
