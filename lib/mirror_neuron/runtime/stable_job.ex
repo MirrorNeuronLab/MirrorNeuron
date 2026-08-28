@@ -15,6 +15,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.JobResponse
   alias MirrorNeuron.Runtime.Page
+  alias MirrorNeuron.Runtime.RunnerResources
 
   @terminal_statuses ["completed", "failed", "cancelled"]
   @definition_scoped_keys ~w(
@@ -157,12 +158,20 @@ defmodule MirrorNeuron.Runtime.StableJob do
           {:ok, saved} ->
             _ = JobResponse.definition_changed(saved)
 
+            cleanup_errors =
+              case RunnerResources.cleanup_retired_native_resources(definition, saved) do
+                :ok -> []
+                {:error, failures} -> failures
+              end
+
             {:ok,
-             Map.put(
-               Map.merge(saved, replacement),
+             saved
+             |> Map.merge(replacement)
+             |> Map.put(
                "retired_definition_resources",
                definition_resource_descriptor(definition)
-             )}
+             )
+             |> maybe_put_resource_cleanup_errors(cleanup_errors)}
 
           {:error, reason} ->
             {:error, reason}
@@ -276,6 +285,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
              :ok <- JobResponse.stop(definition, force: true),
              :ok <- delete_job_schedules(job_id),
              :ok <- delete_historical_runs(definition),
+             :ok <- cleanup_definition_native_resources(job_id, definition),
              :ok <- SharedStorage.cleanup_manifest(job_id, definition["manifest"]),
              :ok <- JobData.delete(job_id),
              :ok <- RedisStore.delete_job_definition(job_id) do
@@ -1167,10 +1177,36 @@ defmodule MirrorNeuron.Runtime.StableJob do
         Map.take(metadata, [
           "mn_storage",
           "mn_docker_workers",
-          "mn_docker_worker_shared_contexts"
+          "mn_docker_worker_shared_contexts",
+          "mn_docker_compose",
+          "mn_docker_compose_shared_contexts",
+          "mn_native_resources"
         ])
     }
   end
+
+  defp cleanup_definition_native_resources(job_id, definition) do
+    metadata = get_in(definition, ["manifest", "metadata"]) || %{}
+
+    with :ok <- RunnerResources.cleanup_prepared_compose_projects(definition),
+         :ok <-
+           if(RunnerResources.docker_worker?(definition),
+             do: RunnerResources.cleanup_docker_worker(job_id),
+             else: :ok
+           ),
+         :ok <-
+           if(is_map(metadata["mn_native_resources"]),
+             do: RunnerResources.cleanup_native_resources(job_id),
+             else: :ok
+           ) do
+      :ok
+    end
+  end
+
+  defp maybe_put_resource_cleanup_errors(definition, []), do: definition
+
+  defp maybe_put_resource_cleanup_errors(definition, errors),
+    do: Map.put(definition, "resource_cleanup_errors", errors)
 
   defp stable_job_id(graph_id), do: "job_#{JobId.generate(graph_id)}"
 

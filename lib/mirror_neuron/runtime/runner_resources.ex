@@ -1,8 +1,10 @@
 defmodule MirrorNeuron.Runtime.RunnerResources do
   @moduledoc false
 
+  alias MirrorNeuron.Cluster.NodeAdapter
   alias MirrorNeuron.ModelServices
   alias MirrorNeuron.Runner.DockerCompose
+  alias MirrorNeuron.SafeAccess
   alias Mirrorneuron.Cluster.V1.CleanupDockerWorkerRequest
 
   @node_paths [
@@ -25,6 +27,94 @@ defmodule MirrorNeuron.Runtime.RunnerResources do
   end
 
   def cleanup_docker_worker(_job_id), do: {:error, :invalid_job_id}
+
+  @doc false
+  def cleanup_native_resources(job_id) when is_binary(job_id) and job_id != "" do
+    with {:ok, result} <-
+           ModelServices.native_resource_command(%{
+             "operation" => "cleanup",
+             "job_id" => job_id
+           }),
+         :ok <- ensure_no_cleanup_errors(result, "native resource") do
+      :ok
+    end
+  end
+
+  def cleanup_native_resources(_job_id), do: {:error, :invalid_job_id}
+
+  @doc false
+  def cleanup_native_resource_external_ids(kind, external_ids)
+      when is_binary(kind) and is_list(external_ids) do
+    with {:ok, result} <-
+           ModelServices.native_resource_command(%{
+             "operation" => "cleanup",
+             "external_ids" => Enum.filter(external_ids, &is_binary/1),
+             "resource_kinds" => [kind]
+           }),
+         :ok <- ensure_no_cleanup_errors(result, "native resource") do
+      :ok
+    end
+  end
+
+  def cleanup_native_resource_external_ids(_kind, _external_ids),
+    do: {:error, :invalid_native_resource_selector}
+
+  @doc false
+  def cleanup_retired_native_resources(retired, current)
+      when is_map(retired) and is_map(current) do
+    current_keys =
+      current
+      |> native_resource_descriptors()
+      |> MapSet.new(fn descriptor ->
+        {detail(descriptor, "kind"), detail(descriptor, "external_id")}
+      end)
+
+    failures =
+      retired
+      |> native_resource_descriptors()
+      |> Enum.reject(fn descriptor ->
+        MapSet.member?(current_keys, {
+          detail(descriptor, "kind"),
+          detail(descriptor, "external_id")
+        })
+      end)
+      |> Enum.group_by(fn descriptor ->
+        {detail(descriptor, "owner_node"), detail(descriptor, "kind")}
+      end)
+      |> Enum.flat_map(fn {{owner_node, kind}, descriptors} ->
+        external_ids =
+          descriptors
+          |> Enum.map(&detail(&1, "external_id"))
+          |> Enum.filter(&(is_binary(&1) and &1 != ""))
+          |> Enum.uniq()
+
+        with {:ok, node} <- native_resource_node(owner_node),
+             :ok <-
+               NodeAdapter.rpc_call(
+                 node,
+                 __MODULE__,
+                 :cleanup_native_resource_external_ids,
+                 [kind, external_ids],
+                 120_000
+               ) do
+          []
+        else
+          reason ->
+            [
+              %{
+                node: to_string(owner_node || NodeAdapter.self()),
+                kind: kind,
+                external_ids: external_ids,
+                reason: reason
+              }
+            ]
+        end
+      end)
+
+    if failures == [], do: :ok, else: {:error, failures}
+  end
+
+  def cleanup_retired_native_resources(_retired, _current), do: :ok
 
   @doc false
   def cleanup_prepared_compose_projects(job) when is_map(job) do
@@ -77,6 +167,33 @@ defmodule MirrorNeuron.Runtime.RunnerResources do
     |> detail("mn_docker_workers")
     |> is_map()
   end
+
+  defp native_resource_descriptors(job) do
+    metadata =
+      detail(job, "metadata") ||
+        job |> detail("manifest") |> detail("metadata") || %{}
+
+    native = detail(metadata, "mn_native_resources")
+
+    case detail(native, "resources") do
+      resources when is_list(resources) ->
+        Enum.filter(resources, fn descriptor ->
+          is_map(descriptor) and
+            detail(descriptor, "kind") in ["docker_worker", "docker_compose", "openshell"] and
+            is_binary(detail(descriptor, "external_id")) and
+            detail(descriptor, "external_id") != ""
+        end)
+
+      _other ->
+        []
+    end
+  end
+
+  defp native_resource_node(nil), do: {:ok, NodeAdapter.self()}
+  defp native_resource_node(""), do: {:ok, NodeAdapter.self()}
+  defp native_resource_node(node) when is_atom(node), do: {:ok, node}
+  defp native_resource_node(node) when is_binary(node), do: SafeAccess.node_name_to_atom(node)
+  defp native_resource_node(_node), do: {:error, :invalid_owner_node}
 
   defp docker_worker_config?(config) do
     runner_module = detail(config, "runner_module")
@@ -132,6 +249,11 @@ defmodule MirrorNeuron.Runtime.RunnerResources do
   defp key_atom("metadata"), do: :metadata
   defp key_atom("mn_docker_workers"), do: :mn_docker_workers
   defp key_atom("mn_docker_compose"), do: :mn_docker_compose
+  defp key_atom("mn_native_resources"), do: :mn_native_resources
+  defp key_atom("resources"), do: :resources
+  defp key_atom("kind"), do: :kind
+  defp key_atom("external_id"), do: :external_id
+  defp key_atom("owner_node"), do: :owner_node
   defp key_atom("project_name"), do: :project_name
   defp key_atom("runner_module"), do: :runner_module
   defp key_atom("runtime_driver"), do: :runtime_driver

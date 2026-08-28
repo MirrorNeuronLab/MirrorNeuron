@@ -66,7 +66,8 @@ defmodule MirrorNeuron.Runtime.JobCleanupTest do
         {module, function} <- [
           {HostLocal, :terminate_job},
           {OpenShellJobSandbox, :cleanup_job_local},
-          {DockerJobSandbox, :cleanup_job_local}
+          {DockerJobSandbox, :cleanup_job_local},
+          {RunnerResources, :cleanup_native_resources}
         ] do
       assert_receive {:cleanup_rpc, ^node, ^module, ^function, ["run-1"], 15_000}
     end
@@ -93,7 +94,7 @@ defmodule MirrorNeuron.Runtime.JobCleanupTest do
                     15_000}
   end
 
-  test "runtime cleanup retires DockerWorker resources through every owning node" do
+  test "runtime cleanup retires native resources through every owning node" do
     NodeAdapterStub.reset(self())
 
     job = %{
@@ -105,7 +106,7 @@ defmodule MirrorNeuron.Runtime.JobCleanupTest do
     assert :ok = JobCleanup.cleanup_runtime_resources("docker-worker-run", job, [])
 
     for node <- [:control@lab, :connected@lab] do
-      assert_receive {:cleanup_rpc, ^node, RunnerResources, :cleanup_docker_worker,
+      assert_receive {:cleanup_rpc, ^node, RunnerResources, :cleanup_native_resources,
                       ["docker-worker-run"], 15_000}
     end
   end

@@ -55,11 +55,10 @@ defmodule MirrorNeuron.Runtime.JobCleanup do
   end
 
   defp runtime_resources(job) do
-    if RunnerResources.docker_worker?(job) do
-      @runtime_resources ++ [{RunnerResources, :cleanup_docker_worker, "DockerWorker native SDK"}]
-    else
-      @runtime_resources
-    end
+    _ = job
+
+    @runtime_resources ++
+      [{RunnerResources, :cleanup_native_resources, "native SDK resources"}]
   end
 
   defp cleanup_nodes(job, agents) do

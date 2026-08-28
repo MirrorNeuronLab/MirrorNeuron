@@ -1,6 +1,9 @@
 defmodule MirrorNeuron.Runner.OpenShell do
+  require Logger
+
   alias MirrorNeuron.Config
   alias MirrorNeuron.Message
+  alias MirrorNeuron.ModelServices
   alias MirrorNeuron.Runner.OpenShellSharedStorage
   alias MirrorNeuron.Sandbox.OpenShellCLI
   alias MirrorNeuron.Sandbox.OpenShellJobSandbox
@@ -23,10 +26,17 @@ defmodule MirrorNeuron.Runner.OpenShell do
     executable = sandbox_cli(config)
     remote_dir = Map.get(config, "sandbox_upload_path", "/sandbox/job")
 
-    with {:ok, staged_dir} <- stage_workspace(payload, config, opts) do
+    with {:ok, staged_dir} <- stage_workspace(payload, config, opts),
+         {:ok, resource_id} <- register_one_shot_sandbox(sandbox_name, opts) do
       try do
         with {:ok, args} <- build_args(sandbox_name, staged_dir, remote_dir, config, opts),
              {:ok, output, openshell_exit_code} <- run_command(executable, args),
+             :ok <-
+               release_one_shot_sandbox(
+                 resource_id,
+                 Map.get(config, "no_keep", true),
+                 openshell_exit_code
+               ),
              {:ok, result} <-
                extract_result(output, sandbox_name, remote_dir, openshell_exit_code) do
           if result["exit_code"] == 0 do
@@ -40,6 +50,49 @@ defmodule MirrorNeuron.Runner.OpenShell do
       end
     end
   end
+
+  defp register_one_shot_sandbox(sandbox_name, opts) do
+    attrs = %{
+      "operation" => "register",
+      "resource_kind" => "openshell",
+      "scope" => "attempt",
+      "external_id" => sandbox_name,
+      "job_id" => to_string(Keyword.get(opts, :job_id) || ""),
+      "run_id" => to_string(Keyword.get(opts, :run_id) || ""),
+      "owner_node" => to_string(Node.self()),
+      "state" => "committed"
+    }
+
+    case ModelServices.native_resource_command(attrs) do
+      {:ok, %{"resource_id" => resource_id}} when is_binary(resource_id) ->
+        {:ok, resource_id}
+
+      {:ok, _result} ->
+        {:error, "native SDK did not return an OpenShell resource lease"}
+
+      {:error, reason} ->
+        {:error, "failed to register OpenShell sandbox ownership: #{reason}"}
+    end
+  end
+
+  defp release_one_shot_sandbox(resource_id, true, 0) do
+    case ModelServices.native_resource_command(%{
+           "operation" => "release",
+           "resource_ids" => [resource_id]
+         }) do
+      {:ok, _result} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "OpenShell sandbox completed but its native resource lease could not be released: #{inspect(reason)}"
+        )
+
+        :ok
+    end
+  end
+
+  defp release_one_shot_sandbox(_resource_id, _no_keep, _openshell_exit_code), do: :ok
 
   defp run_in_shared_sandbox(payload, config, opts) do
     executable = sandbox_cli(config)

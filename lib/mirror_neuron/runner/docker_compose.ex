@@ -19,10 +19,27 @@ defmodule MirrorNeuron.Runner.DockerCompose do
   def run(_payload, config, opts) when is_map(config) do
     with {:ok, project} <- prepare_project(config, opts),
          :ok <- emit(opts, "docker_compose_ready", %{"project_name" => project["project_name"]}) do
+      cleanup_marker = {__MODULE__, :cleanup_complete, make_ref()}
+
       try do
-        await_project(project, opts)
+        run_result = await_project(project, opts)
+        cleanup_result = cleanup_project(project)
+        Process.put(cleanup_marker, true)
+
+        case {run_result, cleanup_result} do
+          {result, {:ok, _cleanup}} ->
+            result
+
+          {{:ok, _result}, {:error, reason}} ->
+            {:error, reason}
+
+          {{:error, run_reason}, {:error, cleanup_reason}} ->
+            {:error, "#{inspect(run_reason)}; cleanup also failed: #{inspect(cleanup_reason)}"}
+        end
       after
-        _ = cleanup_project(project)
+        if Process.delete(cleanup_marker) != true do
+          _ = cleanup_project(project)
+        end
       end
     end
   end

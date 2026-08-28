@@ -72,6 +72,7 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
       # and DockerCompose projects must still be brought down.
       with :ok <- cleanup_prepared_compose_projects(job_id),
            :ok <- cleanup_docker_worker(job_id),
+           :ok <- RunnerResources.cleanup_native_resources(job_id),
            :ok <- HostLocal.terminate_job(job_id),
            :ok <- stop_local_job(job_id),
            :ok <- ServiceRegistry.deregister_job(job_id),

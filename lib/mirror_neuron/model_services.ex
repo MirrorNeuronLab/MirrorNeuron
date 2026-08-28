@@ -317,6 +317,17 @@ defmodule MirrorNeuron.ModelServices do
     )
   end
 
+  @doc false
+  def native_resource_command(attrs, timeout \\ 120_000) when is_map(attrs) do
+    native_sdk_json_command(
+      Map.put(attrs, "kind", "native_resource"),
+      timeout,
+      :native_sdk_grpc_native_resource_client,
+      &__MODULE__.grpc_set_resource/3,
+      "native SDK resource lifecycle command"
+    )
+  end
+
   defp register_model_services(services, node_name) do
     case services do
       [] ->
