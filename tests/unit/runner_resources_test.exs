@@ -123,6 +123,19 @@ defmodule MirrorNeuron.Runtime.RunnerResourcesTest do
                     }}
   end
 
+  test "unified cleanup exposes the registry result for migration-aware callers" do
+    assert {:ok, %{"removed_count" => 0, "errors" => []}} =
+             RunnerResources.cleanup_native_resources_with_result("run-native-result")
+
+    assert_receive {:native_resource_cleanup,
+                    %{
+                      "kind" => "native_resource",
+                      "operation" => "cleanup",
+                      "job_id" => "run-native-result",
+                      "run_id" => "run-native-result"
+                    }}
+  end
+
   test "exact external-id cleanup uses kind-scoped native resource selectors" do
     assert :ok =
              RunnerResources.cleanup_native_resource_external_ids(

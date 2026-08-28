@@ -30,6 +30,14 @@ defmodule MirrorNeuron.Runtime.RunnerResources do
 
   @doc false
   def cleanup_native_resources(job_id) when is_binary(job_id) and job_id != "" do
+    with {:ok, _result} <- cleanup_native_resources_with_result(job_id) do
+      :ok
+    end
+  end
+
+  @doc false
+  def cleanup_native_resources_with_result(job_id)
+      when is_binary(job_id) and job_id != "" do
     with {:ok, result} <-
            ModelServices.native_resource_command(%{
              "operation" => "cleanup",
@@ -41,11 +49,13 @@ defmodule MirrorNeuron.Runtime.RunnerResources do
              "run_id" => job_id
            }),
          :ok <- ensure_no_cleanup_errors(result, "native resource") do
-      :ok
+      {:ok, result}
     end
   end
 
   def cleanup_native_resources(_job_id), do: {:error, :invalid_job_id}
+
+  def cleanup_native_resources_with_result(_job_id), do: {:error, :invalid_job_id}
 
   @doc false
   def cleanup_native_resource_external_ids(kind, external_ids)

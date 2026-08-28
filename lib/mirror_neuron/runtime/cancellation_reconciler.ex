@@ -70,9 +70,9 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
       # particular, after a Core restart there may be no
       # HostLocal process to terminate, but persisted DockerWorker containers
       # and DockerCompose projects must still be brought down.
-      with :ok <- cleanup_prepared_compose_projects(job_id),
-           :ok <- cleanup_docker_worker(job_id),
-           :ok <- RunnerResources.cleanup_native_resources(job_id),
+      with {:ok, native_cleanup} <-
+             RunnerResources.cleanup_native_resources_with_result(job_id),
+           :ok <- cleanup_legacy_native_resources(job_id, native_cleanup),
            :ok <- HostLocal.terminate_job(job_id),
            :ok <- stop_local_job(job_id),
            :ok <- ServiceRegistry.deregister_job(job_id),
@@ -127,6 +127,32 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
   defp stop_local_job(job_id) do
     Runtime.terminate_local_job(job_id)
   end
+
+  # Current native SDKs register every resource before it is created. If that
+  # registry owned anything for this job, it has already performed the exact
+  # cleanup (including owned Compose source removal). Running the legacy
+  # cleanup a second time would turn a successful deletion into a false
+  # failure. A zero-match result identifies a pre-registry job, for which the
+  # persisted Core metadata remains the only safe cleanup recipe.
+  defp cleanup_legacy_native_resources(job_id, native_cleanup) do
+    if native_cleanup_count(native_cleanup) > 0 do
+      :ok
+    else
+      with :ok <- cleanup_prepared_compose_projects(job_id),
+           :ok <- cleanup_docker_worker(job_id) do
+        :ok
+      end
+    end
+  end
+
+  defp native_cleanup_count(result) when is_map(result) do
+    case Map.get(result, "removed_count") || Map.get(result, :removed_count) do
+      count when is_integer(count) and count > 0 -> count
+      _other -> 0
+    end
+  end
+
+  defp native_cleanup_count(_result), do: 0
 
   # A cancellation can be reconciled after its JobCoordinator has exited or
   # after Core has restarted.  The prepared Compose record lives in the
