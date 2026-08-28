@@ -65,7 +65,10 @@ require only scalar result fields.
 Core starts it asynchronously on the owner node, routes bounded unary queries
 to that owner, retries failed or degraded warm-ups with bounded backoff, and
 stops it for archive, reset, deletion, and definition replacement. Response
-queries never create Runs.
+queries never create Runs. A confirmed deletion force-detaches a responder
+when its native shutdown is stalled, allowing deletion to cancel runtime
+resources and remove the Job while native cleanup completes in the background;
+archive and reset retain strict shutdown behavior.
 Federated job and run controls resolve an owner on demand when a projection has
 not yet synchronized, so any connected Core can operate a remote durable
 definition or run. If a known remote owner is unavailable during archive, the

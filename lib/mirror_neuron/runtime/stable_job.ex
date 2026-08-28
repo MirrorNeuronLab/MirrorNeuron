@@ -273,7 +273,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
       with_start_gate(job_id, fn ->
         with {:ok, definition} <- get(job_id),
              :ok <- ensure_revision(definition, Keyword.get(opts, :expected_revision)),
-             :ok <- JobResponse.stop(definition),
+             :ok <- JobResponse.stop(definition, force: true),
              :ok <- delete_job_schedules(job_id),
              :ok <- delete_historical_runs(definition),
              :ok <- SharedStorage.cleanup_manifest(job_id, definition["manifest"]),

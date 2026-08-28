@@ -493,7 +493,10 @@ asynchronously, routes bounded unary questions to it, and stops it before Job
 data reset or deletion. It remains available before the first Run and between
 Runs. Asking it a question never creates or keeps alive a Run. A degraded
 dependency warm-up is retried with bounded backoff, allowing the service to
-recover after Core or a model gateway finishes starting.
+recover after Core or a model gateway finishes starting. A confirmed deletion
+can force-detach a responder whose native shutdown is stalled, so it can still
+cancel runtime resources and remove the Job; its native cleanup then finishes
+in the background. Archive and reset retain their strict shutdown behavior.
 
 An executable declaration may additionally include one validated `bounded_mcp`
 agent. Its optional `preflight` binds selected effects to a declared read-only

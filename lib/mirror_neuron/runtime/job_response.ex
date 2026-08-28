@@ -72,13 +72,28 @@ defmodule MirrorNeuron.Runtime.JobResponse do
 
   def definition_changed(definition) when is_map(definition), do: ensure_started(definition)
 
-  def stop(definition) when is_map(definition) do
+  def stop(definition) when is_map(definition), do: stop(definition, [])
+
+  def stop(job_id) when is_binary(job_id) do
+    case StableJob.get(job_id) do
+      {:ok, definition} -> stop(definition)
+      {:error, _missing} -> terminate_local(job_id)
+    end
+  end
+
+  def stop(definition, opts) when is_map(definition) and is_list(opts) do
     job_id = definition["job_id"]
+    force? = Keyword.get(opts, :force, false)
 
     result =
       if enabled?(definition) or match?({:ok, _pid}, lookup(job_id)) do
         ModelServices.job_response_command(
-          %{"kind" => "job_response", "operation" => "stop", "job_id" => job_id},
+          %{
+            "kind" => "job_response",
+            "operation" => "stop",
+            "job_id" => job_id,
+            "force" => force?
+          },
           27_000
         )
       else
@@ -90,18 +105,17 @@ defmodule MirrorNeuron.Runtime.JobResponse do
         terminate_local(job_id)
 
       {:error, reason} ->
-        if safe_error_code(reason) == "native_unavailable" do
+        if force? or safe_error_code(reason) == "native_unavailable" do
+          if force? do
+            Logger.warning(
+              "forcing response service shutdown for #{job_id} after #{safe_error_code(reason)}"
+            )
+          end
+
           terminate_local(job_id)
         else
           {:error, {:response_service_stop_failed, safe_error_code(reason)}}
         end
-    end
-  end
-
-  def stop(job_id) when is_binary(job_id) do
-    case StableJob.get(job_id) do
-      {:ok, definition} -> stop(definition)
-      {:error, _missing} -> terminate_local(job_id)
     end
   end
 
@@ -365,7 +379,8 @@ defmodule MirrorNeuron.Runtime.JobResponse do
         %{
           "kind" => "job_response",
           "operation" => "stop",
-          "job_id" => state.definition["job_id"]
+          "job_id" => state.definition["job_id"],
+          "force" => true
         },
         27_000
       )

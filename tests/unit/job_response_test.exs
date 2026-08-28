@@ -73,7 +73,7 @@ defmodule MirrorNeuron.Runtime.JobResponseTest do
              })
 
     assert_receive {:job_response_command, %{"operation" => "stop", "job_id" => ^job_id}}, 2_000
-    assert Registry.lookup(MirrorNeuron.Runtime.JobResponseRegistry, job_id) == []
+    assert_registry_stopped(job_id)
   end
 
   test "a degraded warm-up retries and recovers without a definition change" do
@@ -128,6 +128,38 @@ defmodule MirrorNeuron.Runtime.JobResponseTest do
     assert %{state: "ready"} = await_state(job_id, "ready")
   end
 
+  test "a forced stop permits confirmed deletion after a native shutdown deadline" do
+    job_id = "job-response-force-#{System.unique_integer([:positive])}"
+    parent = self()
+
+    Application.put_env(
+      :mirror_neuron,
+      :native_sdk_grpc_job_response_client,
+      fn _target, request, _timeout ->
+        attrs = Jason.decode!(request.resource_json)
+        send(parent, {:forced_stop_command, attrs})
+        {:error, :deadline_exceeded}
+      end
+    )
+
+    definition = %{
+      "job_id" => job_id,
+      "status" => "active",
+      "manifest" => %{"response_service" => %{"enabled" => true}}
+    }
+
+    assert {:error, {:response_service_stop_failed, "deadline_exceeded"}} =
+             JobResponse.stop(definition)
+
+    assert_receive {:forced_stop_command,
+                    %{"operation" => "stop", "job_id" => ^job_id, "force" => false}}
+
+    assert :ok = JobResponse.stop(definition, force: true)
+
+    assert_receive {:forced_stop_command,
+                    %{"operation" => "stop", "job_id" => ^job_id, "force" => true}}
+  end
+
   defp await_state(job_id, expected, attempts \\ 50)
 
   defp await_state(job_id, _expected, 0), do: JobResponse.status_local(job_id)
@@ -140,6 +172,21 @@ defmodule MirrorNeuron.Runtime.JobResponseTest do
     else
       Process.sleep(10)
       await_state(job_id, expected, attempts - 1)
+    end
+  end
+
+  defp assert_registry_stopped(job_id, attempts \\ 50)
+
+  defp assert_registry_stopped(job_id, attempts) do
+    if Registry.lookup(MirrorNeuron.Runtime.JobResponseRegistry, job_id) == [] do
+      :ok
+    else
+      if attempts == 0 do
+        assert Registry.lookup(MirrorNeuron.Runtime.JobResponseRegistry, job_id) == []
+      else
+        Process.sleep(10)
+        assert_registry_stopped(job_id, attempts - 1)
+      end
     end
   end
 end

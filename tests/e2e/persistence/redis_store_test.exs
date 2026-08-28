@@ -1273,6 +1273,9 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     old_compose_cleanup =
       Application.get_env(:mirror_neuron, :native_sdk_grpc_cleanup_docker_compose_client)
 
+    old_response_client =
+      Application.get_env(:mirror_neuron, :native_sdk_grpc_job_response_client)
+
     root = Path.join(System.tmp_dir!(), "mn_stable_delete_#{suffix}")
     shared_root = Path.join(root, "shared")
     definition_submission = Path.join([shared_root, "submissions", stable_job_id])
@@ -1312,6 +1315,16 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
       end
     )
 
+    Application.put_env(
+      :mirror_neuron,
+      :native_sdk_grpc_job_response_client,
+      fn _target, request, _timeout ->
+        attrs = Jason.decode!(request.resource_json)
+        send(parent, {:job_response_stop, attrs})
+        {:error, :deadline_exceeded}
+      end
+    )
+
     on_exit(fn ->
       Enum.each(run_ids, &RedisStore.delete_job/1)
       RedisStore.delete_job_definition(stable_job_id)
@@ -1321,6 +1334,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
       restore_system_env("MN_NATIVE_SDK_GRPC_TARGET", old_native_target)
       restore_env(:native_sdk_grpc_cleanup_docker_worker_client, old_worker_cleanup)
       restore_env(:native_sdk_grpc_cleanup_docker_compose_client, old_compose_cleanup)
+      restore_env(:native_sdk_grpc_job_response_client, old_response_client)
       File.rm_rf(root)
     end)
 
@@ -1339,7 +1353,10 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
                "job_id" => stable_job_id,
                "status" => "active",
                "run_ids" => run_ids,
-               "manifest" => %{"metadata" => retired_resources}
+               "manifest" => %{
+                 "metadata" => retired_resources,
+                 "response_service" => %{"enabled" => true}
+               }
              })
 
     runs = [
@@ -1381,6 +1398,13 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
 
     assert {:ok, %{"metadata" => ^retired_resources}} =
              StableJob.delete(stable_job_id, confirmed: true)
+
+    assert_receive {:job_response_stop,
+                    %{
+                      "operation" => "stop",
+                      "job_id" => ^stable_job_id,
+                      "force" => true
+                    }}
 
     assert_receive {:docker_worker_cleanup, worker_request}
     assert worker_request.job_id == "stable-delete-run-b-#{suffix}"
