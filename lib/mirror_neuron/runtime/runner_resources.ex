@@ -33,7 +33,12 @@ defmodule MirrorNeuron.Runtime.RunnerResources do
     with {:ok, result} <-
            ModelServices.native_resource_command(%{
              "operation" => "cleanup",
-             "job_id" => job_id
+             # This boundary is used for both stable definitions and physical
+             # runs. Registry selectors are additive, so matching the runtime
+             # identity against both fields cleans the exact owned records in
+             # either lifecycle without broadening cleanup to other jobs.
+             "job_id" => job_id,
+             "run_id" => job_id
            }),
          :ok <- ensure_no_cleanup_errors(result, "native resource") do
       :ok

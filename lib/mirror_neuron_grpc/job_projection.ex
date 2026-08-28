@@ -13,6 +13,7 @@ defmodule MirrorNeuron.Grpc.JobProjection do
   @bundle_ref_fields ~w(
     bundle_fingerprint bundle_storage bundle_bytes graph_id manifest_version
   )
+  @native_resource_fields ~w(kind scope external_id owner_node submission_id)
   @run_fields ~w(
     graph_id job_name status type job_type workflow_id attempt attempt_id
     data_generation job_data_access owner_node submitted_at started_at updated_at
@@ -34,6 +35,7 @@ defmodule MirrorNeuron.Grpc.JobProjection do
     |> put_counts(definition)
     |> put_recent_run_ids(definition)
     |> put_response_service(definition)
+    |> put_native_resource_ownership(definition)
     |> compact_bundle_ref()
   end
 
@@ -84,6 +86,35 @@ defmodule MirrorNeuron.Grpc.JobProjection do
 
   defp put_response_service(projected, definition) do
     Map.put(projected, "response_service", JobResponse.status(definition))
+  end
+
+  defp put_native_resource_ownership(projected, definition) do
+    native = get_in(definition, ["manifest", "metadata", "mn_native_resources"])
+
+    case native do
+      %{} ->
+        resources =
+          native
+          |> Map.get("resources", [])
+          |> case do
+            values when is_list(values) ->
+              values
+              |> Enum.filter(&is_map/1)
+              |> Enum.map(&Map.take(&1, @native_resource_fields))
+
+            _other ->
+              []
+          end
+
+        Map.put(projected, "native_resource_ownership", %{
+          "version" => native["version"],
+          "submission_id" => native["submission_id"],
+          "resources" => resources
+        })
+
+      _missing ->
+        projected
+    end
   end
 
   defp compact_bundle_ref(%{"bundle_ref" => bundle_ref} = definition)

@@ -118,7 +118,8 @@ defmodule MirrorNeuron.Runtime.RunnerResourcesTest do
                     %{
                       "kind" => "native_resource",
                       "operation" => "cleanup",
-                      "job_id" => "run-native"
+                      "job_id" => "run-native",
+                      "run_id" => "run-native"
                     }}
   end
 

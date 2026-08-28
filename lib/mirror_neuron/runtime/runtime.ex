@@ -346,9 +346,11 @@ defmodule MirrorNeuron.Runtime do
   defp clear_persisted_job(job_id, %{"status" => status} = job)
        when status in ["cancelling", "cancelled"] do
     case CancellationStore.fetch(job_id) do
-      {:ok, %{"status" => cancellation_status}}
-      when cancellation_status in ["pending", "acknowledged"] ->
-        clear_durable_cancellation(job_id)
+      {:ok, %{"status" => "acknowledged"}} ->
+        clear_durable_cancellation(job_id, true)
+
+      {:ok, %{"status" => "pending"}} ->
+        clear_durable_cancellation(job_id, false)
 
       _ ->
         clear_terminal_job(job_id, job)
@@ -357,13 +359,19 @@ defmodule MirrorNeuron.Runtime do
 
   defp clear_persisted_job(job_id, job), do: clear_terminal_job(job_id, job)
 
-  defp clear_durable_cancellation(job_id) do
-    with {:ok, _cancellation} <- CancellationStore.mark_public_cleared(job_id),
+  defp clear_durable_cancellation(job_id, cleanup_native?) do
+    with :ok <- maybe_cleanup_acknowledged_native_resources(job_id, cleanup_native?),
+         {:ok, _cancellation} <- CancellationStore.mark_public_cleared(job_id),
          :ok <- RedisStore.delete_job(job_id, preserve_cancellation_fence: true),
          {:ok, cancellation} <- CancellationStore.finalize_public_clear(job_id) do
       {:ok, cancellation_clear_result(cancellation)}
     end
   end
+
+  defp maybe_cleanup_acknowledged_native_resources(job_id, true),
+    do: MirrorNeuron.Runtime.RunnerResources.cleanup_native_resources(job_id)
+
+  defp maybe_cleanup_acknowledged_native_resources(_job_id, false), do: :ok
 
   defp clear_terminal_job(job_id, job) do
     with :ok <- prepare_job_cleanup(job, false),

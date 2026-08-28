@@ -93,6 +93,50 @@ defmodule MirrorNeuron.Grpc.JobProjectionTest do
     assert byte_size(Jason.encode!(schedule)) < 10_000
   end
 
+  test "job detail exposes bounded native ownership without cleanup capabilities" do
+    detail =
+      JobProjection.detail(%{
+        "job_id" => "job-native",
+        "manifest" => %{
+          "metadata" => %{
+            "mn_native_resources" => %{
+              "version" => 1,
+              "submission_id" => "submission-current",
+              "resources" => [
+                %{
+                  "kind" => "docker_compose",
+                  "scope" => "definition",
+                  "external_id" => "mn-compose-current",
+                  "owner_node" => "runtime@127.0.0.1",
+                  "submission_id" => "submission-current",
+                  "cleanup" => %{"compose_file" => "/private/compose.yaml"}
+                }
+              ]
+            }
+          }
+        }
+      })
+
+    assert detail["native_resource_ownership"] == %{
+             "version" => 1,
+             "submission_id" => "submission-current",
+             "resources" => [
+               %{
+                 "kind" => "docker_compose",
+                 "scope" => "definition",
+                 "external_id" => "mn-compose-current",
+                 "owner_node" => "runtime@127.0.0.1",
+                 "submission_id" => "submission-current"
+               }
+             ]
+           }
+
+    refute Map.has_key?(
+             hd(detail["native_resource_ownership"]["resources"]),
+             "cleanup"
+           )
+  end
+
   test "job projections expose only sanitized response service lifecycle state" do
     definition = %{
       "job_id" => "job-response-1",

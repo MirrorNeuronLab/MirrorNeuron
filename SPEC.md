@@ -37,7 +37,9 @@ run; pause and resume preserve that run identity. Retry and recovery attempts
 retain their run and use an independent attempt identity. Public stable-job responses are bounded projections: they
 carry a durable bundle reference and lifecycle/configuration metadata, never
 the embedded expanded manifest, private runtime paths, or the full run-ID
-history. A submitted bundle is loaded, normalized, validated, checked
+history. The detail projection includes only the sanitized native-resource
+ownership identity needed to distinguish a durable prepared definition from an
+abandoned node-local preparation; it never exposes cleanup commands or paths. A submitted bundle is loaded, normalized, validated, checked
 for services and requirements, admitted to resources, and started under
 per-run supervision.
 The service workflow entrypoint has no implicit batch deadline or beacon
