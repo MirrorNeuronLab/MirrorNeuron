@@ -732,6 +732,12 @@ known but unavailable owner, the submitting Core records a durable archive
 tombstone, marks that stale projection `archive_pending`, and replays the archive
 once the owner is reachable. A reachable owner response—success or a validation rejection—
 clears the tombstone rather than retrying unexpectedly later.
+If a confirmed `DeleteJob` reaches an unavailable owner, Core records a durable
+delete tombstone instead. It returns `delete_pending` and removes the stale job
+and run projections from normal lists immediately; owner-local data and runtime
+resources are deleted only when replay reaches that owner. A reachable response
+either completes the deletion and clears its projections or clears a rejected
+tombstone.
 `DeleteJob` and `DeleteRun` keep the normal 15-second peer connection bound but
 allow up to five minutes for the forwarded owner request, since confirmed
 cleanup may cancel runs and retire multiple bounded runtime resources.

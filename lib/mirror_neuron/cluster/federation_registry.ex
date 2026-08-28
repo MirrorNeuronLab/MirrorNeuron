@@ -532,7 +532,13 @@ defmodule MirrorNeuron.Cluster.FederationRegistry do
 
   defp public_peer(peer) do
     peer
-    |> Map.drop(["peer_auth_token", "job_projections", "run_projections", "archive_tombstones"])
+    |> Map.drop([
+      "peer_auth_token",
+      "job_projections",
+      "run_projections",
+      "archive_tombstones",
+      "delete_tombstones"
+    ])
     |> Map.put("connection_mode", "federated")
   end
 

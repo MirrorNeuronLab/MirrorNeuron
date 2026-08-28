@@ -226,6 +226,35 @@ defmodule MirrorNeuron.Cluster.FederationRegistryTest do
              FederationRegistry.projections()
   end
 
+  test "delete tombstones hide stale jobs and their runs while retaining owner routing" do
+    assert {:ok, _peer, _status} =
+             FederationRegistry.register("mirror_neuron@peer", peer_info(), "scoped")
+
+    assert {:ok, _peer, _status} =
+             FederationRegistry.put_projection("mirror_neuron@peer", [
+               %{"job_id" => "job-delete", "status" => "active"}
+             ])
+
+    assert {:ok, _peer, _status} =
+             FederationRegistry.put_run_projections("mirror_neuron@peer", [
+               %{"job_id" => "job-delete", "run_id" => "run-delete", "status" => "running"}
+             ])
+
+    assert {:ok, tombstone} =
+             FederationRegistry.queue_delete_tombstone("mirror_neuron@peer", "job-delete", 4)
+
+    assert tombstone["status"] == "pending"
+    assert FederationRegistry.projection("job-delete")["status"] == "delete_pending"
+    assert FederationRegistry.projection_owner("job-delete") == "mirror_neuron@peer"
+    assert FederationRegistry.projections() == []
+    assert FederationRegistry.run_projections() == []
+
+    assert {:ok, [^tombstone]} = FederationRegistry.delete_tombstones("mirror_neuron@peer")
+
+    assert {:ok, public_peer} = FederationRegistry.public_fetch("mirror_neuron@peer")
+    refute Map.has_key?(public_peer, "delete_tombstones")
+  end
+
   test "archive tombstones replay after a peer reconnects and remain on transport failure" do
     assert {:ok, _peer, _status} =
              FederationRegistry.register("mirror_neuron@peer", peer_info(), "scoped")
@@ -254,6 +283,50 @@ defmodule MirrorNeuron.Cluster.FederationRegistryTest do
 
     assert_receive {:archive_replayed, %{job_id: "job-archive", expected_revision: 0, version: 1}}
     assert {:ok, []} = FederationRegistry.archive_tombstones("mirror_neuron@peer")
+  end
+
+  test "delete tombstones replay after a peer reconnects and remove local projections" do
+    assert {:ok, _peer, _status} =
+             FederationRegistry.register("mirror_neuron@peer", peer_info(), "scoped")
+
+    assert {:ok, _peer, _status} =
+             FederationRegistry.put_projection("mirror_neuron@peer", [
+               %{"job_id" => "job-delete", "status" => "active"}
+             ])
+
+    assert {:ok, _peer, _status} =
+             FederationRegistry.put_run_projections("mirror_neuron@peer", [
+               %{"job_id" => "job-delete", "run_id" => "run-delete", "status" => "completed"}
+             ])
+
+    assert {:ok, _tombstone} =
+             FederationRegistry.queue_delete_tombstone("mirror_neuron@peer", "job-delete", 5)
+
+    assert {:ok, [%{job_id: "job-delete", status: :pending}]} =
+             FederationClient.replay_delete_tombstones("mirror_neuron@peer",
+               call: fn _node, :delete_job, _request ->
+                 raise GRPC.RPCError,
+                   status: GRPC.Status.unavailable(),
+                   message: "peer is offline"
+               end
+             )
+
+    assert {:ok, [_pending]} = FederationRegistry.delete_tombstones("mirror_neuron@peer")
+
+    assert {:ok, [%{job_id: "job-delete", status: :applied}]} =
+             FederationClient.replay_delete_tombstones("mirror_neuron@peer",
+               call: fn "mirror_neuron@peer", :delete_job, request ->
+                 send(self(), {:delete_replayed, request})
+                 :ok
+               end
+             )
+
+    assert_receive {:delete_replayed,
+                    %{job_id: "job-delete", expected_revision: 5, confirmed: true, version: 1}}
+
+    assert {:ok, []} = FederationRegistry.delete_tombstones("mirror_neuron@peer")
+    assert FederationRegistry.projection("job-delete") == nil
+    assert FederationRegistry.projection("run-delete") == nil
   end
 
   test "a reachable archive rejection clears its tombstone instead of retrying later" do

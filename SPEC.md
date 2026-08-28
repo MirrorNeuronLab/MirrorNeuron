@@ -71,10 +71,14 @@ not yet synchronized, so any connected Core can operate a remote durable
 definition or run. If a known remote owner is unavailable during archive, the
 submitting Core durably records an archive tombstone, projects the stale remote
 definition with status `archive_pending`, and replays the archive when that peer
-reconnects. The tombstone is
-cleared after any reachable owner response, preventing later implicit retries
-of a rejected archive. A confirmed archive immediately updates the submitting
-Core's projection instead of waiting for the next federation sync.
+reconnects. An offline confirmed deletion similarly records a delete tombstone,
+hides the stale definition and run projections from normal lists, returns
+`delete_pending`, and replays owner cleanup when that peer reconnects. Until the
+owner confirms it, deletion is accepted but its remote data and runtime
+resources are not yet removed. The tombstone is cleared after any reachable
+owner response, preventing later implicit retries of a rejected archive or
+deletion. A confirmed archive immediately updates the submitting Core's
+projection instead of waiting for the next federation sync.
 Owner-forwarded job and run deletion use a bounded five-minute request deadline
 instead of the ordinary 15-second federation request deadline. Connection
 establishment remains bounded by the ordinary deadline, while confirmed cleanup

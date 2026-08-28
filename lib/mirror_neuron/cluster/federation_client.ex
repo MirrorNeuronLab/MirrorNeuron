@@ -5,7 +5,7 @@ defmodule MirrorNeuron.Cluster.FederationClient do
   alias MirrorNeuron.Cluster.NodeAdapter
   alias Mirrorneuron.Cluster.V1.ListServicesRequest
   alias Mirrorneuron.Cluster.V1.ClusterService.Stub, as: ClusterStub
-  alias Mirrorneuron.Job.V1.{JobRequest, ListJobsRequest, RunRequest}
+  alias Mirrorneuron.Job.V1.{DeleteJobRequest, JobRequest, ListJobsRequest, RunRequest}
   alias Mirrorneuron.Job.V1.JobService.Stub, as: JobStub
 
   @timeout 15_000
@@ -156,6 +156,7 @@ defmodule MirrorNeuron.Cluster.FederationClient do
 
     _ = FederationRegistry.replace_run_projections(node_name, runs)
     _ = replay_archive_tombstones(node_name)
+    _ = replay_delete_tombstones(node_name)
     {:ok, %{jobs: length(jobs), runs: length(runs)}}
   rescue
     error ->
@@ -197,6 +198,25 @@ defmodule MirrorNeuron.Cluster.FederationClient do
 
   def replay_archive_tombstones(_node_name, _options), do: {:error, :invalid_owner_node}
 
+  @doc false
+  def replay_delete_tombstones(node_name, options \\ [])
+
+  def replay_delete_tombstones(node_name, options) when is_binary(node_name) do
+    registry = Keyword.get(options, :federation_registry, FederationRegistry)
+    invoke = Keyword.get(options, :call, &call/3)
+
+    with {:ok, tombstones} <- registry.delete_tombstones(node_name) do
+      outcomes =
+        Enum.map(tombstones, fn tombstone ->
+          replay_delete_tombstone(node_name, tombstone, registry, invoke)
+        end)
+
+      {:ok, outcomes}
+    end
+  end
+
+  def replay_delete_tombstones(_node_name, _options), do: {:error, :invalid_owner_node}
+
   defp replay_archive_tombstone(node_name, tombstone, registry, invoke) do
     job_id = Map.get(tombstone, "job_id")
     expected_revision = Map.get(tombstone, "expected_revision", 0)
@@ -233,6 +253,43 @@ defmodule MirrorNeuron.Cluster.FederationClient do
     end
   end
 
+  defp replay_delete_tombstone(node_name, tombstone, registry, invoke) do
+    job_id = Map.get(tombstone, "job_id")
+    expected_revision = Map.get(tombstone, "expected_revision", 0)
+
+    if is_binary(job_id) and is_integer(expected_revision) and expected_revision >= 0 do
+      request = %DeleteJobRequest{
+        job_id: job_id,
+        expected_revision: expected_revision,
+        confirmed: true,
+        version: 1
+      }
+
+      try do
+        _response = invoke.(node_name, :delete_job, request)
+
+        case registry.mark_job_deleted(node_name, job_id) do
+          {:ok, _projection} ->
+            :ok = registry.clear_delete_tombstone(node_name, job_id)
+            %{job_id: job_id, status: :applied}
+
+          {:error, _reason} ->
+            %{job_id: job_id, status: :pending}
+        end
+      rescue
+        error in GRPC.RPCError ->
+          if availability_failure?(error) do
+            %{job_id: job_id, status: :pending}
+          else
+            :ok = registry.clear_delete_tombstone(node_name, job_id)
+            %{job_id: job_id, status: :rejected}
+          end
+      end
+    else
+      %{job_id: job_id, status: :invalid}
+    end
+  end
+
   defp connect(target, peer) do
     token = Map.get(peer, "peer_auth_token", "")
 
@@ -258,7 +315,7 @@ defmodule MirrorNeuron.Cluster.FederationClient do
   defp record_response(node_name, function, %{result_json: json}) when is_binary(json) do
     case Jason.decode(json) do
       {:ok, %{"status" => "deleted", "job_id" => job_id}} when function == :delete_job ->
-        FederationRegistry.remove_projection(node_name, job_id)
+        FederationRegistry.mark_job_deleted(node_name, job_id)
 
       {:ok, %{"status" => "deleted", "run_id" => run_id}} when function == :delete_run ->
         FederationRegistry.remove_projection(node_name, run_id)

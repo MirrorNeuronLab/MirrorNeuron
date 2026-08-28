@@ -144,7 +144,7 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
   def delete_job(request, stream) do
     case remote_job_owner(request.job_id) do
       nil -> delete_local_job(request)
-      owner -> forward_call(owner, :delete_job, request, stream)
+      owner -> forward_delete_or_queue(owner, request, stream)
     end
   end
 
@@ -365,6 +365,39 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
                 "owner_node" => owner,
                 "status" => "archive_pending",
                 "archive_tombstone" => tombstone
+              })
+
+            error ->
+              respond(error)
+          end
+        else
+          reraise error, __STACKTRACE__
+        end
+    end
+  end
+
+  defp forward_delete_or_queue(_owner, %{confirmed: false}, _stream),
+    do: respond({:error, :confirmation_required})
+
+  defp forward_delete_or_queue(owner, request, stream) do
+    try do
+      response = forward_call(owner, :delete_job, request, stream)
+      _ = FederationRegistry.clear_delete_tombstone(owner, request.job_id)
+      response
+    rescue
+      error in GRPC.RPCError ->
+        if FederationClient.availability_failure?(error) do
+          case FederationRegistry.queue_delete_tombstone(
+                 owner,
+                 request.job_id,
+                 request.expected_revision
+               ) do
+            {:ok, tombstone} ->
+              response(%{
+                "job_id" => request.job_id,
+                "owner_node" => owner,
+                "status" => "delete_pending",
+                "delete_tombstone" => tombstone
               })
 
             error ->
