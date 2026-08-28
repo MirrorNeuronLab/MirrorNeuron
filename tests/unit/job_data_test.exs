@@ -4,12 +4,14 @@ defmodule MirrorNeuron.JobDataTest do
   alias MirrorNeuron.JobData
 
   setup do
-    root = Path.join(System.tmp_dir!(), "mn-job-data-#{System.unique_integer([:positive])}")
+    base = Path.join(System.tmp_dir!(), "mn-job-data-#{System.unique_integer([:positive])}")
+    root = Path.join(base, "root")
+    File.mkdir_p!(base)
     previous = System.get_env("MN_JOB_DATA_ROOT")
     System.put_env("MN_JOB_DATA_ROOT", root)
 
     on_exit(fn ->
-      File.rm_rf(root)
+      File.rm_rf(base)
 
       if previous do
         System.put_env("MN_JOB_DATA_ROOT", previous)
