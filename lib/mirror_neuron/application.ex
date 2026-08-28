@@ -76,6 +76,7 @@ defmodule MirrorNeuron.Application do
     [
       {Registry, keys: :duplicate, name: MirrorNeuron.Runtime.EventRegistry},
       {Cluster.Supervisor, [topologies, [name: MirrorNeuron.ClusterSupervisor]]},
+      MirrorNeuron.Runtime.Idempotency,
       MirrorNeuron.Redis,
       MirrorNeuron.Persistence.Retention,
       {Task.Supervisor, name: MirrorNeuron.Runtime.RecoveryTaskSupervisor},

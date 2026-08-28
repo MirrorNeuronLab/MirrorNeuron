@@ -1,14 +1,34 @@
 defmodule MirrorNeuron.Runtime.Idempotency do
   @moduledoc false
 
+  use GenServer
+
   @table :mirror_neuron_idempotency_v1
   @ttl_ms 86_400_000
   @maximum 10_000
 
+  def start_link(_opts) do
+    GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
+  end
+
+  @impl true
+  def init(:ok) do
+    table =
+      :ets.new(@table, [
+        :named_table,
+        :public,
+        :set,
+        read_concurrency: true,
+        write_concurrency: true
+      ])
+
+    {:ok, table}
+  end
+
   def run(_scope, key, _payload, operation) when key in [nil, ""], do: operation.()
 
   def run(scope, key, payload, operation) when is_binary(key) do
-    table = ensure_table()
+    table = table!()
     now = System.system_time(:millisecond)
     prune(table, now)
     record_key = {scope, key}
@@ -29,14 +49,10 @@ defmodule MirrorNeuron.Runtime.Idempotency do
     end
   end
 
-  defp ensure_table do
+  defp table! do
     case :ets.whereis(@table) do
       :undefined ->
-        try do
-          :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
-        rescue
-          ArgumentError -> @table
-        end
+        raise "#{inspect(__MODULE__)} is not started"
 
       table ->
         table

@@ -148,6 +148,10 @@ operation. Acknowledgement removes the index entry but retains the durable
 cancellation record for audit.
 Pause, resume, cancel, backup, restore, deployment, and schedule operations
 preserve event/status coherence.
+Idempotency records are owned by a supervised runtime process rather than an
+individual gRPC request process. An identical keyed Job, Run, or schedule
+request therefore replays the original result after its first request handler
+has exited; reusing the key with a different payload is rejected.
 Service schedules are lifecycle schedules: an occurrence starts when no run is
 attached, resumes a paused run, no-ops when it is already pending/running,
 replaces terminal history, and blocks while cancellation or ambiguous
