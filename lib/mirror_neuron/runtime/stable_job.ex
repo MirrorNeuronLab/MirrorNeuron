@@ -7,6 +7,8 @@ defmodule MirrorNeuron.Runtime.StableJob do
   one attached run whose identity survives pause and resume.
   """
 
+  require Logger
+
   alias MirrorNeuron.{JobBundle, JobData, JobId, Manifest}
   alias MirrorNeuron.Artifacts.SharedStorage
   alias MirrorNeuron.Bundle.Archive
@@ -282,19 +284,47 @@ defmodule MirrorNeuron.Runtime.StableJob do
       with_start_gate(job_id, fn ->
         with {:ok, definition} <- get(job_id),
              :ok <- ensure_revision(definition, Keyword.get(opts, :expected_revision)),
-             :ok <- JobResponse.stop(definition, force: true),
-             :ok <- delete_job_schedules(job_id),
-             :ok <- delete_historical_runs(definition),
-             :ok <- cleanup_definition_native_resources(job_id, definition),
-             :ok <- SharedStorage.cleanup_manifest(job_id, definition["manifest"]),
-             :ok <- JobData.delete(job_id),
-             :ok <- RedisStore.delete_job_definition(job_id) do
+             :ok <-
+               delete_step(job_id, :response_service, JobResponse.stop(definition, force: true)),
+             :ok <- delete_step(job_id, :schedules, delete_job_schedules(job_id)),
+             :ok <- delete_step(job_id, :historical_runs, delete_historical_runs(definition)),
+             :ok <-
+               delete_step(
+                 job_id,
+                 :definition_native_resources,
+                 cleanup_definition_native_resources(job_id, definition)
+               ),
+             :ok <-
+               delete_step(
+                 job_id,
+                 :shared_storage,
+                 SharedStorage.cleanup_manifest(job_id, definition["manifest"])
+               ),
+             :ok <- delete_step(job_id, :job_data, JobData.delete(job_id)),
+             :ok <-
+               delete_step(job_id, :definition_record, RedisStore.delete_job_definition(job_id)) do
           {:ok, definition_resource_descriptor(definition)}
         end
       end)
     else
       {:error, :confirmation_required}
     end
+  end
+
+  defp delete_step(_job_id, _stage, :ok), do: :ok
+
+  defp delete_step(job_id, stage, {:error, reason} = error) do
+    Logger.warning("stable job deletion failed for #{job_id} at #{stage}: #{inspect(reason)}")
+
+    error
+  end
+
+  defp delete_step(job_id, stage, other) do
+    Logger.warning(
+      "stable job deletion returned an invalid result for #{job_id} at #{stage}: #{inspect(other)}"
+    )
+
+    other
   end
 
   def delete_run(run_id, opts \\ []) do
@@ -1188,18 +1218,22 @@ defmodule MirrorNeuron.Runtime.StableJob do
   defp cleanup_definition_native_resources(job_id, definition) do
     metadata = get_in(definition, ["manifest", "metadata"]) || %{}
 
-    with :ok <- RunnerResources.cleanup_prepared_compose_projects(definition),
-         :ok <-
-           if(RunnerResources.docker_worker?(definition),
-             do: RunnerResources.cleanup_docker_worker(job_id),
-             else: :ok
-           ),
-         :ok <-
-           if(is_map(metadata["mn_native_resources"]),
-             do: RunnerResources.cleanup_native_resources(job_id),
-             else: :ok
-           ) do
-      :ok
+    if is_map(metadata["mn_native_resources"]) do
+      # The native registry is the durable owner for current definitions. It
+      # can clean by the exact recorded resource or, when staged Compose source
+      # has already retired, by the exact project labels. Running the legacy
+      # source-dependent cleanup first can turn a successful owned cleanup into
+      # a false deletion failure and prevents the registry path from running.
+      RunnerResources.cleanup_native_resources(job_id)
+    else
+      with :ok <- RunnerResources.cleanup_prepared_compose_projects(definition),
+           :ok <-
+             if(RunnerResources.docker_worker?(definition),
+               do: RunnerResources.cleanup_docker_worker(job_id),
+               else: :ok
+             ) do
+        :ok
+      end
     end
   end
 

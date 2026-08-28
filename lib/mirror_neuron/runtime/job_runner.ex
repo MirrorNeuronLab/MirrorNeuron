@@ -69,7 +69,7 @@ defmodule MirrorNeuron.Runtime.JobRunner do
 
     case RedisStore.fetch_job(job_id) do
       {:ok, %{"status" => "cancelling"}} ->
-        {:stop, :normal}
+        stop_normally(job_id, manifest, opts)
 
       _ ->
         acquire_and_start_coordinator(job_id, manifest, opts, lease_name, node_name)
@@ -82,7 +82,7 @@ defmodule MirrorNeuron.Runtime.JobRunner do
         start_coordinator_with_lease(job_id, manifest, opts, node_name, lease)
 
       {:error, {:locked, _owner}} ->
-        {:stop, :normal}
+        stop_normally(job_id, manifest, opts, node_name)
 
       {:error, reason} ->
         fail_runner_start(job_id, manifest, opts, nil, reason)
@@ -161,7 +161,7 @@ defmodule MirrorNeuron.Runtime.JobRunner do
           timestamp: Runtime.timestamp()
         })
 
-        {:stop, :normal}
+        stop_normally(job_id, manifest, opts, node_name)
 
       {:exhausted, reason} ->
         case cleanup_previous_attempt(job_id, %{"restart_reason" => reason}) do
@@ -184,7 +184,7 @@ defmodule MirrorNeuron.Runtime.JobRunner do
           timestamp: Runtime.timestamp()
         })
 
-        {:stop, :normal}
+        stop_normally(job_id, manifest, opts, node_name)
 
       {:error, reason} ->
         release_job_lease(job_id, node_name, lease)
@@ -333,6 +333,9 @@ defmodule MirrorNeuron.Runtime.JobRunner do
   end
 
   @impl true
+  def handle_continue(:stop_normally, state), do: {:stop, :normal, state}
+
+  @impl true
   def handle_info(:start_attempt_coordinator, state) do
     case start_attempt_coordinator(state) do
       {:ok, next_state} -> {:noreply, next_state}
@@ -445,6 +448,31 @@ defmodule MirrorNeuron.Runtime.JobRunner do
   end
 
   defp stop_coordinator(_pid), do: :ok
+
+  # Returning {:stop, :normal} directly from init is a failed child start to a
+  # supervisor. During a transient restart Horde retries that start, even when
+  # the durable job is already terminal or paused. Start successfully and stop
+  # in a continuation so the normal exit is observed and is not restarted.
+  defp stop_normally(job_id, manifest, opts, node_name \\ to_string(Node.self())) do
+    {:ok,
+     %{
+       job_id: job_id,
+       manifest: manifest,
+       bundle: Keyword.get(opts, :job_bundle),
+       bundle_ref: Keyword.get(opts, :bundle_ref),
+       opts: opts,
+       coordinator: nil,
+       attempt_job: nil,
+       node_name: node_name,
+       lease: nil,
+       lease_failures: 0,
+       lease_timer_ref: nil,
+       lease_timer_token: nil,
+       coordinator_start_timer_ref: nil
+     }, {:continue, :stop_normally}}
+  end
+
+  defp release_job_lease(_job_id, _node_name, nil), do: :ok
 
   defp release_job_lease(job_id, node_name, lease) do
     case RedisStore.release_fenced_lease("job:#{job_id}", node_name, lease["epoch"]) do

@@ -85,10 +85,6 @@ if [ -z "$REMOTE_HOST" ]; then
   exit 1
 fi
 
-if [ -z "$REMOTE_IP" ]; then
-  REMOTE_IP="$REMOTE_HOST"
-fi
-
 detect_local_ip() {
   if command -v ipconfig >/dev/null 2>&1; then
     ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true
@@ -118,6 +114,27 @@ ssh_remote() {
   # shellcheck disable=SC2086
   ssh $SSH_OPTS "$REMOTE_HOST" "$@"
 }
+
+detect_remote_ip() {
+  ssh_remote '
+    if command -v hostname >/dev/null 2>&1 && hostname -I >/dev/null 2>&1; then
+      hostname -I | awk "{print \$1}"
+    elif command -v ipconfig >/dev/null 2>&1; then
+      ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true
+    elif command -v ifconfig >/dev/null 2>&1; then
+      ifconfig | awk "/inet / && \$2 !~ /^127\\./ {print \$2; exit}"
+    fi
+  '
+}
+
+if [ -z "$REMOTE_IP" ]; then
+  REMOTE_IP="$(detect_remote_ip)"
+fi
+
+if [ -z "$REMOTE_IP" ]; then
+  echo "could not determine remote IP; pass --remote-ip" >&2
+  exit 1
+fi
 
 find_free_local_port() {
   local port

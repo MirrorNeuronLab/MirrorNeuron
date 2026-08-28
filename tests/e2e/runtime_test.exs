@@ -3530,6 +3530,7 @@ defmodule MirrorNeuron.RuntimeTest do
       Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:agent, job_id, "worker"})
 
     Process.exit(first_pid, :kill)
+    trigger_missing_agent_health_check(job_id, "worker", first_pid)
 
     wait_until(
       fn ->
@@ -3548,6 +3549,7 @@ defmodule MirrorNeuron.RuntimeTest do
       Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:agent, job_id, "worker"})
 
     Process.exit(second_pid, :kill)
+    trigger_missing_agent_health_check(job_id, "worker", second_pid)
 
     assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 12_000)
     assert job["status"] == "failed"
@@ -3850,6 +3852,21 @@ defmodule MirrorNeuron.RuntimeTest do
       [{pid, _meta}] -> pid
       _ -> flunk("job coordinator was not registered for #{job_id}")
     end
+  end
+
+  defp trigger_missing_agent_health_check(job_id, agent_id, dead_pid) do
+    wait_until(
+      fn ->
+        not Process.alive?(dead_pid) and agent_unregistered?(job_id, agent_id)
+      end,
+      2_000
+    )
+
+    coordinator = job_coordinator_pid(job_id)
+    timer_ref = :sys.get_state(coordinator).health_check_timer_ref
+    assert is_reference(timer_ref)
+    assert is_integer(Process.read_timer(timer_ref))
+    send(coordinator, :health_check)
   end
 
   defp job_runner_pid(job_id, fail? \\ true) do

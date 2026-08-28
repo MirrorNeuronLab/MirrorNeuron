@@ -52,6 +52,27 @@ defmodule MirrorNeuron.RuntimeReliabilityTest do
     end
   end
 
+  defmodule CrashOnceJob do
+    def child_spec({id, table, test_pid}) do
+      %{
+        id: {__MODULE__, id},
+        start: {__MODULE__, :start_link, [{id, table, test_pid}]},
+        restart: :transient
+      }
+    end
+
+    def start_link({id, table, test_pid}) do
+      Task.start_link(fn ->
+        attempt = :ets.update_counter(table, id, {2, 1}, {id, 0})
+        send(test_pid, {:crash_once_job_started, id, attempt})
+
+        if attempt == 1 do
+          exit(:expected_clean_attempt_restart)
+        end
+      end)
+    end
+  end
+
   setup do
     old_env = Map.new(@runtime_envs, &{&1, System.get_env(&1)})
     old_app = Map.new(@runtime_app_keys, &{&1, Application.get_env(:mirror_neuron, &1)})
@@ -72,6 +93,24 @@ defmodule MirrorNeuron.RuntimeReliabilityTest do
     assert Runtime.cancel_job_call_timeout_ms() == 5_000
     assert Delivery.lease_ms() == 30_000
     assert Delivery.max_attempts() == 10
+  end
+
+  test "independent clean-attempt bursts do not exhaust the shared job supervisor" do
+    table = :ets.new(:job_supervisor_restart_burst, [:public])
+    supervisor_pid = Process.whereis(MirrorNeuron.Runtime.JobSupervisor)
+
+    for id <- 1..4 do
+      assert {:ok, _pid} =
+               Horde.DynamicSupervisor.start_child(
+                 MirrorNeuron.Runtime.JobSupervisor,
+                 {CrashOnceJob, {id, table, self()}}
+               )
+
+      assert_receive {:crash_once_job_started, ^id, 1}, 1_000
+      assert_receive {:crash_once_job_started, ^id, 2}, 1_000
+    end
+
+    assert Process.whereis(MirrorNeuron.Runtime.JobSupervisor) == supervisor_pid
   end
 
   test "state-bearing coordinator events are delivered durably before completion" do

@@ -29,13 +29,15 @@ defmodule MirrorNeuron.Redis do
     end
   end
 
-  def reconnect do
+  def reconnect(failed_connection \\ Process.whereis(__MODULE__.Connection)) do
     case Process.whereis(__MODULE__) do
       nil ->
         {:error, :not_running}
 
       _pid ->
-        restart_child()
+        :global.trans({{__MODULE__, :reconnect}, self()}, fn ->
+          reconnect_if_still_current(failed_connection)
+        end)
     end
   end
 
@@ -50,6 +52,21 @@ defmodule MirrorNeuron.Redis do
   def reconnectable_error?({:redix_exited_during_call, _reason}), do: true
   def reconnectable_error?({:redix_exit, _reason}), do: true
   def reconnectable_error?(_reason), do: false
+
+  defp reconnect_if_still_current(failed_connection) do
+    current_connection = Process.whereis(__MODULE__.Connection)
+
+    cond do
+      Process.whereis(__MODULE__) == nil ->
+        {:error, :not_running}
+
+      is_pid(current_connection) and current_connection != failed_connection ->
+        :ok
+
+      true ->
+        restart_child()
+    end
+  end
 
   defp restart_child do
     with :ok <- stop_child(),

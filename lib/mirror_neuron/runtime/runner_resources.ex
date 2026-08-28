@@ -3,6 +3,7 @@ defmodule MirrorNeuron.Runtime.RunnerResources do
 
   alias MirrorNeuron.Cluster.NodeAdapter
   alias MirrorNeuron.ModelServices
+  alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runner.DockerCompose
   alias MirrorNeuron.SafeAccess
   alias Mirrorneuron.Cluster.V1.CleanupDockerWorkerRequest
@@ -30,10 +31,13 @@ defmodule MirrorNeuron.Runtime.RunnerResources do
 
   @doc false
   def cleanup_native_resources(job_id) when is_binary(job_id) and job_id != "" do
-    with {:ok, _result} <- cleanup_native_resources_with_result(job_id) do
+    with {:ok, result} <- cleanup_native_resources_with_result(job_id),
+         :ok <- cleanup_legacy_resources_if_unregistered(job_id, result) do
       :ok
     end
   end
+
+  def cleanup_native_resources(_job_id), do: {:error, :invalid_job_id}
 
   @doc false
   def cleanup_native_resources_with_result(job_id)
@@ -53,9 +57,44 @@ defmodule MirrorNeuron.Runtime.RunnerResources do
     end
   end
 
-  def cleanup_native_resources(_job_id), do: {:error, :invalid_job_id}
-
   def cleanup_native_resources_with_result(_job_id), do: {:error, :invalid_job_id}
+
+  defp cleanup_legacy_resources_if_unregistered(job_id, result) do
+    if native_cleanup_count(result) > 0 do
+      :ok
+    else
+      case fetch_persisted_job(job_id) do
+        {:ok, job} when is_map(job) ->
+          with :ok <- cleanup_prepared_compose_projects(job),
+               :ok <-
+                 if(docker_worker?(job),
+                   do: cleanup_docker_worker(job_id),
+                   else: :ok
+                 ) do
+            :ok
+          end
+
+        _missing ->
+          :ok
+      end
+    end
+  end
+
+  defp fetch_persisted_job(job_id) do
+    case RedisStore.fetch_job(job_id) do
+      {:ok, _job} = found -> found
+      _missing -> RedisStore.fetch_job_definition(job_id)
+    end
+  end
+
+  defp native_cleanup_count(result) when is_map(result) do
+    case detail(result, "removed_count") do
+      count when is_integer(count) and count > 0 -> count
+      _other -> 0
+    end
+  end
+
+  defp native_cleanup_count(_result), do: 0
 
   @doc false
   def cleanup_native_resource_external_ids(kind, external_ids)

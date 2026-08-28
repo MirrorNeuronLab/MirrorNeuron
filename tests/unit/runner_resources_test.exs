@@ -10,6 +10,7 @@ defmodule MirrorNeuron.Runtime.RunnerResourcesTest do
   end
 
   alias MirrorNeuron.Runtime.RunnerResources
+  alias MirrorNeuron.Persistence.RedisStore
 
   alias Mirrorneuron.Cluster.V1.{
     CleanupDockerComposeResponse,
@@ -134,6 +135,103 @@ defmodule MirrorNeuron.Runtime.RunnerResourcesTest do
                       "job_id" => "run-native-result",
                       "run_id" => "run-native-result"
                     }}
+  end
+
+  test "unified cleanup falls back to persisted legacy DockerWorker metadata" do
+    run_id = "legacy-worker-#{System.unique_integer([:positive])}"
+
+    on_exit(fn -> RedisStore.delete_job(run_id) end)
+
+    assert {:ok, _job} =
+             RedisStore.persist_job(run_id, %{
+               "job_id" => run_id,
+               "status" => "completed",
+               "manifest" => %{
+                 "flow" => %{
+                   "nodes" => [
+                     %{
+                       "config" => %{
+                         "runner_module" => "MirrorNeuron.Runner.DockerWorker",
+                         "docker_worker_container_name" => "mn-worker-legacy"
+                       }
+                     }
+                   ]
+                 }
+               }
+             })
+
+    assert :ok = RunnerResources.cleanup_native_resources(run_id)
+    assert_receive {:docker_worker_cleanup, request}
+    assert request.job_id == run_id
+  end
+
+  test "registry-owned cleanup does not repeat legacy DockerWorker cleanup" do
+    run_id = "registry-worker-#{System.unique_integer([:positive])}"
+
+    on_exit(fn -> RedisStore.delete_job(run_id) end)
+
+    assert {:ok, _job} =
+             RedisStore.persist_job(run_id, %{
+               "job_id" => run_id,
+               "status" => "completed",
+               "manifest" => %{
+                 "metadata" => %{
+                   "mn_docker_workers" => %{"submission_id" => "submission-registry"}
+                 }
+               }
+             })
+
+    Application.put_env(
+      :mirror_neuron,
+      :native_sdk_grpc_native_resource_client,
+      fn _target, request, _timeout ->
+        send(self(), {:native_resource_cleanup, Jason.decode!(request.resource_json)})
+
+        {:ok,
+         %SetResourceResponse{
+           resource_json: ~s({"removed_count":1,"errors":[]}),
+           version: 1
+         }}
+      end
+    )
+
+    assert :ok = RunnerResources.cleanup_native_resources(run_id)
+    refute_receive {:docker_worker_cleanup, _request}
+  end
+
+  test "zero-match registry cleanup falls back to a persisted stable definition" do
+    job_id = "legacy-definition-#{System.unique_integer([:positive])}"
+
+    on_exit(fn -> RedisStore.delete_job_definition(job_id) end)
+
+    assert {:ok, _definition} =
+             RedisStore.persist_job_definition(job_id, %{
+               "job_id" => job_id,
+               "status" => "active",
+               "manifest" => %{
+                 "flow" => %{
+                   "nodes" => [
+                     %{
+                       "config" => %{
+                         "runner_module" => "MirrorNeuron.Runner.DockerCompose",
+                         "mn_docker_compose" => %{
+                           "project_name" => "mn-compose-legacy-definition",
+                           "context_path" => "/owned/context",
+                           "compose_file" => "/owned/context/docker-compose.yaml",
+                           "generated_env_file" => "/owned/context/project.env",
+                           "services" => ["app"]
+                         }
+                       }
+                     }
+                   ]
+                 }
+               }
+             })
+
+    assert :ok = RunnerResources.cleanup_native_resources(job_id)
+    assert_receive {:docker_compose_cleanup, request}
+    assert [project_json] = request.projects_json
+    assert Jason.decode!(project_json)["project_name"] == "mn-compose-legacy-definition"
   end
 
   test "exact external-id cleanup uses kind-scoped native resource selectors" do

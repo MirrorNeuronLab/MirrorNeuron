@@ -14,7 +14,8 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
 
   alias Mirrorneuron.Cluster.V1.{
     CleanupDockerComposeResponse,
-    CleanupDockerWorkerResponse
+    CleanupDockerWorkerResponse,
+    SetResourceResponse
   }
 
   defmodule CleanupNodeAdapterStub do
@@ -1425,6 +1426,115 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     end
   end
 
+  test "stable job deletion uses registry ownership without repeating legacy Compose cleanup" do
+    suffix = System.unique_integer([:positive])
+    stable_job_id = "stable-registry-delete-#{suffix}"
+    old_job_data_root = System.get_env("MN_JOB_DATA_ROOT")
+    old_native_target = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
+
+    old_native_cleanup =
+      Application.get_env(:mirror_neuron, :native_sdk_grpc_native_resource_client)
+
+    old_compose_cleanup =
+      Application.get_env(:mirror_neuron, :native_sdk_grpc_cleanup_docker_compose_client)
+
+    root = Path.join(System.tmp_dir!(), "mn_stable_registry_delete_#{suffix}")
+    parent = self()
+
+    System.put_env("MN_JOB_DATA_ROOT", Path.join(root, "job-data"))
+    System.put_env("MN_NATIVE_SDK_GRPC_TARGET", "127.0.0.1:55052")
+
+    Application.put_env(
+      :mirror_neuron,
+      :native_sdk_grpc_native_resource_client,
+      fn _target, request, _timeout ->
+        send(parent, {:native_resource_cleanup, Jason.decode!(request.resource_json)})
+
+        {:ok,
+         %SetResourceResponse{
+           resource_json: ~s({"removed_count":1,"errors":[]}),
+           version: 1
+         }}
+      end
+    )
+
+    Application.put_env(
+      :mirror_neuron,
+      :native_sdk_grpc_cleanup_docker_compose_client,
+      fn _target, request, _timeout ->
+        send(parent, {:unexpected_legacy_compose_cleanup, request})
+
+        {:ok,
+         %CleanupDockerComposeResponse{
+           result_json: ~s({"removed":[],"errors":["owned source is gone"]}),
+           version: 1
+         }}
+      end
+    )
+
+    on_exit(fn ->
+      RedisStore.delete_job_definition(stable_job_id)
+      restore_system_env("MN_JOB_DATA_ROOT", old_job_data_root)
+      restore_system_env("MN_NATIVE_SDK_GRPC_TARGET", old_native_target)
+      restore_env(:native_sdk_grpc_native_resource_client, old_native_cleanup)
+      restore_env(:native_sdk_grpc_cleanup_docker_compose_client, old_compose_cleanup)
+      File.rm_rf(root)
+    end)
+
+    native_resources = %{
+      "version" => 1,
+      "resources" => [
+        %{
+          "kind" => "docker_compose",
+          "scope" => "definition",
+          "external_id" => "mn-compose-registry-definition"
+        }
+      ]
+    }
+
+    assert {:ok, _path} = MirrorNeuron.JobData.initialize(stable_job_id)
+
+    assert {:ok, _definition} =
+             RedisStore.persist_job_definition(stable_job_id, %{
+               "job_id" => stable_job_id,
+               "status" => "active",
+               "run_ids" => [],
+               "manifest" => %{
+                 "metadata" => %{"mn_native_resources" => native_resources},
+                 "flow" => %{
+                   "nodes" => [
+                     %{
+                       "config" => %{
+                         "runner_module" => "MirrorNeuron.Runner.DockerCompose",
+                         "mn_docker_compose" => %{
+                           "project_name" => "mn-compose-registry-definition",
+                           "context_path" => "/retired/context",
+                           "compose_file" => "/retired/context/docker-compose.yaml",
+                           "generated_env_file" => "/retired/context/project.env",
+                           "services" => ["app"]
+                         }
+                       }
+                     }
+                   ]
+                 }
+               }
+             })
+
+    assert {:ok, %{"metadata" => %{"mn_native_resources" => ^native_resources}}} =
+             StableJob.delete(stable_job_id, confirmed: true)
+
+    assert_receive {:native_resource_cleanup,
+                    %{
+                      "kind" => "native_resource",
+                      "operation" => "cleanup",
+                      "job_id" => ^stable_job_id,
+                      "run_id" => ^stable_job_id
+                    }}
+
+    refute_receive {:unexpected_legacy_compose_cleanup, _request}
+    assert {:error, _reason} = RedisStore.fetch_job_definition(stable_job_id)
+  end
+
   test "run deletion cancels active DockerWorker and DockerCompose runs and detaches them" do
     suffix = System.unique_integer([:positive])
     previous_target = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
@@ -2367,7 +2477,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
   test "retention reclaims missing schedule indexes and leases but preserves corrupt records", %{
     namespace: namespace
   } do
-    suspend_retention()
+    suspend_background_schedule_sweeps()
     missing_id = "missing-schedule-#{System.unique_integer([:positive])}"
     corrupt_id = "corrupt-schedule-#{System.unique_integer([:positive])}"
 
@@ -2457,6 +2567,52 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
              Redix.command(MirrorNeuron.Redis.Connection, [
                "KEYS",
                redis_key(namespace, ["lease", "job:#{job_id}*"])
+             ])
+  end
+
+  test "schedule reads reclaim missing indexes and leases before retention", %{
+    namespace: namespace
+  } do
+    suspend_background_schedule_sweeps()
+    schedule_id = "missing-schedule-read-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _schedule} =
+             RedisStore.persist_schedule(schedule_id, %{
+               "kind" => "delayed",
+               "status" => "active",
+               "enabled" => true,
+               "next_run_at" => "2030-01-01T00:00:00Z"
+             })
+
+    assert {:ok, _lease} =
+             RedisStore.acquire_fenced_lease("schedule:#{schedule_id}:state", "owner", 5_000)
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "DEL",
+               redis_key(namespace, ["schedule", schedule_id])
+             ])
+
+    assert {:ok, []} = RedisStore.list_schedules()
+
+    assert {:ok, 0} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SISMEMBER",
+               redis_key(namespace, ["schedules"]),
+               schedule_id
+             ])
+
+    assert {:ok, nil} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "ZSCORE",
+               redis_key(namespace, ["schedule", "due"]),
+               schedule_id
+             ])
+
+    assert {:ok, []} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "KEYS",
+               redis_key(namespace, ["lease", "schedule:#{schedule_id}:*"])
              ])
   end
 
@@ -2651,12 +2807,21 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
   defp redis_key(namespace, parts), do: Enum.join([namespace | parts], ":")
 
   defp suspend_retention do
-    case Process.whereis(MirrorNeuron.Persistence.Retention) do
-      retention when is_pid(retention) ->
-        :sys.suspend(retention)
+    suspend_process(MirrorNeuron.Persistence.Retention)
+  end
+
+  defp suspend_background_schedule_sweeps do
+    suspend_retention()
+    suspend_process(MirrorNeuron.Cluster.Leader)
+  end
+
+  defp suspend_process(name) do
+    case Process.whereis(name) do
+      process when is_pid(process) ->
+        :sys.suspend(process)
 
         on_exit(fn ->
-          if Process.alive?(retention), do: :sys.resume(retention)
+          if Process.alive?(process), do: :sys.resume(process)
         end)
 
       nil ->

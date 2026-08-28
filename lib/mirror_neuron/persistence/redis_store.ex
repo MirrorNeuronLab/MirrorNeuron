@@ -4610,11 +4610,13 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     do: command_local(args, attempts_left, backoff_ms)
 
   defp command_local(args, attempts_left, backoff_ms) do
-    case safe_command(MirrorNeuron.Redis.Connection, args) do
+    connection = redis_connection()
+
+    case safe_command(connection || MirrorNeuron.Redis.Connection, args) do
       {:error, reason} = error ->
         cond do
           reconnectable_error?(reason) and attempts_left > 0 ->
-            _ = MirrorNeuron.Redis.reconnect()
+            _ = MirrorNeuron.Redis.reconnect(connection)
             Process.sleep(backoff_ms)
             command_local(args, attempts_left - 1, next_reconnect_backoff(backoff_ms))
 
@@ -4661,14 +4663,8 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       {:ok, results} ->
         parse_transaction_results(results)
 
-      {:error, reason} = error ->
-        if attempts_left > 0 and reconnectable_error?(reason) do
-          _ = MirrorNeuron.Redis.reconnect()
-          Process.sleep(backoff_ms)
-          transaction(commands, attempts_left - 1, next_reconnect_backoff(backoff_ms))
-        else
-          error
-        end
+      {:error, _reason} = error ->
+        error
     end
   end
 
@@ -4679,17 +4675,28 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     do: pipeline_local(commands, attempts_left, backoff_ms)
 
   defp pipeline_local(commands, attempts_left, backoff_ms) do
-    case safe_pipeline(MirrorNeuron.Redis.Connection, commands) do
+    connection = redis_connection()
+
+    case safe_pipeline(connection || MirrorNeuron.Redis.Connection, commands) do
       {:ok, results} ->
         case readonly_error_in_results(results) do
-          nil -> {:ok, results}
-          reason -> retry_or_primary_unavailable(commands, attempts_left, backoff_ms, reason)
+          nil ->
+            {:ok, results}
+
+          reason ->
+            retry_or_primary_unavailable(
+              commands,
+              attempts_left,
+              backoff_ms,
+              reason,
+              connection
+            )
         end
 
       {:error, reason} = error ->
         cond do
           reconnectable_error?(reason) and attempts_left > 0 ->
-            _ = MirrorNeuron.Redis.reconnect()
+            _ = MirrorNeuron.Redis.reconnect(connection)
             Process.sleep(backoff_ms)
             pipeline_local(commands, attempts_left - 1, next_reconnect_backoff(backoff_ms))
 
@@ -4708,15 +4715,27 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   defp readonly_error_in_results(_results), do: nil
 
-  defp retry_or_primary_unavailable(commands, attempts_left, backoff_ms, _reason)
+  defp retry_or_primary_unavailable(
+         commands,
+         attempts_left,
+         backoff_ms,
+         _reason,
+         failed_connection
+       )
        when attempts_left > 0 do
-    _ = MirrorNeuron.Redis.reconnect()
+    _ = MirrorNeuron.Redis.reconnect(failed_connection)
     Process.sleep(backoff_ms)
     pipeline_local(commands, attempts_left - 1, next_reconnect_backoff(backoff_ms))
   end
 
-  defp retry_or_primary_unavailable(_commands, _attempts_left, _backoff_ms, reason),
-    do: {:error, {:redis_primary_unavailable, reason}}
+  defp retry_or_primary_unavailable(
+         _commands,
+         _attempts_left,
+         _backoff_ms,
+         reason,
+         _failed_connection
+       ),
+       do: {:error, {:redis_primary_unavailable, reason}}
 
   defp safe_pipeline(connection, commands) do
     Redix.pipeline(connection, commands)
@@ -4860,6 +4879,8 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   defp reconnectable_error?(reason), do: MirrorNeuron.Redis.reconnectable_error?(reason)
+
+  defp redis_connection, do: Process.whereis(MirrorNeuron.Redis.Connection)
 
   defp redis_reconnect_attempts do
     config_integer("MN_REDIS_RECONNECT_ATTEMPTS", :redis_reconnect_attempts, 10)

@@ -16,6 +16,39 @@ defmodule MirrorNeuron.RedisTest do
     assert_eventually(fn -> ping?() end)
   end
 
+  test "concurrent reconnect callers perform one complete child transition" do
+    old_connection = Process.whereis(MirrorNeuron.Redis.Connection)
+    parent = self()
+
+    tasks =
+      for _index <- 1..32 do
+        Task.async(fn ->
+          send(parent, {:ready, self()})
+
+          receive do
+            :reconnect -> MirrorNeuron.Redis.reconnect(old_connection)
+          end
+        end)
+      end
+
+    callers =
+      for _index <- tasks do
+        assert_receive {:ready, caller}
+        caller
+      end
+
+    Enum.each(callers, &send(&1, :reconnect))
+    assert Enum.all?(Task.await_many(tasks, 5_000), &(&1 == :ok))
+
+    assert_eventually(fn -> ping?() end)
+    new_connection = Process.whereis(MirrorNeuron.Redis.Connection)
+    assert is_pid(new_connection)
+    refute new_connection == old_connection
+
+    assert MirrorNeuron.Redis.reconnect(old_connection) == :ok
+    assert Process.whereis(MirrorNeuron.Redis.Connection) == new_connection
+  end
+
   defp ping? do
     match?({:ok, "PONG"}, Redix.command(MirrorNeuron.Redis.Connection, ["PING"]))
   catch
