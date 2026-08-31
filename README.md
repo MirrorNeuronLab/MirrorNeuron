@@ -639,6 +639,7 @@ present. Production does not require any `.env` file.
 | `MN_JOB_DATA_ROOT` | Root for persistent stable-job data; defaults to `$MN_HOME/job-data`. Each job is a validated direct child. |
 | `MN_JOB_CALL_TIMEOUT_MS` | Timeout for runtime job control calls such as pause, resume, pressure, and external message submit; defaults to 15000. |
 | `MN_CANCEL_JOB_CALL_TIMEOUT_MS` | Local coordinator cancellation call timeout; unavailable remote ownership is recorded as durable `cancellation_pending` instead of waiting for this timeout. Defaults to 5000. |
+| `MN_SHARED_STORAGE_READY_TIMEOUT_SECONDS` | Maximum time a run with SDK-staged local inputs remains pending for its owner-local shared-storage inventory to verify; defaults to 1800. |
 | `MN_MESSAGE_DEFAULT_TTL_SECONDS` | Default lifetime for an agent message; defaults to 86400. |
 | `MN_MESSAGE_MAX_TTL_SECONDS` | Maximum accepted agent-message lifetime; defaults to 604800. |
 | `MN_MESSAGE_ACK_RECEIPT_TTL_SECONDS` | Retention for ACK and dead-letter receipts; defaults to 3600. |
@@ -707,6 +708,14 @@ Filesystem watching remains enabled and the fallback rescan interval defaults
 to 3600 seconds (`MN_SYNCTHING_RESCAN_INTERVAL_SECONDS`). Managed ignores keep
 derived Python environments, staged Python sources, and local checkpoints out
 of the replicated shared-data set.
+
+SDK-staged local input trees have an atomic readiness inventory. Before it
+sends any workflow entrypoint message, the owner Core verifies that marker and
+each file on its own shared mount. A remote run stays `pending` with
+`submission_storage_waiting` progress until replication is complete, starts
+automatically with `submission_storage_ready`, or fails before source dispatch
+on `MN_SHARED_STORAGE_READY_TIMEOUT_SECONDS` (default `1800`). This check uses
+filesystem integrity only; Core does not need Syncthing API credentials.
 
 ---
 

@@ -138,6 +138,12 @@ defmodule MirrorNeuron.Config.Schema do
       spec("MN_SHARED_STORAGE_ROOT", :shared_storage_root, :path, default: {:home, ".mn/shared"}),
       spec("MN_HOST_SHARED_STORAGE_ROOT", :host_shared_storage_root, :path),
       spec("MN_RUNTIME_SHARED_STORAGE_ROOT", :runtime_shared_storage_root, :path),
+      spec(
+        "MN_SHARED_STORAGE_READY_TIMEOUT_SECONDS",
+        :shared_storage_ready_timeout_seconds,
+        :integer,
+        default: 1_800
+      ),
       spec("MN_SYNCTHING_ENABLED", :syncthing_enabled, :string, default: "auto"),
       spec("MN_SYNCTHING_API_KEY", :syncthing_api_key, :string, default: ""),
       spec("MN_SYNCTHING_DEVICE_ID", :syncthing_device_id, :string, default: ""),

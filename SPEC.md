@@ -52,6 +52,15 @@ data, schedules, and run history. Run preparation rewrites only run/attempt
 identity and run-output locations; submission IDs, containers, input roots,
 and definition-owned resources remain immutable until a later bundle
 replacement retires them.
+For SDK-staged local inputs, Core verifies the versioned
+`mn_storage.inputs.readiness` inventory on the owner node before it seeds a
+workflow entrypoint. The run remains `pending` while Syncthing catches up,
+emitting rate-limited `submission_storage_waiting` events, then emits
+`submission_storage_ready` and dispatches automatically. A non-ready tree
+fails before any source message on the configured
+`MN_SHARED_STORAGE_READY_TIMEOUT_SECONDS` deadline (default 1800) with a
+`submission_storage_timeout` event. Legacy submissions without an inventory
+remain immediate.
 Ordinary service starts fail with the stable `service_run_exists` conflict when
 any run is attached. Explicit replacement requires a fresh run ID, validates
 before cleanup, durably cancels active work, permanently clears every old

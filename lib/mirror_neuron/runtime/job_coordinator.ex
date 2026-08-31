@@ -5,7 +5,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   alias MirrorNeuron.Execution.Profile
   alias MirrorNeuron.Message
   alias MirrorNeuron.Persistence.RedisStore
-  alias MirrorNeuron.Artifacts.{SharedStorage, StagedArtifact}
+  alias MirrorNeuron.Artifacts.{SharedStorage, StagedArtifact, SubmissionReadiness}
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.{JobBundle, ServiceRegistry, ServiceSpec}
   alias MirrorNeuron.Runner.DockerCompose
@@ -39,7 +39,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         _ -> nil
       end
 
-    status = "running"
+    status = "pending"
     submitted_at = if existing_job, do: existing_job["submitted_at"], else: Runtime.timestamp()
     scheduler_plan = scheduler_plan_from(manifest, opts)
     runtime_topology = build_runtime_topology(manifest, scheduler_plan)
@@ -106,7 +106,13 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         ),
       attempt_history: Map.get(existing_job || %{}, "attempt_history", []),
       restart_budget: Map.get(existing_job || %{}, "restart_budget"),
-      attempt_not_before: Map.get(existing_job || %{}, "attempt_not_before")
+      attempt_not_before: Map.get(existing_job || %{}, "attempt_not_before"),
+      submission_storage: %{
+        started_at_ms: System.monotonic_time(:millisecond),
+        timer_token: nil,
+        last_wait_event_at_ms: nil,
+        waiting?: false
+      }
     }
 
     {:ok, state, {:continue, :bootstrap}}
@@ -127,22 +133,10 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       timestamp: Runtime.timestamp()
     })
 
-    with {:ok, boot_state} <- start_agents(state),
-         {:ok, next_state, workflow_events} <- complete_bootstrap(boot_state) do
-      persist_job(next_state)
+    case start_agents(state) do
+      {:ok, boot_state} ->
+        continue_bootstrap_after_storage_check(boot_state)
 
-      EventBus.publish(state.job_id, %{
-        type: :job_running,
-        mode: "clean_restart",
-        attempt: next_state.attempt,
-        attempt_started_at: next_state.attempt_started_at,
-        restart_reason: next_state.restart_reason,
-        timestamp: Runtime.timestamp()
-      })
-
-      publish_workflow_events(next_state, workflow_events)
-      {:noreply, schedule_runtime_timers(next_state)}
-    else
       {:error, {:execution_profile_unavailable, profile, agent_id}, failed_state} ->
         paused_state =
           pause_for_profile_review(
@@ -155,11 +149,51 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         {:stop, :normal, paused_state}
 
       {:error, reason, failed_state} ->
-        failed_state =
-          finalize_job(failed_state, "failed", %{error: reason}, :job_failed, %{reason: reason})
-
-        {:stop, {:shutdown, reason}, failed_state}
+        fail_bootstrap(failed_state, reason)
     end
+  end
+
+  defp continue_bootstrap_after_storage_check(state) do
+    case submission_storage_status(state) do
+      {:ready, ready_state} ->
+        complete_ready_bootstrap(ready_state)
+
+      {:waiting, waiting_state} ->
+        persist_job(waiting_state)
+        {:noreply, schedule_submission_storage_check(waiting_state)}
+
+      {:error, reason, failed_state} ->
+        fail_bootstrap(failed_state, reason)
+    end
+  end
+
+  defp complete_ready_bootstrap(state) do
+    case complete_bootstrap(state) do
+      {:ok, next_state, workflow_events} ->
+        persist_job(next_state)
+
+        EventBus.publish(state.job_id, %{
+          type: :job_running,
+          mode: "clean_restart",
+          attempt: next_state.attempt,
+          attempt_started_at: next_state.attempt_started_at,
+          restart_reason: next_state.restart_reason,
+          timestamp: Runtime.timestamp()
+        })
+
+        publish_workflow_events(next_state, workflow_events)
+        {:noreply, schedule_runtime_timers(next_state)}
+
+      {:error, reason, failed_state} ->
+        fail_bootstrap(failed_state, reason)
+    end
+  end
+
+  defp fail_bootstrap(state, reason) do
+    failed_state =
+      finalize_job(state, "failed", %{error: reason}, :job_failed, %{reason: reason})
+
+    {:stop, {:shutdown, reason}, failed_state}
   end
 
   defp complete_bootstrap(state) do
@@ -171,6 +205,107 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     else
       {:error, reason} -> {:error, reason, state}
     end
+  end
+
+  # A submission readiness marker is present only for SDK-staged host inputs.
+  # Workers are prepared first, but no generated source receives its initial
+  # message until the selected owner has verified every staged file locally.
+  defp submission_storage_status(state) do
+    now_ms = System.monotonic_time(:millisecond)
+    storage = Map.get(state, :submission_storage, %{})
+    started_at_ms = Map.get(storage, :started_at_ms, now_ms)
+    elapsed_ms = max(now_ms - started_at_ms, 0)
+
+    case SubmissionReadiness.verify(state.manifest) do
+      {:ready, %{"managed" => true} = metrics} ->
+        EventBus.publish(
+          state.job_id,
+          submission_storage_event(:submission_storage_ready, metrics, elapsed_ms)
+        )
+
+        {:ready, %{state | submission_storage: Map.put(storage, :timer_token, nil)}}
+
+      {:ready, _legacy_or_local} ->
+        {:ready, %{state | submission_storage: Map.put(storage, :timer_token, nil)}}
+
+      {:waiting, metrics} ->
+        timeout_seconds = SubmissionReadiness.timeout_seconds()
+        details = submission_storage_event(:submission_storage_waiting, metrics, elapsed_ms)
+
+        cond do
+          elapsed_ms >= timeout_seconds * 1_000 ->
+            timeout_details = Map.put(details, :timeout_seconds, timeout_seconds)
+
+            EventBus.publish(
+              state.job_id,
+              Map.put(timeout_details, :type, :submission_storage_timeout)
+            )
+
+            {:error,
+             "staged inputs were not ready on #{Map.fetch!(timeout_details, :node)} after #{timeout_seconds} seconds",
+             %{state | submission_storage: Map.put(storage, :timer_token, nil)}}
+
+          wait_event_due?(storage, now_ms) ->
+            EventBus.publish(state.job_id, details)
+
+            {:waiting,
+             %{
+               state
+               | submission_storage:
+                   storage
+                   |> Map.put(:waiting?, true)
+                   |> Map.put(:last_wait_event_at_ms, now_ms)
+             }}
+
+          true ->
+            {:waiting, %{state | submission_storage: Map.put(storage, :waiting?, true)}}
+        end
+
+      {:error, reason, metrics} ->
+        EventBus.publish(
+          state.job_id,
+          submission_storage_event(
+            :submission_storage_timeout,
+            Map.put(metrics, "reason", reason),
+            elapsed_ms
+          )
+        )
+
+        {:error, reason, %{state | submission_storage: Map.put(storage, :timer_token, nil)}}
+    end
+  end
+
+  defp submission_storage_event(type, metrics, elapsed_ms) do
+    metrics
+    |> Map.put(:type, type)
+    |> Map.put(:node, to_string(Node.self()))
+    |> Map.put(:elapsed_ms, elapsed_ms)
+    |> Map.put(:timestamp, Runtime.timestamp())
+  end
+
+  defp wait_event_due?(storage, now_ms) do
+    case Map.get(storage, :last_wait_event_at_ms) do
+      nil -> true
+      previous -> now_ms - previous >= SubmissionReadiness.event_interval_ms()
+    end
+  end
+
+  defp schedule_submission_storage_check(state) do
+    storage = Map.get(state, :submission_storage, %{})
+    token = make_ref()
+
+    Process.send_after(
+      self(),
+      {:submission_storage_check, token},
+      SubmissionReadiness.poll_interval_ms()
+    )
+
+    %{state | submission_storage: Map.put(storage, :timer_token, token)}
+  end
+
+  defp clear_submission_storage_check(state) do
+    storage = Map.get(state, :submission_storage, %{})
+    %{state | submission_storage: Map.put(storage, :timer_token, nil)}
   end
 
   @impl true
@@ -465,6 +600,17 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   def handle_cast(:coordinator_delivery_available, state), do: {:noreply, state}
+
+  @impl true
+  def handle_info(
+        {:submission_storage_check, token},
+        %{status: "pending", submission_storage: %{timer_token: token}} = state
+      ) do
+    state = clear_submission_storage_check(state)
+    continue_bootstrap_after_storage_check(state)
+  end
+
+  def handle_info({:submission_storage_check, _token}, state), do: {:noreply, state}
 
   @impl true
   def handle_info(

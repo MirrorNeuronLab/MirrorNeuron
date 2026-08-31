@@ -591,6 +591,19 @@ defmodule MirrorNeuron.Runtime.StableJob do
   end
 
   defp do_with_run_identity(manifest, definition, run_id, data_dir, access, opts) do
+    protected_input_paths = staged_input_config_paths(manifest)
+
+    resolved_configuration =
+      definition["resolved_configuration"]
+      |> stringify()
+      |> drop_runtime_owned_paths(protected_input_paths)
+
+    run_input_overrides =
+      opts
+      |> Keyword.get(:inputs, %{})
+      |> stringify()
+      |> drop_runtime_owned_paths(protected_input_paths)
+
     metadata =
       (manifest.metadata || %{})
       |> stringify()
@@ -626,7 +639,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
 
         env =
           Map.get(config, "environment", %{})
-          |> merge_runtime_configuration(definition, run_id)
+          |> merge_runtime_configuration(definition, run_id, protected_input_paths)
           |> Map.merge(Map.put(environment, "MN_JOB_DATA_ACCESS", requested_access))
 
         %{node | config: Map.put(config, "environment", env)}
@@ -634,8 +647,8 @@ defmodule MirrorNeuron.Runtime.StableJob do
 
     initial_inputs =
       (manifest.initial_inputs || %{})
-      |> deep_merge(stringify(definition["resolved_configuration"] || %{}))
-      |> deep_merge(stringify(Keyword.get(opts, :inputs, %{})))
+      |> deep_merge(resolved_configuration)
+      |> deep_merge(run_input_overrides)
       |> deep_merge(%{
         "identity" => %{"job_id" => definition["job_id"], "run_id" => run_id}
       })
@@ -748,14 +761,18 @@ defmodule MirrorNeuron.Runtime.StableJob do
     end
   end
 
-  defp merge_runtime_configuration(environment, definition, run_id) do
+  defp merge_runtime_configuration(environment, definition, run_id, protected_input_paths) do
     case Map.get(environment, "MN_BLUEPRINT_CONFIG_JSON") do
       encoded when is_binary(encoded) ->
         case Jason.decode(encoded) do
           {:ok, config} when is_map(config) ->
             config =
               config
-              |> deep_merge(stringify(definition["resolved_configuration"] || %{}))
+              |> deep_merge(
+                definition["resolved_configuration"]
+                |> stringify()
+                |> drop_runtime_owned_paths(protected_input_paths)
+              )
               |> deep_merge(%{
                 "identity" => %{"job_id" => definition["job_id"], "run_id" => run_id}
               })
@@ -768,6 +785,60 @@ defmodule MirrorNeuron.Runtime.StableJob do
 
       _missing ->
         environment
+    end
+  end
+
+  # Local input folders are copied to a submission-scoped shared-storage path
+  # before a run starts.  The SDK advertises those exact config paths in
+  # mn_storage; they are runtime-owned from that point forward, so a persisted
+  # launch overlay containing a submitter-only /Users/... path must not win.
+  defp staged_input_config_paths(manifest) do
+    manifest
+    |> Map.get(:metadata, %{})
+    |> Map.get("mn_storage", %{})
+    |> Map.get("inputs", %{})
+    |> Map.get("folders", [])
+    |> List.wrap()
+    |> Enum.flat_map(fn folder ->
+      if is_map(folder) do
+        [Map.get(folder, "config_path") | List.wrap(Map.get(folder, "config_paths"))]
+        |> Enum.filter(&(is_binary(&1) and &1 != ""))
+      else
+        []
+      end
+    end)
+    |> Enum.uniq()
+  end
+
+  defp drop_runtime_owned_paths(configuration, paths) when is_map(configuration) do
+    Enum.reduce(paths, configuration, &drop_dotted_path(&2, &1))
+  end
+
+  defp drop_runtime_owned_paths(configuration, _paths), do: configuration
+
+  defp drop_dotted_path(configuration, path) when is_map(configuration) and is_binary(path) do
+    path
+    |> String.split(".", trim: true)
+    |> drop_path_segments(configuration)
+  end
+
+  defp drop_dotted_path(configuration, _path), do: configuration
+
+  defp drop_path_segments([], configuration), do: configuration
+
+  defp drop_path_segments([key], configuration), do: Map.delete(configuration, key)
+
+  defp drop_path_segments([key | rest], configuration) do
+    case Map.get(configuration, key) do
+      value when is_map(value) ->
+        updated = drop_path_segments(rest, value)
+
+        if map_size(updated) == 0,
+          do: Map.delete(configuration, key),
+          else: Map.put(configuration, key, updated)
+
+      _ ->
+        configuration
     end
   end
 

@@ -19,6 +19,16 @@ defmodule MirrorNeuron.Runtime.JobCoordinatorTimerTest do
     assert {:noreply, ^state} = JobCoordinator.handle_info(stale_message, state)
   end
 
+  test "stale staged-input readiness checks cannot seed a pending workflow" do
+    state = %{
+      status: "pending",
+      submission_storage: %{timer_token: make_ref()}
+    }
+
+    assert {:noreply, ^state} =
+             JobCoordinator.handle_info({:submission_storage_check, make_ref()}, state)
+  end
+
   test "completed recovery tasks are demonitored and removed" do
     task = Task.async(fn -> :completed end)
     state = %{job_id: "task-job", recovery_tasks: %{task.ref => task}}

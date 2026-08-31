@@ -110,4 +110,118 @@ defmodule MirrorNeuron.Runtime.StableJobTest do
     assert get_in(prepared.initial_inputs, ["identity", "job_id"]) == "stable-job"
     assert get_in(prepared.initial_inputs, ["identity", "run_id"]) == "run-2"
   end
+
+  test "keeps staged local-input paths authoritative while retaining unrelated overlays" do
+    staged_path = "/root/.mn/shared/submissions/submission-1/inputs/mn_local_inputs/source"
+
+    assert {:ok, manifest} =
+             Manifest.load(%{
+               "apiVersion" => "mn.workflow/v1",
+               "kind" => "Workflow",
+               "manifest_version" => "1.0",
+               "graph_id" => "staged-input-path-test",
+               "entrypoints" => ["worker"],
+               "metadata" => %{
+                 "mn_storage" => %{
+                   "inputs" => %{
+                     "folders" => [
+                       %{
+                         "config_path" => "inputs.payload.input_folder",
+                         "config_paths" => [
+                           "inputs.payload.input_folder",
+                           "inputs.payload.source_folder"
+                         ],
+                         "runtime_path" => staged_path
+                       }
+                     ]
+                   }
+                 }
+               },
+               "initial_inputs" => %{
+                 "inputs" => %{
+                   "payload" => %{
+                     "input_folder" => staged_path,
+                     "source_folder" => staged_path
+                   }
+                 }
+               },
+               "flow" => %{
+                 "nodes" => [
+                   %{
+                     "node_id" => "worker",
+                     "agent_type" => "router",
+                     "role" => "root",
+                     "config" => %{
+                       "environment" => %{
+                         "MN_JOB_INPUT_DIR" => "/root/.mn/shared/submissions/submission-1/inputs",
+                         "MN_BLUEPRINT_CONFIG_JSON" =>
+                           Jason.encode!(%{
+                             "inputs" => %{
+                               "payload" => %{
+                                 "input_folder" => staged_path,
+                                 "source_folder" => staged_path
+                               }
+                             },
+                             "mode" => "staged-default"
+                           })
+                       }
+                     }
+                   }
+                 ],
+                 "edges" => []
+               }
+             })
+
+    definition = %{
+      "job_id" => "staged-input-job",
+      "data_generation" => 1,
+      "resolved_configuration" => %{
+        "inputs" => %{
+          "payload" => %{
+            "input_folder" => "/Users/homer/Sandbox/Archmind",
+            "source_folder" => "/Users/homer/Sandbox/Archmind"
+          }
+        },
+        "mode" => "operator-selected",
+        "threshold" => 2
+      }
+    }
+
+    assert {:ok, prepared} =
+             StableJob.prepare_run_manifest(
+               manifest,
+               definition,
+               "run-1",
+               "/job-data/staged-input-job",
+               "read_write",
+               inputs: %{
+                 "inputs" => %{
+                   "payload" => %{
+                     "input_folder" => "/Users/homer/override",
+                     "source_folder" => "/Users/homer/override"
+                   }
+                 },
+                 "per_run_option" => true
+               }
+             )
+
+    prepared_map = Manifest.to_map(prepared)
+    [node] = get_in(prepared_map, ["flow", "nodes"])
+    environment = get_in(node, ["config", "environment"])
+    config = Jason.decode!(environment["MN_BLUEPRINT_CONFIG_JSON"])
+
+    assert get_in(config, ["inputs", "payload", "input_folder"]) == staged_path
+    assert get_in(config, ["inputs", "payload", "source_folder"]) == staged_path
+    assert config["mode"] == "operator-selected"
+    assert config["threshold"] == 2
+    assert environment["MN_JOB_INPUT_DIR"] == "/root/.mn/shared/submissions/submission-1/inputs"
+
+    assert get_in(prepared.initial_inputs, ["inputs", Access.at(0), "payload", "input_folder"]) ==
+             staged_path
+
+    assert get_in(prepared.initial_inputs, ["inputs", Access.at(0), "payload", "source_folder"]) ==
+             staged_path
+
+    assert prepared.initial_inputs["per_run_option"] == true
+  end
 end
