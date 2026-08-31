@@ -758,6 +758,11 @@ continue across peers and giving clients a stable missing-resource error.
 Runtime-model preparation and LiteLLM route controls likewise forward to a
 joined requested `node`; callers keep one Core ingress and never receive peer
 credentials.
+`ObservabilityService.StreamEvents` follows the same owner boundary: a
+non-owner Core relays the remote owner's replay/live stream in one authenticated
+federation hop. CLI monitors therefore receive remote workflow events without
+requiring a shared Redis identity; local and legacy streams keep their existing
+node-local behavior.
 `UpdateJobRequest` may include `manifest_json` and `payloads` to atomically
 replace an inactive definition's executable bundle without changing its graph
 or blueprint identity.

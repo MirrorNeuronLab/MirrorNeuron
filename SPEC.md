@@ -97,6 +97,11 @@ Owner-forwarded job and run deletion use a bounded five-minute request deadline
 instead of the ordinary 15-second federation request deadline. Connection
 establishment remains bounded by the ordinary deadline, while confirmed cleanup
 has time to cancel runs and retire each owned runtime resource.
+The observability event stream resolves the same run owner. A non-owner Core
+proxies the owner's replay and live server stream in one federation hop, so
+clients see workflow transitions without sharing Redis identities or polling a
+Syncthing replica. Event payloads are relayed unchanged; local and legacy
+streams continue to read the node-local event store and EventBus.
 Stable-job lookup and lifecycle atoms map to semantic gRPC statuses (`NOT_FOUND`,
 `ALREADY_EXISTS`, `FAILED_PRECONDITION`, or `INVALID_ARGUMENT`); a missing
 resource on one peer must not surface as `INTERNAL` or abort owner discovery.

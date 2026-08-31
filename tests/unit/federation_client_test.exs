@@ -3,6 +3,7 @@ defmodule MirrorNeuron.Cluster.FederationClientTest do
 
   alias MirrorNeuron.Cluster.FederationClient
   alias Mirrorneuron.Job.V1.{JobRequest, RunRequest}
+  alias Mirrorneuron.Observability.V1.EventResponse
 
   test "uses a bounded extended timeout only for semantic Job responses" do
     assert FederationClient.request_timeout(:query_job_response) == 60_000
@@ -91,5 +92,37 @@ defmodule MirrorNeuron.Cluster.FederationClientTest do
 
     assert FederationClient.decode_services("{}") == []
     assert FederationClient.decode_services("not-json") == []
+  end
+
+  test "relays every response from a federated event stream in order" do
+    responses = [
+      {:ok, %EventResponse{event_json: ~s({"type":"step_started"}), version: 1}},
+      {:ok, %EventResponse{event_json: ~s({"type":"step_completed"}), version: 1}},
+      {:trailers, %{}}
+    ]
+
+    assert :ok =
+             FederationClient.relay_event_responses(
+               "mirror_neuron@spark",
+               responses,
+               fn response ->
+                 send(self(), {:event, response.event_json})
+               end
+             )
+
+    assert_receive {:event, ~s({"type":"step_started"})}
+    assert_receive {:event, ~s({"type":"step_completed"})}
+  end
+
+  test "turns a broken federated event stream into an owner availability error" do
+    error = GRPC.RPCError.exception(status: GRPC.Status.unavailable(), message: "peer closed")
+
+    assert_raise GRPC.RPCError, ~r/MN_NODE_UNAVAILABLE.*mirror_neuron@spark/, fn ->
+      FederationClient.relay_event_responses(
+        "mirror_neuron@spark",
+        [{:error, error}],
+        fn _response -> :ok end
+      )
+    end
   end
 end

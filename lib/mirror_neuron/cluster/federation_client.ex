@@ -7,6 +7,7 @@ defmodule MirrorNeuron.Cluster.FederationClient do
   alias Mirrorneuron.Cluster.V1.ClusterService.Stub, as: ClusterStub
   alias Mirrorneuron.Job.V1.{DeleteJobRequest, JobRequest, ListJobsRequest, RunRequest}
   alias Mirrorneuron.Job.V1.JobService.Stub, as: JobStub
+  alias Mirrorneuron.Observability.V1.ObservabilityService.Stub, as: ObservabilityStub
 
   @timeout 15_000
   @job_response_timeout 60_000
@@ -16,6 +17,46 @@ defmodule MirrorNeuron.Cluster.FederationClient do
     response = rpc_call(node_name, JobStub, function, request)
     record_response(node_name, function, response)
     response
+  end
+
+  @doc false
+  def stream_events(node_name, request, on_event)
+      when is_binary(node_name) and is_function(on_event, 1) do
+    with {:ok, peer} <- FederationRegistry.fetch(node_name),
+         {:ok, target} <- target(peer),
+         {:ok, channel} <- connect(target, peer) do
+      try do
+        case ObservabilityStub.stream_events(channel, request) do
+          {:ok, responses} -> relay_event_responses(node_name, responses, on_event)
+          {:error, reason} -> relay_failure!(node_name, reason)
+        end
+      after
+        _ = GRPC.Stub.disconnect(channel)
+      end
+    else
+      {:error, reason} -> unavailable!(node_name, reason)
+    end
+  end
+
+  @doc false
+  def relay_event_responses(node_name, responses, on_event)
+      when is_binary(node_name) and is_function(on_event, 1) do
+    responses
+    |> Enum.reduce_while(:ok, fn
+      {:ok, response}, :ok ->
+        on_event.(response)
+        {:cont, :ok}
+
+      {:trailers, _trailers}, :ok ->
+        {:cont, :ok}
+
+      {:error, reason}, :ok ->
+        {:halt, {:error, reason}}
+    end)
+    |> case do
+      :ok -> :ok
+      {:error, reason} -> relay_failure!(node_name, reason)
+    end
   end
 
   @doc false
@@ -353,6 +394,10 @@ defmodule MirrorNeuron.Cluster.FederationClient do
     raise GRPC.RPCError,
       status: GRPC.Status.unavailable(),
       message: "MN_NODE_UNAVAILABLE: owner #{node_name} is unreachable (#{safe_reason(reason)})"
+  end
+
+  defp relay_failure!(node_name, reason) do
+    if availability_failure?(reason), do: unavailable!(node_name, reason), else: raise(reason)
   end
 
   defp safe_reason(%GRPC.RPCError{status: status}), do: "grpc_status_#{status}"
