@@ -80,6 +80,30 @@ defmodule MirrorNeuron.ArtifactsTest do
              "large doc"
   end
 
+  test "materializes the payload root when an upload uses dot", %{root: root} do
+    assert {:ok, %{sha256: first_sha}} = BlobStore.put_bytes("first")
+    assert {:ok, %{sha256: second_sha}} = BlobStore.put_bytes("second")
+
+    refs = [
+      %{
+        "type" => "blob_ref",
+        "sha256" => first_sha,
+        "payload_path" => "services/cctv_web_ui.py"
+      },
+      %{
+        "type" => "blob_ref",
+        "sha256" => second_sha,
+        "payload_path" => "domain/report.py"
+      }
+    ]
+
+    target = Path.join(root, "stage/root")
+
+    assert :ok = Resolver.materialize_payload_refs(refs, ".", target)
+    assert File.read!(Path.join(target, "services/cctv_web_ui.py")) == "first"
+    assert File.read!(Path.join(target, "domain/report.py")) == "second"
+  end
+
   test "resolver fails fast when a shared blob is missing" do
     sha256 = String.duplicate("a", 64)
 

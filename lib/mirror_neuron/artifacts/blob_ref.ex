@@ -38,15 +38,19 @@ defmodule MirrorNeuron.Artifacts.BlobRef do
   def refs_for_payload_prefix(refs, prefix) do
     prefix = normalize_payload_path(prefix)
 
-    refs
-    |> List.wrap()
-    |> Enum.map(&normalize/1)
-    |> Enum.filter(&valid?/1)
-    |> Enum.filter(fn ref ->
+    normalized_refs =
+      refs
+      |> List.wrap()
+      |> Enum.map(&normalize/1)
+      |> Enum.filter(&valid?/1)
+
+    Enum.filter(normalized_refs, fn ref ->
       payload_path = Map.get(ref, "payload_path")
 
       is_binary(payload_path) and
-        (payload_path == prefix or String.starts_with?(payload_path, prefix <> "/"))
+        (is_nil(prefix) or
+           payload_path == prefix or
+           String.starts_with?(payload_path, prefix <> "/"))
     end)
   end
 
@@ -55,6 +59,12 @@ defmodule MirrorNeuron.Artifacts.BlobRef do
     payload_path = normalize_payload_path(payload_path)
 
     cond do
+      is_nil(payload_path) ->
+        nil
+
+      is_nil(prefix) ->
+        payload_path
+
       payload_path == prefix ->
         ""
 
