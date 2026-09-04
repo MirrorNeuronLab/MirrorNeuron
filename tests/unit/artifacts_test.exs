@@ -52,6 +52,25 @@ defmodule MirrorNeuron.ArtifactsTest do
     assert sha == String.duplicate("a", 64)
   end
 
+  test "does not treat filesystem readiness digests as blob refs" do
+    manifest = %{
+      "metadata" => %{
+        "mn_storage" => %{
+          "inputs" => %{
+            "readiness" => %{
+              "version" => "mn.input_readiness/v1",
+              "path" => "inputs/.mn-inputs-ready.json",
+              "sha256" => String.duplicate("a", 64),
+              "size_bytes" => 851
+            }
+          }
+        }
+      }
+    }
+
+    assert BlobRef.collect(manifest) == []
+  end
+
   test "materializes payload refs from the shared blob store through a job folder", %{
     root: root,
     job_root: job_root

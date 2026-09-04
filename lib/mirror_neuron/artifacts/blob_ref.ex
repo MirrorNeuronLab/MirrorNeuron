@@ -95,10 +95,8 @@ defmodule MirrorNeuron.Artifacts.BlobRef do
 
   defp blob_ref_map?(%{} = value) do
     type = Map.get(value, "type") || Map.get(value, :type)
-    sha = Map.get(value, "sha256") || Map.get(value, :sha256)
 
-    to_string(type) == "blob_ref" or
-      (is_binary(sha) and Regex.match?(@sha256_re, normalize_sha(sha)))
+    to_string(type) == "blob_ref"
   end
 
   defp normalize_locations(locations) when is_list(locations) do
