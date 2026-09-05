@@ -4,7 +4,7 @@ defmodule MirrorNeuron.Grpc.JobProjection do
   alias MirrorNeuron.Runtime.JobResponse
 
   @summary_fields ~w(
-    job_id blueprint_id graph_id job_name type owner_node status data_generation
+    job_id blueprint_id graph_id job_name type owner_node status revision data_generation
     latest_run_id created_at updated_at bundle_ref retired_definition_resources
     resource_cleanup_errors
   )

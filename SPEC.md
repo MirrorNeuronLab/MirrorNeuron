@@ -328,3 +328,6 @@ mix compile --warnings-as-errors
 Shell scripts also pass `bash -n`. Unit tests cover deterministic behavior;
 Redis, OpenShell, Docker, and multi-node paths receive focused integration/E2E
 coverage when those contracts change.
+
+Stable Job summary and detail projections retain the definition revision so
+HTTP and SDK callers can perform optimistic concurrency checks on mutations.

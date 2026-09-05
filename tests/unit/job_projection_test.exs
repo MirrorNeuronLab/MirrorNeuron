@@ -6,6 +6,7 @@ defmodule MirrorNeuron.Grpc.JobProjectionTest do
   test "job responses reference archived bundles without echoing manifests" do
     definition = %{
       "job_id" => "job-1",
+      "revision" => 7,
       "graph_id" => "large-workflow",
       "job_name" => "Large workflow",
       "status" => "active",
@@ -35,6 +36,7 @@ defmodule MirrorNeuron.Grpc.JobProjectionTest do
       refute Map.has_key?(projected["bundle_ref"], "cache_path")
       refute Map.has_key?(projected["bundle_ref"], "job_path")
       refute Map.has_key?(projected["bundle_ref"], "manifest_path")
+      assert projected["revision"] == 7
       assert projected["run_count"] == 2
       assert projected["schedule_count"] == 1
       assert byte_size(Jason.encode!(projected)) < 10_000
