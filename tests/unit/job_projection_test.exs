@@ -168,4 +168,23 @@ defmodule MirrorNeuron.Grpc.JobProjectionTest do
                %{}
              )
   end
+
+  test "definitions without native services retain a reconciliation token" do
+    detail =
+      JobProjection.detail(%{
+        "job_id" => "job-without-services",
+        "manifest" => %{
+          "metadata" => %{
+            "mn_native_resources" => %{
+              "version" => 1,
+              "submission_id" => "submission-empty",
+              "resources" => []
+            }
+          }
+        }
+      })
+
+    assert detail["native_resource_ownership"]["submission_id"] == "submission-empty"
+    assert detail["native_resource_ownership"]["resources"] == []
+  end
 end
