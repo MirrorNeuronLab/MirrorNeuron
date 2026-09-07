@@ -70,6 +70,8 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
       # particular, after a Core restart there may be no
       # HostLocal process to terminate, but persisted DockerWorker containers
       # and DockerCompose projects must still be brought down.
+      memory_fence = MirrorNeuron.Runtime.ContextMemory.cancel_run(job_id)
+
       with {:ok, native_cleanup} <-
              RunnerResources.cleanup_native_resources_with_result(job_id),
            :ok <- cleanup_legacy_native_resources(job_id, native_cleanup),
@@ -77,7 +79,8 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
            :ok <- stop_local_job(job_id),
            :ok <- ServiceRegistry.deregister_job(job_id),
            :ok <- OpenShellJobSandbox.cleanup_job_local(job_id),
-           :ok <- DockerJobSandbox.cleanup_job_local(job_id) do
+           :ok <- DockerJobSandbox.cleanup_job_local(job_id),
+           :ok <- memory_fence do
         case CancellationStore.acknowledge(job_id, local_node) do
           {:ok, :completed, _cancellation} ->
             EventBus.publish_if_job_exists(job_id, %{

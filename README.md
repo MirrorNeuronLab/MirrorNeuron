@@ -1045,3 +1045,12 @@ child-workflow compiler; no compatibility execution fallback is provided.
 
 Validation: `mix test tests/unit/child_workflow_test.exs
  tests/unit/dynamic_workflow_test.exs tests/unit/workflow_ledger_test.exs --no-start`.
+
+Managed long-running investigations use the SDK/Membrane
+`mn.context.working.v1` contract. Core keeps its scheduling boundary: memory
+recall never schedules external tools or changes a committed child DAG. For
+jobs declaring `required_context_engine`, cancellation fences the run's durable
+memory index before acknowledging completion; failed fences are retried while
+worker shutdown still proceeds. Deletion fences and removes index keys in
+bounded Redis pages while preserving a small tombstone against stale writes.
+Exact source text and response receipts remain confidential run artifacts.

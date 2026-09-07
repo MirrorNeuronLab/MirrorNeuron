@@ -1462,6 +1462,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   defp do_delete_job(job_id, opts) do
     with {:ok, job_map} <- job_for_cleanup(job_id),
+         :ok <- MirrorNeuron.Runtime.ContextMemory.clear_run(job_id, job_map),
          :ok <- delete_service_instances(job_id: job_id),
          :ok <- cleanup_shared_storage(job_id, job_map),
          :ok <- JobStore.cleanup_job(job_id),

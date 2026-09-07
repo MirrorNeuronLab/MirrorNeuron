@@ -372,3 +372,20 @@ child-workflow compiler; no compatibility execution fallback is provided.
 
 Validation: `mix test tests/unit/child_workflow_test.exs
  tests/unit/dynamic_workflow_test.exs tests/unit/workflow_ledger_test.exs --no-start`.
+
+## Durable working-context lifecycle
+
+Jobs with `required_context_engine: true` may use Membrane's additive
+`mn.context.working.v1` RPC. `Runtime.ContextMemory` binds cleanup to the persisted
+stable job ID and run ID, using `MN_CONTEXT_REDIS_URL` from the common runtime
+Redis environment. Length-framed keys isolate runs; identifiers cannot inject
+Redis scan patterns. Cancellation attempts the index fence before stopping
+workers, and acknowledges only after both succeed. An unavailable index does
+not prevent worker shutdown. Cancellation reconciliation retries failures.
+
+Deleting a run fences new memory writes, paginates `SCAN`, and `UNLINK`s at most
+128 keys per command. Keep the cancellation tombstone; run IDs must not be
+reused. Existing artifact cleanup owns source blobs and SQLite invocation
+receipts. A memory failure cannot complete a logical step or alter its topology;
+`needs_partition` is handled by an explicitly admitted domain result/planning
+boundary. Public events do not carry source text or memory packet content.
