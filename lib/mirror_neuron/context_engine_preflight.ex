@@ -16,7 +16,8 @@ defmodule MirrorNeuron.ContextEnginePreflight do
       {:error, attempts} ->
         {:error,
          "Context Engine is required by manifest required_context_engine=true, but it is not reachable. " <>
-           "Start it on port 50052 or set CONTEXT_ENGINE_ADDR. Tried: #{format_attempts(attempts)}"}
+           "Start it at MN_CONTEXT_ADDR (or the legacy CONTEXT_ENGINE_ADDR override). " <>
+           "Tried: #{format_attempts(attempts)}"}
     end
   end
 
@@ -43,14 +44,13 @@ defmodule MirrorNeuron.ContextEnginePreflight do
 
   defp endpoints do
     configured =
-      "CONTEXT_ENGINE_ADDR"
-      |> System.get_env("")
-      |> String.trim()
+      ["MN_CONTEXT_ADDR", "CONTEXT_ENGINE_ADDR"]
+      |> Enum.map(&(System.get_env(&1, "") |> String.trim()))
+      |> Enum.find(&(&1 != ""))
 
-    if configured == "" do
-      @default_endpoints
-    else
-      [configured]
+    case configured do
+      nil -> @default_endpoints
+      endpoint -> [endpoint]
     end
   end
 

@@ -375,7 +375,12 @@ Validation: `mix test tests/unit/child_workflow_test.exs
 
 ## Durable working-context lifecycle
 
-Jobs with `required_context_engine: true` may use Membrane's additive
+Jobs with `required_context_engine: true` check Membrane's context service
+at `MN_CONTEXT_ADDR`, the same address used by SDK workers.
+Startup checks that address on the job owner; the legacy `CONTEXT_ENGINE_ADDR`
+is used only when `MN_CONTEXT_ADDR` is unset or blank. An explicitly configured
+unreachable service fails startup rather than probing a different service.
+Jobs with this requirement may use Membrane's additive
 `mn.context.working.v1` RPC. `Runtime.ContextMemory` binds cleanup to the persisted
 stable job ID and run ID, using `MN_CONTEXT_REDIS_URL` from the common runtime
 Redis environment. Length-framed keys isolate runs; identifiers cannot inject
