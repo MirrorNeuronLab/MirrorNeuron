@@ -347,3 +347,28 @@ requests; image construction validates the protobuf runtime compatibility.
 Rebuilding the Membrane image alone cannot repair missing gateway dependencies.
 The SDK stages and validates the actual RPC bindings when LiteLLM loads its
 callback. This adds no blueprint dependencies or runtime package installation.
+
+## Runtime-owned child workflow rounds
+
+The `workflow.child_workflows` contract admits bounded child templates beneath
+one fixed parent step. `Runtime.ChildWorkflow` validates the planner's finite
+DAG, commits immutable revisions and graph hashes, and creates namespaced
+instances in the existing workflow ledger. Redis persistence, worker delivery,
+resource admission and attempt fencing remain owned by the existing runtime.
+
+The generated parent sink hands off completion, leaving the parent running.
+Only after a complete child round can a new planner instance run. A final stop
+maps the child's bounded output into the deferred sink result and releases the
+parent exit. Children cannot modify parent inputs, parent edges, running work,
+or another region. Invalid plans fail the parent and run before task dispatch.
+
+Child fields are additive to ledger v3 and restored with the existing topology.
+Public events contain parent, round, revision and phase; completed worker payloads
+are not public event bodies because they can contain confidential plans.
+Completed child instances remain bounded by round/node limits and retain their
+outcomes for inspection. Static and existing dynamic-region workflows preserve
+their current execution semantics. Deploy this runtime together with the SDK
+child-workflow compiler; no compatibility execution fallback is provided.
+
+Validation: `mix test tests/unit/child_workflow_test.exs
+ tests/unit/dynamic_workflow_test.exs tests/unit/workflow_ledger_test.exs --no-start`.

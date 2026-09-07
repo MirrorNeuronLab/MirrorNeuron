@@ -840,7 +840,28 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     Map.take(payload, ["patch_id", "base_revision", "region_id"])
   end
 
+  defp public_agent_event_payload(event_type, payload)
+       when event_type in [
+              :workflow_step_attempt_completed,
+              "workflow_step_attempt_completed",
+              :workflow_step_completed,
+              "workflow_step_completed"
+            ] and is_map(payload) do
+    # Worker results can contain confidential child plans. Durable artifacts/ledger own their contents.
+    if contains_child_plan?(payload),
+      do: Map.take(payload, ["step_id", "workflow_step_id", "attempt_id", "status"]),
+      else: payload
+  end
+
   defp public_agent_event_payload(_event_type, payload), do: payload
+
+  defp contains_child_plan?(value) when is_map(value),
+    do: Map.has_key?(value, "child_plan") or Enum.any?(Map.values(value), &contains_child_plan?/1)
+
+  defp contains_child_plan?(value) when is_list(value),
+    do: Enum.any?(value, &contains_child_plan?/1)
+
+  defp contains_child_plan?(_), do: false
 
   defp run_health_check(state, reschedule?) do
     state = refresh_pressure(state)

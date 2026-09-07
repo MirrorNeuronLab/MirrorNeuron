@@ -5,6 +5,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   alias MirrorNeuron.Artifacts.StagedArtifact
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.DynamicWorkflow
+  alias MirrorNeuron.Runtime.ChildWorkflow
   alias MirrorNeuron.Runtime.ErrorEnvelope
   alias MirrorNeuron.Runtime.WorkflowTrigger
 
@@ -41,6 +42,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
 
       base
       |> DynamicWorkflow.initialize(flow, Map.new(templates, &{&1["id"], initial_step(&1)}))
+      |> ChildWorkflow.initialize(flow, Map.new(templates, &{&1["id"], initial_step(&1)}))
       |> merge_existing(existing_job)
     end
   end
@@ -152,6 +154,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
     state
     |> Map.drop(["messages"])
     |> Map.put("steps", compact_steps)
+    |> ChildWorkflow.public_snapshot()
   end
 
   def compact_snapshot(state), do: state
@@ -329,6 +332,9 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
       normalized_event_type = normalize_event_type(event_type)
 
       cond do
+        ChildWorkflow.child?(step) and Map.get(state, "status") not in ["pending", "running"] ->
+          {state, [], []}
+
         step_terminal?(step) ->
           ignore_terminal_step_event(state, step, normalized_event_type, payload, now)
 
@@ -339,7 +345,17 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
           {next_state, retirement_events} =
             DynamicWorkflow.retire_completed_service_patches(next_state, now)
 
-          activate_ready_steps(next_state, events ++ retirement_events, actions, now)
+          child_failures =
+            for event <- events,
+                event.type == :workflow_child_failed,
+                do: {:fail_job, event.parent_step_id, event.reason}
+
+          activate_ready_steps(
+            next_state,
+            events ++ retirement_events,
+            actions ++ child_failures,
+            now
+          )
       end
     else
       _ -> {state, [], []}
@@ -658,6 +674,9 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
     edges = incoming_edges(state, step)
 
     cond do
+      ChildWorkflow.managed_target?(state, step) ->
+        true
+
       DynamicWorkflow.managed_target?(state, step) ->
         true
 
@@ -698,7 +717,10 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
         "graph_revision" => DynamicWorkflow.graph_revision(state),
         "template_id" => Map.get(step, "template_id"),
         "region_id" => Map.get(step, "region_id"),
-        "step_input" => Map.get(step, "instance_input")
+        "step_input" => Map.get(step, "instance_input"),
+        "parent_step_id" => step["parent_step_id"],
+        "child_round" => step["child_round"],
+        "child_phase" => step["child_phase"]
       }
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)
       |> Map.new()
@@ -1269,8 +1291,33 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
       stale_attempt_output?(step, payload) ->
         ignore_stale_step_output(state, step, payload, now)
 
+      dependencies_satisfied?(state, step) and ChildWorkflow.parent?(state, step) ->
+        ChildWorkflow.start(state, step, payload, now)
+
       dependencies_satisfied?(state, step) ->
-        complete_step(state, step, payload, now)
+        {next, events} = complete_step(state, step, payload, now)
+        {next, child_events, resolution} = ChildWorkflow.completed(next, step, payload, now)
+
+        case resolution do
+          {:completed, parent, output} ->
+            {next, boundary_events} = complete_step(next, get_step(next, parent), output, now)
+            {next, events ++ child_events ++ boundary_events}
+
+          {:failed, parent, reason} ->
+            failed =
+              Map.merge(get_step(next, parent), %{
+                "status" => "failed",
+                "terminal_reason" => reason
+              })
+
+            {put_step(next, failed),
+             events ++
+               child_events ++
+               [workflow_event(:workflow_step_failed, failed, %{"reason" => reason})]}
+
+          nil ->
+            {next, events ++ child_events}
+        end
 
       true ->
         block_step_for_dependencies(state, step, step_last_message(step), now)
@@ -1725,9 +1772,13 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
     graph = if is_map(Map.get(flow, "graph")), do: Map.get(flow, "graph"), else: %{}
     runtime_by_id = Map.new(runtime_nodes, &{&1.node_id, &1})
 
-    dynamic
-    |> Map.get("templates", %{})
-    |> normalize_template_specs()
+    child_templates =
+      flow
+      |> Map.get("child_workflows", %{})
+      |> Map.values()
+      |> Enum.flat_map(&normalize_template_specs(&1["templates"]))
+
+    (normalize_template_specs(Map.get(dynamic, "templates", %{})) ++ child_templates)
     |> Enum.map(&step_definition(&1, runtime_by_id, graph, false))
     |> Enum.reject(&is_nil/1)
   end
@@ -1938,7 +1989,8 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
             "applied_patches",
             "patch_order",
             "dynamic_patch_instances",
-            "dynamic_history"
+            "dynamic_history",
+            "child_workflows"
           ])
         )
         |> Map.put("steps", steps)

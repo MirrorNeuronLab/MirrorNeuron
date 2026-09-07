@@ -10,22 +10,25 @@ defmodule MirrorNeuron.Runtime.DynamicWorkflowSpec do
     mode = to_string(Map.get(flow, "mode") || "static_dag")
     dynamic = if is_map(Map.get(flow, "dynamic")), do: Map.get(flow, "dynamic"), else: %{}
 
-    cond do
-      mode not in ["static_dag", "dynamic_dag"] ->
-        ["workflow mode must be static_dag or dynamic_dag"]
+    errors =
+      cond do
+        mode not in ["static_dag", "dynamic_dag"] ->
+          ["workflow mode must be static_dag or dynamic_dag"]
 
-      mode == "static_dag" and Map.get(dynamic, "enabled") == true ->
-        ["dynamic.enabled requires workflow mode dynamic_dag"]
+        mode == "static_dag" and Map.get(dynamic, "enabled") == true ->
+          ["dynamic.enabled requires workflow mode dynamic_dag"]
 
-      mode == "dynamic_dag" and Map.get(dynamic, "enabled") != true ->
-        ["dynamic_dag workflows require dynamic.enabled true"]
+        mode == "dynamic_dag" and Map.get(dynamic, "enabled") != true ->
+          ["dynamic_dag workflows require dynamic.enabled true"]
 
-      mode != "dynamic_dag" ->
-        []
+        mode != "dynamic_dag" ->
+          []
 
-      true ->
-        validate_dynamic_spec(flow, dynamic, MapSet.new(node_ids))
-    end
+        true ->
+          validate_dynamic_spec(flow, dynamic, MapSet.new(node_ids))
+      end
+
+    errors ++ MirrorNeuron.Runtime.ChildWorkflow.validation_errors(flow, node_ids)
   end
 
   def validation_errors(_flow, _node_ids), do: []
