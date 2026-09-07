@@ -1012,3 +1012,11 @@ uses the configured serving window and calls Membrane's `CompilePrompt` RPC
 when necessary; deploy the SDK and Membrane image together. Model compression
 remains optional, and no workflow timeout behavior changes. Historical release
 support snapshots remain unchanged.
+
+
+The Core image also runs the LiteLLM gateway. Its Python environment includes
+`grpcio>=1.82.1` and `protobuf>=7.35.1` for automatic Membrane `CompilePrompt`
+requests; image construction validates the protobuf runtime compatibility.
+Rebuilding the Membrane image alone cannot repair missing gateway dependencies.
+The SDK stages and validates the actual RPC bindings when LiteLLM loads its
+callback. This adds no blueprint dependencies or runtime package installation.
