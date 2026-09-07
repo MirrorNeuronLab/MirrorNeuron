@@ -1004,3 +1004,11 @@ and libcluster. See `mix.exs` and `mix.lock` for the current dependency list.
 ## License
 
 MirrorNeuron Core is licensed under the MIT License. See [LICENSE](LICENSE).
+
+
+The default Compose runtime starts Membrane alongside LiteLLM for automatic
+request context compression. No blueprint profile is needed. The SDK gateway
+uses the configured serving window and calls Membrane's `CompilePrompt` RPC
+when necessary; deploy the SDK and Membrane image together. Model compression
+remains optional, and no workflow timeout behavior changes. Historical release
+support snapshots remain unchanged.

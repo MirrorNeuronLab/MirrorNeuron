@@ -331,3 +331,11 @@ coverage when those contracts change.
 
 Stable Job summary and detail projections retain the definition revision so
 HTTP and SDK callers can perform optimistic concurrency checks on mutations.
+
+
+The default Compose runtime starts Membrane alongside LiteLLM for automatic
+request context compression. No blueprint profile is needed. The SDK gateway
+uses the configured serving window and calls Membrane's `CompilePrompt` RPC
+when necessary; deploy the SDK and Membrane image together. Model compression
+remains optional, and no workflow timeout behavior changes. Historical release
+support snapshots remain unchanged.

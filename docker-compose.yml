@@ -107,8 +107,6 @@ services:
   membrane-context-engine:
     image: ${ENGINE_IMAGE:-mirror-neuron-memory-engine:latest}
     container_name: mirror-neuron-context-engine
-    profiles:
-      - context
     build:
       context: ${MEMBRANE_DIR:-../Membrane}
       dockerfile: Dockerfile
@@ -152,7 +150,11 @@ services:
     env_file:
       - path: ${MN_LITELLM_GATEWAY_ENV_FILE:-./docker-compose.env}
         required: false
+    depends_on:
+      membrane-context-engine:
+        condition: service_started
     environment:
+      MN_CONTEXT_ADDR: membrane-context-engine:50052
       HOME: /root
       MN_LITELLM_GATEWAY_INTERNAL_API_BASE: ${MN_LITELLM_GATEWAY_INTERNAL_API_BASE:-http://mn-litellm-proxy:4000/v1}
       MN_LITELLM_MAX_CONCURRENT_REQUESTS: ${MN_LITELLM_MAX_CONCURRENT_REQUESTS:-auto}
