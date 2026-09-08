@@ -1060,3 +1060,8 @@ step timeout as their default liveness deadline. Node-level beacon settings are
 not applied because this runner does not stream workflow beacons. An explicit
 workflow `control.beacon_timeout_ms` remains authoritative for workloads that
 provide a separate beacon producer. HostLocal node beacon settings are unchanged.
+
+Generated step sources consume authoritative upstream outputs carried by Core
+workflow triggers after child-workflow completion. They preserve run-input
+references and artifacts and retain the same one-dispatch-per-attempt behavior
+as ordinary generated sink deliveries.

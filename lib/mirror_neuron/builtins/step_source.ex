@@ -30,9 +30,14 @@ defmodule MirrorNeuron.Builtins.StepSource do
       {:ok, state, [{:event, :step_source_duplicate_ignored, event_payload(state)}]}
     else
       payload = payload(message) || %{}
-      metadata = StepContract.metadata(payload)
       required = required_upstreams(state.config)
-      producer = if is_map(payload), do: Map.get(payload, "step_id"), else: nil
+      boundaries = boundary_payloads(message, payload, required)
+
+      metadata =
+        Enum.reduce(boundaries, StepContract.metadata(payload), fn boundary, acc ->
+          Map.merge(acc, StepContract.metadata(boundary))
+        end)
+
       run_inputs_ref = state.run_inputs_ref || Map.get(metadata, "run_inputs_ref")
 
       run_inputs =
@@ -42,11 +47,13 @@ defmodule MirrorNeuron.Builtins.StepSource do
           if(required == [], do: StepContract.initial_input_payload(payload), else: %{})
 
       upstream_outputs =
-        if is_binary(producer) and producer in required do
-          Map.put(state.upstream_outputs, producer, StepContract.output_payload(payload))
-        else
-          state.upstream_outputs
-        end
+        Enum.reduce(boundaries, state.upstream_outputs, fn boundary, outputs ->
+          producer = Map.get(boundary, "step_id")
+
+          if is_binary(producer) and producer in required,
+            do: Map.put(outputs, producer, StepContract.output_payload(boundary)),
+            else: outputs
+        end)
 
       next_state = %{
         state
@@ -55,7 +62,9 @@ defmodule MirrorNeuron.Builtins.StepSource do
           upstream_outputs: upstream_outputs,
           upstream_artifacts:
             Enum.uniq(
-              state.upstream_artifacts ++ StepContract.artifacts(payload, artifacts(message))
+              state.upstream_artifacts ++
+                StepContract.artifacts(payload, artifacts(message)) ++
+                Enum.flat_map(boundaries, &StepContract.artifacts(&1, []))
             ),
           seen_message_ids: Enum.uniq(state.seen_message_ids ++ [message_id])
       }
@@ -65,6 +74,25 @@ defmodule MirrorNeuron.Builtins.StepSource do
       else
         {:error, reason} -> {:error, reason, next_state}
       end
+    end
+  end
+
+  # Child-workflow completion is delivered by the ledger as a trigger carrying
+  # authoritative parent outputs, rather than a second generated sink emission.
+  defp boundary_payloads(message, payload, required) do
+    if Message.from(message) == "workflow_ledger" and Message.type(message) == "workflow_trigger" do
+      payload
+      |> Map.get("parents", [])
+      |> Enum.filter(fn parent ->
+        is_map(parent) and parent["step_id"] in required and is_map(parent["output"])
+      end)
+      |> Enum.map(fn parent ->
+        parent["output"]
+        |> StagedArtifact.resolve_output!()
+        |> Map.put("step_id", parent["step_id"])
+      end)
+    else
+      [payload]
     end
   end
 

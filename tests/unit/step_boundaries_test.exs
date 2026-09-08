@@ -62,6 +62,47 @@ defmodule MirrorNeuron.StepBoundariesTest do
     assert Enum.any?(replay_actions, &match?({:event, :step_source_duplicate_ignored, _}, &1))
   end
 
+  test "ledger trigger dispatches child output and preserves run input metadata" do
+    node = %{
+      config: %{
+        "step_id" => "publish",
+        "required_upstreams" => ["investigate"],
+        "fields" => %{
+          "report" => %{"$ref" => "upstream", "step_id" => "investigate", "path" => ["report"]},
+          "goal" => %{"$ref" => "run_input", "path" => ["goal"]}
+        },
+        "output_message_type" => "publish_started"
+      }
+    }
+
+    {:ok, state} = StepSource.init(node)
+
+    payload = %{
+      "parents" => [
+        %{
+          "step_id" => "investigate",
+          "output" => %{
+            "outputs" => %{"report" => "shared/report.json"},
+            "_mn_step" => %{"run_inputs" => %{"goal" => "inspect"}}
+          }
+        }
+      ]
+    }
+
+    ordinary = message("worker", "publish", "workflow_trigger", payload, "ordinary")
+    {:ok, _, actions} = StepSource.handle_message(ordinary, state, %{})
+    assert Enum.any?(actions, &match?({:event, :step_source_waiting, _}, &1))
+    trigger = message("workflow_ledger", "publish", "workflow_trigger", payload, "trigger")
+    {:ok, completed, actions} = StepSource.handle_message(trigger, state, %{})
+
+    assert {:emit, "publish_started", result, _} =
+             Enum.find(actions, &match?({:emit, _, _, _}, &1))
+
+    assert result["outputs"] == %{"report" => "shared/report.json", "goal" => "inspect"}
+    {:ok, ^completed, replay} = StepSource.handle_message(trigger, completed, %{})
+    refute Enum.any?(replay, &match?({:emit, _, _, _}, &1))
+  end
+
   @tag :tmp_dir
   test "root step source stages immutable run inputs outside step metadata", %{tmp_dir: tmp_dir} do
     submission = Path.join(tmp_dir, "submission")
