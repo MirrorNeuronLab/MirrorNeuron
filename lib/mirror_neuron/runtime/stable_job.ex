@@ -192,7 +192,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
           {:ok, definition}
         else
           with :ok <- ensure_no_active_runs(definition),
-               :ok <- JobResponse.stop(definition),
+               :ok <- JobResponse.stop(definition, force: true),
                {:ok, archived} <-
                  RedisStore.persist_job_definition(
                    job_id,
