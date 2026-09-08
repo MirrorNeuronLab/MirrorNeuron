@@ -394,3 +394,9 @@ reused. Existing artifact cleanup owns source blobs and SQLite invocation
 receipts. A memory failure cannot complete a logical step or alter its topology;
 `needs_partition` is handled by an explicitly admitted domain result/planning
 boundary. Public events do not carry source text or memory packet content.
+
+DockerWorker workflow attempts, including dynamic child tasks, use the declared
+step timeout as their default liveness deadline. Node-level beacon settings are
+not applied because this runner does not stream workflow beacons. An explicit
+workflow `control.beacon_timeout_ms` remains authoritative for workloads that
+provide a separate beacon producer. HostLocal node beacon settings are unchanged.

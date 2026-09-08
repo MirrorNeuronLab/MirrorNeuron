@@ -65,6 +65,39 @@ defmodule MirrorNeuron.Runtime.ChildWorkflowTest do
     }
   end
 
+  test "Docker child templates use task deadlines instead of unstreamed node beacons" do
+    definition = manifest()
+
+    flow =
+      put_in(definition.flow, ["child_workflows", "inspect", "templates", "query", "control"], %{
+        "timeout_seconds" => 300
+      })
+
+    runtime_nodes =
+      Enum.map(nodes(), fn node ->
+        %{
+          node
+          | config: %{
+              "runner_module" => "MirrorNeuron.Runner.DockerWorker",
+              "beacon_timeout_ms" => 45_000
+            }
+        }
+      end)
+
+    state = WorkflowLedger.new(%{definition | flow: flow}, runtime_nodes)
+    assert state["child_templates"]["query"]["beacon_timeout_ms"] == 300_000
+
+    flow =
+      put_in(
+        flow,
+        ["child_workflows", "inspect", "templates", "query", "control", "beacon_timeout_ms"],
+        90_000
+      )
+
+    state = WorkflowLedger.new(%{definition | flow: flow}, runtime_nodes)
+    assert state["child_templates"]["query"]["beacon_timeout_ms"] == 90_000
+  end
+
   test "parent waits, committed DAG executes, next planner sees results, then parent exits" do
     {state, actions} = started()
     assert state["steps"]["inspect"]["status"] == "running"

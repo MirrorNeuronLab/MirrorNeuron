@@ -417,11 +417,34 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     }
 
     {state, []} =
-      WorkflowLedger.new(manifest, [%{node_id: "slow_llm_step", config: %{}}])
+      WorkflowLedger.new(manifest, [
+        %{
+          node_id: "slow_llm_step",
+          config: %{
+            "runner_module" => "MirrorNeuron.Runner.DockerWorker",
+            "beacon_timeout_ms" => 45_000
+          }
+        }
+      ])
       |> WorkflowLedger.job_running()
 
     assert get_in(state, ["steps", "slow_llm_step", "timeout_seconds"]) == 300
     assert get_in(state, ["steps", "slow_llm_step", "beacon_timeout_ms"]) == 300_000
+    message = Message.new("job", "runtime", "slow_llm_step", "start", %{})
+
+    {state, _} =
+      WorkflowLedger.on_message_received(
+        state,
+        "slow_llm_step",
+        message,
+        "2026-06-02T16:00:00.000Z"
+      )
+
+    {state, [], []} = WorkflowLedger.reconcile(state, "2026-06-02T16:01:00.000Z")
+    assert state["steps"]["slow_llm_step"]["status"] == "running"
+    {state, events, _} = WorkflowLedger.reconcile(state, "2026-06-02T16:05:01.000Z")
+    assert Enum.any?(events, &(&1.type == :workflow_step_attempt_timed_out))
+    assert state["steps"]["slow_llm_step"]["status"] == "failed"
   end
 
   test "service entrypoint has no implicit deadline while downstream steps stay bounded" do

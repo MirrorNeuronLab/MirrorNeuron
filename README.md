@@ -1054,3 +1054,9 @@ memory index before acknowledging completion; failed fences are retried while
 worker shutdown still proceeds. Deletion fences and removes index keys in
 bounded Redis pages while preserving a small tombstone against stale writes.
 Exact source text and response receipts remain confidential run artifacts.
+
+DockerWorker workflow attempts, including dynamic child tasks, use the declared
+step timeout as their default liveness deadline. Node-level beacon settings are
+not applied because this runner does not stream workflow beacons. An explicit
+workflow `control.beacon_timeout_ms` remains authoritative for workloads that
+provide a separate beacon producer. HostLocal node beacon settings are unchanged.
