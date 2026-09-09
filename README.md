@@ -1065,3 +1065,10 @@ Generated step sources consume authoritative upstream outputs carried by Core
 workflow triggers after child-workflow completion. They preserve run-input
 references and artifacts and retain the same one-dispatch-per-attempt behavior
 as ordinary generated sink deliveries.
+
+
+Native SDK runtime services publish fresh host hardware snapshots through the
+`hardware` runtime-status domain every 30 seconds. Core uses those snapshots for
+local admission and federated advertisements instead of retaining startup memory
+readings. After 90 seconds without a refresh, advertised available memory becomes
+zero until telemetry recovers. GPU vendor and capacity requirements remain enforced.

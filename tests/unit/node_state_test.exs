@@ -153,6 +153,36 @@ defmodule MirrorNeuron.Cluster.NodeStateTest do
     assert get_in(unchanged, ["snapshot", "reported_at"]) == reported_at
   end
 
+  test "hardware telemetry replaces stale startup availability without rejoining" do
+    alias MirrorNeuron.Cluster.Hardware
+    Hardware.clear_snapshot()
+    on_exit(fn -> Hardware.clear_snapshot() end)
+
+    for available <- [31_014, 117_812] do
+      hardware = %{
+        "memory" => %{"available_mb" => available},
+        "gpu" => [%{"memory_total_mb" => 131_072, "memory_free_mb" => available}],
+        "devices" => [%{"memory_total_mb" => 131_072, "memory_free_mb" => available}]
+      }
+
+      assert {:ok, _} = NodeState.publish_runtime_status("hardware", "v#{available}", hardware)
+      assert Hardware.info().memory.available_mb == available
+      assert hd(Hardware.info().gpu).memory_free_mb == available
+    end
+
+    assert {:error, _} = NodeState.publish_runtime_status("hardware", "invalid", %{})
+    assert Hardware.info().memory.available_mb == 117_812
+
+    :persistent_term.put(
+      {Hardware, :snapshot},
+      {System.monotonic_time(:second) - 91, Hardware.info()}
+    )
+
+    assert Hardware.info().memory.available_mb == 0
+    assert hd(Hardware.info().gpu).memory_free_mb == 0
+    assert hd(Hardware.info().gpu).memory_total_mb == 131_072
+  end
+
   test "publish_runtime_status rejects unsupported domains" do
     assert {:error, message} = NodeState.publish_runtime_status("commands", "v1", %{})
     assert message =~ "jobs, models"

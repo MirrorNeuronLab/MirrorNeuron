@@ -10,7 +10,7 @@ defmodule MirrorNeuron.Cluster.NodeState do
   @active_statuses ["healthy", "joining"]
   @operator_statuses ["maintenance", "draining"]
   @inactive_statuses ["disconnected", "maintenance", "draining", "offline", "quarantined"]
-  @runtime_status_domains ["jobs", "models"]
+  @runtime_status_domains ["jobs", "models", "hardware"]
 
   def mark(node, status, attrs \\ %{}) do
     node_name = to_string(node)
@@ -136,11 +136,20 @@ defmodule MirrorNeuron.Cluster.NodeState do
         {:error,
          "runtime status domain must be one of #{Enum.join(@runtime_status_domains, ", ")}"}
 
+      domain == "hardware" and
+          not (is_map(status["memory"]) and is_list(status["gpu"]) and is_list(status["devices"]) and
+                 Enum.all?(status["gpu"], &is_map/1) and
+                   Enum.all?(status["devices"], &is_map/1)) ->
+        {:error, "hardware status requires memory, gpu, and devices"}
+
       revision == "" ->
         {:error, "runtime status revision is required"}
 
       true ->
-        publish_runtime_status_snapshot(domain, revision, status)
+        with {:ok, result} <- publish_runtime_status_snapshot(domain, revision, status) do
+          if domain == "hardware", do: Hardware.update_snapshot(status)
+          {:ok, result}
+        end
     end
   end
 

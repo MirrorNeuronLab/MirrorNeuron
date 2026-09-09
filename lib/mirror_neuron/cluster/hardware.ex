@@ -6,7 +6,41 @@ defmodule MirrorNeuron.Cluster.Hardware do
   alias MirrorNeuron.Config
   alias MirrorNeuron.ResourceSpec
 
+  def update_snapshot(hardware) when is_map(hardware) do
+    :persistent_term.put(
+      {__MODULE__, :snapshot},
+      {System.monotonic_time(:second), atomize_hardware(hardware)}
+    )
+
+    :ok
+  end
+
+  def clear_snapshot, do: :persistent_term.erase({__MODULE__, :snapshot})
+
   def info do
+    case :persistent_term.get({__MODULE__, :snapshot}, nil) do
+      {reported, hardware} ->
+        if System.monotonic_time(:second) - reported <= 90,
+          do: hardware,
+          else: unavailable_memory(hardware)
+
+      nil ->
+        initial_info()
+    end
+  end
+
+  defp unavailable_memory(hardware) do
+    hardware
+    |> Map.update(:memory, %{}, &Map.merge(&1, %{available_mb: 0, available_bytes: 0}))
+    |> Map.update(:gpu, [], &Enum.map(&1, fn device -> Map.put(device, :memory_free_mb, 0) end))
+    |> Map.update(
+      :devices,
+      [],
+      &Enum.map(&1, fn device -> Map.put(device, :memory_free_mb, 0) end)
+    )
+  end
+
+  defp initial_info do
     case advertised_info() do
       {:ok, hardware} -> hardware
       :error -> runtime_advertisement_info()
