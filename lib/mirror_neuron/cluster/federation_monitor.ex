@@ -22,7 +22,28 @@ defmodule MirrorNeuron.Cluster.FederationMonitor do
 
   @impl true
   def handle_info(:sync, state) do
-    _ = sync_all()
+    _ = MirrorNeuron.Cluster.EndpointRefresh.refresh()
+    now = System.monotonic_time(:millisecond)
+    state = Map.take(state, Enum.map(FederationRegistry.list(), & &1["node_name"]))
+
+    state =
+      Enum.reduce(FederationRegistry.list(), state, fn peer, acc ->
+        name = peer["node_name"]
+        previous = Map.get(acc, name, %{failures: 0, next: now})
+
+        if previous.next <= now do
+          failures =
+            case FederationClient.sync_peer(name) do
+              {:ok, _} -> 0
+              _ -> min(previous.failures + 1, 4)
+            end
+
+          Map.put(acc, name, %{failures: failures, next: now + retry_delay(failures)})
+        else
+          acc
+        end
+      end)
+
     schedule(@interval)
     {:noreply, state}
   end
@@ -47,4 +68,6 @@ defmodule MirrorNeuron.Cluster.FederationMonitor do
   end
 
   defp schedule(delay), do: Process.send_after(self(), :sync, delay)
+
+  def retry_delay(failures), do: min(@interval * Integer.pow(2, min(max(failures, 0), 4)), 60_000)
 end

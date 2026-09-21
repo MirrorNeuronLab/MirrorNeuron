@@ -164,6 +164,24 @@ defmodule MirrorNeuron.Cluster.FederationClient do
   defp discovery_request(:run_id, run_id), do: %RunRequest{run_id: run_id, version: 1}
 
   def sync_peer(node_name) do
+    # This request uses the existing peer-scoped channel credential. The registry
+    # additionally verifies our original credential and coordination-store identity.
+    if File.exists?(
+         Path.join(System.get_env("MN_HOME") || Path.expand("~/.mn"), "node-identity.json")
+       ) do
+      call_cluster(
+        node_name,
+        :register_federated_peer,
+        %Mirrorneuron.Cluster.V1.RegisterFederatedPeerRequest{
+          node_name: to_string(NodeAdapter.self()),
+          peer_info_json:
+            Jason.encode!(MirrorNeuron.Grpc.Handlers.ClusterHandshake.node_advertisement_info()),
+          peer_auth_token: MirrorNeuron.Grpc.Tokens.peer_token(node_name),
+          version: 1
+        }
+      )
+    end
+
     response =
       call(
         node_name,

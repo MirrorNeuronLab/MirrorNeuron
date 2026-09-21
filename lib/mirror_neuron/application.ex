@@ -7,6 +7,7 @@ defmodule MirrorNeuron.Application do
 
   @impl true
   def start(_type, _args) do
+    MirrorNeuron.Cluster.RuntimeIdentity.validate!()
     Config.validate!()
 
     cluster_hosts =

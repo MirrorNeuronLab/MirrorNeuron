@@ -456,7 +456,11 @@ defmodule MirrorNeuron.Cluster.FederationRegistry do
   end
 
   defp register_existing(peers, node_name, existing, peer) do
-    if peer_identity(existing) == peer_identity(peer) do
+    if peer_identity(existing) == peer_identity(peer) and
+         MirrorNeuron.Grpc.Tokens.secure_compare(
+           Map.get(existing, "peer_auth_token", ""),
+           Map.get(peer, "peer_auth_token", "")
+         ) do
       merged =
         existing
         |> Map.merge(peer)
@@ -469,14 +473,11 @@ defmodule MirrorNeuron.Cluster.FederationRegistry do
   end
 
   defp peer_identity(peer) do
-    {
-      Map.get(peer, "grpc_host"),
-      to_string(Map.get(peer, "grpc_port") || ""),
-      get_in(peer, ["coordination_store", "identity"])
-    }
+    {Map.get(peer, "node_name"), get_in(peer, ["coordination_store", "identity"])}
   end
 
   defp require_peer_name(""), do: {:error, :missing_peer_name}
+  defp require_peer_name("nonode@nohost"), do: {:error, :invalid_peer_name}
   defp require_peer_name(_node_name), do: :ok
   defp require_job_id(""), do: {:error, :missing_job_id}
   defp require_job_id(_job_id), do: :ok

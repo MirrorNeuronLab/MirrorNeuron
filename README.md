@@ -323,3 +323,8 @@ most 1,200 Unicode code points after trimming. Core preserves this planner
 guidance without changing effects, argument validation, or execution authority.
 Deploy this validator with the matching SDK common and job-response packages
 before loading description-bearing blueprint declarations.
+Managed desktop Core requires its configured node identity at startup. The CLI
+persists that identity independently of the network address and reports an
+unnamed or mismatched Core as unready. After Wi-Fi changes, `mn runtime reconnect`
+refreshes endpoint advertisements without restarting healthy Core processes.
+Direct distributed-Erlang deployments retain their existing naming policy.

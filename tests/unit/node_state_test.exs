@@ -3,6 +3,14 @@ defmodule MirrorNeuron.Cluster.NodeStateTest do
 
   alias MirrorNeuron.Cluster.NodeState
 
+  defmodule NamedNodeStub do
+    def self, do: :"desktop@127.0.0.1"
+  end
+
+  defmodule UnnamedNodeStub do
+    def self, do: :nonode@nohost
+  end
+
   defmodule NodeStateStoreStub do
     def reset do
       nodes()
@@ -89,6 +97,7 @@ defmodule MirrorNeuron.Cluster.NodeStateTest do
   end
 
   setup do
+    old_adapter = Application.get_env(:mirror_neuron, :cluster_node_adapter)
     old_store = Application.get_env(:mirror_neuron, :node_state_store)
     old_coordination_store = Application.get_env(:mirror_neuron, :coordination_store)
 
@@ -97,6 +106,7 @@ defmodule MirrorNeuron.Cluster.NodeStateTest do
     Application.put_env(:mirror_neuron, :coordination_store, CoordinationStoreStub)
 
     on_exit(fn ->
+      restore_env(:cluster_node_adapter, old_adapter)
       NodeStateStoreStub.reset()
       restore_env(:node_state_store, old_store)
       restore_env(:coordination_store, old_coordination_store)
@@ -293,7 +303,8 @@ defmodule MirrorNeuron.Cluster.NodeStateTest do
   end
 
   test "advertise_self clears stale self disconnect state on fresh runtime start" do
-    self_node = Node.self() |> to_string()
+    Application.put_env(:mirror_neuron, :cluster_node_adapter, NamedNodeStub)
+    self_node = NamedNodeStub.self() |> to_string()
 
     assert {:ok, _state} =
              NodeState.mark(self_node, "disconnected", %{
@@ -307,6 +318,14 @@ defmodule MirrorNeuron.Cluster.NodeStateTest do
     assert advertised["operator_disconnect"] == false
     assert advertised["scheduling_eligible"] == true
     assert NodeState.schedulable?(self_node)
+  end
+
+  test "unnamed Core is never healthy or eligible to own jobs" do
+    Application.put_env(:mirror_neuron, :cluster_node_adapter, UnnamedNodeStub)
+    assert {:ok, state} = NodeState.advertise_self("healthy", %{"hardware" => %{}})
+    assert state["status"] == "identity_invalid"
+    refute state["scheduling_eligible"]
+    refute state["job_owner_eligible"]
   end
 
   test "advertise_self returns coordination startup failures so the monitor retries" do

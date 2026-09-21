@@ -15,7 +15,10 @@ defmodule MirrorNeuron.Grpc.Handlers.Resource do
     case MirrorNeuron.Monitor.cluster_overview() do
       {:ok, overview} ->
         %GetSystemSummaryResponse{
-          summary_json: Support.versioned_json(overview),
+          summary_json:
+            Support.versioned_json(
+              Map.put(overview, "identity", MirrorNeuron.Cluster.RuntimeIdentity.health())
+            ),
           version: @interface_version
         }
 

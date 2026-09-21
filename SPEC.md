@@ -437,3 +437,16 @@ most 1,200 Unicode code points after trimming. Core preserves this planner
 guidance without changing effects, argument validation, or execution authority.
 Deploy this validator with the matching SDK common and job-response packages
 before loading description-bearing blueprint declarations.
+# Managed desktop identity
+
+When MN_NODE_NAME is supplied, Core validates that it is a valid distributed
+name equal to Node.self() before starting supervision or accepting job/operation
+RPCs. Node inspection must never advertise nonode@nohost as healthy or eligible.
+System summary includes identity expected/actual/valid diagnostics.
+
+Desktop endpoint updates come from version-1 runtime-network.json under MN_HOME,
+bound to the current node name. Federation retries use capped exponential
+backoff. Existing peer registrations may change endpoints only with the same
+node name, coordination-store identity, and peer credential. Job projections
+and ownership survive these updates. Unreachable peers retain their identity;
+operators may need to re-add their current endpoint if no known address works.

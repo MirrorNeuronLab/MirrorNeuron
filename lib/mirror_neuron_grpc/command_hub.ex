@@ -170,6 +170,10 @@ defmodule MirrorNeuron.Grpc.CommandPolicy do
   def enforce!(service, command, request, stream) do
     MirrorNeuron.Grpc.Handlers.Support.require_interface_version!(request)
 
+    if service in [:job, :operations] do
+      MirrorNeuron.Cluster.RuntimeIdentity.validate!()
+    end
+
     if network_only_denied?(service, command) do
       MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!(command_name(command))
     end

@@ -151,8 +151,21 @@ defmodule MirrorNeuron.Cluster.FederationRegistryTest do
 
     conflicting = Map.put(peer_info(), "grpc_port", 55_099)
 
-    assert {:error, :peer_identity_conflict} =
+    assert {:ok, updated, "already_registered"} =
              FederationRegistry.register("mirror_neuron@peer", conflicting, credential)
+
+    assert updated["grpc_port"] == 55_099
+    assert length(FederationRegistry.list()) == 1
+
+    assert {:error, :peer_identity_conflict} =
+             FederationRegistry.register("mirror_neuron@peer", conflicting, "wrong-token")
+
+    assert {:error, :peer_identity_conflict} =
+             FederationRegistry.register(
+               "mirror_neuron@peer",
+               put_in(conflicting, ["coordination_store", "identity"], "different-store"),
+               credential
+             )
   end
 
   test "registration rejects shared coordination store identities" do
@@ -160,6 +173,33 @@ defmodule MirrorNeuron.Cluster.FederationRegistryTest do
 
     assert {:error, :shared_coordination_store} =
              FederationRegistry.register("mirror_neuron@peer", shared, "scoped")
+  end
+
+  test "authenticated endpoint refresh retains job ownership and projections" do
+    assert {:ok, _, _} = FederationRegistry.register("mirror_neuron@peer", peer_info(), "scoped")
+
+    assert {:ok, _, _} =
+             FederationRegistry.put_projection("mirror_neuron@peer", [
+               %{"job_id" => "job-1", "status" => "running"}
+             ])
+
+    updated = Map.put(peer_info(), "grpc_host", "new-host.local")
+
+    assert {:ok, _, "already_registered"} =
+             FederationRegistry.register("mirror_neuron@peer", updated, "scoped")
+
+    assert FederationRegistry.projection("job-1")["owner_node"] == "mirror_neuron@peer"
+    assert length(FederationRegistry.list()) == 1
+
+    assert {:error, :peer_identity_conflict} =
+             FederationRegistry.register(
+               "mirror_neuron@peer",
+               Map.put(updated, "grpc_host", "attacker.local"),
+               "wrong"
+             )
+
+    assert {:ok, saved} = FederationRegistry.fetch("mirror_neuron@peer")
+    assert saved["grpc_host"] == "new-host.local"
   end
 
   test "offline projections remain readable and are marked stale" do

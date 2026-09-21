@@ -178,6 +178,25 @@ defmodule MirrorNeuron.Cluster.NodeState do
   end
 
   def advertise_self(status \\ "healthy", attrs \\ %{}) do
+    identity =
+      MirrorNeuron.Cluster.RuntimeIdentity.health(
+        System.get_env("MN_NODE_NAME"),
+        NodeAdapter.self()
+      )
+
+    identity_valid =
+      if System.get_env("MN_NODE_NAME") == nil,
+        do: MirrorNeuron.Cluster.RuntimeIdentity.valid_name?(to_string(NodeAdapter.self())),
+        else: identity["valid"]
+
+    attrs = Map.put(attrs, "identity", identity)
+
+    attrs =
+      if identity_valid,
+        do: attrs,
+        else: Map.merge(attrs, %{"scheduling_eligible" => false, "job_owner_eligible" => false})
+
+    status = if identity_valid, do: status, else: "identity_invalid"
     hardware = map_get(attrs, "hardware") || Hardware.info()
 
     with {:ok, coordination_store} <- coordination_store_status() do

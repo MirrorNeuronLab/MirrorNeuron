@@ -11,6 +11,25 @@ defmodule MirrorNeuron.Cluster.Manager do
     |> Enum.map(fn node ->
       state = stored_node_state(node)
 
+      identity_valid =
+        if node == NodeAdapter.self() and System.get_env("MN_NODE_NAME") != nil,
+          do:
+            MirrorNeuron.Cluster.RuntimeIdentity.health(System.get_env("MN_NODE_NAME"), node)[
+              "valid"
+            ],
+          else: MirrorNeuron.Cluster.RuntimeIdentity.valid_name?(to_string(node))
+
+      state =
+        if identity_valid,
+          do: state,
+          else:
+            Map.merge(state, %{
+              "status" => "identity_invalid",
+              "scheduling_eligible" => false,
+              "local_scheduler_eligible" => false,
+              "job_owner_eligible" => false
+            })
+
       if node != NodeAdapter.self() and NodeState.operator_disconnected_state?(state) do
         nil
       else
@@ -144,6 +163,9 @@ defmodule MirrorNeuron.Cluster.Manager do
     Map.get(state, "grpc_port") ||
       advertised_grpc_port()
   end
+
+  defp node_grpc_host(_node, %{"connection_mode" => "federated"} = state),
+    do: Map.get(state, "grpc_host")
 
   defp node_grpc_host(node, state) do
     Map.get(state, "grpc_host") ||
