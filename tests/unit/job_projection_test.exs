@@ -189,4 +189,33 @@ defmodule MirrorNeuron.Grpc.JobProjectionTest do
     assert detail["native_resource_ownership"]["submission_id"] == "submission-empty"
     assert detail["native_resource_ownership"]["resources"] == []
   end
+
+  test "job detail exposes only declared workflow shape and agent identity" do
+    detail =
+      JobProjection.detail(%{
+        "job_id" => "job-1",
+        "manifest" => %{
+          "workflow" => %{
+            "workflow_id" => "flow-1",
+            "steps" => [%{"id" => "prepare", "label" => "Prepare", "secret" => "hidden"}],
+            "edges" => [%{"from" => "prepare", "to" => "finish", "payload" => "hidden"}]
+          },
+          "runtime" => %{
+            "bindings" => %{
+              "prepare" => %{
+                "workers" => [%{"id" => "agent-1", "role" => "research", "env" => %{"KEY" => "secret"}}]
+              }
+            }
+          }
+        }
+      })
+
+    shape = detail["workflow_definition"]
+    assert shape["workflow"]["steps"] == [%{"id" => "prepare", "label" => "Prepare"}]
+    assert shape["workflow"]["edges"] == [%{"from" => "prepare", "to" => "finish"}]
+    assert shape["runtime"]["bindings"]["prepare"]["workers"] == [
+             %{"id" => "agent-1", "role" => "research"}
+           ]
+    refute Map.has_key?(detail, "manifest")
+  end
 end

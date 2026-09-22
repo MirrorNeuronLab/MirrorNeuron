@@ -1,6 +1,7 @@
 defmodule MirrorNeuron.Grpc.JobProjection do
   @moduledoc false
 
+  alias MirrorNeuron.Grpc.JobWorkflowProjection
   alias MirrorNeuron.Runtime.JobResponse
 
   @summary_fields ~w(
@@ -36,6 +37,7 @@ defmodule MirrorNeuron.Grpc.JobProjection do
     |> put_recent_run_ids(definition)
     |> put_response_service(definition)
     |> put_native_resource_ownership(definition)
+    |> Map.put("workflow_definition", JobWorkflowProjection.from_definition(definition))
     |> compact_bundle_ref()
   end
 

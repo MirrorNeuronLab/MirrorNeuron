@@ -125,6 +125,10 @@ streams continue to read the node-local event store and EventBus.
 Stable-job lookup and lifecycle atoms map to semantic gRPC statuses (`NOT_FOUND`,
 `ALREADY_EXISTS`, `FAILED_PRECONDITION`, or `INVALID_ARGUMENT`); a missing
 resource on one peer must not surface as `INTERNAL` or abort owner discovery.
+Stable-job detail includes a source-facing workflow projection with
+logical steps, edges, and declared agent identities. It omits the executable
+manifest, worker environment, payloads, and host paths so API clients can read
+the saved shape without starting a run.
 Federated runtime-model and LiteLLM route controls honor their requested
 `node` owner through the same scoped Core-to-Core forwarding path, so SDK and
 CLI callers use any joined Core as a secure ingress rather than peer tokens.
