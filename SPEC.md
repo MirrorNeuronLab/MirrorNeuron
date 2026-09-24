@@ -24,6 +24,10 @@ message-driven workflows. It loads executable manifests and job bundles,
 supervises long-lived runtime nodes, schedules work across local or clustered
 resources, persists lifecycle state, and exposes control and observability over
 gRPC.
+For SDK-staged shared submissions, terminal runs publish `outputs/runs/<run-id>/.mn_completion.json`
+with the final status and an inventory of durable regular files. The submitting
+host uses this receipt to wait for replication before copying declared outputs.
+Core never writes to a submitter-only host path on a remote worker node.
 
 This specification covers only Core. Source-manifest compilation, terminal and
 HTTP adapters, domain blueprints, reusable Python agents/skills, context memory,

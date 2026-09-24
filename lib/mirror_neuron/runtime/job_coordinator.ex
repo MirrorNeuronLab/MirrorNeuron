@@ -2961,6 +2961,20 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     }
 
     persist_job(next_state)
+    run_id = WorkflowLedger.run_id(finished_workflow) || state.job_id
+
+    case SharedStorage.publish_run_completion(
+           MirrorNeuron.Manifest.to_map(state.manifest),
+           run_id,
+           status
+         ) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("failed to publish shared run completion: #{inspect(reason)}")
+    end
+
     cleanup_sandboxes(next_state)
 
     event =

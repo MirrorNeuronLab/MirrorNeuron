@@ -58,6 +58,80 @@ defmodule MirrorNeuron.Artifacts.SharedStorage do
 
   def finalize_terminal_job(_job_id, _manifest, _status), do: {:ok, []}
 
+  def publish_run_completion(manifest, run_id, status)
+      when is_binary(run_id) and status in @terminal_statuses do
+    case storage_metadata(manifest) do
+      nil ->
+        :ok
+
+      storage ->
+        if master_host_output_copy?(storage),
+          do: publish_master_host_run_completion(storage, run_id, status),
+          else: :ok
+    end
+  end
+
+  def publish_run_completion(_manifest, _run_id, _status), do: :ok
+
+  defp publish_master_host_run_completion(storage, run_id, status) do
+    with true <- Regex.match?(~r/\A[A-Za-z0-9_-]{1,128}\z/, run_id),
+         {:ok, submission} <- safe_submission_path(storage),
+         run_dir = Path.join([submission, "outputs", "runs", run_id]),
+         true <- File.dir?(run_dir),
+         {:ok, run_files} <- run_output_files(run_dir),
+         user_dir = Path.join([submission, "outputs", "user"]),
+         {:ok, user_files} <-
+           if(File.dir?(user_dir), do: run_output_files(user_dir), else: {:ok, []}),
+         files = Enum.sort_by(run_files ++ user_files, & &1["path"]),
+         receipt = %{"run_id" => run_id, "status" => status, "output_files" => files},
+         temporary = Path.join(run_dir, ".mn_completion.json.tmp"),
+         :ok <- File.write(temporary, Jason.encode!(receipt)),
+         :ok <- File.rename(temporary, Path.join(run_dir, ".mn_completion.json")) do
+      :ok
+    else
+      false -> {:error, :invalid_run_output_path}
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :invalid_run_output_path}
+    end
+  end
+
+  defp run_output_files(run_dir) do
+    case File.ls(run_dir) do
+      {:ok, entries} ->
+        entries
+        |> Enum.sort()
+        |> Enum.reduce_while({:ok, []}, fn entry, {:ok, files} ->
+          path = Path.join(run_dir, entry)
+
+          cond do
+            entry in [".mn_completion.json", ".mn_completion.json.tmp"] ->
+              {:cont, {:ok, files}}
+
+            true ->
+              case File.lstat(path) do
+                {:ok, %{type: :directory}} ->
+                  case run_output_files(path) do
+                    {:ok, children} -> {:cont, {:ok, files ++ children}}
+                    error -> {:halt, error}
+                  end
+
+                {:ok, %{type: :regular}} ->
+                  {:cont, {:ok, files ++ [%{"path" => path}]}}
+
+                {:ok, _other} ->
+                  {:cont, {:ok, files}}
+
+                error ->
+                  {:halt, error}
+              end
+          end
+        end)
+
+      error ->
+        error
+    end
+  end
+
   defp finalize_runtime_output_copy(job_id, storage, status) do
     warnings = copy_outputs(storage, status)
     fatal? = Enum.any?(warnings, &fatal_warning?/1)

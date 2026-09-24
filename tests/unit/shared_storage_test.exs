@@ -64,6 +64,49 @@ defmodule MirrorNeuron.Artifacts.SharedStorageTest do
     assert File.exists?(submission)
   end
 
+  test "terminal run publishes a complete shared output receipt", %{root: root} do
+    submission = Path.join([root, "submissions", "sub-receipt"])
+    run_dir = Path.join([submission, "outputs", "runs", "run-1"])
+    nested = Path.join(run_dir, "case")
+    user_dir = Path.join([submission, "outputs", "user"])
+    File.mkdir_p!(nested)
+    File.mkdir_p!(user_dir)
+    File.write!(Path.join(run_dir, "final_report.md"), "draft")
+    File.write!(Path.join(run_dir, "result.json"), "{\"product\":true}")
+    File.write!(Path.join(nested, "evidence.json"), "{}")
+    File.write!(Path.join(user_dir, "review_index.json"), "{}")
+    File.write!(Path.join(run_dir, ".mn_completion.json.tmp"), "stale")
+
+    assert :ok =
+             SharedStorage.publish_run_completion(
+               manifest(submission, run_dir, Path.join(root, "target"))
+               |> put_in(["metadata", "mn_storage", "output_copy_executor"], "master_host"),
+               "run-1",
+               "completed"
+             )
+
+    receipt = Jason.decode!(File.read!(Path.join(run_dir, ".mn_completion.json")))
+    assert File.read!(Path.join(run_dir, "result.json")) == "{\"product\":true}"
+    assert receipt["status"] == "completed"
+    assert receipt["run_id"] == "run-1"
+
+    assert Enum.map(receipt["output_files"], & &1["path"]) ==
+             Enum.sort([
+               Path.join(nested, "evidence.json"),
+               Path.join(run_dir, "final_report.md"),
+               Path.join(run_dir, "result.json"),
+               Path.join(user_dir, "review_index.json")
+             ])
+
+    assert {:error, :invalid_run_output_path} =
+             SharedStorage.publish_run_completion(
+               manifest(submission, run_dir, Path.join(root, "target"))
+               |> put_in(["metadata", "mn_storage", "output_copy_executor"], "master_host"),
+               "../unsafe",
+               "completed"
+             )
+  end
+
   test "terminal cancel retains submission storage when outputs are missing", %{root: root} do
     submission = Path.join([root, "submissions", "sub-cancel"])
     source = Path.join([submission, "outputs", "user"])
