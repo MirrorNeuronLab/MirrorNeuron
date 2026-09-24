@@ -262,6 +262,10 @@ Federation handshakes advertise the owner's complete hardware profile. Resource
 reports preserve both direct scheduler eligibility and the separate federated
 owner eligibility facts, so submitters can validate a remote owner without
 making that owner a member of their local scheduler.
+Federated peer availability is based on authenticated gRPC reachability probes
+at five-second intervals. Three consecutive failures mark a peer unavailable;
+the first successful probe restores healthy status. Job and run projection
+refresh failures mark cached summaries stale without changing peer availability.
 Service discovery aggregates each authenticated federated owner's local
 registry in one hop, preserving the normal service filters without recursively
 forwarding a peer request.

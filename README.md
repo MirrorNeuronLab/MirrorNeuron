@@ -116,6 +116,11 @@ failure does not transfer ownership: the owner can continue its local work,
 while remote summaries may become stale. Federation does not automatically
 migrate an unavailable owner's jobs.
 
+Federated peer status uses an authenticated gRPC reachability check every five
+seconds. Three consecutive failed checks mark a peer unavailable; one successful
+check restores healthy status. Job and run summary refreshes run separately, so
+a refresh failure marks cached summaries stale without changing peer status.
+
 Model routing follows the same owner boundary:
 
 ```text

@@ -3,13 +3,14 @@ defmodule MirrorNeuron.Cluster.FederationClient do
 
   alias MirrorNeuron.Cluster.FederationRegistry
   alias MirrorNeuron.Cluster.NodeAdapter
-  alias Mirrorneuron.Cluster.V1.ListServicesRequest
+  alias Mirrorneuron.Cluster.V1.{GetFederatedPeerRequest, ListServicesRequest}
   alias Mirrorneuron.Cluster.V1.ClusterService.Stub, as: ClusterStub
   alias Mirrorneuron.Job.V1.{DeleteJobRequest, JobRequest, ListJobsRequest, RunRequest}
   alias Mirrorneuron.Job.V1.JobService.Stub, as: JobStub
   alias Mirrorneuron.Observability.V1.ObservabilityService.Stub, as: ObservabilityStub
 
   @timeout 15_000
+  @probe_timeout 2_000
   @job_response_timeout 60_000
   @destructive_job_timeout 300_000
 
@@ -107,9 +108,20 @@ defmodule MirrorNeuron.Cluster.FederationClient do
   defp rpc_call(node_name, stub, function, request) do
     with {:ok, peer} <- FederationRegistry.fetch(node_name),
          {:ok, target} <- target(peer),
-         {:ok, channel} <- connect(target, peer),
-         result <- apply(stub, function, [channel, request, [timeout: request_timeout(function)]]) do
-      _ = GRPC.Stub.disconnect(channel)
+         {:ok, channel} <- connect(target, peer) do
+      result =
+        try do
+          apply(stub, function, [channel, request, [timeout: request_timeout(function)]])
+        rescue
+          error ->
+            if availability_failure?(error) do
+              MirrorNeuron.Cluster.FederationMonitor.request_failed(node_name, function, error)
+            end
+
+            reraise error, __STACKTRACE__
+        after
+          _ = GRPC.Stub.disconnect(channel)
+        end
 
       case result do
         {:ok, response} ->
@@ -117,13 +129,13 @@ defmodule MirrorNeuron.Cluster.FederationClient do
 
         {:error, reason} ->
           if availability_failure?(reason) do
-            unavailable!(node_name, reason)
+            unavailable!(node_name, reason, function)
           else
             raise reason
           end
       end
     else
-      {:error, reason} -> unavailable!(node_name, reason)
+      {:error, reason} -> unavailable!(node_name, reason, function)
     end
   end
 
@@ -190,36 +202,32 @@ defmodule MirrorNeuron.Cluster.FederationClient do
       )
 
     jobs = response.result_json |> decode_items()
-    _ = FederationRegistry.replace_projections(node_name, jobs)
+    {:ok, _, _} = FederationRegistry.replace_projections(node_name, jobs)
 
     runs =
       Enum.flat_map(jobs, fn job ->
         case Map.get(job, "job_id") do
           job_id when is_binary(job_id) and job_id != "" ->
-            try do
-              call(node_name, :list_runs, %JobRequest{
-                job_id: job_id,
-                page_size: 1_000,
-                version: 1
-              })
-              |> Map.get(:result_json)
-              |> decode_items()
-            rescue
-              _ -> []
-            end
+            call(node_name, :list_runs, %JobRequest{
+              job_id: job_id,
+              page_size: 1_000,
+              version: 1
+            })
+            |> Map.get(:result_json)
+            |> decode_items()
 
           _ ->
             []
         end
       end)
 
-    _ = FederationRegistry.replace_run_projections(node_name, runs)
+    {:ok, _, _} = FederationRegistry.replace_run_projections(node_name, runs)
     _ = replay_archive_tombstones(node_name)
     _ = replay_delete_tombstones(node_name)
     {:ok, %{jobs: length(jobs), runs: length(runs)}}
   rescue
     error ->
-      _ = FederationRegistry.mark_unavailable(node_name)
+      _ = FederationRegistry.mark_projections_stale(node_name)
       {:error, error}
   end
 
@@ -349,17 +357,38 @@ defmodule MirrorNeuron.Cluster.FederationClient do
     end
   end
 
-  defp connect(target, peer) do
+  defp connect(target, peer, timeout \\ @timeout) do
     token = Map.get(peer, "peer_auth_token", "")
 
     GRPC.Stub.connect(target,
-      timeout: @timeout,
+      timeout: timeout,
       headers: [
         {"authorization", "Bearer #{token}"},
         {"x-mn-federation-peer", to_string(NodeAdapter.self())},
         {"x-mn-federation-hop", "1"}
       ]
     )
+  end
+
+  def probe_peer(node_name) when is_binary(node_name) do
+    with {:ok, peer} <- FederationRegistry.fetch(node_name),
+         {:ok, target} <- target(peer),
+         {:ok, channel} <- connect(target, peer, @probe_timeout) do
+      try do
+        case ClusterStub.get_federated_peer(
+               channel,
+               %GetFederatedPeerRequest{node_name: to_string(NodeAdapter.self()), version: 1},
+               timeout: @probe_timeout
+             ) do
+          {:ok, _response} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+      after
+        _ = GRPC.Stub.disconnect(channel)
+      end
+    end
+  rescue
+    error -> {:error, error}
   end
 
   defp target(peer) do
@@ -406,8 +435,8 @@ defmodule MirrorNeuron.Cluster.FederationClient do
     end
   end
 
-  defp unavailable!(node_name, reason) do
-    _ = FederationRegistry.mark_unavailable(node_name)
+  defp unavailable!(node_name, reason, operation \\ :peer_request) do
+    MirrorNeuron.Cluster.FederationMonitor.request_failed(node_name, operation, reason)
 
     raise GRPC.RPCError,
       status: GRPC.Status.unavailable(),

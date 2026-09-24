@@ -274,14 +274,12 @@ defmodule MirrorNeuron.Cluster.FederationRegistry do
           saved =
             peer
             |> Map.drop(["job_projections", "run_projections"])
-            |> Map.put("peer_available", true)
             |> Map.put("last_synced_at", projected_at)
 
           {:ok, Map.put(peers, node_name, saved), saved, "updated"}
         end)
       end
 
-    if match?({:ok, _, _}, result), do: mark_available(node_name)
     result
   end
 
@@ -322,48 +320,50 @@ defmodule MirrorNeuron.Cluster.FederationRegistry do
           saved =
             peer
             |> Map.drop(["job_projections", "run_projections"])
-            |> Map.put("peer_available", true)
             |> Map.put("last_synced_at", projected_at)
 
           {:ok, Map.put(peers, node_name, saved), saved, "updated"}
         end)
       end
 
-    if match?({:ok, _, _}, result), do: mark_available(node_name)
     result
+  end
+
+  def mark_projections_stale(node_name) do
+    with {:ok, _peer} <- fetch(node_name),
+         {:ok, jobs} <- projection_store().list_federation_projections(node_name, "job"),
+         {:ok, runs} <- projection_store().list_federation_projections(node_name, "run"),
+         {:ok, _} <-
+           projection_store().put_federation_projections(
+             node_name,
+             "job",
+             Enum.map(jobs, &Map.put(&1, "projection_stale", true))
+           ),
+         {:ok, _} <-
+           projection_store().put_federation_projections(
+             node_name,
+             "run",
+             Enum.map(runs, &Map.put(&1, "projection_stale", true))
+           ) do
+      :ok
+    end
   end
 
   def mark_unavailable(node_name) do
     result =
-      with {:ok, _peer} <- fetch(node_name),
-           {:ok, jobs} <- projection_store().list_federation_projections(node_name, "job"),
-           {:ok, runs} <- projection_store().list_federation_projections(node_name, "run"),
-           {:ok, _jobs} <-
-             projection_store().put_federation_projections(
-               node_name,
-               "job",
-               stale_projections(jobs)
-             ),
-           {:ok, _runs} <-
-             projection_store().put_federation_projections(
-               node_name,
-               "run",
-               stale_projections(runs)
-             ) do
+      with {:ok, _peer} <- fetch(node_name) do
         update_registry(fn peers ->
           peer = Map.fetch!(peers, node_name)
-
-          saved =
-            peer
-            |> Map.drop(["job_projections", "run_projections"])
-            |> Map.put("peer_available", false)
-
+          saved = Map.put(peer, "peer_available", false)
           {:ok, Map.put(peers, node_name, saved), saved, "offline"}
         end)
       end
 
     if match?({:ok, _, _}, result) do
-      _ =
+      _ = set_projection_owner_available(node_name, false)
+      _ = mark_projections_stale(node_name)
+
+      state_result =
         mark_peer_state(node_name, "unavailable", %{
           "connection_mode" => "federated",
           "operator_disconnect" => false,
@@ -371,9 +371,11 @@ defmodule MirrorNeuron.Cluster.FederationRegistry do
           "job_owner_eligible" => true,
           "peer_available" => false
         })
-    end
 
-    result
+      if match?({:ok, _}, state_result), do: result, else: state_result
+    else
+      result
+    end
   end
 
   def projections do
@@ -543,14 +545,50 @@ defmodule MirrorNeuron.Cluster.FederationRegistry do
     |> Map.put("connection_mode", "federated")
   end
 
-  defp mark_available(node_name) do
-    mark_peer_state(node_name, "healthy", %{
-      "connection_mode" => "federated",
-      "operator_disconnect" => false,
-      "scheduling_eligible" => false,
-      "job_owner_eligible" => true,
-      "peer_available" => true
-    })
+  def mark_available(node_name) do
+    result =
+      with {:ok, _peer} <- fetch(node_name) do
+        update_registry(fn peers ->
+          peer = Map.fetch!(peers, node_name)
+          saved = Map.put(peer, "peer_available", true)
+          {:ok, Map.put(peers, node_name, saved), saved, "online"}
+        end)
+      end
+
+    if match?({:ok, _, _}, result) do
+      state_result =
+        mark_peer_state(node_name, "healthy", %{
+          "connection_mode" => "federated",
+          "operator_disconnect" => false,
+          "scheduling_eligible" => false,
+          "job_owner_eligible" => true,
+          "peer_available" => true
+        })
+
+      _ = set_projection_owner_available(node_name, true)
+      if match?({:ok, _}, state_result), do: result, else: state_result
+    else
+      result
+    end
+  end
+
+  defp set_projection_owner_available(node_name, available) do
+    with {:ok, jobs} <- projection_store().list_federation_projections(node_name, "job"),
+         {:ok, runs} <- projection_store().list_federation_projections(node_name, "run"),
+         {:ok, _} <-
+           projection_store().put_federation_projections(
+             node_name,
+             "job",
+             Enum.map(jobs, &Map.put(&1, "owner_available", available))
+           ),
+         {:ok, _} <-
+           projection_store().put_federation_projections(
+             node_name,
+             "run",
+             Enum.map(runs, &Map.put(&1, "owner_available", available))
+           ) do
+      :ok
+    end
   end
 
   defp update_registry(callback) do
@@ -627,14 +665,6 @@ defmodule MirrorNeuron.Cluster.FederationRegistry do
 
   defp projection_store do
     Application.get_env(:mirror_neuron, :federation_projection_store, RedisStore)
-  end
-
-  defp stale_projections(projections) do
-    Enum.map(projections, fn projection ->
-      projection
-      |> Map.put("owner_available", false)
-      |> Map.put("projection_stale", true)
-    end)
   end
 
   defp job_tombstones(owner_node, operation) do
