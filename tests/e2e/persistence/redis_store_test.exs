@@ -4,6 +4,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
   alias MirrorNeuron.Bundle.{Archive, Fingerprint}
   alias MirrorNeuron.Artifacts.JobStore
   alias MirrorNeuron.JobBundle
+  alias MirrorNeuron.Cluster.NodeAdapter
   alias MirrorNeuron.Message
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
@@ -1677,6 +1678,43 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
       assert archived["status"] == "archived"
       assert {:ok, %{"status" => "completed"}} = RedisStore.fetch_job(run_id)
     end
+  end
+
+  test "archive reclaims a start gate left by a terminated local caller" do
+    job_id = "stale-start-gate-#{System.unique_integer([:positive])}"
+    lease_name = "job-data-start:#{job_id}"
+
+    holder =
+      spawn(fn ->
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    holder_ref = Process.monitor(holder)
+    owner_id = "#{NodeAdapter.self()}:#{inspect(holder)}:1"
+
+    on_exit(fn ->
+      _ = RedisStore.delete_job_definition(job_id)
+    end)
+
+    assert {:ok, _definition} =
+             RedisStore.persist_job_definition(job_id, %{
+               "job_id" => job_id,
+               "status" => "active",
+               "run_ids" => [],
+               "manifest" => %{"flow" => %{"nodes" => []}}
+             })
+
+    assert {:ok, stale_lease} = RedisStore.acquire_fenced_lease(lease_name, owner_id, 600_000)
+    Process.exit(holder, :kill)
+    assert_receive {:DOWN, ^holder_ref, :process, ^holder, :killed}
+
+    assert {:ok, archived} = StableJob.archive(job_id)
+    assert archived["status"] == "archived"
+
+    assert {:error, :not_owner} =
+             RedisStore.release_fenced_lease(lease_name, owner_id, stale_lease["epoch"])
   end
 
   test "retention retries sandbox cleanup on disconnected persisted placement nodes" do

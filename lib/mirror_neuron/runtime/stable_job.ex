@@ -1238,7 +1238,8 @@ defmodule MirrorNeuron.Runtime.StableJob do
       {:ok, lease} ->
         {:ok, lease}
 
-      {:error, {:locked, _lease}} when retries > 0 ->
+      {:error, {:locked, lease}} when retries > 0 ->
+        reclaim_dead_local_start_gate(lease_name, lease)
         Process.sleep(@start_gate_retry_ms)
         acquire_start_gate(lease_name, owner_id, retries - 1)
 
@@ -1249,6 +1250,36 @@ defmodule MirrorNeuron.Runtime.StableJob do
         {:error, reason}
     end
   end
+
+  defp reclaim_dead_local_start_gate(lease_name, %{"owner_id" => owner_id, "epoch" => epoch})
+       when is_binary(owner_id) and is_integer(epoch) do
+    case String.split(owner_id, ":", parts: 3) do
+      [node, pid_text, nonce] ->
+        with true <- node == to_string(NodeAdapter.self()),
+             true <- Regex.match?(~r/^#PID<\d+\.\d+\.\d+>$/, pid_text),
+             {_nonce, ""} <- Integer.parse(nonce),
+             pid <-
+               pid_text
+               |> String.replace_prefix("#PID", "")
+               |> String.to_charlist()
+               |> :erlang.list_to_pid(),
+             false <- Process.alive?(pid) do
+          case RedisStore.release_fenced_lease(lease_name, owner_id, epoch) do
+            :ok -> Logger.warning("reclaimed start gate left by a terminated local process")
+            _ -> :ok
+          end
+        else
+          _ -> :ok
+        end
+
+      _ ->
+        :ok
+    end
+  rescue
+    ArgumentError -> :ok
+  end
+
+  defp reclaim_dead_local_start_gate(_lease_name, _lease), do: :ok
 
   defp normalize_run(run, job_id, run_id) do
     run

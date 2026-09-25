@@ -94,7 +94,7 @@ defmodule MirrorNeuron.Runtime.JobResponse do
             "job_id" => job_id,
             "force" => force?
           },
-          27_000
+          if(force?, do: 5_000, else: 27_000)
         )
       else
         {:ok, %{"state" => "disabled"}}

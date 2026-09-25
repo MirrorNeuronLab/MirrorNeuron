@@ -135,9 +135,9 @@ defmodule MirrorNeuron.Runtime.JobResponseTest do
     Application.put_env(
       :mirror_neuron,
       :native_sdk_grpc_job_response_client,
-      fn _target, request, _timeout ->
+      fn _target, request, timeout ->
         attrs = Jason.decode!(request.resource_json)
-        send(parent, {:forced_stop_command, attrs})
+        send(parent, {:forced_stop_command, attrs, timeout})
         {:error, :deadline_exceeded}
       end
     )
@@ -152,12 +152,12 @@ defmodule MirrorNeuron.Runtime.JobResponseTest do
              JobResponse.stop(definition)
 
     assert_receive {:forced_stop_command,
-                    %{"operation" => "stop", "job_id" => ^job_id, "force" => false}}
+                    %{"operation" => "stop", "job_id" => ^job_id, "force" => false}, 27_000}
 
     assert :ok = JobResponse.stop(definition, force: true)
 
     assert_receive {:forced_stop_command,
-                    %{"operation" => "stop", "job_id" => ^job_id, "force" => true}}
+                    %{"operation" => "stop", "job_id" => ^job_id, "force" => true}, 5_000}
   end
 
   defp await_state(job_id, expected, attempts \\ 50)
