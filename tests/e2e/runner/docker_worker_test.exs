@@ -51,6 +51,28 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     {:ok, tmp_dir: tmp_dir, prepared_container: prepared_container}
   end
 
+  test "rejects a prepared image without process supervision before launching work", %{
+    tmp_dir: tmp_dir
+  } do
+    fake_docker = Path.join(tmp_dir, "missing-python")
+    File.write!(fake_docker, "#!/bin/sh\necho 'python3 not found'\nexit 127\n")
+    File.chmod!(fake_docker, 0o755)
+
+    assert {:error, reason} =
+             DockerWorker.run(
+               %{},
+               %{
+                 "image" => "worker:latest",
+                 "docker_bin" => fake_docker,
+                 "command" => ["sh", "-c", "sleep 300"]
+               },
+               job_id: "missing-python",
+               agent_id: "worker"
+             )
+
+    assert reason =~ "requires Python 3 process supervision"
+  end
+
   test "runs in an SDK-prepared worker without publishing host ports", %{
     tmp_dir: tmp_dir,
     prepared_container: prepared_container

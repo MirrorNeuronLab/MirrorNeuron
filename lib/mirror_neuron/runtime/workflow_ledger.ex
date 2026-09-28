@@ -122,14 +122,21 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
           })
         end)
 
-      {put_state_status(state, "paused", now), events}
+      {state |> MirrorNeuron.Runtime.WorkflowPause.pause(now) |> put_state_status("paused", now),
+       events}
     else
       {state, []}
     end
   end
 
   def resume(state, now \\ Runtime.timestamp()) do
-    if enabled?(state), do: {put_state_status(state, "running", now), []}, else: {state, []}
+    if enabled?(state) do
+      {state
+       |> MirrorNeuron.Runtime.WorkflowPause.resume(now)
+       |> put_state_status("running", now), []}
+    else
+      {state, []}
+    end
   end
 
   def finish(state, status, now \\ Runtime.timestamp()) do
@@ -1987,6 +1994,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
             "job_id",
             "run_id",
             "status",
+            "paused_at",
             "messages",
             "mode",
             "dynamic_enabled",

@@ -158,6 +158,28 @@ defmodule MirrorNeuron.Runtime.ChildWorkflowTest do
     assert restored["child_workflows"]["inspect"]["revision"] == 1
   end
 
+  test "pausing a committed investigation preserves its child plan and timeout budget" do
+    {state, actions} = started()
+    {state, _, actions} = finish(state, actions, plan(0))
+    {:redeliver, child, agent, message} = hd(actions)
+
+    {state, _} =
+      WorkflowLedger.on_message_received(state, agent, message, "2026-06-02T16:00:00.000Z")
+
+    {paused, _} = WorkflowLedger.pause(state, "2026-06-02T16:00:01.000Z")
+    restored = WorkflowLedger.new(manifest(), nodes(), %{"workflow_state" => paused})
+    assert restored["paused_at"] == paused["paused_at"]
+    {resumed, []} = WorkflowLedger.resume(restored, "2026-06-02T18:00:01.000Z")
+    assert resumed["child_workflows"] == state["child_workflows"]
+
+    assert resumed["steps"][child]["current_attempt"]["attempt_id"] ==
+             state["steps"][child]["current_attempt"]["attempt_id"]
+
+    {checked, _, actions} = WorkflowLedger.reconcile(resumed, "2026-06-02T18:00:02.000Z")
+    assert checked["steps"][child]["status"] == "running"
+    refute Enum.any?(actions, &match?({:terminate_agent, _, _}, &1))
+  end
+
   test "cycles and unadmitted templates never dispatch" do
     for steps <- [
           [%{"id" => "a", "template" => "query", "needs" => ["a"], "input" => %{}}],

@@ -1,9 +1,11 @@
 defmodule MirrorNeuron.Runner.DockerWorker do
   @moduledoc false
+  require Logger
 
   alias MirrorNeuron.Config
   alias MirrorNeuron.Message
   alias MirrorNeuron.Sandbox.DockerJobSandbox
+  alias MirrorNeuron.Runner.DockerCommand
 
   @default_container_workdir "/mn/job"
   @default_agent_event_prefix "__MN_EVENT__"
@@ -15,6 +17,10 @@ defmodule MirrorNeuron.Runner.DockerWorker do
   ]
 
   def run(payload, config, opts \\ []) do
+    DockerCommand.run(opts, &run_owned(payload, config, &1))
+  end
+
+  defp run_owned(payload, config, opts) do
     runner_name = build_runner_name(config, opts)
 
     base_dir =
@@ -339,9 +345,11 @@ defmodule MirrorNeuron.Runner.DockerWorker do
   defp run_shared_docker(image, base_dir, config, opts) do
     job_id = Keyword.fetch!(opts, :job_id)
 
-    with {:ok, sandbox} <- DockerJobSandbox.ensure(job_id, image, config, opts) do
+    with {:ok, sandbox} <- DockerJobSandbox.ensure(job_id, image, config, opts),
+         :ok <- DockerCommand.validate_runtime(docker_bin(config), sandbox["container_name"]) do
       container_name = sandbox["container_name"]
       remote_dir = build_shared_remote_dir(config, opts)
+      opts = Keyword.put(opts, :docker_invocation_dir, remote_dir)
 
       try do
         with :ok <- prepare_shared_remote_dir(container_name, remote_dir, config),
@@ -352,6 +360,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
           {:ok, output, exit_code, container_name}
         end
       after
+        stop_invocation(container_name, remote_dir, config)
         cleanup_shared_remote_dir(container_name, remote_dir, config)
       end
     end
@@ -359,7 +368,13 @@ defmodule MirrorNeuron.Runner.DockerWorker do
 
   defp build_docker_exec_args(container_name, remote_dir, config, opts) do
     workdir = resolve_shared_workdir(config, remote_dir)
-    command = normalize_command(Map.get(config, "command")) |> wrap_runtime_bootstrap_command()
+
+    command =
+      Map.get(config, "command")
+      |> normalize_command()
+      |> wrap_runtime_bootstrap_command()
+      |> DockerCommand.wrap(remote_dir)
+
     env = runtime_env(workdir, remote_dir, config, opts, remote_dir)
 
     args =
@@ -431,7 +446,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     agent = safe_name(Keyword.get(opts, :agent_id, "agent"))
     attempt = Keyword.get(opts, :attempt, 1)
     invocation = Keyword.get(opts, :invocation, 1)
-    unique = Integer.to_string(System.unique_integer([:positive]))
+    unique = Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
 
     Path.join([
       @default_container_workdir,
@@ -566,6 +581,8 @@ defmodule MirrorNeuron.Runner.DockerWorker do
          deadline,
          event_state
        ) do
+    owner_ref = Keyword.fetch!(opts, :docker_owner_monitor)
+
     receive do
       {^port, {:data, data}} ->
         {clean_data, next_event_state} = filter_agent_event_output(data, event_state)
@@ -606,10 +623,15 @@ defmodule MirrorNeuron.Runner.DockerWorker do
         })
 
         {:ok, output, exit_code}
+
+      {:DOWN, ^owner_ref, :process, _owner, _reason} ->
+        stop_owned_command(port, container_name, config, opts)
+
+      :terminate_docker_command ->
+        stop_owned_command(port, container_name, config, opts)
     after
       receive_timeout(deadline) ->
-        Port.close(port)
-        cleanup_container(container_name, config)
+        cleanup_result = stop_owned_command(port, container_name, config, opts)
         output = chunks |> Enum.reverse() |> IO.iodata_to_binary()
 
         emit_runner_event(opts, "docker_worker_command_timed_out", %{
@@ -626,6 +648,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
          %{
            "error" => "docker worker command timed out",
            "timeout_ms" => timeout_ms_from_deadline(deadline),
+           "cleanup_result" => inspect(cleanup_result),
            "stdout" => output
          }}
     end
@@ -835,11 +858,42 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     max(deadline - System.monotonic_time(:millisecond), 0)
   end
 
-  defp cleanup_container(container_name, config) do
-    _ = System.cmd(docker_bin(config), ["rm", "-f", container_name], stderr_to_stdout: true)
-    :ok
-  rescue
-    _ -> :ok
+  defp stop_owned_command(port, container_name, config, opts) do
+    # Disconnect output while cleanup retries so an unreachable Docker daemon
+    # cannot leave an abandoned command filling this process's mailbox.
+    if Port.info(port), do: Port.close(port)
+
+    result =
+      DockerCommand.stop(
+        docker_bin(config),
+        container_name,
+        Keyword.fetch!(opts, :docker_invocation_dir)
+      )
+
+    case result do
+      :ok ->
+        {:error, %{"error" => "docker worker command interrupted"}}
+
+      {:error, reason} ->
+        # Keep ownership registered until cleanup succeeds. Pause/resume and
+        # cancellation must not mistake a failed Docker RPC for reclaimed work.
+        Logger.warning("DockerWorker command cleanup failed; retrying: #{inspect(reason)}")
+
+        Process.sleep(1_000)
+        stop_owned_command(port, container_name, config, opts)
+    end
+  end
+
+  defp stop_invocation(container_name, remote_dir, config) do
+    case DockerCommand.stop(docker_bin(config), container_name, remote_dir) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("DockerWorker invocation cleanup failed; retrying: #{inspect(reason)}")
+        Process.sleep(1_000)
+        stop_invocation(container_name, remote_dir, config)
+    end
   end
 
   defp copy_uploads(base_dir, config, opts) do

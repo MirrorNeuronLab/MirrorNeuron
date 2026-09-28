@@ -10,7 +10,6 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   alias MirrorNeuron.{JobBundle, ServiceRegistry, ServiceSpec}
   alias MirrorNeuron.Runner.DockerCompose
   alias MirrorNeuron.Scheduler
-  alias MirrorNeuron.Sandbox.DockerJobSandbox
 
   alias MirrorNeuron.Runtime.{
     AgentWorker,
@@ -310,6 +309,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   @impl true
   def handle_call(:pause, _from, %{status: "running"} = state) do
+    state = state |> cancel_policy_timers() |> cancel_recovery_tasks()
     EventBus.publish(state.job_id, %{type: :job_pausing, timestamp: Runtime.timestamp()})
     {workflow_state, workflow_events} = WorkflowLedger.pause(state.workflow_state)
     broadcast_agent_control(state, :pause)
@@ -347,18 +347,24 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     persist_job(next_state)
 
     if job_type(next_state) == "service" do
-      reset_prepared_service_containers(next_state)
       cleanup_sandboxes(next_state)
       ServiceRegistry.deregister_job(next_state.job_id)
     end
 
     EventBus.publish(state.job_id, %{type: :job_paused, timestamp: Runtime.timestamp()})
     publish_workflow_events(next_state, workflow_events)
-    {:reply, {:ok, "paused"}, next_state}
+
+    case stop_paused_commands(next_state) do
+      :ok -> {:reply, {:ok, "paused"}, next_state}
+      {:error, reason} -> {:reply, {:error, {:pause_cleanup_failed, reason}}, next_state}
+    end
   end
 
   def handle_call(:pause, _from, %{status: "paused"} = state) do
-    {:reply, {:ok, "paused"}, state}
+    case stop_paused_commands(state) do
+      :ok -> {:reply, {:ok, "paused"}, state}
+      {:error, reason} -> {:reply, {:error, {:pause_cleanup_failed, reason}}, state}
+    end
   end
 
   def handle_call(:pause, _from, state), do: {:reply, {:error, "job is not running"}, state}
@@ -447,7 +453,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   @impl true
   def handle_call({:reschedule_agents, agent_ids, scheduler_plan, reason}, _from, state)
-      when state.status in ["running", "paused"] do
+      when state.status == "running" do
     affected_agent_ids = normalize_agent_ids(agent_ids, state)
 
     if affected_agent_ids == [] do
@@ -526,7 +532,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         _from,
         state
       )
-      when state.status in ["running", "paused"] do
+      when state.status == "running" do
     affected_agent_ids = normalize_agent_ids(agent_ids, state)
 
     cond do
@@ -751,6 +757,11 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     end
   end
 
+  def handle_info({:policy_restart, agent_id, _reason}, %{status: status} = state)
+      when status != "running" do
+    {:noreply, clear_policy_timer(state, {:restart, agent_id})}
+  end
+
   def handle_info({:policy_restart, agent_id, reason}, state) do
     next_state = clear_policy_timer(state, {:restart, agent_id})
 
@@ -778,6 +789,11 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
             {:stop, {:shutdown, final_reason}, failed_state}
         end
     end
+  end
+
+  def handle_info({:policy_reschedule, agent_ids, _reason}, %{status: status} = state)
+      when status != "running" do
+    {:noreply, Enum.reduce(agent_ids, state, &clear_policy_timer(&2, {:reschedule, &1}))}
   end
 
   def handle_info({:policy_reschedule, agent_ids, reason}, state) do
@@ -1894,6 +1910,31 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
           []
       end
 
+    with :ok <- stop_paused_commands(state) do
+      restore_paused_agents(state, agent_ids)
+    else
+      {:error, reason} -> {:error, {:pause_cleanup_failed, reason}, state}
+    end
+  end
+
+  defp stop_paused_commands(state) do
+    agent_ids =
+      if job_type(state) == "service",
+        do: state.agent_ids,
+        else: WorkflowLedger.active_agent_ids(state.workflow_state)
+
+    if agent_ids == [] do
+      :ok
+    else
+      MirrorNeuron.Runtime.JobCleanup.stop_agent_commands(
+        state.job_id,
+        %{scheduler: scheduler_plan(state)},
+        agent_ids
+      )
+    end
+  end
+
+  defp restore_paused_agents(state, agent_ids) do
     case recover_agents(
            state,
            agent_ids,
@@ -2935,7 +2976,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp finalize_job(state, status, result, event_type, event_fields) do
-    state = cancel_policy_timers(state)
+    state = state |> cancel_policy_timers() |> cancel_recovery_tasks()
     terminate_agent_workers(state)
     ServiceRegistry.deregister_job(state.job_id)
     {result, event_fields} = attach_failure_error(state, status, result, event_type, event_fields)
@@ -3457,26 +3498,6 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
           {:error, reason} ->
             Logger.warning(
               "failed to clean prepared DockerCompose project while stopping service #{state.job_id}: #{inspect(reason)}"
-            )
-        end
-
-      _node ->
-        :ok
-    end)
-  end
-
-  defp reset_prepared_service_containers(state) do
-    state.nodes_by_id
-    |> Map.values()
-    |> Enum.each(fn
-      %{config: config} when is_map(config) ->
-        case DockerJobSandbox.reset_prepared_container(config) do
-          :ok ->
-            :ok
-
-          {:error, reason} ->
-            Logger.warning(
-              "failed to reset prepared DockerWorker while pausing service #{state.job_id}: #{inspect(reason)}"
             )
         end
 

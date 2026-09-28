@@ -3,6 +3,19 @@ defmodule MirrorNeuron.Runtime.JobCoordinatorTimerTest do
 
   alias MirrorNeuron.Runtime.JobCoordinator
 
+  test "queued restart and reschedule messages cannot revive a paused run" do
+    state = %{status: "paused", pending_policy_timers: %{}}
+
+    assert {:noreply, ^state} =
+             JobCoordinator.handle_info({:policy_restart, "worker", "lost"}, state)
+
+    assert {:noreply, ^state} =
+             JobCoordinator.handle_info({:policy_reschedule, ["worker"], "lost"}, state)
+
+    assert {:reply, {:error, "job is paused"}, ^state} =
+             JobCoordinator.handle_call({:reschedule_agents, ["worker"], %{}, "lost"}, nil, state)
+  end
+
   test "stale policy timer messages cannot execute a replacement action" do
     key = {:restart, "worker"}
     current_token = make_ref()

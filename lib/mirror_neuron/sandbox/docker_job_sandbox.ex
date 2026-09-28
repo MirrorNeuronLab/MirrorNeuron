@@ -7,7 +7,8 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
     prepared_sandbox(job_id, image, config)
   end
 
-  def cleanup_job_local(_job_id, _config \\ %{}), do: :ok
+  def cleanup_job_local(job_id, _config \\ %{}),
+    do: MirrorNeuron.Runner.DockerCommand.terminate_job(job_id)
 
   def reset_prepared_container(config) when is_map(config) do
     case prepared_container_name(config) do

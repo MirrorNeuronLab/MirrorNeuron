@@ -27,6 +27,19 @@ defmodule MirrorNeuron.Runtime.JobCleanup do
     cleanup(job_id, job, agents, runtime_resources(job))
   end
 
+  def stop_agent_commands(job_id, job, agent_ids) do
+    cleanup(
+      job_id,
+      job,
+      [],
+      [
+        {HostLocal, :terminate_agents, "HostLocal"},
+        {MirrorNeuron.Runner.DockerCommand, :terminate_agents, "DockerWorker"}
+      ],
+      [agent_ids]
+    )
+  end
+
   def cleanup_sandboxes(job_id, job, agents) when is_list(agents) do
     resources =
       if detail(job, "status") in ["completed", "failed", "cancelled", "deleted"] do
@@ -38,13 +51,13 @@ defmodule MirrorNeuron.Runtime.JobCleanup do
     cleanup(job_id, job, agents, resources)
   end
 
-  defp cleanup(job_id, job, agents, resources) do
+  defp cleanup(job_id, job, agents, resources, extra_args \\ []) do
     failures =
       job
       |> cleanup_nodes(agents)
       |> Enum.flat_map(fn node ->
         Enum.flat_map(resources, fn {module, function, label} ->
-          case safe_cleanup_on_node(node, module, function, job_id) do
+          case safe_cleanup_on_node(node, module, function, [job_id | extra_args]) do
             :ok ->
               []
 
@@ -104,8 +117,8 @@ defmodule MirrorNeuron.Runtime.JobCleanup do
 
   defp cleanup_node(_node), do: :error
 
-  defp safe_cleanup_on_node(node, module, function, job_id) do
-    NodeAdapter.rpc_call(node, module, function, [job_id], @cleanup_timeout_ms)
+  defp safe_cleanup_on_node(node, module, function, args) do
+    NodeAdapter.rpc_call(node, module, function, args, @cleanup_timeout_ms)
   rescue
     exception -> {:badrpc, {exception.__struct__, Exception.message(exception)}}
   catch

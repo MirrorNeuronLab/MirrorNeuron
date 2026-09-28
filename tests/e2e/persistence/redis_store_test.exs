@@ -1740,11 +1740,10 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
 
     assert {:error, failures} = Runtime.cleanup_job_sandboxes(job_id, job)
 
-    assert Enum.map(failures, & &1.node) == [
-             to_string(remote_node),
-             to_string(remote_node),
-             to_string(remote_node)
-           ]
+    assert Enum.all?(failures, &(&1.node == to_string(remote_node)))
+
+    assert Enum.map(failures, & &1.resource) ==
+             ["HostLocal", "OpenShell", "DockerWorker", "model residency"]
 
     assert_receive {:cleanup_rpc, ^remote_node, MirrorNeuron.Runner.HostLocal, :terminate_job,
                     [^job_id], 15_000}

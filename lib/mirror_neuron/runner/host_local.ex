@@ -12,10 +12,15 @@ defmodule MirrorNeuron.Runner.HostLocal do
   @cancellation_timeout_ms 2_000
 
   def terminate_job(job_id) when is_binary(job_id) do
+    terminate_agents(job_id, :all)
+  end
+
+  def terminate_agents(job_id, agent_ids) do
     if Process.whereis(@host_process_registry) do
       runners =
         @host_process_registry
         |> Registry.lookup(job_id)
+        |> Enum.filter(fn {_pid, agent_id} -> agent_ids == :all or agent_id in agent_ids end)
         |> Enum.map(fn {pid, _metadata} -> {pid, Process.monitor(pid)} end)
 
       Enum.each(runners, fn {pid, _monitor_ref} ->
@@ -314,7 +319,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
     owner_ref = Process.monitor(owner)
     job_id = Keyword.get(opts, :job_id)
 
-    :ok = register_host_process(job_id)
+    :ok = register_host_process(job_id, Keyword.get(opts, :agent_id))
 
     port =
       Port.open(
@@ -484,15 +489,15 @@ defmodule MirrorNeuron.Runner.HostLocal do
     System.monotonic_time(:millisecond) + @cancellation_timeout_ms
   end
 
-  defp register_host_process(job_id) when is_binary(job_id) and job_id != "" do
+  defp register_host_process(job_id, agent_id) when is_binary(job_id) and job_id != "" do
     if Process.whereis(@host_process_registry) do
-      {:ok, _value} = Registry.register(@host_process_registry, job_id, nil)
+      {:ok, _value} = Registry.register(@host_process_registry, job_id, agent_id)
     end
 
     :ok
   end
 
-  defp register_host_process(_job_id), do: :ok
+  defp register_host_process(_job_id, _agent_id), do: :ok
 
   defp await_terminated_runners([], _deadline), do: :ok
 

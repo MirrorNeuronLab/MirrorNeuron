@@ -145,4 +145,18 @@ defmodule MirrorNeuron.Runtime.JobCleanupTest do
     assert :ok = JobCleanup.cleanup_sandboxes("paused-run", %{status: "paused"}, [])
     refute_receive {:cleanup_rpc, _, RunnerResources, :release_run_models, _, _}
   end
+
+  test "pause cleanup targets only interrupted agents on every placement owner" do
+    NodeAdapterStub.reset(self())
+    job = %{scheduler: %{placements: [%{node: :placed@lab}]}}
+    assert :ok = JobCleanup.stop_agent_commands("paused-run", job, ["investigator"])
+
+    for node <- [:control@lab, :connected@lab, :placed@lab],
+        module <- [MirrorNeuron.Runner.HostLocal, MirrorNeuron.Runner.DockerCommand] do
+      assert_receive {:cleanup_rpc, ^node, ^module, :terminate_agents,
+                      ["paused-run", ["investigator"]], 15_000}
+    end
+
+    refute_receive {:cleanup_rpc, _, _, _, _, _}
+  end
 end

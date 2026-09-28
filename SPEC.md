@@ -192,6 +192,14 @@ operation. Acknowledgement removes the index entry but retains the durable
 cancellation record for audit.
 Pause, resume, cancel, backup, restore, deployment, and schedule operations
 preserve event/status coherence.
+Paused workflows preserve remaining step, child-workflow, heartbeat, and retry
+time budgets. Pause cancels pending recovery work; recovery and deployment
+requests cannot start agents while paused. Pause and resume wait for interrupted
+HostLocal and DockerWorker commands to relinquish their owned processes.
+DockerWorker uses Python 3 in its prepared worker image to supervise a separate
+process group per invocation. Owner loss, timeout and cancellation reap that
+group and its invocation workspace; they never remove or restart the shared
+prepared container. Failed command cleanup retains live ownership for retry.
 Idempotency records are owned by a supervised runtime process rather than an
 individual gRPC request process. An identical keyed Job, Run, or schedule
 request therefore replays the original result after its first request handler
