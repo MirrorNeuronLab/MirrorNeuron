@@ -19,6 +19,11 @@ source does not update an installed binary runtime.
 
 ## Purpose
 
+OpenShell shared-output downloads precede invocation workspace cleanup. With
+shared storage enabled, the command wrapper retains its directory until transfer
+succeeds; a failed transfer retains the mirror for recovery. Persistent workspaces
+retain their files while their synchronized temporary mirror is removed.
+
 MirrorNeuron Core is the Elixir/OTP execution runtime for durable,
 message-driven workflows. It loads executable manifests and job bundles,
 supervises long-lived runtime nodes, schedules work across local or clustered

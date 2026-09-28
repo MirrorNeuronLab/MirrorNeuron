@@ -499,6 +499,10 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
       from pathlib import Path
 
       payload = json.loads(Path(os.environ["MN_INPUT_FILE"]).read_text())
+      if os.environ.get("MN_JOB_OUTPUT_DIR"):
+          output = Path(os.environ["MN_JOB_OUTPUT_DIR"])
+          output.mkdir(parents=True, exist_ok=True)
+          (output / "result.txt").write_text(payload["value"])
       print(json.dumps({"seen": payload["value"]}))
       """
     )
@@ -592,6 +596,11 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
             cp "$local_path" "$target"
           fi
           ;;
+        download)
+          root="$(sandbox_root "$3")"
+          source="$root${4#/sandbox}"
+          cp -R "$source/." "$5/"
+          ;;
         ssh-config)
           name="$3"
           cat <<EOF
@@ -649,6 +658,9 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
         exec bash -lc "$rewritten"
       fi
 
+      if [ "$1" = "rm" ] && [ "$2" = "-rf" ] && [ "$3" = "--" ]; then
+        exec rm -rf -- "$root${4#/sandbox}"
+      fi
       exec "$@"
       """
     )
@@ -673,7 +685,8 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
 
     env_backup = %{
       "FAKE_SANDBOXES_DIR" => System.get_env("FAKE_SANDBOXES_DIR"),
-      "FAKE_DELETED_LOG" => System.get_env("FAKE_DELETED_LOG")
+      "FAKE_DELETED_LOG" => System.get_env("FAKE_DELETED_LOG"),
+      "MN_SHARED_STORAGE_ROOT" => System.get_env("MN_SHARED_STORAGE_ROOT")
     }
 
     try do
@@ -705,6 +718,43 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
       assert result2["stdout"] =~ "\"seen\": \"second\""
       assert File.dir?(Path.join(sandboxes_dir, result1["sandbox_name"]))
       assert File.read!(args_log) =~ "sandbox upload prepared-shared-test"
+
+      shared_root = Path.join(tmp_dir, "shared")
+      job_root = Path.join(shared_root, "job")
+      output_dir = Path.join(job_root, "outputs/user")
+      File.mkdir_p!(output_dir)
+      System.put_env("MN_SHARED_STORAGE_ROOT", shared_root)
+
+      shared_config =
+        Map.merge(config, %{
+          "sync_shared_storage" => true,
+          "environment" => %{
+            "MN_JOB_SHARED_STORAGE_ROOT" => job_root,
+            "MN_JOB_OUTPUT_DIR" => output_dir
+          }
+        })
+
+      assert {:ok, synced} =
+               OpenShell.run(
+                 %{"value" => "durable-before-cleanup"},
+                 shared_config,
+                 job_id: "job-shared-1",
+                 agent_id: "shared-writer",
+                 bundle_root: bundle_dir,
+                 payloads_path: payloads_dir
+               )
+
+      assert synced["exit_code"] == 0
+      assert File.read!(Path.join(output_dir, "result.txt")) == "durable-before-cleanup"
+
+      remote_workspace =
+        String.replace_prefix(
+          synced["remote_dir"],
+          "/sandbox",
+          Path.join(sandboxes_dir, synced["sandbox_name"])
+        )
+
+      refute File.exists?(remote_workspace)
 
       assert :ok = OpenShellJobSandbox.cleanup_job_local("job-shared-1")
       assert File.exists?(Path.join(sandboxes_dir, result1["sandbox_name"]))

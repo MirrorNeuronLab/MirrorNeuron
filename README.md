@@ -36,6 +36,9 @@ on that engine.
 
 ## Why MirrorNeuron?
 
+OpenShell workers synchronize shared outputs before cleaning their invocation
+workspace. Failed transfers preserve the sandbox copy for recovery.
+
 Agent workflows become harder to operate when they span many steps, wait for
 input, call external services, or need to survive a restart. MirrorNeuron gives
 that work an explicit execution model and a durable record of progress.

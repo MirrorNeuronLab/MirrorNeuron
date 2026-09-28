@@ -120,7 +120,11 @@ defmodule MirrorNeuron.Runner.OpenShell do
                  ),
                :ok <- OpenShellSharedStorage.upload(shared_storage, executable),
                {:ok, command} <-
-                 build_command(shared_storage.config, remote_dir, shared_storage.opts),
+                 build_command(
+                   shared_command_config(shared_storage),
+                   remote_dir,
+                   shared_storage.opts
+                 ),
                {:ok, output, ssh_exit_code} <-
                  run_ssh_command(
                    shared_storage.config,
@@ -133,7 +137,8 @@ defmodule MirrorNeuron.Runner.OpenShell do
                    cleanup_shared_storage(
                      shared_storage,
                      shared_storage.config,
-                     sandbox
+                     sandbox,
+                     remote_dir
                    ),
                  {:ok, result} <-
                    extract_result(
@@ -156,19 +161,29 @@ defmodule MirrorNeuron.Runner.OpenShell do
     end
   end
 
+  defp shared_command_config(%OpenShellSharedStorage{enabled: true, config: config}),
+    do: Map.put(config, "cleanup_remote_dir", false)
+
+  defp shared_command_config(%OpenShellSharedStorage{config: config}), do: config
+
   defp cleanup_shared_storage(
          %OpenShellSharedStorage{enabled: false},
          _config,
-         _sandbox
+         _sandbox,
+         _remote_dir
        ),
        do: :ok
 
   defp cleanup_shared_storage(
          %OpenShellSharedStorage{remote_root: remote_root},
          config,
-         sandbox
+         sandbox,
+         remote_dir
        ) do
-    command = ["rm -rf -- #{shell_escape(remote_root)}"]
+    # The mirror lives inside the invocation directory. Remove it only after
+    # download succeeds, preserving both on transfer failure for recovery.
+    cleanup_path = if cleanup_remote_dir?(config), do: remote_dir, else: remote_root
+    command = ["rm", "-rf", "--", cleanup_path]
 
     case run_ssh_command(
            config,
