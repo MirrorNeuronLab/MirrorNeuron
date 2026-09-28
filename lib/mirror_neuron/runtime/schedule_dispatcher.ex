@@ -11,6 +11,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
   alias MirrorNeuron.Runtime.StableJob
   alias MirrorNeuron.Scheduler
   alias MirrorNeuron.Runtime.ErrorEnvelope
+  alias MirrorNeuron.Runtime.ScheduleOccurrence
   alias MirrorNeuron.Runtime.SchedulePolicy
 
   @lease_ttl_ms 30_000
@@ -216,7 +217,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
       mark_blocked(schedule, "overlap")
     else
       dispatch_with_lease(schedule, %{
-        "scheduled_for" => Runtime.timestamp(),
+        "scheduled_for" => event["created_at"],
         "reason" => "event",
         "event" => event
       })
@@ -296,26 +297,41 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
   defp schedule_owner?(_schedule), do: true
 
   defp dispatch_child(schedule, instance, lease, state_lock) do
-    dispatch_id = generate_dispatch_id()
+    dispatch_id =
+      if service_schedule?(schedule),
+        do: generate_dispatch_id(),
+        else: dispatch_token(schedule, instance)
+
     metadata = schedule_dispatch_metadata(schedule, instance, dispatch_id, lease)
 
-    with {:ok, started} <- start_scheduled_run(schedule, metadata) do
+    start = fn run_id ->
+      start_scheduled_run(schedule, Map.put(metadata, "reserved_run_id", run_id))
+    end
+
+    dispatched =
+      if service_schedule?(schedule),
+        do: start_scheduled_run(schedule, metadata),
+        else: ScheduleOccurrence.run(schedule, metadata, state_lock, start)
+
+    with {:ok, started} <- dispatched do
       run_id = started.run_id
 
-      log_schedule_update_failure(
-        schedule["schedule_id"],
-        update_after_dispatch(
-          schedule,
-          dispatch_id,
-          run_id,
-          instance,
-          metadata,
-          started,
-          state_lock
-        )
-      )
+      case update_after_dispatch(
+             schedule,
+             dispatch_id,
+             run_id,
+             instance,
+             metadata,
+             started,
+             state_lock
+           ) do
+        {:ok, _saved} ->
+          %{checked: 1, dispatched: 1, skipped: 0, failed: 0, missed: 0, blocked: 0}
 
-      %{checked: 1, dispatched: 1, skipped: 0, failed: 0, missed: 0, blocked: 0}
+        {:error, reason} ->
+          log_schedule_update_failure(schedule["schedule_id"], {:error, reason})
+          %{checked: 1, dispatched: 0, skipped: 0, failed: 1, missed: 0, blocked: 0}
+      end
     else
       {:error, {:service_schedule_blocked, reason}} ->
         log_schedule_update_failure(
@@ -337,17 +353,15 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
 
   defp start_scheduled_run(%{"job_id" => job_id}, metadata)
        when is_binary(job_id) and job_id != "" do
-    StableJob.scheduled_transition(job_id,
-      schedule_metadata: metadata,
-      inputs: Map.get(metadata, "payload", %{})
-    )
+    opts = [schedule_metadata: metadata, inputs: Map.get(metadata, "payload", %{})]
+    StableJob.scheduled_transition(job_id, reserved_run_option(opts, :run_id, metadata))
   end
 
   defp start_scheduled_run(schedule, metadata) do
     with {:ok, bundle_or_manifest} <- load_dispatch_bundle(schedule, metadata) do
       case Runtime.start_job(
              dispatch_manifest(bundle_or_manifest),
-             dispatch_opts(bundle_or_manifest)
+             reserved_run_option(dispatch_opts(bundle_or_manifest), :job_id, metadata)
            ) do
         {:ok, run_id, pid} ->
           {:ok,
@@ -366,6 +380,11 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
       end
     end
   end
+
+  defp reserved_run_option(opts, key, %{"reserved_run_id" => run_id}) when is_binary(run_id),
+    do: Keyword.put(opts, key, run_id)
+
+  defp reserved_run_option(opts, _key, _metadata), do: opts
 
   defp load_dispatch_bundle(schedule, metadata) do
     fingerprint = get_in(schedule, ["bundle_ref", "bundle_fingerprint"])
@@ -424,7 +443,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
          started,
          state_lock
        ) do
-    now = Runtime.timestamp()
+    now = Map.get(started, :submitted_at) || Runtime.timestamp()
     window_end_at = window_end_at(schedule, now)
 
     dispatch =
@@ -447,12 +466,19 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
       |> Map.new()
 
     mutate_schedule_with_lock(schedule["schedule_id"], state_lock, fn current ->
-      current
-      |> prune_inactive_run_ids()
-      |> prepend_dispatch(dispatch)
-      |> Map.update("active_run_ids", [run_id], &Enum.uniq([run_id | &1]))
-      |> increment_counter("dispatched")
-      |> maybe_complete_one_shot()
+      if Enum.any?(
+           current["dispatches"] || [],
+           &(&1["dispatch_id"] == dispatch_id and &1["status"] in ["submitted", "window_closed"])
+         ) do
+        current
+      else
+        current
+        |> prune_inactive_run_ids()
+        |> prepend_dispatch(dispatch)
+        |> Map.update("active_run_ids", [run_id], &Enum.uniq([run_id | &1]))
+        |> increment_counter("dispatched")
+        |> maybe_complete_one_shot()
+      end
     end)
   end
 
@@ -522,13 +548,17 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     if occurrence_consumed and schedule["kind"] == "periodic" do
       next_run_at = SchedulePolicy.next_run_at(schedule, DateTime.add(now, 60, :second))
 
-      log_schedule_update_failure(
-        schedule["schedule_id"],
-        mutate_schedule(schedule["schedule_id"], &Map.put(&1, "next_run_at", next_run_at))
-      )
-    end
+      case mutate_schedule(schedule["schedule_id"], &Map.put(&1, "next_run_at", next_run_at)) do
+        {:ok, _saved} ->
+          result
 
-    result
+        {:error, reason} ->
+          log_schedule_update_failure(schedule["schedule_id"], {:error, reason})
+          Map.update!(result, :failed, &(&1 + 1))
+      end
+    else
+      result
+    end
   end
 
   defp mark_missed(schedule, now) do
@@ -1016,7 +1046,8 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
       :sha256,
       Jason.encode!(%{
         schedule_id: schedule["schedule_id"],
-        scheduled_for: instance["scheduled_for"],
+        scheduled_for:
+          if(get_in(instance, ["event", "event_id"]), do: nil, else: instance["scheduled_for"]),
         reason: instance["reason"],
         event_id: get_in(instance, ["event", "event_id"])
       })

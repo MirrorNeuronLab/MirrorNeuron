@@ -1,0 +1,8 @@
+syntax = "proto3";
+package mirrorneuron.interactions.v1;
+import "cluster.proto";
+// Reuse existing bounded JSON resource envelopes. Domain schema is mn.interaction.v1.
+service InteractionService {
+  rpc Command (mirrorneuron.cluster.v1.SetResourceRequest) returns (mirrorneuron.cluster.v1.GetResourceResponse);
+  rpc Watch (mirrorneuron.cluster.v1.SetResourceRequest) returns (stream mirrorneuron.cluster.v1.GetResourceResponse);
+}

@@ -462,3 +462,42 @@ backoff. Existing peer registrations may change endpoints only with the same
 node name, coordination-store identity, and peer credential. Job projections
 and ownership survive these updates. Unreachable peers retain their identity;
 operators may need to re-add their current endpoint if no known address works.
+
+
+## Durable batch schedule occurrences
+
+Batch schedules reserve an occurrence in Redis before starting work. A reservation
+binds the schedule and occurrence to one execution ID and survives dispatcher
+lease expiry, process restart, and run-record retention. Event occurrences use
+the event ID independently of retry time. Only the reservation creator may
+submit an execution; retries reconcile the exact recorded run and verify its
+schedule/dispatch metadata, or return the durable submission receipt.
+
+If interruption leaves a reservation without a verifiable run, dispatch reports
+`schedule_occurrence_unconfirmed` for operator review; absence is not treated as
+permission to execute again. A fresh intentional occurrence remains independent.
+Receipts live until their owning schedule is deleted. Schedule deletion removes
+them with the schedule under the same fenced mutation.
+
+Dispatch bookkeeping failures are reported as failures. Receipt replay preserves
+the original submission time and does not extend an already recorded execution
+window or count the same retained dispatch twice. Service schedules retain their
+existing single-run pause/resume/replacement behavior.
+
+## Durable human interaction capability (cutover pending)
+
+`mn.interaction.v1` stores versioned requests and replay events atomically in Redis.
+The `mirrorneuron.interactions.v1.InteractionService` Command and Watch RPCs use
+the existing authenticated channel and JSON resource envelope. Explicit option
+IDs and semantics, expected revisions and command IDs are required. Request
+state is separate from effect state. Scope binds the original execution;
+federated commands route to its owner. Snapshots include an opaque composite
+cursor; expired cursors require resynchronization. Response receipts survive
+transport loss and only one concurrent decision can commit.
+
+The implementation retains at most 10,000 replay events and 5,000 records per
+node; resolved/display records have seven-day retention. Capacity fails explicitly.
+Pending deadlines are checked transactionally and by a deadline sweeper. Historical
+blueprint audit files are not deleted. This capability is not yet a completed
+legacy cutover: blueprint migration, remote-node/restart gates, retention cleanup
+notifications and coordinated draining remain required before release.

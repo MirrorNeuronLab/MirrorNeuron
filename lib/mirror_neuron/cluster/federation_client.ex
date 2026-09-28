@@ -61,6 +61,28 @@ defmodule MirrorNeuron.Cluster.FederationClient do
   end
 
   @doc false
+  def interaction_command(node_name, request),
+    do: rpc_call(node_name, MirrorNeuron.Grpc.InteractionStub, :command, request)
+
+  @doc false
+  def interaction_events(node_name, request, on_event) do
+    with {:ok, peer} <- FederationRegistry.fetch(node_name),
+         {:ok, destination} <- target(peer),
+         {:ok, channel} <- connect(destination, peer) do
+      try do
+        case MirrorNeuron.Grpc.InteractionStub.watch(channel, request) do
+          {:ok, responses} -> relay_event_responses(node_name, responses, on_event)
+          {:error, reason} -> relay_failure!(node_name, reason)
+        end
+      after
+        GRPC.Stub.disconnect(channel)
+      end
+    else
+      {:error, reason} -> unavailable!(node_name, reason)
+    end
+  end
+
+  @doc false
   def call_cluster(node_name, function, request) when is_atom(function) do
     rpc_call(node_name, ClusterStub, function, request)
   end

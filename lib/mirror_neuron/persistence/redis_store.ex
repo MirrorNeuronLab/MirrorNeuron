@@ -829,6 +829,71 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
+  def reserve_schedule_occurrence(schedule_id, token, record, lock) do
+    script = """
+    if redis.call("get", KEYS[1]) ~= ARGV[1] or redis.call("exists", KEYS[2]) == 0 then
+      return {0, ""}
+    end
+    local existing = redis.call("hget", KEYS[3], ARGV[2])
+    if existing then return {2, existing} end
+    redis.call("hset", KEYS[3], ARGV[2], ARGV[3])
+    return {1, ARGV[3]}
+    """
+
+    with {:ok, [state, contents]} <-
+           command([
+             "EVAL",
+             script,
+             "3",
+             key("lease", lock.lease_name),
+             key("schedule", schedule_id),
+             key("schedule-occurrences", schedule_id),
+             fenced_lease_value(lock.owner, lock.lease["epoch"]),
+             token,
+             Jason.encode!(record)
+           ]) do
+      case state do
+        0 ->
+          {:error, :not_owner}
+
+        value when value in [1, 2] ->
+          with :ok <- wait_for_replicas(), {:ok, saved} <- Jason.decode(contents) do
+            {:ok, if(value == 1, do: :new, else: :existing), saved}
+          end
+      end
+    end
+  end
+
+  def complete_schedule_occurrence(schedule_id, token, record, lock) do
+    script = """
+    if redis.call("get", KEYS[1]) ~= ARGV[1] or redis.call("exists", KEYS[2]) == 0 then
+      return 0
+    end
+    local existing = redis.call("hget", KEYS[3], ARGV[2])
+    if not existing or cjson.decode(existing).run_id ~= cjson.decode(ARGV[3]).run_id then
+      return 0
+    end
+    redis.call("hset", KEYS[3], ARGV[2], ARGV[3])
+    return 1
+    """
+
+    case command([
+           "EVAL",
+           script,
+           "3",
+           key("lease", lock.lease_name),
+           key("schedule", schedule_id),
+           key("schedule-occurrences", schedule_id),
+           fenced_lease_value(lock.owner, lock.lease["epoch"]),
+           token,
+           Jason.encode!(record)
+         ]) do
+      {:ok, 1} -> wait_for_replicas()
+      {:ok, 0} -> {:error, :not_owner}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   def persist_schedule(schedule_id, schedule_map) do
     schedule = prepare_schedule(schedule_id, schedule_map)
     revision = runtime_status_revision(schedule)
@@ -951,7 +1016,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
     with {:ok, results} <-
            transaction([
-             ["DEL", key("schedule", schedule_id)],
+             ["DEL", key("schedule", schedule_id), key("schedule-occurrences", schedule_id)],
              ["SREM", key(@schedules_set), schedule_id],
              ["ZREM", key(@schedule_due_zset), schedule_id],
              cluster_runtime_status_event_command(
@@ -979,7 +1044,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       return 0
     end
 
-    redis.call("del", KEYS[2])
+    redis.call("del", KEYS[2], KEYS[7])
     redis.call("srem", KEYS[3], ARGV[2])
     redis.call("zrem", KEYS[4], ARGV[2])
     redis.call("del", KEYS[1])
@@ -995,13 +1060,14 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     case command([
            "EVAL",
            script,
-           "6",
+           "7",
            key("lease", lease_name),
            key("schedule", schedule_id),
            key(@schedules_set),
            key(@schedule_due_zset),
            key("lease", lease_name, "epoch"),
            cluster_runtime_status_stream_key(),
+           key("schedule-occurrences", schedule_id),
            fenced_lease_value(owner_id, epoch),
            schedule_id,
            to_string(NodeAdapter.self()),
