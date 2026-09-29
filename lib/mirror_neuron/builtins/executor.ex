@@ -269,6 +269,12 @@ defmodule MirrorNeuron.Builtins.Executor do
            runner_config,
            message: message,
            attempt: attempt,
+           run_id: get_in(context, [:workflow, "run_id"]),
+           step_instance:
+             (get_in(context, [:workflow, "step_id"]) || "step") <> ":" <> context.node.node_id,
+           runtime_attempt:
+             get_in(context, [:workflow, "attempt"]) || Map.get(context, :job_attempt) || attempt,
+           lease_epoch: Map.get(context, :lease_epoch),
            invocation: invocation,
            coordinator_node: node(context.coordinator),
            job_id: context.job_id,
@@ -614,6 +620,8 @@ defmodule MirrorNeuron.Builtins.Executor do
     end
   end
 
+  defp attach_structured_result(%{"structured_result" => _} = result, _config), do: {:ok, result}
+
   defp attach_structured_result(result, config) do
     environment = Map.get(config, "environment", %{})
 
@@ -678,6 +686,8 @@ defmodule MirrorNeuron.Builtins.Executor do
 
     trunc(base * :math.pow(2, max(attempt - 1, 0)))
   end
+
+  defp retryable?(%{"retryable" => false}), do: false
 
   defp retryable?(reason) do
     reason

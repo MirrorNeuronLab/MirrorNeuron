@@ -336,3 +336,27 @@ persists that identity independently of the network address and reports an
 unnamed or mismatched Core as unready. After Wi-Fi changes, `mn runtime reconnect`
 refreshes endpoint advertisements without restarting healthy Core processes.
 Direct distributed-Erlang deployments retain their existing naming policy.
+
+### OpenShell artifact handoff v1
+
+Set `artifact_handoff: {"version": "mn.artifact_handoff/v1"}` on an
+OpenShell executor to use owner-node immutable artifact commits. The SDK's
+`mn_sdk.artifact_handoff` helpers declare outputs and resolve verified inputs.
+This mode rejects `sync_shared_storage: true`; that flag explicitly selects the
+legacy whole-tree contract for unmigrated blueprints. Deploy the matching SDK
+in worker images when upgrading Core.
+
+Core records dispatch before execution, captures diagnostics separately, seals
+and verifies declared files, and atomically publishes a receipt with their
+bytes before releasing step results. Transfer retries never dispatch the worker.
+A missing trustworthy execution record blocks replay; an operator must explicitly
+start a new run to retry an unknown outcome. No exactly-once model-call guarantee
+is claimed. Job sandbox caches are disposable and verified on every hit.
+
+Receipts and transaction journals live under
+`outputs/runs/<actual-runtime-run-id>/.handoff/` on the owning node. Startup
+maintenance reconciles published receipts and independently retries cleanup.
+Workflow replay can recover a committed executor result without the sandbox.
+Owner storage loss is outside this durability guarantee. Replica consumers must
+verify the receipt and every referenced file; filesystem replication alone is
+not a completion signal.

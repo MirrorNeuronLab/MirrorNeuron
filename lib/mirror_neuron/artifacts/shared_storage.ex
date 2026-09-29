@@ -104,6 +104,10 @@ defmodule MirrorNeuron.Artifacts.SharedStorage do
           path = Path.join(run_dir, entry)
 
           cond do
+            (Path.basename(run_dir) == ".handoff" and entry in ["transactions", "staging"]) or
+                (Path.basename(run_dir) == "commits" and String.starts_with?(entry, ".publish-")) ->
+              {:cont, {:ok, files}}
+
             entry in [".mn_completion.json", ".mn_completion.json.tmp"] ->
               {:cont, {:ok, files}}
 

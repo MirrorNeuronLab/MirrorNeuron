@@ -310,7 +310,16 @@ defmodule MirrorNeuron.Manifest do
       |> Enum.filter(&(is_nil(&1.node_id) or &1.node_id == ""))
       |> Enum.map(fn _ -> "node_id is required for every node" end)
 
+    handoff_errors =
+      Enum.flat_map(manifest.nodes, fn node ->
+        case MirrorNeuron.Runner.OpenShellArtifactHandoff.validate(node.config || %{}) do
+          :ok -> []
+          {:error, reason} -> ["#{node.node_id}: #{reason}"]
+        end
+      end)
+
     errors
+    |> add_errors(handoff_errors)
     |> add_errors(Enum.map(Enum.uniq(duplicates), &"duplicate node_id #{&1}"))
     |> add_errors(unsupported)
     |> add_errors(unsupported_templates)

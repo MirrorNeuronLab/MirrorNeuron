@@ -379,6 +379,8 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       artifact_refs: state.runtime_context[:artifact_refs] || [],
       template_type: Map.get(state.node, :type, "generic"),
       invocation: state.processed_messages + 1,
+      lease_epoch: state.runtime_context[:lease_epoch],
+      job_attempt: state.runtime_context[:attempt],
       workflow: workflow,
       coordinator_reporter: fn kind, fields, delivery_key ->
         enqueue_coordinator_report(state, message, kind, fields, delivery_key)

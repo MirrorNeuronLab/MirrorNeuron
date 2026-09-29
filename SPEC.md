@@ -514,3 +514,45 @@ Pending deadlines are checked transactionally and by a deadline sweeper. Histori
 blueprint audit files are not deleted. This capability is not yet a completed
 legacy cutover: blueprint migration, remote-node/restart gates, retention cleanup
 notifications and coordinated draining remain required before release.
+
+## OpenShell artifact handoff v1
+
+`artifact_handoff.version = "mn.artifact_handoff/v1"` selects an immutable
+artifact protocol. It cannot coexist with `sync_shared_storage=true`; no error
+falls back to whole-tree synchronization. Optional positive quotas are
+`max_bytes` (default 64 MB), `max_files` (256), and `max_result_bytes` (1 MB).
+`export_outputs=true` materializes the successful structured result's `exports`
+map from committed references into the submission's configured output folder.
+
+The runtime supplies the actual workflow run ID, logical step plus executor
+instance, runtime attempt, owner identity and lease epoch. Core validates its
+job lease before dispatch/publication and the owner store serializes publication
+with a monotonic transaction fence. Identity or content conflicts fail closed.
+Execution-start is synchronized before dispatch. Worker exit and bounded,
+secret-redacted diagnostics are persisted independently of file transfer. Each
+attempt has a distinct writable workspace. Cached inputs are job-scoped,
+verified by size/hash, and copied into the attempt; sandbox recreation naturally
+starts with an empty cache.
+
+A worker declares files using SDK artifact references. The sandbox wrapper seals
+all declared outputs and upstream result references after exit; the owner rejects
+missing files, links, special files, unsafe paths, invalid producer identity,
+quota excess, and hash/size discrepancies. Downloads are private staging files.
+Only verified files enter a synchronized immutable directory; the receipt is
+published atomically with that directory. Identical replay succeeds and a
+conflicting receipt fails. Completion is emitted only after this receipt exists.
+A transfer retry uses the recorded execution outcome, not another dispatch.
+
+Artifact transaction receipts are a narrow exception to the prohibition on
+recovering agent checkpoints from local disk: they recover the already completed
+artifact publication, not agent memory or workflow coordination. Redis retains
+workflow ownership and completion authority. On restart, maintenance reconciles
+receipts against journals; executor replay returns the recorded result.
+Uncertain dispatches without a trustworthy completion record are `unknown_blocked`
+and require an explicit new run. Cleanup runs only after commit; failure leaves
+a durable warning and is retried independently. The guarantee is owner-node
+storage durability, without requiring another node's availability.
+
+Deterministic acceptance coverage: `tests/unit/open_shell_artifact_handoff_test.exs`
+uses the actual runner and both blueprint bindings; `tests/handoff/test_store.py`
+exercises crash publication, fencing, conflicts, corruption, quotas and replication.

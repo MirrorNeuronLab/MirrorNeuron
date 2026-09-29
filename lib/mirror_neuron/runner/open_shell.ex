@@ -14,10 +14,17 @@ defmodule MirrorNeuron.Runner.OpenShell do
   def run(payload, config, opts \\ []) do
     config = resolve_local_cli_paths(config, opts)
 
-    if reuse_shared_sandbox?(config) do
-      run_in_shared_sandbox(payload, config, opts)
-    else
-      run_one_shot(payload, config, opts)
+    with :ok <- MirrorNeuron.Runner.OpenShellArtifactHandoff.validate(config) do
+      cond do
+        is_map(config["artifact_handoff"]) ->
+          MirrorNeuron.Runner.OpenShellArtifactHandoff.run(payload, config, opts)
+
+        reuse_shared_sandbox?(config) ->
+          run_in_shared_sandbox(payload, config, opts)
+
+        true ->
+          run_one_shot(payload, config, opts)
+      end
     end
   end
 
@@ -345,7 +352,8 @@ defmodule MirrorNeuron.Runner.OpenShell do
       {:error, "failed to invoke #{executable}: #{Exception.message(error)}"}
   end
 
-  defp upload_workspace(executable, sandbox_name, staged_dir, remote_dir) do
+  @doc false
+  def upload_workspace(executable, sandbox_name, staged_dir, remote_dir) do
     staged_dir
     |> staged_uploads(remote_dir)
     |> Enum.reduce_while({:ok, :uploaded}, fn {source, destination}, {:ok, :uploaded} ->
@@ -377,7 +385,8 @@ defmodule MirrorNeuron.Runner.OpenShell do
       {:error, "failed to invoke #{executable}: #{Exception.message(error)}"}
   end
 
-  defp run_ssh_command(config, sandbox_name, ssh_host, command) do
+  @doc false
+  def run_ssh_command(config, sandbox_name, ssh_host, command) do
     executable = sandbox_cli(config)
 
     case OpenShellCLI.direct_exec_args(sandbox_name, command) do
@@ -474,7 +483,8 @@ defmodule MirrorNeuron.Runner.OpenShell do
     MirrorNeuron.Runner.Result.sanitize(result)
   end
 
-  defp stage_workspace(payload, config, opts) do
+  @doc false
+  def stage_workspace(payload, config, opts) do
     sandbox_name =
       if reuse_shared_sandbox?(config) do
         "shared-#{Keyword.get(opts, :job_id, "job")}"
@@ -863,7 +873,8 @@ defmodule MirrorNeuron.Runner.OpenShell do
     end
   end
 
-  defp resolve_workdir(config, remote_dir) do
+  @doc false
+  def resolve_workdir(config, remote_dir) do
     default_root = Map.get(config, "sandbox_upload_path", "/sandbox/job")
     configured = Map.get(config, "workdir", remote_dir)
 

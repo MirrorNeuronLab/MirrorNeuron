@@ -495,6 +495,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     base
     |> Map.merge(MirrorNeuron.ResourceSpec.allocation_env(allocation))
     |> Map.merge(extra_env(config))
+    |> Map.merge(MirrorNeuron.Runner.WorkflowEnvironment.from_options(opts))
     |> Map.put("MN_EXECUTION_NODE", to_string(Node.self()))
   end
 

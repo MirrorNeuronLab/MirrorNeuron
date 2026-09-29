@@ -77,6 +77,12 @@ defmodule MirrorNeuron.Artifacts.SharedStorageTest do
     File.write!(Path.join(user_dir, "review_index.json"), "{}")
     File.write!(Path.join(run_dir, ".mn_completion.json.tmp"), "stale")
 
+    for name <- ["transactions/a/state.json", "staging/a/partial.bin"] do
+      path = Path.join([run_dir, ".handoff", name])
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, "mutable")
+    end
+
     assert :ok =
              SharedStorage.publish_run_completion(
                manifest(submission, run_dir, Path.join(root, "target"))

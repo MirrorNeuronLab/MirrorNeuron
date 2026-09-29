@@ -46,6 +46,7 @@ defmodule MirrorNeuron.Application do
               MirrorNeuron.Cluster.Leader,
               MirrorNeuron.Runtime.ReliabilityObserver,
               MirrorNeuron.Execution.LeaseManager,
+              MirrorNeuron.Runner.OpenShellArtifactMaintenance,
               {Registry, keys: :duplicate, name: MirrorNeuron.Runner.HostProcessRegistry},
               {Registry, keys: :duplicate, name: MirrorNeuron.Runner.DockerProcessRegistry},
               {Registry, keys: :unique, name: MirrorNeuron.Sandbox.Registry},
