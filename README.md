@@ -34,6 +34,8 @@ on that engine.
 > installed releases may differ. Check `mn --version` and command help when
 > following a guide, and use compatible ecosystem releases.
 
+Child-round plan nodes accept an optional non-empty `label` of at most 1,024 UTF-8 bytes. Core persists it on the child instance and includes it in public topology events; omitted labels retain the template label or instance ID. Labels do not alter task identity, dependencies or execution.
+
 ## Why MirrorNeuron?
 
 OpenShell workers synchronize shared outputs before cleaning their invocation

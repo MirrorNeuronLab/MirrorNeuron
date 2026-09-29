@@ -65,6 +65,49 @@ defmodule MirrorNeuron.Runtime.ChildWorkflowTest do
     }
   end
 
+  test "child task labels survive scheduling, topology events and recovery" do
+    {state, actions} = started()
+
+    output =
+      plan(0, [
+        %{
+          "id" => "read",
+          "label" => "Scan source: src/api.py",
+          "template" => "query",
+          "needs" => [],
+          "input" => %{}
+        }
+      ])
+
+    {state, events, _actions} = finish(state, actions, output)
+    assert state["steps"]["inspect:r1:read"]["label"] == "Scan source: src/api.py"
+    delta = Enum.find(events, &(&1.type == :workflow_child_plan_committed)).topology_delta
+    assert hd(delta.steps_added)["label"] == "Scan source: src/api.py"
+    restored = WorkflowLedger.new(manifest(), nodes(), %{"workflow_state" => state})
+    assert restored["steps"]["inspect:r1:read"]["label"] == "Scan source: src/api.py"
+  end
+
+  test "invalid child labels are rejected before dispatch" do
+    for label <- [42, "", String.duplicate("x", 1025)] do
+      {state, actions} = started()
+
+      output =
+        put_in(plan(0), ["child_plan", "steps"], [
+          %{
+            "id" => "read",
+            "label" => label,
+            "template" => "query",
+            "needs" => [],
+            "input" => %{}
+          }
+        ])
+
+      {state, _events, actions} = finish(state, actions, output)
+      assert state["steps"]["inspect"]["status"] == "failed"
+      refute Enum.any?(actions, &match?({:redeliver, _, _, _}, &1))
+    end
+  end
+
   test "128 artifact-backed tasks fit the bounded coordination plan" do
     definition = manifest()
 

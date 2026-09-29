@@ -200,6 +200,14 @@ defmodule MirrorNeuron.Runtime.ChildWorkflow do
                  do:
                    raise(ArgumentError, "Unadmitted child template, invalid input or dependency")
 
+          if Map.has_key?(node, "label") and
+               not (is_binary(node["label"]) and byte_size(node["label"]) in 1..1024),
+             do:
+               raise(
+                 ArgumentError,
+                 "Child label must be a non-empty string of at most 1024 bytes"
+               )
+
           schema = Map.get(spec["templates"][node["template"]], "input_schema", %{})
 
           case MirrorNeuron.Builtins.StepContract.validate_schema(node["input"], schema) do
@@ -241,7 +249,8 @@ defmodule MirrorNeuron.Runtime.ChildWorkflow do
               Map.merge(child["input"], node["input"]),
               Enum.map(node["needs"], &(prefix <> &1)),
               "executing",
-              now
+              now,
+              node["label"]
             )
           end)
 
@@ -280,7 +289,7 @@ defmodule MirrorNeuron.Runtime.ChildWorkflow do
     )
   end
 
-  defp add_instance(state, parent, id, template, input, needs, phase, now) do
+  defp add_instance(state, parent, id, template, input, needs, phase, now, label \\ nil) do
     child = state["child_workflows"][parent]
     metadata = Map.take(child, ["parent_step_id", "round", "revision", "phase", "results"])
 
@@ -288,6 +297,7 @@ defmodule MirrorNeuron.Runtime.ChildWorkflow do
       state["child_templates"][template]
       |> Map.merge(%{
         "id" => id,
+        "label" => label || state["child_templates"][template]["label"] || id,
         "dynamic_instance" => true,
         "parent_step_id" => parent,
         "child_workflow_id" => parent,

@@ -1,5 +1,7 @@
 # MirrorNeuron Core Specification
 
+Child-round plan nodes accept an optional non-empty `label` of at most 1,024 UTF-8 bytes. Core persists it on the child instance and includes it in public topology events; omitted labels retain the template label or instance ID. Labels do not alter task identity, dependencies or execution.
+
 ## Managed model residency
 
 Managed DMR models are retained by physical run identity on the native owner node.
