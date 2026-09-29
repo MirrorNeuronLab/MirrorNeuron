@@ -1851,17 +1851,17 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
           positive_int(configured_timeout_seconds, @default_timeout_seconds)
         end
 
-      # DockerWorker can report a terminal result but does not stream workflow
-      # beacons while a command is in flight. Keep the declared workflow
-      # timeout authoritative; an unbounded service entrypoint therefore has
-      # no implicit beacon deadline either.
-      # Node beacon settings belong to runners that stream beacons. DockerWorker
-      # buffers command output and cannot satisfy a node-level beacon deadline.
-      # An explicit workflow control remains authoritative for custom producers.
+      # These runners buffer command output and report terminal results; they
+      # cannot satisfy a node-level beacon deadline during an in-flight command.
+      # Use the declared step deadline unless workflow control explicitly
+      # declares a heartbeat supplied by another producer.
       node_beacon_timeout_ms =
-        if Map.get(node_config, "runner_module") == "MirrorNeuron.Runner.DockerWorker",
-          do: nil,
-          else: Map.get(node_config, "beacon_timeout_ms")
+        if Map.get(node_config, "runner_module") in [
+             "MirrorNeuron.Runner.DockerWorker",
+             "MirrorNeuron.Runner.OpenShell"
+           ],
+           do: nil,
+           else: Map.get(node_config, "beacon_timeout_ms")
 
       configured_beacon_timeout_ms =
         Map.get(control, "beacon_timeout_ms") || node_beacon_timeout_ms

@@ -351,7 +351,34 @@ defmodule MirrorNeuron.Runtime.ChildWorkflow do
       child_workflow_id: parent,
       round: child["round"],
       revision: child["revision"],
-      phase: child["phase"]
+      phase: child["phase"],
+      topology_delta: topology_delta(state, parent, child, type)
     }
   end
+
+  defp topology_delta(state, parent, child, type)
+       when type in [
+              :workflow_child_started,
+              :workflow_child_plan_committed,
+              :workflow_child_round_completed
+            ] do
+    ids =
+      if child["phase"] == "planning",
+        do: ["#{parent}:p#{child["revision"]}"],
+        else: child["active"]
+
+    # Public topology only: task inputs, outputs and evidence stay in artifacts.
+    fields =
+      ~w(id label run agent_ids dynamic_instance template_id parent_step_id child_workflow_id child_round child_phase)
+
+    %{
+      steps_added: Enum.map(ids, &Map.take(state["steps"][&1], fields)),
+      edges_added:
+        state["edges"]
+        |> Enum.filter(&(&1["to"] in ids))
+        |> Enum.map(&Map.take(&1, ~w(id from to accepts required)))
+    }
+  end
+
+  defp topology_delta(_state, _parent, _child, _type), do: %{}
 end

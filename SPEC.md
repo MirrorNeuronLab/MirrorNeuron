@@ -390,6 +390,11 @@ Rebuilding the Membrane image alone cannot repair missing gateway dependencies.
 The SDK stages and validates the actual RPC bindings when LiteLLM loads its
 callback. This adds no blueprint dependencies or runtime package installation.
 
+OpenShell buffers command output until completion, including artifact-handoff
+workers. Its inherited node beacon timeout does not shorten a workflow task
+deadline. Explicit workflow heartbeat controls remain authoritative; otherwise
+the declared step timeout governs both fixed and child tasks.
+
 ## Runtime-owned child workflow rounds
 
 The `workflow.child_workflows` contract admits bounded child templates beneath
@@ -562,3 +567,8 @@ storage durability, without requiring another node's availability.
 Deterministic acceptance coverage: `tests/unit/open_shell_artifact_handoff_test.exs`
 uses the actual runner and both blueprint bindings; `tests/handoff/test_store.py`
 exercises crash publication, fencing, conflicts, corruption, quotas and replication.
+
+Child workflow start, plan-commit and round-complete events publish bounded
+`topology_delta` step/edge metadata for the newly active planner or task DAG.
+The projection excludes task inputs, outputs and artifact contents, allowing live
+monitors to discover runtime-created steps without transferring large blobs.

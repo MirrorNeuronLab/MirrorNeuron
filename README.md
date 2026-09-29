@@ -58,6 +58,11 @@ for workload fit and the
 [reliability guide](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/reliability.md)
 for guarantees and limits.
 
+OpenShell buffers command output until completion, including artifact-handoff
+workers. Its inherited node beacon timeout does not shorten a workflow task
+deadline. Explicit workflow heartbeat controls remain authoritative; otherwise
+the declared step timeout governs both fixed and child tasks.
+
 ## How it works
 
 ```text
@@ -366,3 +371,8 @@ Workflow replay can recover a committed executor result without the sandbox.
 Owner storage loss is outside this durability guarantee. Replica consumers must
 verify the receipt and every referenced file; filesystem replication alone is
 not a completion signal.
+
+Child workflow start, plan-commit and round-complete events publish bounded
+`topology_delta` step/edge metadata for the newly active planner or task DAG.
+The projection excludes task inputs, outputs and artifact contents, allowing live
+monitors to discover runtime-created steps without transferring large blobs.

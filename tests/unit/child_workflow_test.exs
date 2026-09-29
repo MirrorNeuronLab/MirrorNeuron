@@ -103,6 +103,11 @@ defmodule MirrorNeuron.Runtime.ChildWorkflowTest do
     assert state["child_workflows"]["inspect"]["phase"] == "executing"
     assert length(state["child_workflows"]["inspect"]["active"]) == 128
     assert Enum.any?(events, &(&1.type == :workflow_child_plan_committed))
+    delta = Enum.find(events, &(&1.type == :workflow_child_plan_committed)).topology_delta
+    assert length(delta.steps_added) > 0
+    assert Enum.all?(delta.steps_added, &(&1["parent_step_id"] == "inspect"))
+    assert Enum.all?(delta.steps_added, &(not Map.has_key?(&1, "instance_input")))
+    assert Enum.all?(delta.steps_added, &(not Map.has_key?(&1, "output")))
     assert length(actions) == 1
     restored = WorkflowLedger.new(definition, nodes(), %{"workflow_state" => state})
     assert restored["child_workflows"] == state["child_workflows"]
@@ -166,12 +171,50 @@ defmodule MirrorNeuron.Runtime.ChildWorkflowTest do
     assert state["child_templates"]["query"]["beacon_timeout_ms"] == 90_000
   end
 
+  test "OpenShell child templates use task deadlines instead of unstreamed node beacons" do
+    definition = manifest()
+
+    flow =
+      put_in(definition.flow, ["child_workflows", "inspect", "templates", "query", "control"], %{
+        "timeout_seconds" => 300
+      })
+
+    runtime_nodes =
+      Enum.map(nodes(), fn node ->
+        %{
+          node
+          | config: %{
+              "runner_module" => "MirrorNeuron.Runner.OpenShell",
+              "beacon_timeout_ms" => 45_000
+            }
+        }
+      end)
+
+    state = WorkflowLedger.new(%{definition | flow: flow}, runtime_nodes)
+    assert state["child_templates"]["query"]["beacon_timeout_ms"] == 300_000
+
+    flow =
+      put_in(
+        flow,
+        ["child_workflows", "inspect", "templates", "query", "control", "beacon_timeout_ms"],
+        90_000
+      )
+
+    state = WorkflowLedger.new(%{definition | flow: flow}, runtime_nodes)
+    assert state["child_templates"]["query"]["beacon_timeout_ms"] == 90_000
+  end
+
   test "parent waits, committed DAG executes, next planner sees results, then parent exits" do
     {state, actions} = started()
     assert state["steps"]["inspect"]["status"] == "running"
     assert state["steps"]["report"]["status"] == "pending"
     {state, events, actions} = finish(state, actions, plan(0))
     assert Enum.any?(events, &(&1.type == :workflow_child_plan_committed))
+    delta = Enum.find(events, &(&1.type == :workflow_child_plan_committed)).topology_delta
+    assert length(delta.steps_added) > 0
+    assert Enum.all?(delta.steps_added, &(&1["parent_step_id"] == "inspect"))
+    assert Enum.all?(delta.steps_added, &(not Map.has_key?(&1, "instance_input")))
+    assert Enum.all?(delta.steps_added, &(not Map.has_key?(&1, "output")))
     assert state["child_workflows"]["inspect"]["phase"] == "executing"
     assert length(actions) == 1
 
