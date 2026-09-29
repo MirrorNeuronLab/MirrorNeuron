@@ -4,6 +4,8 @@ defmodule MirrorNeuron.Runtime.ChildWorkflow do
   alias MirrorNeuron.Artifacts.StagedArtifact
 
   @terminal ["completed", "partial", "skipped"]
+  # Up to 128 tasks carry immutable artifact references, not inline artifacts.
+  @max_plan_bytes 128 * 1024
   @id ~r/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/
 
   def initialize(state, flow, templates) do
@@ -156,8 +158,9 @@ defmodule MirrorNeuron.Runtime.ChildWorkflow do
     unless child["phase"] == "planning" and plan["revision"] == child["revision"],
       do: raise(ArgumentError, "Stale child plan revision or phase")
 
-    unless byte_size(Jason.encode!(plan)) <= 32768,
-      do: raise(ArgumentError, "Child plan exceeds 32 KiB")
+    unless byte_size(Jason.encode!(plan)) <= @max_plan_bytes,
+      do:
+        raise(ArgumentError, "Child plan exceeds 128 KiB; store large inputs in shared artifacts")
 
     case plan["decision"] do
       "stop" ->

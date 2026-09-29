@@ -27,8 +27,8 @@ defmodule MirrorNeuron.Runtime.ChildWorkflowTest do
 
   defp nodes, do: Enum.map(~w(inspect report planner query), &%{node_id: &1, config: %{}})
 
-  defp started do
-    {state, []} = WorkflowLedger.new(manifest(), nodes()) |> WorkflowLedger.job_running()
+  defp started(definition \\ manifest()) do
+    {state, []} = WorkflowLedger.new(definition, nodes()) |> WorkflowLedger.job_running()
     message = Message.new("job", "runtime", "inspect", "start", %{})
     {state, _} = WorkflowLedger.on_message_received(state, "inspect", message)
 
@@ -63,6 +63,74 @@ defmodule MirrorNeuron.Runtime.ChildWorkflowTest do
         "evidence_refs" => []
       }
     }
+  end
+
+  test "128 artifact-backed tasks fit the bounded coordination plan" do
+    definition = manifest()
+
+    definition = %{
+      definition
+      | flow: put_in(definition.flow, ["child_workflows", "inspect", "max_steps_per_round"], 128)
+    }
+
+    steps =
+      Enum.map(1..128, fn n ->
+        digest = String.duplicate("a", 64)
+
+        %{
+          "id" => "task-#{n}",
+          "template" => "query",
+          "needs" => if(n == 1, do: [], else: ["task-#{n - 1}"]),
+          "input" => %{
+            "review_input" => %{
+              "type" => "artifact_ref",
+              "version" => "mn.artifact_handoff/v1",
+              "commit_id" => "input-#{digest}",
+              "path" => "#{digest}.json",
+              "sha256" => digest,
+              "size_bytes" => 60000,
+              "kind" => "review_input",
+              "producer" => %{"run_id" => "test-run", "step_instance" => "owner-admission"}
+            }
+          }
+        }
+      end)
+
+    output = plan(0, steps)
+    assert byte_size(Jason.encode!(output["child_plan"])) > 32768
+    {state, actions} = started(definition)
+    {state, events, actions} = finish(state, actions, output)
+    assert state["child_workflows"]["inspect"]["phase"] == "executing"
+    assert length(state["child_workflows"]["inspect"]["active"]) == 128
+    assert Enum.any?(events, &(&1.type == :workflow_child_plan_committed))
+    assert length(actions) == 1
+    restored = WorkflowLedger.new(definition, nodes(), %{"workflow_state" => state})
+    assert restored["child_workflows"] == state["child_workflows"]
+  end
+
+  test "plan byte ceiling applies to execute and stop before dispatch" do
+    for output <- [
+          put_in(plan(0), ["child_plan", "rationale"], String.duplicate("界", 45000)),
+          %{
+            "child_plan" => %{
+              "decision" => "stop",
+              "revision" => 0,
+              "reason" => "complete",
+              "output" => %{"blob" => String.duplicate("x", 131_072)}
+            }
+          }
+        ] do
+      {state, actions} = started()
+      {state, events, actions} = finish(state, actions, output)
+      assert state["steps"]["inspect"]["status"] == "failed"
+      assert state["child_workflows"]["inspect"]["plans"] == []
+      refute Enum.any?(actions, &match?({:redeliver, _, _, _}, &1))
+
+      assert Enum.any?(
+               events,
+               &(&1.type == :workflow_child_failed and String.contains?(&1.reason, "128 KiB"))
+             )
+    end
   end
 
   test "Docker child templates use task deadlines instead of unstreamed node beacons" do

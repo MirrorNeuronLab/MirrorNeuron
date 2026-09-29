@@ -404,6 +404,12 @@ maps the child's bounded output into the deferred sink result and releases the
 parent exit. Children cannot modify parent inputs, parent edges, running work,
 or another region. Invalid plans fail the parent and run before task dispatch.
 
+Child plans (execute and stop) are limited to 128 KiB of compact UTF-8 JSON,
+including task metadata and immutable artifact references. This accommodates
+the admitted 128-step ceiling; large inputs and results remain in shared files
+replicated by Syncthing. Older Core builds enforce 32 KiB, so deploy the matching
+Core before submitting larger plans. Task and round limits are unchanged.
+
 Child fields are additive to ledger v3 and restored with the existing topology.
 Public events contain parent, round, revision and phase; completed worker payloads
 are not public event bodies because they can contain confidential plans.

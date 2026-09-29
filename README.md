@@ -92,6 +92,12 @@ Core owns scheduling and completion boundaries; agents and skills own task
 behavior. Dynamic workflows can instantiate admitted templates within declared
 bounds. They cannot arbitrarily rewrite running work.
 
+Child plans (execute and stop) are limited to 128 KiB of compact UTF-8 JSON,
+including task metadata and immutable artifact references. This accommodates
+the admitted 128-step ceiling; large inputs and results remain in shared files
+replicated by Syncthing. Older Core builds enforce 32 KiB, so deploy the matching
+Core before submitting larger plans. Task and round limits are unchanged.
+
 Read [Core concepts](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/core-concepts.md),
 [Blueprint format](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/blueprint-standard.md),
 and [Runtime architecture](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/runtime-architecture.md)
