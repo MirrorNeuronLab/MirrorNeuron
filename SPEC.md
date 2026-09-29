@@ -574,3 +574,12 @@ Child workflow start, plan-commit and round-complete events publish bounded
 `topology_delta` step/edge metadata for the newly active planner or task DAG.
 The projection excludes task inputs, outputs and artifact contents, allowing live
 monitors to discover runtime-created steps without transferring large blobs.
+
+## Running-time measurements
+
+Run persistence maintains `running_time` (`accumulated_ms`, `active_since`,
+`complete`) in durable records and live projections. Co-worker analysis exposes
+these fields through the existing run JSON contract. Queue and pause intervals
+are excluded; an interrupted coordinator session retains observed time and marks
+unobserved recovery gaps incomplete. Historical records are not backfilled with
+wall-clock estimates. No new gRPC method or protobuf fields are required.

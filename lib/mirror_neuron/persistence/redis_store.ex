@@ -435,8 +435,24 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   def validate_job_attempt_epoch(_job_id, epoch),
     do: {:error, {:invalid_attempt_epoch, epoch}}
 
+  defp with_run_clock(job_id, job_map) do
+    case command(["GET", key("job", job_id, "summary")]) do
+      {:ok, encoded} ->
+        with {:ok, previous} when is_map(previous) <- Jason.decode(encoded || "{}") do
+          clock = MirrorNeuron.Runtime.RunClock.advance(previous, job_map)
+          {:ok, Map.put(job_map, "running_time", clock)}
+        else
+          _ -> {:error, "invalid persisted running-time record"}
+        end
+
+      {:error, reason} ->
+        {:error, format_reason(reason)}
+    end
+  end
+
   def persist_job(job_id, job_map) when is_map(job_map) do
-    with :ok <- validate_identifier("job_id", job_id) do
+    with :ok <- validate_identifier("job_id", job_id),
+         {:ok, job_map} <- with_run_clock(job_id, job_map) do
       encoded = Jason.encode!(job_map)
       encoded_summary = Jason.encode!(job_summary(job_id, job_map))
       encoded_guard = Jason.encode!(job_guard(job_id, job_map))
@@ -461,7 +477,8 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   @doc false
   def persist_job_projection(job_id, job_map) when is_map(job_map) do
-    with :ok <- validate_identifier("job_id", job_id) do
+    with :ok <- validate_identifier("job_id", job_id),
+         {:ok, job_map} <- with_run_clock(job_id, job_map) do
       encoded_summary = Jason.encode!(job_summary(job_id, job_map))
       encoded_guard = Jason.encode!(job_guard(job_id, job_map))
 
@@ -678,6 +695,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
         defaults
         |> Map.merge(existing)
         |> Map.merge(updates)
+        |> Map.delete("clock_session")
         |> Map.put("job_id", job_id)
         |> Map.put_new("submitted_at", timestamp())
         |> Map.put("updated_at", timestamp())
@@ -2509,6 +2527,8 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       "graph_id" => field(job, "graph_id"),
       "job_name" => field(job, "job_name"),
       "status" => field(job, "status"),
+      "running_time" => field(job, "running_time"),
+      "clock_session" => field(job, "clock_session"),
       "attempt" => field(job, "attempt", 0),
       "attempt_started_at" => field(job, "attempt_started_at"),
       "restart_reason" => field(job, "restart_reason"),

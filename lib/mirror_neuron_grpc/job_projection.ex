@@ -18,7 +18,7 @@ defmodule MirrorNeuron.Grpc.JobProjection do
   @run_fields ~w(
     graph_id job_name status type job_type workflow_id attempt attempt_id
     data_generation job_data_access owner_node submitted_at started_at updated_at
-    completed_at cancelled_at result_ref workflow_state_ref manifest_ref
+    completed_at cancelled_at result_ref workflow_state_ref manifest_ref running_time
   )
 
   def summary(definition) when is_map(definition) do

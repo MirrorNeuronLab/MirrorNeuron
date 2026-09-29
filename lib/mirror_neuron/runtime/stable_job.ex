@@ -241,8 +241,20 @@ defmodule MirrorNeuron.Runtime.StableJob do
       |> Map.get("run_ids", [])
       |> Enum.reduce_while({:ok, []}, fn run_id, {:ok, runs} ->
         case RedisStore.fetch_job(run_id) do
-          {:ok, run} -> {:cont, {:ok, [normalize_run(run, job_id, run_id) | runs]}}
-          {:error, _missing} -> {:cont, {:ok, runs}}
+          {:ok, run} ->
+            run =
+              case RedisStore.fetch_job_summary(run_id) do
+                {:ok, summary} ->
+                  Map.merge(run, Map.take(summary, ~w(status updated_at running_time)))
+
+                _ ->
+                  run
+              end
+
+            {:cont, {:ok, [normalize_run(run, job_id, run_id) | runs]}}
+
+          {:error, _missing} ->
+            {:cont, {:ok, runs}}
         end
       end)
       |> then(fn {:ok, runs} -> {:ok, Enum.reverse(runs)} end)
