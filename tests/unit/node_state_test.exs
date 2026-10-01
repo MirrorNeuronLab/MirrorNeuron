@@ -304,6 +304,15 @@ defmodule MirrorNeuron.Cluster.NodeStateTest do
 
   test "advertise_self clears stale self disconnect state on fresh runtime start" do
     Application.put_env(:mirror_neuron, :cluster_node_adapter, NamedNodeStub)
+    previous_identity = System.get_env("MN_NODE_NAME")
+    System.put_env("MN_NODE_NAME", to_string(NamedNodeStub.self()))
+
+    on_exit(fn ->
+      if previous_identity,
+        do: System.put_env("MN_NODE_NAME", previous_identity),
+        else: System.delete_env("MN_NODE_NAME")
+    end)
+
     self_node = NamedNodeStub.self() |> to_string()
 
     assert {:ok, _state} =

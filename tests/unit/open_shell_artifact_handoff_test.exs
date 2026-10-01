@@ -49,7 +49,10 @@ defmodule MirrorNeuron.OpenShellArtifactHandoffTest do
       "artifact_handoff" => %{"version" => "mn.artifact_handoff/v1"},
       "upload_paths" => [%{"source" => worker, "target" => "worker.py"}],
       "workdir" => "/sandbox/job",
-      "command" => [Path.expand("../mn-system-tests/.venv/bin/python"), "worker.py"],
+      "command" => [
+        System.get_env("MN_TEST_PYTHON") || System.find_executable("python3"),
+        "worker.py"
+      ],
       "environment" => %{"MN_JOB_SHARED_STORAGE_ROOT" => Path.join(root, "submission")}
     }
 
@@ -168,7 +171,7 @@ defmodule MirrorNeuron.OpenShellArtifactHandoffTest do
 
   test "code-generation blueprint uses committed references and exports verified HTML", ctx do
     demo = Path.expand("../../mn-blueprints/demo_openshell_code_generation", File.cwd!())
-    python = Path.expand("../mn-system-tests/.venv/bin/python")
+    python = System.get_env("MN_TEST_PYTHON") || System.find_executable("python3")
 
     script = """
     from pathlib import Path
@@ -222,7 +225,7 @@ defmodule MirrorNeuron.OpenShellArtifactHandoffTest do
         File.cwd!()
       )
 
-    python = Path.expand("../mn-system-tests/.venv/bin/python")
+    python = System.get_env("MN_TEST_PYTHON") || System.find_executable("python3")
 
     admission = """
     import json,time

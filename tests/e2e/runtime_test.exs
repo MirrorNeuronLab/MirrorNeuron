@@ -1805,6 +1805,15 @@ defmodule MirrorNeuron.RuntimeTest do
   end
 
   test "graceful runtime shutdown keeps a running job recoverable on startup scan" do
+    # This test controls the startup scan explicitly. A periodic scan may
+    # otherwise recover the runner before we can observe its shutdown.
+    recovery = Process.whereis(MirrorNeuron.Runtime.LocalRecovery)
+    :ok = :sys.suspend(recovery)
+
+    on_exit(fn ->
+      if Process.alive?(recovery), do: :sys.resume(recovery)
+    end)
+
     manifest = %{
       "manifest_version" => "1.0",
       "graph_id" => "local_graceful_runtime_restart_test",
@@ -3644,7 +3653,15 @@ defmodule MirrorNeuron.RuntimeTest do
 
     assert {:ok, events} = MirrorNeuron.events(job_id)
     assert Enum.count(events, &(&1["type"] == "job_attempt_started")) >= 3
-    refute Enum.any?(events, &(&1["type"] == "agent_recovered"))
+
+    # Workflow readiness may also recover an agent. Verify the required
+    # clean attempts themselves rather than forbidding unrelated readiness.
+    for attempt <- 1..3 do
+      assert Enum.any?(events, fn event ->
+               event["type"] == "job_attempt_started" and event["attempt"] == attempt and
+                 event["mode"] == "clean_restart"
+             end)
+    end
 
     wait_until(
       fn ->

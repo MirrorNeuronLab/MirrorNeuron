@@ -673,7 +673,13 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
           )
         end)
 
-      assert wait_until(fn -> File.exists?(pid_path) end)
+      assert wait_until(fn ->
+               case File.read(pid_path) do
+                 {:ok, value} -> Regex.match?(~r/\A[0-9]+\z/, String.trim(value))
+                 _ -> false
+               end
+             end)
+
       pid = pid_path |> File.read!() |> String.trim() |> String.to_integer()
       assert os_process_alive?(pid)
 
@@ -740,7 +746,13 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
           )
         end)
 
-      assert wait_until(fn -> File.exists?(pid_path) end)
+      assert wait_until(fn ->
+               case File.read(pid_path) do
+                 {:ok, value} -> Regex.match?(~r/\A[0-9]+\z/, String.trim(value))
+                 _ -> false
+               end
+             end)
+
       pid = pid_path |> File.read!() |> String.trim() |> String.to_integer()
       assert python_process_alive?(python, pid)
 
