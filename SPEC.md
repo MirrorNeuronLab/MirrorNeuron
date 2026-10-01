@@ -583,3 +583,36 @@ these fields through the existing run JSON contract. Queue and pause intervals
 are excluded; an interrupted coordinator session retains observed time and marks
 unobserved recovery gaps incomplete. Historical records are not backfilled with
 wall-clock estimates. No new gRPC method or protobuf fields are required.
+
+## Manual durable checkpoint retry
+
+- Failed runs expose `PlanRunRetry` and `RetryRun` in `mirrorneuron.job.v1`.
+  Submission requires explicit overrides, expected attempt, checkpoint revision
+  and an idempotency key. Core revalidates under the job lifecycle/start gate.
+  Identical resubmissions return the accepted attempt; changed settings under
+  the same key and stale selections are rejected.
+- `mn.run_checkpoint/v1` records bind workflow-ledger v3 state to run/job IDs,
+  attempt, immutable manifest/input digests, job-data generation and artifact
+  integrity inventory. Redis remains the coordination authority. Unsupported or
+  insufficient historical checkpoints are inspectable but cannot authorize retry.
+- Completed steps/child tasks and dynamic graph state survive restoration.
+  Unfinished steps restart from retained inputs; internal progress is restored
+  only by declared durable domain contracts. Arbitrary process state is excluded.
+  Missing boundaries or uncertain external effects block dispatch.
+- Accepted retry preserves job/run identity, increments attempt and lease epoch,
+  clears current terminal output references and records failure, selected
+  checkpoint, explicit changes and outcome in attempt history. Redis writes and
+  shared completion markers are fenced against earlier attempts.
+- Only declared retry-adjustable budget/connection fields accept explicit changes.
+  Original bundle, topology and inputs remain unchanged. Durable active usage is
+  preserved; failed waiting time is excluded. Per-invocation timeouts restart.
+- Failed records and their checkpoint/bundle/artifact references outlive normal
+  terminal retention until explicit deletion or data reset. Logs/delivery records
+  remain bounded. Resource status exposes checkpoint count/bytes and artifact bytes.
+
+OpenShell receipt replay uses the `mn.logical_request/v1:` request digest contract.
+Matching Core-injected attempt/delivery/deadline fields are excluded from that
+logical digest; user-supplied values and executable commands remain bound.
+Older handoff receipts without this logical replay contract cannot authorize
+checkpoint retry. Successful recovery retains its failed-attempt recovery records
+until explicit deletion/reset, including when the latest attempt is completed.

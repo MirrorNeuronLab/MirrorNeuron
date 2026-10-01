@@ -136,6 +136,9 @@ defmodule MirrorNeuron.Grpc.Handlers.Support do
 
   defp runtime_error_status(:confirmation_required), do: GRPC.Status.failed_precondition()
   defp runtime_error_status(:job_not_active), do: GRPC.Status.failed_precondition()
+  defp runtime_error_status({:run_retry_blocked, _}), do: GRPC.Status.failed_precondition()
+  defp runtime_error_status({:invalid_run_retry, _}), do: GRPC.Status.invalid_argument()
+
   defp runtime_error_status(:invalid_job_update), do: GRPC.Status.invalid_argument()
 
   defp runtime_error_status({:job_call_timeout, _job_id, _timeout_ms}),

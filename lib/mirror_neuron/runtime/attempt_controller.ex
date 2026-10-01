@@ -2,9 +2,9 @@ defmodule MirrorNeuron.Runtime.AttemptController do
   @moduledoc """
   Owns the durable control transition for whole-job attempts.
 
-  An attempt is rebuilt from the persisted manifest and declared inputs. This
-  module deliberately does not read agent observations, workflow ledgers, or
-  checkpoints when deciding or preparing a restart.
+  Automatic recovery rebuilds from the persisted manifest and declared inputs.
+  An explicitly authorized checkpoint retry delegates to RunRetry; neither
+  operation restores arbitrary process state or agent observations.
   """
 
   alias MirrorNeuron.Persistence.RedisStore
@@ -12,6 +12,13 @@ defmodule MirrorNeuron.Runtime.AttemptController do
   alias MirrorNeuron.Runtime.{LifecyclePolicy, RecoverySafety}
 
   def prepare(job_id, manifest, opts, lease) do
+    case Keyword.get(opts, :checkpoint_retry) do
+      %{} = retry -> MirrorNeuron.Runtime.RunRetry.begin_attempt(job_id, manifest, retry, lease)
+      _ -> prepare_clean_attempt(job_id, manifest, opts, lease)
+    end
+  end
+
+  defp prepare_clean_attempt(job_id, manifest, opts, lease) do
     with {:ok, existing} <- RedisStore.fetch_job(job_id) do
       initial? = Map.get(existing, "attempt", 0) == 0 and existing["status"] == "pending"
 
@@ -63,7 +70,7 @@ defmodule MirrorNeuron.Runtime.AttemptController do
       end)
 
     updates = %{
-      "status" => "running",
+      "status" => "pending",
       "attempt_started_at" => started_at,
       "attempt_not_before" => nil,
       "attempt_history" => attempt_history

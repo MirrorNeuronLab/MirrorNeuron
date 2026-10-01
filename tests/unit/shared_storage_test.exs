@@ -3,6 +3,26 @@ defmodule MirrorNeuron.Artifacts.SharedStorageTest do
 
   alias MirrorNeuron.Artifacts.SharedStorage
 
+  test "a previous attempt cannot overwrite the retry completion marker", %{root: root} do
+    submission = Path.join([root, "submissions", "fenced"])
+    source = Path.join([submission, "outputs", "user"])
+    run = Path.join([submission, "outputs", "runs", "run"])
+    File.mkdir_p!(run)
+
+    manifest =
+      manifest(submission, source, Path.join(root, "target"))
+      |> put_in(["metadata", "mn_storage", "output_copy_executor"], "master_host")
+
+    assert :ok = SharedStorage.publish_run_completion(manifest, "run", "failed", 1)
+    assert :ok = SharedStorage.clear_run_completion(manifest, "run", 2)
+    refute File.exists?(Path.join(run, ".mn_completion.json"))
+    assert {:error, _} = SharedStorage.publish_run_completion(manifest, "run", "failed", 1)
+    assert :ok = SharedStorage.publish_run_completion(manifest, "run", "completed", 2)
+
+    assert %{"status" => "completed", "lease_epoch" => 2} =
+             run |> Path.join(".mn_completion.json") |> File.read!() |> Jason.decode!()
+  end
+
   setup do
     old_shared = System.get_env("MN_SHARED_STORAGE_ROOT")
     old_runtime = System.get_env("MN_RUNTIME_SHARED_STORAGE_ROOT")

@@ -50,11 +50,35 @@ defmodule MirrorNeuron.Grpc.JobProjection do
 
     record
     |> Map.take(@run_fields)
+    |> Map.put("record_source", "runtime")
+    |> Map.put("retry", retry_summary(record))
     |> Map.put("job_id", stable_job_id)
     |> Map.put("run_id", resolved_run_id)
     |> Map.put_new("attempt_id", "#{resolved_run_id}:#{Map.get(record, "attempt", 1)}")
     |> compact_reference("manifest_ref")
   end
+
+  defp retry_summary(%{"status" => "failed"} = record) do
+    case MirrorNeuron.Persistence.RedisStore.fetch_run_checkpoint(record["job_id"]) do
+      {:ok, checkpoint} ->
+        %{
+          "checkpoint_available" => true,
+          "eligibility" => "requires_plan",
+          "reason" => "Checkpoint retained. Plan a retry to verify recovery is available.",
+          "checkpoint_revision" => checkpoint["revision"],
+          "retained_bytes" => byte_size(Jason.encode!(checkpoint)),
+          "retention" => "until_deleted"
+        }
+
+      _ ->
+        %{
+          "checkpoint_available" => false,
+          "reason" => "No durable checkpoint remains. Review history or start a new run."
+        }
+    end
+  end
+
+  defp retry_summary(_), do: nil
 
   def runs(records) when is_list(records), do: Enum.map(records, &run/1)
 

@@ -12,8 +12,10 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
     JobRequest,
     JsonResponse,
     ListJobsRequest,
+    PlanRunRetryRequest,
     QueryJobResponseRequest,
     RunRequest,
+    RetryRunRequest,
     SendRunInputRequest,
     StartRunRequest,
     UpdateJobRequest
@@ -35,6 +37,8 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
     {:GetRun, :get_run, RunRequest},
     {:PauseRun, :pause_run, RunRequest},
     {:ResumeRun, :resume_run, RunRequest},
+    {:PlanRunRetry, :plan_run_retry, PlanRunRetryRequest},
+    {:RetryRun, :retry_run, RetryRunRequest},
     {:CancelRun, :cancel_run, RunRequest},
     {:DeleteRun, :delete_run, DeleteRunRequest},
     {:SendRunInput, :send_run_input, SendRunInputRequest},
@@ -65,6 +69,8 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
           :get_run,
           :pause_run,
           :resume_run,
+          :plan_run_retry,
+          :retry_run,
           :cancel_run,
           :delete_run,
           :send_run_input,
@@ -122,6 +128,7 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
              [
                JobServer,
                MirrorNeuron.Grpc.ClusterServer,
+               MirrorNeuron.Grpc.InteractionServer,
                MirrorNeuron.Grpc.ObservabilityServer,
                MirrorNeuron.Grpc.OperationsServer
              ]

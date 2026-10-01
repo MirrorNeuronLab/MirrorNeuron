@@ -143,6 +143,35 @@ defmodule Mirrorneuron.Job.V1.RunRequest do
   field(:version, 2, type: :uint32)
 end
 
+defmodule Mirrorneuron.Job.V1.PlanRunRetryRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.PlanRunRetryRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:run_id, 1, type: :string, json_name: "runId")
+  field(:configuration_overrides_json, 2, type: :string, json_name: "configurationOverridesJson")
+  field(:version, 3, type: :uint32)
+end
+
+defmodule Mirrorneuron.Job.V1.RetryRunRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.RetryRunRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:run_id, 1, type: :string, json_name: "runId")
+  field(:configuration_overrides_json, 2, type: :string, json_name: "configurationOverridesJson")
+  field(:expected_attempt, 3, type: :uint32, json_name: "expectedAttempt")
+  field(:checkpoint_revision, 4, type: :string, json_name: "checkpointRevision")
+  field(:idempotency_key, 5, type: :string, json_name: "idempotencyKey")
+  field(:version, 6, type: :uint32)
+end
+
 defmodule Mirrorneuron.Job.V1.DeleteRunRequest do
   @moduledoc false
 
@@ -257,6 +286,10 @@ defmodule Mirrorneuron.Job.V1.JobService.Service do
   rpc(:PauseRun, Mirrorneuron.Job.V1.RunRequest, Mirrorneuron.Job.V1.JsonResponse)
 
   rpc(:ResumeRun, Mirrorneuron.Job.V1.RunRequest, Mirrorneuron.Job.V1.JsonResponse)
+
+  rpc(:PlanRunRetry, Mirrorneuron.Job.V1.PlanRunRetryRequest, Mirrorneuron.Job.V1.JsonResponse)
+
+  rpc(:RetryRun, Mirrorneuron.Job.V1.RetryRunRequest, Mirrorneuron.Job.V1.JsonResponse)
 
   rpc(:CancelRun, Mirrorneuron.Job.V1.RunRequest, Mirrorneuron.Job.V1.JsonResponse)
 

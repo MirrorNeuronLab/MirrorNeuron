@@ -87,6 +87,8 @@ defmodule MirrorNeuron.Runtime do
     "agent registry was unavailable while looking up #{agent_id} for job #{job_id}: #{reason}"
   end
 
+  def error_message({kind, message}) when kind in [:run_retry_blocked, :invalid_run_retry], do: message
+
   def error_message({kind, details}) when kind in [:backpressure, :retry_later] do
     job_id = detail(details, "job_id") || "unknown"
     agent_id = detail(details, "agent_id") || "unknown"

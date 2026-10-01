@@ -14,6 +14,8 @@ defmodule MirrorNeuron.Grpc.JobServer do
         get_run: :GetRun,
         pause_run: :PauseRun,
         resume_run: :ResumeRun,
+        plan_run_retry: :PlanRunRetry,
+        retry_run: :RetryRun,
         cancel_run: :CancelRun,
         delete_run: :DeleteRun,
         send_run_input: :SendRunInput,

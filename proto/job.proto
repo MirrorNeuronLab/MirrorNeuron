@@ -15,6 +15,8 @@ service JobService {
   rpc GetRun (RunRequest) returns (JsonResponse);
   rpc PauseRun (RunRequest) returns (JsonResponse);
   rpc ResumeRun (RunRequest) returns (JsonResponse);
+  rpc PlanRunRetry (PlanRunRetryRequest) returns (JsonResponse);
+  rpc RetryRun (RetryRunRequest) returns (JsonResponse);
   rpc CancelRun (RunRequest) returns (JsonResponse);
   rpc DeleteRun (DeleteRunRequest) returns (JsonResponse);
   rpc SendRunInput (SendRunInputRequest) returns (JsonResponse);
@@ -79,6 +81,21 @@ message StartRunRequest {
 message RunRequest {
   string run_id = 1;
   uint32 version = 2;
+}
+
+message PlanRunRetryRequest {
+  string run_id = 1;
+  string configuration_overrides_json = 2;
+  uint32 version = 3;
+}
+
+message RetryRunRequest {
+  string run_id = 1;
+  string configuration_overrides_json = 2;
+  uint32 expected_attempt = 3;
+  string checkpoint_revision = 4;
+  string idempotency_key = 5;
+  uint32 version = 6;
 }
 
 message DeleteRunRequest {

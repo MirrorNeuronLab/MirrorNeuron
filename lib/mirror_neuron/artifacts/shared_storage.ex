@@ -58,7 +58,9 @@ defmodule MirrorNeuron.Artifacts.SharedStorage do
 
   def finalize_terminal_job(_job_id, _manifest, _status), do: {:ok, []}
 
-  def publish_run_completion(manifest, run_id, status)
+  def publish_run_completion(manifest, run_id, status, epoch \\ 0)
+
+  def publish_run_completion(manifest, run_id, status, epoch)
       when is_binary(run_id) and status in @terminal_statuses do
     case storage_metadata(manifest) do
       nil ->
@@ -66,14 +68,38 @@ defmodule MirrorNeuron.Artifacts.SharedStorage do
 
       storage ->
         if master_host_output_copy?(storage),
-          do: publish_master_host_run_completion(storage, run_id, status),
+          do: publish_master_host_run_completion(storage, run_id, status, epoch),
           else: :ok
     end
   end
 
-  def publish_run_completion(_manifest, _run_id, _status), do: :ok
+  def publish_run_completion(_manifest, _run_id, _status, _epoch), do: :ok
 
-  defp publish_master_host_run_completion(storage, run_id, status) do
+  def clear_run_completion(manifest, run_id, epoch) do
+    case storage_metadata(manifest) do
+      nil ->
+        :ok
+
+      storage ->
+        if master_host_output_copy?(storage) do
+          with true <- is_binary(run_id) and Regex.match?(~r/\A[A-Za-z0-9_-]{1,128}\z/, run_id),
+               {:ok, submission} <- safe_submission_path(storage) do
+            completion_update(
+              Path.join([submission, "outputs", "runs", run_id]),
+              epoch,
+              "activate",
+              %{}
+            )
+          else
+            _ -> {:error, :invalid_run_output_path}
+          end
+        else
+          :ok
+        end
+    end
+  end
+
+  defp publish_master_host_run_completion(storage, run_id, status, epoch) do
     with true <- Regex.match?(~r/\A[A-Za-z0-9_-]{1,128}\z/, run_id),
          {:ok, submission} <- safe_submission_path(storage),
          run_dir = Path.join([submission, "outputs", "runs", run_id]),
@@ -84,14 +110,52 @@ defmodule MirrorNeuron.Artifacts.SharedStorage do
            if(File.dir?(user_dir), do: run_output_files(user_dir), else: {:ok, []}),
          files = Enum.sort_by(run_files ++ user_files, & &1["path"]),
          receipt = %{"run_id" => run_id, "status" => status, "output_files" => files},
-         temporary = Path.join(run_dir, ".mn_completion.json.tmp"),
-         :ok <- File.write(temporary, Jason.encode!(receipt)),
-         :ok <- File.rename(temporary, Path.join(run_dir, ".mn_completion.json")) do
+         :ok <- completion_update(run_dir, epoch, "publish", receipt) do
       :ok
     else
       false -> {:error, :invalid_run_output_path}
       {:error, reason} -> {:error, reason}
       _ -> {:error, :invalid_run_output_path}
+    end
+  end
+
+  defp completion_update(run_dir, epoch, action, receipt) do
+    temporary =
+      Path.join(System.tmp_dir!(), "mn-completion-#{System.unique_integer([:positive])}.json")
+
+    try do
+      File.write!(
+        temporary,
+        Jason.encode!(%{
+          "trusted_root" => root(),
+          "run_directory" => run_dir,
+          "epoch" => epoch,
+          "action" => action,
+          "receipt" => receipt
+        })
+      )
+
+      task =
+        Task.async(fn ->
+          System.cmd(
+            "python3",
+            [
+              Path.join(
+                MirrorNeuron.Runner.OpenShellArtifactStore.helper_dir(),
+                "completion_fence.py"
+              ),
+              temporary
+            ],
+            stderr_to_stdout: true
+          )
+        end)
+
+      case Task.yield(task, 10_000) || Task.shutdown(task, :brutal_kill) do
+        {:ok, {_, 0}} -> :ok
+        _ -> {:error, :stale_or_invalid_completion}
+      end
+    after
+      File.rm(temporary)
     end
   end
 
@@ -108,7 +172,7 @@ defmodule MirrorNeuron.Artifacts.SharedStorage do
                 (Path.basename(run_dir) == "commits" and String.starts_with?(entry, ".publish-")) ->
               {:cont, {:ok, files}}
 
-            entry in [".mn_completion.json", ".mn_completion.json.tmp"] ->
+            String.starts_with?(entry, ".mn_completion") ->
               {:cont, {:ok, files}}
 
             true ->

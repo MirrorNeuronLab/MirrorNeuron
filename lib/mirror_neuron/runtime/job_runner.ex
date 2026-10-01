@@ -99,7 +99,8 @@ defmodule MirrorNeuron.Runtime.JobRunner do
           |> Keyword.put(:attempt, attempt_job["attempt"])
           |> Keyword.put(:restart_reason, attempt_job["restart_reason"])
 
-        with :ok <- cleanup_previous_attempt(job_id, attempt_job) do
+        with :ok <- cleanup_previous_attempt(job_id, attempt_job),
+             :ok <- clear_retry_completion(manifest, opts) do
           state =
             %{
               job_id: job_id,
@@ -190,6 +191,18 @@ defmodule MirrorNeuron.Runtime.JobRunner do
         release_job_lease(job_id, node_name, lease)
         fail_runner_start(job_id, manifest, opts, lease, reason, clear_lease?: true)
     end
+  end
+
+  defp clear_retry_completion(manifest, opts) do
+    if Keyword.has_key?(opts, :checkpoint_retry),
+      do:
+        MirrorNeuron.Artifacts.SharedStorage.clear_run_completion(
+          manifest,
+          get_in(Keyword.get(opts, :checkpoint_retry), [:workflow, "run_id"]) ||
+            Keyword.get(opts, :run_id),
+          Keyword.fetch!(opts, :job_lease)["epoch"]
+        ),
+      else: :ok
   end
 
   defp cleanup_previous_attempt(job_id, %{"restart_reason" => restart_reason})
@@ -682,7 +695,7 @@ defmodule MirrorNeuron.Runtime.JobRunner do
   end
 
   defp maybe_clear_lease(updates, true) do
-    Map.merge(updates, %{"lease" => nil, "lease_epoch" => nil, "lease_owner" => nil})
+    Map.merge(updates, %{"lease" => nil, "lease_owner" => nil})
   end
 
   defp maybe_clear_lease(updates, false), do: updates

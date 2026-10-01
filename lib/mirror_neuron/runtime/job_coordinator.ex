@@ -69,7 +69,13 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       completed_system_targets: MapSet.new(),
       pressure: %{},
       policy_state: %{"agents" => %{}},
-      workflow_state: WorkflowLedger.new(manifest, runtime_topology.nodes, nil, job_id),
+      workflow_state:
+        WorkflowLedger.new(
+          manifest,
+          runtime_topology.nodes,
+          if(Keyword.has_key?(opts, :checkpoint_retry), do: existing_job, else: nil),
+          job_id
+        ),
       pending_policy_timers: %{},
       recovery_tasks: %{},
       health_check_timer_ref: nil,
@@ -105,6 +111,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
           Map.get(existing_job || %{}, "restart_reason", "initial_start")
         ),
       attempt_history: Map.get(existing_job || %{}, "attempt_history", []),
+      retry_receipts: Map.get(existing_job || %{}, "retry_receipts", %{}),
       restart_budget: Map.get(existing_job || %{}, "restart_budget"),
       attempt_not_before: Map.get(existing_job || %{}, "attempt_not_before"),
       submission_storage: %{
@@ -170,7 +177,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp complete_ready_bootstrap(state) do
     case complete_bootstrap(state) do
       {:ok, next_state, workflow_events} ->
-        persist_job(next_state)
+        persist_durable_job_snapshot(next_state, job_snapshot(next_state))
 
         EventBus.publish(state.job_id, %{
           type: :job_running,
@@ -198,10 +205,25 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   defp complete_bootstrap(state) do
     with :ok <- wait_for_agents_ready(state),
-         :ok <- register_runtime_services(state),
-         :ok <- seed_entrypoints(state) do
-      {workflow_state, workflow_events} = WorkflowLedger.job_running(state.workflow_state)
-      {:ok, %{state | status: "running", workflow_state: workflow_state}, workflow_events}
+         :ok <- register_runtime_services(state) do
+      {ledger, events} = WorkflowLedger.job_running(state.workflow_state)
+      running = %{state | status: "running", workflow_state: ledger}
+
+      if Keyword.has_key?(state.opts, :checkpoint_retry) do
+        persist_durable_job_snapshot(running, job_snapshot(running))
+        {ledger, retry_events, actions} = WorkflowLedger.reconcile(running.workflow_state)
+        restored = %{running | workflow_state: ledger}
+
+        case apply_workflow_actions(restored, actions) do
+          {:ok, next} -> {:ok, next, events ++ retry_events}
+          {:fail_job, _, reason, failed} -> {:error, reason, failed}
+        end
+      else
+        case seed_initial_entrypoints(running) do
+          :ok -> {:ok, running, events}
+          {:error, reason} -> {:error, reason, running}
+        end
+      end
     else
       {:error, reason} -> {:error, reason, state}
     end
@@ -1281,7 +1303,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
             case Runtime.deliver(
                    ready_state.job_id,
                    agent_id,
-                   message,
+                   put_attempt_epoch(message, ready_state),
                    node_backpressure_opts(ready_state, agent_id)
                  ) do
               :ok ->
@@ -1766,7 +1788,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     }
   end
 
-  defp seed_entrypoints(state) do
+  defp seed_initial_entrypoints(state) do
     inputs = state.manifest.initial_inputs
 
     Enum.reduce_while(state.runtime_entrypoints, :ok, fn agent_id, :ok ->
@@ -2977,12 +2999,22 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp finalize_job(state, status, result, event_type, event_fields) do
+    epoch = get_in(Keyword.get(state.opts, :job_lease, %{}), ["epoch"])
+
+    case RedisStore.validate_job_attempt_epoch(state.job_id, epoch) do
+      :ok -> finalize_current_job(state, status, result, event_type, event_fields)
+      _ -> %{state | status: status}
+    end
+  end
+
+  defp finalize_current_job(state, status, result, event_type, event_fields) do
     state = state |> cancel_policy_timers() |> cancel_recovery_tasks()
     terminate_agent_workers(state)
     ServiceRegistry.deregister_job(state.job_id)
     {result, event_fields} = attach_failure_error(state, status, result, event_type, event_fields)
     {result, event_fields} = finalize_shared_storage(state, status, result, event_fields)
 
+    persist_retry_checkpoint(state)
     finished_workflow = WorkflowLedger.finish(state.workflow_state, status)
     result = strip_result_workflow_state(result)
 
@@ -3002,13 +3034,28 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         pending_workflow_completion: nil
     }
 
+    history =
+      List.wrap(state.attempt_history) ++
+        [
+          %{
+            "attempt" => state.attempt,
+            "action" => status,
+            "at" => Runtime.timestamp(),
+            "result_ref" => result_ref,
+            "workflow_state_ref" => workflow_state_ref
+          }
+        ]
+
+    next_state = %{next_state | attempt_history: history}
+
     persist_job(next_state)
     run_id = WorkflowLedger.run_id(finished_workflow) || state.job_id
 
     case SharedStorage.publish_run_completion(
            MirrorNeuron.Manifest.to_map(state.manifest),
            run_id,
-           status
+           status,
+           get_in(Keyword.get(state.opts, :job_lease, %{}), ["epoch"]) || 0
          ) do
       :ok ->
         :ok
@@ -3326,9 +3373,15 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       attempt_started_at: state.attempt_started_at,
       attempt_not_before: state.attempt_not_before,
       attempt_history: state.attempt_history,
+      retry_receipts: state.retry_receipts,
       restart_budget: state.restart_budget,
       restart_reason: state.restart_reason,
-      recovery_mode: "clean_restart",
+      recovery_mode:
+        if(Keyword.has_key?(state.opts, :checkpoint_retry),
+          do: "checkpoint_retry",
+          else: "clean_restart"
+        ),
+      retry_request: Keyword.get(state.opts, :checkpoint_retry, %{})[:request],
       submitted_at: Map.get(state, :submitted_at, Runtime.timestamp()),
       updated_at: Runtime.timestamp(),
       root_agent_ids: state.manifest.entrypoints,
@@ -3469,6 +3522,11 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp publish_workflow_events(_state, []), do: :ok
 
   defp publish_workflow_events(state, events) when is_list(events) do
+    if Enum.any?(events, fn event ->
+         to_string(event[:type] || event["type"]) in ~w(workflow_step_completed workflow_step_partial workflow_step_attempt_started workflow_message_queued workflow_step_triggered workflow_child_started workflow_child_plan_committed workflow_child_round_completed workflow_graph_patch_applied workflow_controller_checkpointed)
+       end),
+       do: persist_retry_checkpoint(state)
+
     Enum.each(events, fn
       %{type: _type} = event ->
         EventBus.publish(state.job_id, event)
@@ -3482,6 +3540,41 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp publish_workflow_events(_state, _events), do: :ok
+
+  defp persist_retry_checkpoint(state) do
+    if WorkflowLedger.enabled?(state.workflow_state) do
+      job = state |> job_snapshot() |> Jason.encode!() |> Jason.decode!()
+
+      job =
+        case RedisStore.fetch_job(state.job_id) do
+          {:ok, record} ->
+            Map.put(job, "running_time", MirrorNeuron.Runtime.RunClock.advance(record, job))
+
+          _ ->
+            job
+        end
+
+      ledger = WorkflowLedger.persistable_snapshot(state.workflow_state, state.manifest)
+      artifacts = MirrorNeuron.Runtime.RetryArtifacts.capture(job, ledger, state.manifest)
+
+      checkpoint =
+        MirrorNeuron.Runtime.RunRetry.checkpoint(
+          job,
+          ledger,
+          artifacts
+        )
+
+      epoch = get_in(Keyword.get(state.opts, :job_lease, %{}), ["epoch"])
+
+      case RedisStore.persist_run_checkpoint(state.job_id, checkpoint, epoch) do
+        :ok ->
+          :ok
+
+        {:error, _} ->
+          Logger.warning("could not persist run retry checkpoint", job_id: state.job_id)
+      end
+    end
+  end
 
   defp cleanup_sandboxes(state) do
     cleanup_prepared_compose_projects(state)
@@ -3582,8 +3675,35 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       "MN_JOB_DATA_ACCESS" => Keyword.get(state.opts, :job_data_access),
       "MN_JOB_DATA_GENERATION" => to_string(Keyword.get(state.opts, :data_generation, 1))
     })
+    |> Map.merge(retry_environment(state))
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()
+  end
+
+  defp retry_environment(state) do
+    case Keyword.get(state.opts, :checkpoint_retry) do
+      %{job: job, request: request} ->
+        current =
+          case RedisStore.fetch_job(state.job_id) do
+            {:ok, record} -> record
+            _ -> job
+          end
+
+        clock = current["running_time"] || %{}
+
+        %{
+          "MN_RUN_RETRY_JSON" =>
+            Jason.encode!(%{
+              "configuration_overrides" => request["effective_configuration_overrides"] || %{},
+              "consumed_seconds" => (clock["accumulated_ms"] || 0) / 1000,
+              "active_since" => clock["active_since"] || Runtime.timestamp(),
+              "attempt" => state.attempt
+            })
+        }
+
+      _ ->
+        %{}
+    end
   end
 
   defp manifest_ref(state) do

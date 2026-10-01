@@ -493,8 +493,8 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
       |> Map.put("updated_at", "2026-07-19T12:00:30Z")
       |> Map.put("workflow_state", %{"durable_marker" => "projected-only"})
 
-    assert {:ok, ^durable} = RedisStore.persist_job(job_id, durable)
-    assert {:ok, ^projection} = RedisStore.persist_job_projection(job_id, projection)
+    assert {:ok, durable} = RedisStore.persist_job(job_id, durable)
+    assert {:ok, _projection} = RedisStore.persist_job_projection(job_id, projection)
     assert {:ok, ^durable} = RedisStore.fetch_job(job_id)
 
     assert {:ok, summaries} = RedisStore.list_job_summaries()

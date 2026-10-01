@@ -13,6 +13,7 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
   }
 
   alias MirrorNeuron.Runtime.LiveInput
+  alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime.Idempotency
   alias Mirrorneuron.Job.V1.JsonResponse
 
@@ -242,7 +243,54 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     do: route_run_control(request, :pause_run, &MirrorNeuron.pause/1, stream)
 
   def resume_run(request, stream),
-    do: route_run_control(request, :resume_run, &MirrorNeuron.resume/1, stream)
+    do: route_run_control(request, :resume_run, &resume_paused_run/1, stream)
+
+  defp resume_paused_run(run_id) do
+    case RedisStore.fetch_job(run_id) do
+      {:ok, %{"status" => "failed"}} ->
+        {:error,
+         {:run_retry_blocked,
+          "This run failed. Use mn run retry #{run_id} --dry-run to check recovery."}}
+
+      _ ->
+        MirrorNeuron.resume(run_id)
+    end
+  end
+
+  def plan_run_retry(request, stream) do
+    case remote_run_owner(request.run_id) do
+      nil ->
+        with {:ok, overrides} <- Validation.decode_json_map(request.configuration_overrides_json) do
+          respond(MirrorNeuron.Runtime.RunRetry.plan(request.run_id, overrides))
+        else
+          error -> respond(error)
+        end
+
+      owner ->
+        forward_call(owner, :plan_run_retry, request, stream)
+    end
+  end
+
+  def retry_run(request, stream) do
+    case remote_run_owner(request.run_id) do
+      nil ->
+        with {:ok, overrides} <- Validation.decode_json_map(request.configuration_overrides_json) do
+          respond(
+            MirrorNeuron.Runtime.RunRetry.submit(request.run_id, %{
+              "configuration_overrides" => overrides,
+              "expected_attempt" => request.expected_attempt,
+              "checkpoint_revision" => request.checkpoint_revision,
+              "idempotency_key" => request.idempotency_key
+            })
+          )
+        else
+          error -> respond(error)
+        end
+
+      owner ->
+        forward_call(owner, :retry_run, request, stream)
+    end
+  end
 
   def cancel_run(request, stream),
     do: route_run_control(request, :cancel_run, &MirrorNeuron.cancel/1, stream)

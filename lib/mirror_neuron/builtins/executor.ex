@@ -257,6 +257,16 @@ defmodule MirrorNeuron.Builtins.Executor do
     do: run_with_retry(payload, state, context, message, 1)
 
   defp run_with_retry(payload, state, context, message, attempt) do
+    case MirrorNeuron.Runtime.RunRetry.invocation_config(state.config, context) do
+      {:ok, config} ->
+        run_configured_invocation(payload, %{state | config: config}, context, message, attempt)
+
+      {:error, reason} ->
+        {:error, reason, attempt}
+    end
+  end
+
+  defp run_configured_invocation(payload, state, context, message, attempt) do
     config = state.config
     runner_config = with_step_result_pointer(config, context, attempt)
     runner = resolve_runner(config)

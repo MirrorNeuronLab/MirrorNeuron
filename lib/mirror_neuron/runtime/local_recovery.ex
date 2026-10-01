@@ -179,6 +179,19 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
 
   defp recover_job_map(%{"job_id" => job_id, "status" => status} = job, opts) do
     cond do
+      job["recovery_mode"] == "checkpoint_retry" and recoverable_job_status?(job) and
+          not job_runner_alive?(job_id) ->
+        mark_recovery(
+          job,
+          "paused_for_review",
+          "Checkpoint retry was interrupted; explicit retry is required.",
+          requires_review?: true,
+          status: "failed"
+        )
+
+        {:ok,
+         %{job_id: job_id, action: :paused_for_review, reason: "checkpoint retry requires review"}}
+
       paused_for_review?(job) and not Keyword.get(opts, :manual_resume, false) ->
         deregister_job_services(job_id)
         {:ok, %{job_id: job_id, action: :skipped, reason: "job is paused for review"}}
@@ -400,9 +413,11 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
     now = Runtime.timestamp()
     requires_review? = Keyword.get(opts, :requires_review?, false)
 
+    mode = job["recovery_mode"] || "clean_restart"
+
     recovery = %{
       "status" => status,
-      "mode" => "clean_restart",
+      "mode" => mode,
       "reason" => reason,
       "requires_review" => requires_review?,
       "can_resume" => requires_review?,
@@ -415,7 +430,7 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
         "recovery_status" => status,
         "recovery_reason" => reason,
         "recovery_requires_review" => requires_review?,
-        "recovery_mode" => "clean_restart"
+        "recovery_mode" => mode
       }
       |> maybe_put_status(Keyword.get(opts, :status))
       |> maybe_clear_result(Keyword.get(opts, :clear_result?, false))

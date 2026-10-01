@@ -71,9 +71,13 @@ defmodule MirrorNeuron.Runner.OpenShellArtifactHandoff do
       hash =
         :crypto.hash(
           :sha256,
-          Jason.encode!(%{"payload" => payload, "command" => config["command"]})
+          Jason.encode!(%{
+            "payload" => logical_payload(payload, opts),
+            "command" => config["command"]
+          })
         )
         |> Base.encode16(case: :lower)
+        |> then(&("mn.logical_request/v1:" <> &1))
 
       with {:ok, state} <-
              OpenShellArtifactStore.call(base, "begin", %{
@@ -100,6 +104,27 @@ defmodule MirrorNeuron.Runner.OpenShellArtifactHandoff do
          "retryable" => false
        }}
   end
+
+  # Delivery identity changes on retry; only Core-injected control fields are
+  # excluded from the logical request digest. User-supplied values stay bound.
+  defp logical_payload(payload, opts) when is_map(payload) do
+    headers =
+      case Keyword.get(opts, :message) do
+        message when is_map(message) -> MirrorNeuron.Message.headers(message)
+        _ -> %{}
+      end
+
+    Enum.reduce(~w(attempt attempt_id deadline_at heartbeat_deadline_at), payload, fn key,
+                                                                                      value ->
+      header = "mn.workflow." <> key
+
+      if Map.has_key?(headers, header) and value[key] == headers[header],
+        do: Map.delete(value, key),
+        else: value
+    end)
+  end
+
+  defp logical_payload(payload, _opts), do: payload
 
   defp resume(base, %{"phase" => "committed"} = state, _payload, config, _opts) do
     cleanup(base, state, config)

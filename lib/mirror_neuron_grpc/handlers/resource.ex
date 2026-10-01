@@ -32,7 +32,14 @@ defmodule MirrorNeuron.Grpc.Handlers.Resource do
 
   def get_resource(_request, _stream) do
     %GetResourceResponse{
-      resource_json: Support.versioned_json(MirrorNeuron.resource_list()),
+      resource_json:
+        Support.versioned_json(
+          Map.put(
+            MirrorNeuron.resource_list(),
+            "retry_checkpoint_storage",
+            MirrorNeuron.Persistence.RedisStore.retained_checkpoint_storage()
+          )
+        ),
       version: @interface_version
     }
   end

@@ -286,7 +286,15 @@ defmodule MirrorNeuron.Runtime.StableJob do
           |> Map.update("data_generation", 2, &(&1 + 1))
           |> Map.put("data_dir", data_dir)
 
-        persist_and_reconcile(job_id, updated)
+        with {:ok, saved} <- persist_and_reconcile(job_id, updated),
+             {:ok, runs} <- list_runs(job_id) do
+          Enum.reduce_while(runs, {:ok, saved}, fn run, result ->
+            case RedisStore.discard_run_checkpoint(run["run_id"]) do
+              :ok -> {:cont, result}
+              error -> {:halt, error}
+            end
+          end)
+        end
       end
     end)
   end
@@ -1226,7 +1234,8 @@ defmodule MirrorNeuron.Runtime.StableJob do
     end
   end
 
-  defp with_start_gate(job_id, callback) do
+  @doc false
+  def with_start_gate(job_id, callback) do
     with :ok <- JobData.validate_id(job_id) do
       lease_name = "job-data-start:#{job_id}"
       owner_id = "#{NodeAdapter.self()}:#{inspect(self())}:#{System.unique_integer([:positive])}"

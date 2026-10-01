@@ -127,8 +127,10 @@ defmodule MirrorNeuron.Runtime.JobRunnerTest do
     assert {:stop, {:already_started, _pid}} = JobRunner.init({job_id, bundle.manifest, []})
     assert {:ok, nil} = RedisStore.get_lease("job:#{job_id}")
 
-    assert {:ok, %{"lease" => nil, "lease_epoch" => nil, "lease_owner" => nil}} =
+    assert {:ok, %{"lease" => nil, "lease_epoch" => epoch, "lease_owner" => nil}} =
              RedisStore.fetch_job(job_id)
+
+    assert is_integer(epoch) and epoch > 0
   end
 
   defp restore_system_env(key, nil), do: System.delete_env(key)

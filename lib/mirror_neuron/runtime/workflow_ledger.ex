@@ -638,7 +638,15 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   end
 
   defp redeliver_or_trigger(state, step, now) do
-    case step_last_message(step) do
+    {step, saved_message} =
+      if step["checkpoint_retry_delivery"] == true and last_message_present?(step) do
+        {:ok, message, next_step} = retry_message(state, step, now)
+        {Map.delete(next_step, "checkpoint_retry_delivery"), message}
+      else
+        {step, step_last_message(step)}
+      end
+
+    case saved_message do
       message when is_map(message) ->
         step =
           step
@@ -1566,7 +1574,8 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
     heartbeat_deadline_at =
       iso_after_ms_if_configured(now, Map.get(step, "beacon_timeout_ms"))
 
-    idempotency_key = idempotency_key(state, step["id"], attempt_number, message)
+    idempotency_key =
+      step["retry_idempotency_key"] || idempotency_key(state, step["id"], attempt_number, message)
 
     %{
       attempt_number: attempt_number,

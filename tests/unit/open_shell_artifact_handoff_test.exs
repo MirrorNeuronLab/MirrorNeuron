@@ -96,6 +96,49 @@ defmodule MirrorNeuron.OpenShellArtifactHandoffTest do
     assert File.read!(Path.join(ctx.root, "calls")) == "1"
   end
 
+  test "new delivery and lease replay a verified logical receipt without a second invocation",
+       ctx do
+    payload = %{"attempt" => 1, "attempt_id" => "old-delivery", "deadline_at" => "old-deadline"}
+
+    message =
+      MirrorNeuron.Message.new("handoff-test", "runtime", "generate", "init", payload,
+        headers: %{
+          "mn.workflow.attempt" => 1,
+          "mn.workflow.attempt_id" => "old-delivery",
+          "mn.workflow.deadline_at" => "old-deadline"
+        }
+      )
+
+    assert {:ok, original} =
+             OpenShell.run(payload, ctx.config, Keyword.put(ctx.opts, :message, message))
+
+    payload = %{
+      payload
+      | "attempt" => 2,
+        "attempt_id" => "new-delivery",
+        "deadline_at" => "new-deadline"
+    }
+
+    message =
+      MirrorNeuron.Message.new("handoff-test", "runtime", "generate", "init", payload,
+        headers: %{
+          "mn.workflow.attempt" => 2,
+          "mn.workflow.attempt_id" => "new-delivery",
+          "mn.workflow.deadline_at" => "new-deadline"
+        }
+      )
+
+    opts =
+      ctx.opts
+      |> Keyword.put(:lease_epoch, 2)
+      |> Keyword.put(:runtime_attempt, 2)
+      |> Keyword.put(:message, message)
+
+    assert {:ok, ^original} = OpenShell.run(payload, ctx.config, opts)
+    assert File.read!(Path.join(ctx.root, "calls")) == "1"
+    assert {:error, _} = OpenShell.run(Map.put(payload, "changed", true), ctx.config, opts)
+  end
+
   test "conflicting modes fail before execution", ctx do
     assert {:error, _} =
              OpenShell.run(%{}, Map.put(ctx.config, "sync_shared_storage", true), ctx.opts)

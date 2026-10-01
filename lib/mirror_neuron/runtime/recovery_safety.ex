@@ -46,9 +46,9 @@ defmodule MirrorNeuron.Runtime.RecoverySafety do
     node.agent_type in ["executor", "module"] or Map.get(node, :type) in ["executor", "module"]
   end
 
-  defp retry_safe?(node) do
-    config = Map.get(node, :config, %{})
+  defp retry_safe?(node), do: config_retry_safe?(Map.get(node, :config, %{}))
 
+  def config_retry_safe?(config) when is_map(config) do
     not explicit_review?(config) and
       (truthy?(config["safe_to_retry"]) or truthy?(config["idempotent"]) or
          non_empty?(config["idempotency_key"]) or

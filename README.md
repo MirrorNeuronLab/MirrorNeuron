@@ -387,3 +387,36 @@ these fields through the existing run JSON contract. Queue and pause intervals
 are excluded; an interrupted coordinator session retains observed time and marks
 unobserved recovery gaps incomplete. Historical records are not backfilled with
 wall-clock estimates. No new gRPC method or protobuf fields are required.
+
+## Retry failed runs
+
+`PlanRunRetry` verifies recovery eligibility; `RetryRun` submits the verified
+attempt/checkpoint selection with an idempotency key. These commands recover a
+failed run under its existing run and stable job IDs, with a new attempt and
+fenced lease epoch. `ResumeRun` continues paused work; it does not retry failures.
+The CLI and OtterDesk use these same Core commands.
+
+Logical checkpoints retain completed outputs, unfinished inputs, child-workflow
+state and dynamic graph revisions. Recovery restores the ledger rather than
+seeding the entire workflow or restoring process memory. Missing inputs, changed
+bundles, corrupt artifacts, reset job data, active cleanup and uncertain external
+effects block dispatch with a reason. Executor/module replay requires a declared
+idempotency contract or a verified artifact handoff receipt; uncertain dispatches
+remain blocked. Logical effect keys survive retry while delivery IDs change.
+
+Only explicitly supplied fields declared in manifest metadata
+`run_retry.configuration_fields` may change. Fields declare `type: integer`
+with `minimum`/`maximum`, or `type: string` with `allowed_values`. Original inputs,
+workflow topology and result-defining configuration remain immutable. SDK contexts
+receive `MN_RUN_RETRY_JSON` with effective overrides and preserved active usage.
+An allowance of 60 minutes after 20 minutes of execution leaves 40 minutes;
+queued, paused and failed intervals do not add to the durable run clock.
+Executor invocations refresh their retry context from the fenced Core record
+after queue admission, so preparation and paused intervals are not charged by a
+stale startup context. A missing running lease blocks external invocation.
+
+Failed control records, checkpoints and referenced bundles/artifacts are retained
+until explicit run/job deletion or job-data reset. Logs and delivery history keep
+their bounded retention. Resource status reports `retry_checkpoint_storage`.
+Historical files alone do not establish eligibility: planning must verify the
+remaining Core record and supported checkpoint. Run retry is manual only.

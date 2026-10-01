@@ -403,6 +403,92 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   @doc false
+  def persist_run_checkpoint(job_id, checkpoint, epoch) do
+    script = """
+    local guard = redis.call('GET', KEYS[1])
+    if not guard then return -1 end
+    guard = cjson.decode(guard)
+    if tonumber(guard.lease_epoch) ~= tonumber(ARGV[2]) or
+       guard.status == 'cancelling' or guard.status == 'cancelled' then return -1 end
+    redis.call('SET', KEYS[2], ARGV[1])
+    return 1
+    """
+
+    with :ok <- validate_identifier("job_id", job_id),
+         {:ok, 1} <-
+           command([
+             "EVAL",
+             script,
+             "2",
+             key("job", job_id, "guard"),
+             key("job", job_id, "retry_checkpoint"),
+             Jason.encode!(checkpoint),
+             to_string(epoch)
+           ]) do
+      wait_for_replicas()
+    else
+      {:ok, -1} -> {:error, :stale_checkpoint_epoch}
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  def fetch_run_checkpoint(job_id) do
+    with :ok <- validate_identifier("job_id", job_id),
+         {:ok, encoded} when is_binary(encoded) <-
+           command(["GET", key("job", job_id, "retry_checkpoint")]),
+         {:ok, checkpoint} <- Jason.decode(encoded) do
+      {:ok, checkpoint}
+    else
+      {:ok, nil} -> {:error, :checkpoint_not_found}
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  def discard_run_checkpoint(job_id) do
+    with :ok <- validate_identifier("job_id", job_id),
+         {:ok, _} <- command(["DEL", key("job", job_id, "retry_checkpoint")]),
+         {:ok, _} <- persist_terminal_job(job_id, %{"retry_checkpoint_discarded" => true}) do
+      :ok
+    end
+  end
+
+  def retained_checkpoint_storage do
+    with {:ok, ids} <- list_job_ids() do
+      Enum.reduce(
+        ids,
+        %{"checkpoint_count" => 0, "checkpoint_bytes" => 0, "referenced_artifact_bytes" => 0},
+        fn id, acc ->
+          case fetch_run_checkpoint(id) do
+            {:ok, checkpoint} ->
+              artifact_bytes =
+                checkpoint
+                |> BlobRef.collect()
+                |> Enum.map(&Map.get(&1, "size_bytes", 0))
+                |> Enum.sum()
+
+              artifact_bytes =
+                artifact_bytes +
+                  Enum.reduce(get_in(checkpoint, ["artifacts", "inventory"]) || [], 0, fn entry,
+                                                                                          total ->
+                    total + (entry["size_bytes"] || 0)
+                  end)
+
+              acc
+              |> Map.update!("checkpoint_count", &(&1 + 1))
+              |> Map.update!("checkpoint_bytes", &(&1 + byte_size(Jason.encode!(checkpoint))))
+              |> Map.update!("referenced_artifact_bytes", &(&1 + artifact_bytes))
+
+            _ ->
+              acc
+          end
+        end
+      )
+    else
+      _ -> %{"unavailable" => true}
+    end
+  end
+
+  @doc false
   def clear_job_attempt_state(job_id) do
     with {:ok, agent_ids} <- command(["SMEMBERS", key("job", job_id, "agents")]),
          {:ok, delivery_keys} <- command(["SMEMBERS", delivery_index_key(job_id)]),
@@ -459,12 +545,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
       with :ok <- validate_job_lease_epoch(job_id, job_map),
            {:ok, results} <-
-             transaction([
-               ["SET", key("job", job_id), encoded],
-               ["SET", key("job", job_id, "summary"), encoded_summary],
-               ["SET", key("job", job_id, "guard"), encoded_guard],
-               ["SADD", key(@jobs_set), job_id]
-             ]),
+             persist_fenced_job(job_id, encoded, encoded_summary, encoded_guard, job_map),
            :ok <- expect_persist_job_results(results),
            :ok <- apply_job_retention(job_id, job_map),
            :ok <- wait_for_replicas() do
@@ -475,6 +556,55 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   def persist_job(_job_id, _job_map), do: {:error, "job must be an object"}
 
+  # Check the guard and publish the new record in one Redis operation. A
+  # previous attempt cannot pass a check and then overwrite a newer epoch.
+  defp persist_fenced_job(job_id, encoded, summary, guard, job_map) do
+    script = """
+    local prior = redis.call('GET', KEYS[3])
+    if prior then
+      prior = cjson.decode(prior)
+      local incoming = tonumber(ARGV[5])
+      local epoch = tonumber(prior.lease_epoch)
+      if tonumber(prior.cancellation_fence_epoch) then return -2 end
+      if epoch and (incoming < epoch) then return -1 end
+    end
+    if ARGV[1] ~= '' then redis.call('SET', KEYS[1], ARGV[1]) end
+    redis.call('SET', KEYS[2], ARGV[2])
+    redis.call('SET', KEYS[3], ARGV[3])
+    return redis.call('SADD', KEYS[4], ARGV[4])
+    """
+
+    epoch = lease_epoch(job_map)
+
+    case command([
+           "EVAL",
+           script,
+           "4",
+           key("job", job_id),
+           key("job", job_id, "summary"),
+           key("job", job_id, "guard"),
+           key(@jobs_set),
+           encoded,
+           summary,
+           guard,
+           job_id,
+           to_string(epoch || -1)
+         ]) do
+      {:ok, -1} ->
+        {:error, {:stale_lease_epoch, epoch, existing_job_guard(job_id)["lease_epoch"]}}
+
+      {:ok, -2} ->
+        {:error,
+         {:cancellation_fenced, epoch, existing_job_guard(job_id)["cancellation_fence_epoch"]}}
+
+      {:ok, result} ->
+        {:ok, ["OK", "OK", "OK", result]}
+
+      error ->
+        error
+    end
+  end
+
   @doc false
   def persist_job_projection(job_id, job_map) when is_map(job_map) do
     with :ok <- validate_identifier("job_id", job_id),
@@ -484,11 +614,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
       with :ok <- validate_job_lease_epoch(job_id, job_map),
            {:ok, results} <-
-             transaction([
-               ["SET", key("job", job_id, "summary"), encoded_summary],
-               ["SET", key("job", job_id, "guard"), encoded_guard],
-               ["SADD", key(@jobs_set), job_id]
-             ]),
+             persist_fenced_job_projection(job_id, encoded_summary, encoded_guard, job_map),
            :ok <- expect_persist_job_projection_results(results),
            :ok <- apply_job_projection_retention(job_id, job_map),
            :ok <- wait_for_replicas() do
@@ -499,6 +625,13 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   def persist_job_projection(_job_id, _job_map),
     do: {:error, "job must be an object"}
+
+  defp persist_fenced_job_projection(job_id, summary, guard, job_map) do
+    case persist_fenced_job(job_id, "", summary, guard, job_map) do
+      {:ok, [_root, a, b, c]} -> {:ok, [a, b, c]}
+      error -> error
+    end
+  end
 
   @doc false
   def put_federation_projections(owner_node, kind, summaries)
@@ -1579,6 +1712,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       [
         key("job", job_id),
         key("job", job_id, "summary"),
+        key("job", job_id, "retry_checkpoint"),
         key("job", job_id, "events"),
         key("job", job_id, "agents"),
         key("lease", "job:#{job_id}"),
@@ -1731,7 +1865,13 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   defp refresh_job_blob_refs(job) do
-    job
+    checkpoint =
+      case fetch_run_checkpoint(job["job_id"]) do
+        {:ok, checkpoint} -> checkpoint
+        _ -> %{}
+      end
+
+    [job, checkpoint]
     |> BlobRef.collect()
     |> Enum.each(fn ref ->
       case register_blob_ref(ref) do
@@ -4091,19 +4231,41 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     do: %{"owner_id" => inspect(value), "epoch" => nil, "ttl_ms" => nil}
 
   defp apply_job_retention(job_id, job_map) do
-    if terminal_status?(Map.get(job_map, "status") || Map.get(job_map, :status)) do
-      with :ok <- expire_terminal_job(job_id),
-           do: expire_job_deliveries(job_id, 60 * 60)
-    else
-      persist_active_job(job_id)
+    status = field(job_map, "status")
+
+    cond do
+      retained_retry_state?(job_map) ->
+        Enum.each(
+          [
+            key("job", job_id),
+            key("job", job_id, "summary"),
+            key("job", job_id, "guard"),
+            key("job", job_id, "retry_checkpoint")
+          ],
+          &persist_key/1
+        )
+
+        expire_job_deliveries(job_id, 60 * 60)
+
+      terminal_status?(status) ->
+        expire_key(key("job", job_id, "retry_checkpoint"), terminal_job_ttl_seconds())
+        with :ok <- expire_terminal_job(job_id), do: expire_job_deliveries(job_id, 60 * 60)
+
+      true ->
+        persist_active_job(job_id)
     end
   end
 
   defp apply_job_projection_retention(job_id, job_map) do
-    if terminal_status?(Map.get(job_map, "status") || Map.get(job_map, :status)) do
-      expire_terminal_job(job_id)
-    else
+    if retained_retry_state?(job_map) do
+      Enum.each([key("job", job_id, "summary"), key("job", job_id, "guard")], &persist_key/1)
       :ok
+    else
+      if terminal_status?(Map.get(job_map, "status") || Map.get(job_map, :status)) do
+        expire_terminal_job(job_id)
+      else
+        :ok
+      end
     end
   end
 
@@ -4229,7 +4391,15 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   defp terminal_job_expired?(_job, ttl_seconds) when ttl_seconds < 0, do: false
 
   defp terminal_job_expired?(job, ttl_seconds) do
-    terminal_status?(Map.get(job, "status")) and job_age_seconds(job) >= ttl_seconds
+    not retained_retry_state?(job) and
+      terminal_status?(Map.get(job, "status")) and job_age_seconds(job) >= ttl_seconds
+  end
+
+  defp retained_retry_state?(job) do
+    receipts = field(job, "retry_receipts")
+
+    field(job, "retry_checkpoint_discarded") != true and
+      (field(job, "status") == "failed" or (is_map(receipts) and map_size(receipts) > 0))
   end
 
   defp missing_job?(job_id, reason), do: reason == "job #{job_id} was not found"
