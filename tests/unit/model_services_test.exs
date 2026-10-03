@@ -137,7 +137,7 @@ defmodule MirrorNeuron.ModelServicesTest do
     cases = [
       {%{}, "gemma4:e2b"},
       {%{"model" => "default"}, "gemma4:e2b"},
-      {%{"purpose" => "context_engine"}, "hf.co/homerquan/mn-context-engine-model-v-Q4_K_M"},
+      {%{"purpose" => "context_engine"}, "default"},
       {%{"purpose" => "knowledge_rag"},
        "huggingface.co/zenmagnets/Nemotron-3-Embed-1B-Q4_K_M-GGUF:Q4_K_M"}
     ]

@@ -420,3 +420,7 @@ until explicit run/job deletion or job-data reset. Logs and delivery history kee
 their bounded retention. Resource status reports `retry_checkpoint_storage`.
 Historical files alone do not establish eligibility: planning must verify the
 remaining Core record and supported checkpoint. Run retry is manual only.
+
+Oversized prompts use Membrane CPU preparation first, then optional original-ID
+selection on the existing LiteLLM `default` route. No dedicated compressor model
+is prepared. Managed SDK turns also retain source-backed working checkpoints.

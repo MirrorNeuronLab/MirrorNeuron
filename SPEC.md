@@ -381,7 +381,9 @@ The current Compose template starts authenticated Membrane v2 with persistent
 Markdown memory and CPU DuckDB processing. Set `MN_CONTEXT_AUTH_TOKEN` before
 direct Compose startup; installed runtimes generate/reuse a private token and
 forward it to workers. Membrane does not depend on Redis or a GPU compressor.
-Model compression is disabled. Deploy a matching SDK/engine release before
+Optional last-resort record selection uses the existing LiteLLM `default` route
+after CPU compaction. Context-purpose requests resolve the normal default route.
+Deploy a matching SDK/engine release before
 running new Markdown profiles; historical support snapshots remain unchanged.
 
 
