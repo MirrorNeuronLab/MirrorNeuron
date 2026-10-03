@@ -19,7 +19,7 @@ defmodule MirrorNeuron.ModelServices do
   @native_sdk_grpc_target_env "MN_NATIVE_SDK_GRPC_TARGET"
   @native_sdk_grpc_timeout_env "MN_NATIVE_SDK_GRPC_TIMEOUT_MS"
   @default_llm_model "gemma4:e2b"
-  @default_context_engine_model "hf.co/homerquan/mn-context-engine-model-v-Q4_K_M"
+  @default_context_engine_model "default"
   @default_knowledge_rag_model "huggingface.co/zenmagnets/Nemotron-3-Embed-1B-Q4_K_M-GGUF:Q4_K_M"
   @service_env_vars [
     "MN_NODE_SERVICES_JSON",
