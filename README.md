@@ -271,11 +271,11 @@ for deployment and replay boundaries.
 | [mn-web-ui](https://github.com/MirrorNeuronLab/mn-web-ui) | Browser-based runtime and workflow inspection. |
 | [mn-deploy](https://github.com/MirrorNeuronLab/mn-deploy) | Installation, Compose services, and release tooling. |
 | [mn-agents](https://github.com/MirrorNeuronLab/mn-agents) / [mn-skills](https://github.com/MirrorNeuronLab/mn-skills) | Reusable agents and Python skill packages. |
-| [Membrane](https://github.com/MirrorNeuronLab/Membrane) | Working memory, context selection, and compression through the SDK and model gateway. |
+| [Membrane](https://github.com/MirrorNeuronLab/Membrane) | Authoritative Markdown runtime memory and CPU DuckDB context retrieval through the SDK. |
 | [mn-system-tests](https://github.com/MirrorNeuronLab/mn-system-tests) | Cross-component integration and system validation. |
 
-Membrane keeps model context bounded while durable artifacts preserve the
-underlying evidence. It does not schedule tools or change the workflow DAG.
+Membrane keeps complete runtime text and durable receipts as Markdown, with
+one disposable DuckDB index per job. It does not schedule tools or change the workflow DAG.
 Read [Context memory and compression](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/context-memory.md)
 for that contract.
 

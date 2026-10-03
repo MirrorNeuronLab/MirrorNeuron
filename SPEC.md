@@ -377,12 +377,12 @@ Stable Job summary and detail projections retain the definition revision so
 HTTP and SDK callers can perform optimistic concurrency checks on mutations.
 
 
-The default Compose runtime starts Membrane alongside LiteLLM for automatic
-request context compression. No blueprint profile is needed. The SDK gateway
-uses the configured serving window and calls Membrane's `CompilePrompt` RPC
-when necessary; deploy the SDK and Membrane image together. Model compression
-remains optional, and no workflow timeout behavior changes. Historical release
-support snapshots remain unchanged.
+The current Compose template starts authenticated Membrane v2 with persistent
+Markdown memory and CPU DuckDB processing. Set `MN_CONTEXT_AUTH_TOKEN` before
+direct Compose startup; installed runtimes generate/reuse a private token and
+forward it to workers. Membrane does not depend on Redis or a GPU compressor.
+Model compression is disabled. Deploy a matching SDK/engine release before
+running new Markdown profiles; historical support snapshots remain unchanged.
 
 
 The Core image also runs the LiteLLM gateway. Its Python environment includes
@@ -428,7 +428,11 @@ child-workflow compiler; no compatibility execution fallback is provided.
 Validation: `mix test tests/unit/child_workflow_test.exs
  tests/unit/dynamic_workflow_test.exs tests/unit/workflow_ledger_test.exs --no-start`.
 
-## Durable working-context lifecycle
+## Retired working-index lifecycle
+
+The older Core lifecycle below applies only to `required_context_engine: true`.
+New catalog Markdown profiles do not set that retired Redis-index requirement;
+SDK `ContextSession` owns their Markdown lifecycle receipts.
 
 Jobs with `required_context_engine: true` check Membrane's context service
 at `MN_CONTEXT_ADDR`, the same address used by SDK workers.
