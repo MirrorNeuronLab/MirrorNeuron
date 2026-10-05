@@ -70,10 +70,10 @@ defmodule MirrorNeuron.Backup.DurableJob do
       Files.verify!(temp, backup["files"])
       options = temp |> Path.join("restore.json") |> File.read!() |> Jason.decode!()
       definition = backup["definition"]
-      if JobData.validate_id(definition["job_id"]) != :ok,
+      if not is_map(definition) or JobData.validate_id(definition["job_id"]) != :ok,
         do: raise(ArgumentError, "invalid source job identity")
       job_id = options["job_id"] || "job_" <> JobId.generate(definition["graph_id"])
-      :ok = JobData.validate_id(job_id)
+      if JobData.validate_id(job_id) != :ok, do: raise(ArgumentError, "invalid restore job identity")
       {:ok, exists} = RedisStore.job_definition_exists?(job_id)
       if exists, do: raise(ArgumentError, "restore job already exists")
       {:ok, data_dir} = JobData.initialize(job_id)
@@ -84,6 +84,7 @@ defmodule MirrorNeuron.Backup.DurableJob do
         File.mkdir_p!(evidence_dir)
         copy_contents(Path.join(temp, "history"), evidence_dir)
         copy_contents(Path.join(temp, "artifacts"), Path.join(evidence_dir, "artifacts"))
+        copy_contents(Path.join(temp, "staging"), Path.join(evidence_dir, "staging"))
 
         write_json(
           evidence_dir,
@@ -99,7 +100,9 @@ defmodule MirrorNeuron.Backup.DurableJob do
                storage: options["storage"] || %{}
              ) do
           {:ok, created} ->
-            {:ok, Map.put(created, "restored_from_job_id", definition["job_id"])}
+            restore_schedules!(job_id, Path.join(temp, "history/history.json"))
+            {:ok, saved} = StableJob.get(created["job_id"])
+            {:ok, Map.put(saved, "restored_from_job_id", definition["job_id"])}
 
           {:error, reason} ->
             JobData.delete(job_id)
@@ -107,10 +110,26 @@ defmodule MirrorNeuron.Backup.DurableJob do
         end
       rescue
         error ->
+          case StableJob.get(job_id) do
+            {:ok, _} -> StableJob.delete(job_id, confirmed: true)
+            _ -> :ok
+          end
           JobData.delete(job_id)
           reraise error, __STACKTRACE__
       end
     end)
+  end
+
+  defp restore_schedules!(job_id, path) do
+    if File.regular?(path) do
+      history = path |> File.read!() |> Jason.decode!()
+      Enum.each(history["schedules"] || [], fn schedule ->
+        case MirrorNeuron.Runtime.ScheduleDispatcher.create_job_schedule(job_id, Map.put(schedule, "enabled", false)) do
+          {:ok, _} -> :ok
+          {:error, _} -> raise ArgumentError, "could not restore paused schedule"
+        end
+      end)
+    end
   end
 
   defp quiescent(runs) do
