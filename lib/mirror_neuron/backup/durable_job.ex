@@ -36,7 +36,9 @@ defmodule MirrorNeuron.Backup.DurableJob do
             Files.tree(bundle.root_path, "bundle") ++
               Files.tree(data_dir, "job-data") ++
               Files.tree(temp, "history") ++
-              artifact_entries(runs) ++ blob_entries(definition) ++ staged_entries(definition)
+              artifact_entries(runs) ++
+              blob_entries([definition | runs]) ++
+              staged_entries(definition) ++ historical_staging_entries(runs)
 
           backup = %{
             "schema_version" => "mn.backup.v3",
@@ -70,10 +72,15 @@ defmodule MirrorNeuron.Backup.DurableJob do
       Files.verify!(temp, backup["files"])
       options = temp |> Path.join("restore.json") |> File.read!() |> Jason.decode!()
       definition = backup["definition"]
+
       if not is_map(definition) or JobData.validate_id(definition["job_id"]) != :ok,
         do: raise(ArgumentError, "invalid source job identity")
+
       job_id = options["job_id"] || "job_" <> JobId.generate(definition["graph_id"])
-      if JobData.validate_id(job_id) != :ok, do: raise(ArgumentError, "invalid restore job identity")
+
+      if JobData.validate_id(job_id) != :ok,
+        do: raise(ArgumentError, "invalid restore job identity")
+
       {:ok, exists} = RedisStore.job_definition_exists?(job_id)
       if exists, do: raise(ArgumentError, "restore job already exists")
       {:ok, data_dir} = JobData.initialize(job_id)
@@ -114,6 +121,7 @@ defmodule MirrorNeuron.Backup.DurableJob do
             {:ok, _} -> StableJob.delete(job_id, confirmed: true)
             _ -> :ok
           end
+
           JobData.delete(job_id)
           reraise error, __STACKTRACE__
       end
@@ -123,8 +131,12 @@ defmodule MirrorNeuron.Backup.DurableJob do
   defp restore_schedules!(job_id, path) do
     if File.regular?(path) do
       history = path |> File.read!() |> Jason.decode!()
+
       Enum.each(history["schedules"] || [], fn schedule ->
-        case MirrorNeuron.Runtime.ScheduleDispatcher.create_job_schedule(job_id, Map.put(schedule, "enabled", false)) do
+        case MirrorNeuron.Runtime.ScheduleDispatcher.create_job_schedule(
+               job_id,
+               Map.put(schedule, "enabled", false)
+             ) do
           {:ok, _} -> :ok
           {:error, _} -> raise ArgumentError, "could not restore paused schedule"
         end
@@ -144,8 +156,12 @@ defmodule MirrorNeuron.Backup.DurableJob do
     end)
   end
 
-  defp blob_entries(definition) do
-    refs = get_in(definition, ["manifest", "metadata", "mn_artifacts", "blob_refs"]) || []
+  defp blob_entries(records) do
+    refs =
+      Enum.flat_map(
+        records,
+        &(get_in(&1, ["manifest", "metadata", "mn_artifacts", "blob_refs"]) || [])
+      )
 
     Enum.map(refs, fn ref ->
       sha = ref["sha256"]
@@ -153,6 +169,24 @@ defmodule MirrorNeuron.Backup.DurableJob do
       {"blobs/" <> sha, BlobStore.path(sha), false, 0o600}
     end)
     |> Enum.uniq_by(&elem(&1, 0))
+  end
+
+  defp historical_staging_entries(runs) do
+    Enum.flat_map(runs, fn run ->
+      path = get_in(run, ["manifest", "metadata", "mn_storage", "submission_path"])
+      root = Path.expand(MirrorNeuron.Artifacts.SharedStorage.root())
+
+      if is_binary(path) and File.dir?(path) do
+        expanded = Path.expand(path)
+
+        if not String.starts_with?(expanded, root <> "/"),
+          do: raise(ArgumentError, "run staging must be inside runtime shared storage")
+
+        Files.tree(expanded, "history/staging/" <> run["run_id"])
+      else
+        []
+      end
+    end)
   end
 
   defp staged_entries(definition) do

@@ -223,10 +223,10 @@ failure reuses durable command redelivery while its healthy supervising agent
 stays alive, so unrelated effectful workflow steps are not replayed and the
 live job does not enter operator review solely because an auxiliary endpoint
 restarted.
-Job backup and restore use the breaking `mn.backup.v2` contract. Core owns the
-durable runtime snapshot and bundle map; adapters may add verified
-content-addressed payload blobs, wheels, images, and verified transport metadata for
-air-gapped transport. Core does not implement or accept `mn.backup.v1`.
+Portable durable-job backup and restore use `mn.backup.v3`. Core owns streamed
+job snapshots; SDK adapters capture verified payload models, wheels and Docker
+images for air-gapped transport. Historical internal `mn.backup.v2` snapshots
+are separate from these portable durable-job capsules.
 
 Fixed server-defined group-operation kinds persist their immutable target
 snapshot, item states, counters, errors, timestamps, and replayable progress
@@ -355,8 +355,8 @@ work. Secrets never appear in events or ordinary logs.
 
 `mirrorneuron.job.v1.JobService` is the sole authoritative protobuf contract.
 It exposes durable definition, optional definition-response queries, and
-explicit run operations only. Submission, deployment, general-schedule,
-backup/restore, bulk-cancel, clear, alias, and dual-registration operations are
+explicit run operations and durable-job backup/restore. Submission, deployment,
+general-schedule, bulk-cancel, clear, alias, and dual-registration operations are
 not part of this service. Runtime environment code must
 not interpret `MN_JOB_ID` as a run identity; it uses `MN_RUN_ID` and
 `MN_ATTEMPT_ID` explicitly. See `JOBS_AND_RUNS.md` for the complete contract.
@@ -629,3 +629,24 @@ logical digest; user-supplied values and executable commands remain bound.
 Older handoff receipts without this logical replay contract cannot authorize
 checkpoint retry. Successful recovery retains its failed-attempt recovery records
 until explicit deletion/reset, including when the latest attempt is completed.
+
+## Durable job backup transport
+
+`ExportJobBackup(JobRequest)` streams bounded `JobBackupChunk` files from a
+quiescent stable job. `RestoreJobBackup(stream JobBackupChunk)` checks the complete
+`mn.backup.v3` inventory and creates a fresh job definition with copied data.
+Both RPCs require v1 requests, client identity, and runtime identity, and are
+denied in network-only mode. Export follows the authoritative federated owner.
+
+Snapshots include the archived bundle, persistent job data, retained run/event
+history, artifacts, payload blobs, current staging and retained historical
+staging. Start/resume is serialized with export. Source executions are preserved
+as evidence under `.mn-restore/<source-job-id>` rather than replayed; schedules
+receive fresh identities and remain paused. Restoring never overwrites an existing
+job. The SDK owns ZIP64 transport, full offline wheels/images/models, host
+compatibility and hardware preflight, and fresh native resource preparation.
+
+The file protocol bounds chunks to 1 MiB, entries to 100,000 and uncompressed
+content to 128 GiB; path, symlink, duplicate, inventory and checksum failures reject
+restore. Earlier internal `mn.backup.v2` snapshots are not accepted by these RPCs.
+Upgrade the generated SDK bindings and API/CLI adapters with Core.

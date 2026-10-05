@@ -171,3 +171,24 @@ jobs built from the same blueprint remain isolated. They should also cover
 service replacement and lifecycle scheduling, restart, scheduled dispatch, retries, stale
 generation handles, active-run lifecycle rejection, exact sandbox mounts,
 and forged identifiers.
+
+## Durable job backup transport
+
+`ExportJobBackup(JobRequest)` streams bounded `JobBackupChunk` files from a
+quiescent stable job. `RestoreJobBackup(stream JobBackupChunk)` checks the complete
+`mn.backup.v3` inventory and creates a fresh job definition with copied data.
+Both RPCs require v1 requests, client identity, and runtime identity, and are
+denied in network-only mode. Export follows the authoritative federated owner.
+
+Snapshots include the archived bundle, persistent job data, retained run/event
+history, artifacts, payload blobs, current staging and retained historical
+staging. Start/resume is serialized with export. Source executions are preserved
+as evidence under `.mn-restore/<source-job-id>` rather than replayed; schedules
+receive fresh identities and remain paused. Restoring never overwrites an existing
+job. The SDK owns ZIP64 transport, full offline wheels/images/models, host
+compatibility and hardware preflight, and fresh native resource preparation.
+
+The file protocol bounds chunks to 1 MiB, entries to 100,000 and uncompressed
+content to 128 GiB; path, symlink, duplicate, inventory and checksum failures reject
+restore. Earlier internal `mn.backup.v2` snapshots are not accepted by these RPCs.
+Upgrade the generated SDK bindings and API/CLI adapters with Core.
