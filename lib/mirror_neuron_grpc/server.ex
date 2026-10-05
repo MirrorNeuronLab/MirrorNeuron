@@ -9,6 +9,7 @@ defmodule MirrorNeuron.Grpc.JobServer do
         archive_job: :ArchiveJob,
         reset_job_data: :ResetJobData,
         delete_job: :DeleteJob,
+        export_job_backup: :ExportJobBackup,
         start_run: :StartRun,
         list_runs: :ListRuns,
         get_run: :GetRun,
@@ -26,6 +27,15 @@ defmodule MirrorNeuron.Grpc.JobServer do
     def unquote(function)(request, stream) do
       MirrorNeuron.Grpc.CommandHub.dispatch(:job, unquote(command), request, stream)
     end
+  end
+
+  def restore_job_backup(chunks, stream) do
+    MirrorNeuron.Grpc.CommandHub.dispatch(
+      :job,
+      :RestoreJobBackup,
+      %{version: 1, chunks: chunks},
+      stream
+    )
   end
 end
 

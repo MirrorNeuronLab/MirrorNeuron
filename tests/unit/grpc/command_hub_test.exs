@@ -122,7 +122,9 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
              "mirrorneuron.job.v1.JobService"
 
     assert Enum.map(Mirrorneuron.Job.V1.JobService.Service.__rpc_calls__(), &elem(&1, 0)) ==
-             Enum.map(@rpc_cases, &elem(&1, 0))
+             Enum.map(Enum.take(@rpc_cases, 7), &elem(&1, 0)) ++
+               [:ExportJobBackup, :RestoreJobBackup] ++
+               Enum.map(Enum.drop(@rpc_cases, 7), &elem(&1, 0))
 
     assert Endpoint.__meta__(:servers) |> Enum.sort() ==
              [
@@ -157,11 +159,12 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
       |> Map.new()
 
     assert Map.keys(job_entries) |> Enum.sort() ==
-             Enum.map(@rpc_cases, fn {command, _function, _request} -> {:job, command} end)
+             (Enum.map(@rpc_cases, fn {command, _function, _request} -> {:job, command} end) ++
+                [{:job, :ExportJobBackup}, {:job, :RestoreJobBackup}])
              |> Enum.sort()
 
     assert Enum.all?(job_entries, fn {_key, module} ->
-             module == MirrorNeuron.Grpc.Handlers.Job
+             module in [MirrorNeuron.Grpc.Handlers.Job, MirrorNeuron.Grpc.Handlers.JobBackup]
            end)
   end
 

@@ -21,6 +21,24 @@ defmodule MirrorNeuron.Cluster.FederationClient do
   end
 
   @doc false
+  def stream_job_backup(node_name, request, on_chunk) do
+    with {:ok, peer} <- FederationRegistry.fetch(node_name),
+         {:ok, destination} <- target(peer),
+         {:ok, channel} <- connect(destination, peer) do
+      try do
+        case JobStub.export_job_backup(channel, request, timeout: 600_000) do
+          {:ok, responses} -> relay_event_responses(node_name, responses, on_chunk)
+          {:error, reason} -> relay_failure!(node_name, reason)
+        end
+      after
+        GRPC.Stub.disconnect(channel)
+      end
+    else
+      {:error, reason} -> unavailable!(node_name, reason)
+    end
+  end
+
+  @doc false
   def stream_events(node_name, request, on_event)
       when is_binary(node_name) and is_function(on_event, 1) do
     with {:ok, peer} <- FederationRegistry.fetch(node_name),

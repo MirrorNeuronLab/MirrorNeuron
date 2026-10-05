@@ -252,6 +252,11 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
          {:run_retry_blocked,
           "This run failed. Use mn run retry #{run_id} --dry-run to check recovery."}}
 
+      {:ok, %{"stable_job_id" => job_id}} when is_binary(job_id) ->
+        MirrorNeuron.Runtime.StableJob.with_start_gate(job_id, fn ->
+          MirrorNeuron.resume(run_id)
+        end)
+
       _ ->
         MirrorNeuron.resume(run_id)
     end

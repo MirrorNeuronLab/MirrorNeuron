@@ -258,6 +258,22 @@ defmodule Mirrorneuron.Job.V1.JsonResponse do
   field(:next_page_token, 4, type: :string, json_name: "nextPageToken")
 end
 
+defmodule Mirrorneuron.Job.V1.JobBackupChunk do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.JobBackupChunk",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:path, 1, type: :string)
+  field(:data, 2, type: :bytes)
+  field(:eof, 3, type: :bool)
+  field(:directory, 4, type: :bool)
+  field(:mode, 5, type: :uint32)
+  field(:version, 6, type: :uint32)
+end
+
 defmodule Mirrorneuron.Job.V1.JobService.Service do
   @moduledoc false
 
@@ -276,6 +292,18 @@ defmodule Mirrorneuron.Job.V1.JobService.Service do
   rpc(:ResetJobData, Mirrorneuron.Job.V1.JobRequest, Mirrorneuron.Job.V1.JsonResponse)
 
   rpc(:DeleteJob, Mirrorneuron.Job.V1.DeleteJobRequest, Mirrorneuron.Job.V1.JsonResponse)
+
+  rpc(
+    :ExportJobBackup,
+    Mirrorneuron.Job.V1.JobRequest,
+    stream(Mirrorneuron.Job.V1.JobBackupChunk)
+  )
+
+  rpc(
+    :RestoreJobBackup,
+    stream(Mirrorneuron.Job.V1.JobBackupChunk),
+    Mirrorneuron.Job.V1.JsonResponse
+  )
 
   rpc(:StartRun, Mirrorneuron.Job.V1.StartRunRequest, Mirrorneuron.Job.V1.JsonResponse)
 

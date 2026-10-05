@@ -95,6 +95,8 @@ defmodule MirrorNeuron.Grpc.CommandPolicy do
                          {:job, :ArchiveJob},
                          {:job, :ResetJobData},
                          {:job, :DeleteJob},
+                         {:job, :ExportJobBackup},
+                         {:job, :RestoreJobBackup},
                          {:job, :StartRun},
                          {:job, :ListRuns},
                          {:job, :GetRun},
@@ -137,6 +139,8 @@ defmodule MirrorNeuron.Grpc.CommandPolicy do
                             {:job, :ArchiveJob},
                             {:job, :ResetJobData},
                             {:job, :DeleteJob},
+                            {:job, :ExportJobBackup},
+                            {:job, :RestoreJobBackup},
                             {:job, :StartRun},
                             {:job, :ListRuns},
                             {:job, :GetRun},
@@ -243,6 +247,8 @@ defmodule MirrorNeuron.Grpc.CommandHub do
                      )
                    )
                    |> Map.merge(%{
+                     {:job, :ExportJobBackup} => MirrorNeuron.Grpc.Handlers.JobBackup,
+                     {:job, :RestoreJobBackup} => MirrorNeuron.Grpc.Handlers.JobBackup,
                      {:cluster, :NetworkHandshake} => MirrorNeuron.Grpc.Handlers.ClusterHandshake,
                      {:cluster, :GetSystemSummary} => MirrorNeuron.Grpc.Handlers.Resource,
                      {:cluster, :GetResource} => MirrorNeuron.Grpc.Handlers.Resource,
