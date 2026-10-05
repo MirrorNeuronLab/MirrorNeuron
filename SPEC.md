@@ -518,6 +518,13 @@ existing single-run pause/resume/replacement behavior.
 
 ## Durable human interaction capability (cutover pending)
 
+The interaction persistence adapter restores schema-declared list fields after
+Redis Lua JSON decoding: options, fields, field options, presentation items and
+sources remain arrays when empty. This applies to command receipts, reads,
+snapshots and replay, including records already stored by Lua. Object fields and
+answer values retain their original shape. HTTP/desktop consumers continue to
+validate the canonical contract without storage-specific coercion.
+
 `mn.interaction.v1` stores versioned requests and replay events atomically in Redis.
 The `mirrorneuron.interactions.v1.InteractionService` Command and Watch RPCs use
 the existing authenticated channel and JSON resource envelope. Explicit option

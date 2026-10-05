@@ -10,6 +10,8 @@ service JobService {
   rpc ArchiveJob (JobRequest) returns (JsonResponse);
   rpc ResetJobData (JobRequest) returns (JsonResponse);
   rpc DeleteJob (DeleteJobRequest) returns (JsonResponse);
+  rpc ExportJobBackup (JobRequest) returns (stream JobBackupChunk);
+  rpc RestoreJobBackup (stream JobBackupChunk) returns (JsonResponse);
   rpc StartRun (StartRunRequest) returns (JsonResponse);
   rpc ListRuns (JobRequest) returns (JsonResponse);
   rpc GetRun (RunRequest) returns (JsonResponse);
@@ -140,4 +142,15 @@ message JsonResponse {
   uint32 version = 2;
   uint64 revision = 3;
   string next_page_token = 4;
+}
+
+// Ordered, bounded file chunks. A file ends at eof; paths are bundle-relative.
+// Restore accepts a verified mn.backup.v3 snapshot and never resumes executions.
+message JobBackupChunk {
+  string path = 1;
+  bytes data = 2;
+  bool eof = 3;
+  bool directory = 4;
+  uint32 mode = 5;
+  uint32 version = 6;
 }

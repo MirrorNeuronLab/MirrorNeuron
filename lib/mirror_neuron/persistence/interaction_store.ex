@@ -85,78 +85,170 @@ defmodule MirrorNeuron.Persistence.InteractionStore do
     digest = record |> Map.drop(~w(created_at updated_at)) |> digest()
     transact(record["id"], "create", Map.put(record, "creation_digest", digest))
   end
-  def transition(op, record, command), do: transact(record["id"], op, Map.put(command, "digest", digest(command)))
+
+  def transition(op, record, command),
+    do: transact(record["id"], op, Map.put(command, "digest", digest(command)))
+
   def get(id) do
     case command(["HGET", key("records"), id]) do
-      {:ok, nil} -> {:error, "not_found"}
+      {:ok, nil} ->
+        {:error, "not_found"}
+
       {:ok, raw} ->
-        record = Jason.decode!(raw)
-        if record["state"] == "pending" and is_integer(record["expires_at"]) and record["expires_at"] <= System.system_time(:millisecond),
-          do: transact(id, "expire", %{}), else: {:ok, record}
-      {:error, _} -> {:error, "store_unavailable"}
+        record = raw |> Jason.decode!() |> decode_record()
+
+        if record["state"] == "pending" and is_integer(record["expires_at"]) and
+             record["expires_at"] <= System.system_time(:millisecond),
+           do: transact(id, "expire", %{}),
+           else: {:ok, record}
+
+      {:error, _} ->
+        {:error, "store_unavailable"}
     end
   end
+
   def snapshot do
     expire_due()
+
     case command(["EVAL", @snapshot, "2", key("records"), key("sequence")]) do
-      {:ok, [sequence, records]} -> {:ok, %{"cursor" => sequence <> "-0", "items" => Enum.map(records, &Jason.decode!/1), "capability" => "mn.interaction.v1"}}
-      {:error, _} -> {:error, "store_unavailable"}
+      {:ok, [sequence, records]} ->
+        {:ok,
+         %{
+           "cursor" => sequence <> "-0",
+           "items" => Enum.map(records, &(&1 |> Jason.decode!() |> decode_record())),
+           "capability" => "mn.interaction.v1"
+         }}
+
+      {:error, _} ->
+        {:error, "store_unavailable"}
     end
   end
+
   def events(cursor) do
     with {:ok, first} <- command(["XRANGE", key("events"), "-", "+", "COUNT", "1"]),
          :ok <- valid_cursor(cursor, first),
          {:ok, rows} <- command(["XRANGE", key("events"), "(" <> cursor, "+", "COUNT", "200"]) do
-      {:ok, Enum.map(rows, fn [id, ["record", raw]] -> %{"id" => id, "type" => "interaction.updated", "data" => Jason.decode!(raw)} end)}
+      {:ok,
+       Enum.map(rows, fn [id, ["record", raw]] ->
+         %{
+           "id" => id,
+           "type" => "interaction.updated",
+           "data" => raw |> Jason.decode!() |> decode_record()
+         }
+       end)}
     else
       {:error, "cursor_expired"} = error -> error
       _ -> {:error, "store_unavailable"}
     end
   end
+
   def expire_due do
     now = to_string(System.system_time(:millisecond))
+
     case command(["ZRANGEBYSCORE", key("deadlines"), "-inf", now, "LIMIT", "0", "128"]) do
       {:ok, ids} -> Enum.each(ids, &transact(&1, "expire", %{}))
       _ -> :ok
     end
+
     case command(["ZRANGEBYSCORE", key("retention"), "-inf", now, "LIMIT", "0", "128"]) do
-      {:ok, ids} -> Enum.each(ids, fn id ->
-        command(["HDEL", key("records"), id])
-        command(["ZREM", key("retention"), id])
-      end)
-      _ -> :ok
+      {:ok, ids} ->
+        Enum.each(ids, fn id ->
+          command(["HDEL", key("records"), id])
+          command(["ZREM", key("retention"), id])
+        end)
+
+      _ ->
+        :ok
     end
+
     :ok
   end
+
   defp valid_cursor(_, []), do: :ok
+
   defp valid_cursor(cursor, [[first, _]]) do
     if sequence(cursor) < sequence(first) - 1, do: {:error, "cursor_expired"}, else: :ok
   end
+
   defp sequence(cursor), do: cursor |> String.split("-") |> hd() |> String.to_integer()
+
   defp transact(id, op, input) do
-    result = command(["EVAL", @transaction, "5", key("records"), key("events"), key("sequence"), key("deadlines"), key("retention"),
-      id, op, to_string(System.system_time(:millisecond)), Jason.encode!(input)])
+    result =
+      command([
+        "EVAL",
+        @transaction,
+        "5",
+        key("records"),
+        key("events"),
+        key("sequence"),
+        key("deadlines"),
+        key("retention"),
+        id,
+        op,
+        to_string(System.system_time(:millisecond)),
+        Jason.encode!(input)
+      ])
+
     case result do
       {:ok, raw} ->
         case Jason.decode!(raw) do
           %{"error" => error, "changed" => true} ->
             notify()
             {:error, error}
-          %{"error" => error} -> {:error, error}
+
+          %{"error" => error} ->
+            {:error, error}
+
           %{"record" => record, "cursor" => _} ->
             notify()
-            {:ok, record}
-          %{"record" => record} -> {:ok, record}
+            {:ok, decode_record(record)}
+
+          %{"record" => record} ->
+            {:ok, decode_record(record)}
         end
-      {:error, _} -> {:error, "store_unavailable"}
+
+      {:error, _} ->
+        {:error, "store_unavailable"}
     end
   end
+
+  # Redis Lua cjson encodes empty tables as objects, including JSON arrays.
+  # Restore the declared list fields at every storage boundary; arbitrary
+  # objects (scope, metadata, evidence and receipt answers) retain their types.
+  defp decode_record(record) do
+    record
+    |> Map.update("options", [], &decode_list/1)
+    |> Map.update("fields", [], &decode_fields/1)
+    |> Map.update!("presentation", fn presentation ->
+      presentation |> decode_optional_list("items") |> decode_optional_list("sources")
+    end)
+  end
+
+  defp decode_fields(fields) do
+    case decode_list(fields) do
+      fields when is_list(fields) -> Enum.map(fields, &decode_optional_list(&1, "options"))
+      other -> other
+    end
+  end
+
+  defp decode_optional_list(value, key) do
+    if Map.has_key?(value, key), do: Map.update!(value, key, &decode_list/1), else: value
+  end
+
+  defp decode_list(value) when value == %{}, do: []
+  defp decode_list(value), do: value
+
   defp notify do
     Registry.dispatch(MirrorNeuron.Runtime.EventRegistry, :interactions, fn entries ->
       Enum.each(entries, fn {pid, _} -> send(pid, :interaction_changed) end)
     end)
   end
-  defp digest(value), do: :crypto.hash(:sha256, :erlang.term_to_binary(value)) |> Base.encode16(case: :lower)
-  defp key(part), do: Config.string("MN_REDIS_NAMESPACE", :redis_namespace) <> ":interactions:" <> part
+
+  defp digest(value),
+    do: :crypto.hash(:sha256, :erlang.term_to_binary(value)) |> Base.encode16(case: :lower)
+
+  defp key(part),
+    do: Config.string("MN_REDIS_NAMESPACE", :redis_namespace) <> ":interactions:" <> part
+
   defp command(args), do: Redix.command(MirrorNeuron.Redis.Connection, args)
 end
