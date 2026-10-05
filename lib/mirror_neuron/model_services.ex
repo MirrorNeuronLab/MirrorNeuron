@@ -519,6 +519,15 @@ defmodule MirrorNeuron.ModelServices do
     end
   end
 
+  defp normalize_runtime_model_prepare_attrs(%{"purpose" => "job_backup"} = attrs) do
+    if attrs["action"] in ["export_hostlocal_wheels", "inspect_hostlocal_python"] or
+         attrs["ensure_hostlocal_python_environment"] == true do
+      {:ok, Map.drop(attrs, ["model", "runtime_model"])}
+    else
+      {:error, "unsupported job backup Python request"}
+    end
+  end
+
   defp normalize_runtime_model_prepare_attrs(attrs) when is_map(attrs) do
     case runtime_model_for_prepare_purpose(prepare_model_ref(attrs), prepare_model_purpose(attrs)) do
       {:ok, model} ->

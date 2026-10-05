@@ -650,3 +650,8 @@ The file protocol bounds chunks to 1 MiB, entries to 100,000 and uncompressed
 content to 128 GiB; path, symlink, duplicate, inventory and checksum failures reject
 restore. Earlier internal `mn.backup.v2` snapshots are not accepted by these RPCs.
 Upgrade the generated SDK bindings and API/CLI adapters with Core.
+
+HostLocal wheel capture and platform inspection use the existing native
+`PrepareRuntimeModel` transport with `purpose=job_backup`. Core forwards these
+Python requests without selecting a default model; the native SDK/CLI owns
+execution-platform wheel builds and fresh offline virtual environments.

@@ -176,6 +176,49 @@ defmodule MirrorNeuron.ModelServicesTest do
     assert message =~ "send PrepareRuntimeModel gRPC to the target node runtime"
   end
 
+  test "job backup Python requests never select a default model" do
+    previous = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
+    previous_client = Application.get_env(:mirror_neuron, :native_sdk_grpc_client)
+    System.put_env("MN_NATIVE_SDK_GRPC_TARGET", "127.0.0.1:55052")
+    parent = self()
+
+    try do
+      Application.put_env(:mirror_neuron, :native_sdk_grpc_client, fn _, request, _ ->
+        attrs = Jason.decode!(request.resource_json)
+        send(parent, {:backup_python, attrs})
+
+        {:ok,
+         %Mirrorneuron.Cluster.V1.SetResourceResponse{
+           resource_json: "{\"status\":\"ready\"}",
+           version: 1
+         }}
+      end)
+
+      for action <- ["export_hostlocal_wheels", "inspect_hostlocal_python"] do
+        assert {:ok, %{"status" => "ready"}} =
+                 ModelServices.prepare_runtime_model(%{
+                   "purpose" => "job_backup",
+                   "action" => action
+                 })
+
+        assert_receive {:backup_python, attrs}
+        refute Map.has_key?(attrs, "model")
+        refute Map.has_key?(attrs, "runtime_model")
+      end
+
+      assert {:error, "unsupported job backup Python request"} =
+               ModelServices.prepare_runtime_model(%{
+                 "purpose" => "job_backup",
+                 "action" => "pull"
+               })
+
+      refute_receive {:backup_python, _}
+    after
+      restore_env("MN_NATIVE_SDK_GRPC_TARGET", previous)
+      restore_app_env(:native_sdk_grpc_client, previous_client)
+    end
+  end
+
   test "DockerWorker preparation and cleanup forward to the node-local SDK gRPC service" do
     previous = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
 
