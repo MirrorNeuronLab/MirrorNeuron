@@ -497,6 +497,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     |> Map.merge(extra_env(config))
     |> Map.merge(MirrorNeuron.Runner.WorkflowEnvironment.from_options(opts))
     |> Map.put("MN_EXECUTION_NODE", to_string(Node.self()))
+    |> MirrorNeuron.Runner.ContextEnvironment.bind()
   end
 
   defp cleanup_remote_dir?(config) do

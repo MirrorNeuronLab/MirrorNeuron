@@ -450,3 +450,11 @@ HostLocal wheel capture and platform inspection use the existing native
 `PrepareRuntimeModel` transport with `purpose=job_backup`. Core forwards these
 Python requests without selecting a default model; the native SDK/CLI owns
 execution-platform wheel builds and fresh offline virtual environments.
+
+## Execution-node context service binding
+
+DockerWorker binds Membrane endpoint, authentication, observability and serving
+counter settings from the execution node as one service configuration before
+launch. A submitter's credential cannot authenticate a different node's service.
+Missing execution-node endpoint/authentication fails before dispatch. Secrets
+stay in the trusted runner environment and are excluded from diagnostic output.
