@@ -276,6 +276,9 @@ for deployment and replay boundaries.
 
 Membrane keeps complete runtime text and durable receipts as Markdown, with
 one disposable DuckDB index per job. It does not schedule tools or change the workflow DAG.
+The development Compose template also publishes authenticated Membrane gRPC
+on `127.0.0.1:${MN_CONTEXT_HOST_PORT:-50052}` for host-native SDK responders;
+Docker clients retain the internal service address.
 Read [Context memory and compression](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/context-memory.md)
 for that contract.
 

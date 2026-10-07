@@ -114,6 +114,8 @@ services:
     restart: unless-stopped
     expose:
       - "50052"
+    ports:
+      - "127.0.0.1:${MN_CONTEXT_HOST_PORT:-50052}:50052"
     environment:
       MN_CONTEXT_ADDR: 0.0.0.0:50052
       MN_CONTEXT_AUTH_TOKEN: ${MN_CONTEXT_AUTH_TOKEN:?Set a trusted runtime token}
