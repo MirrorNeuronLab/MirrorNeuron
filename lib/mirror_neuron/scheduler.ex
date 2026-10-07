@@ -631,7 +631,9 @@ defmodule MirrorNeuron.Scheduler do
   end
 
   defp active_jobs do
-    case RedisStore.list_job_summaries() do
+    # Monitoring summaries deliberately omit placements and allocations.
+    # Admission must read the durable reservations before allocating resources.
+    case RedisStore.list_jobs() do
       {:ok, jobs} -> jobs
       {:error, _reason} -> []
     end

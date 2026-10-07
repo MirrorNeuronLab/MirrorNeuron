@@ -461,6 +461,83 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     RedisStore.delete_job(job_id)
   end
 
+  test "scheduler admission reads durable reservations omitted from monitoring summaries" do
+    alias MirrorNeuron.{Config, Manifest, Scheduler}
+
+    first_port = Config.integer("MN_AUTO_PORT_START", :auto_port_start)
+    job_id = "port-reservation-#{System.unique_integer([:positive])}"
+
+    node = %{
+      "name" => "reservation@lab",
+      "status" => "healthy",
+      "capabilities" => ["cpu"],
+      "hardware" => %{
+        "platform" => %{"os" => "linux"},
+        "cpu" => %{"logical_processors" => 8},
+        "memory" => %{"available_mb" => 16_384},
+        "disk" => %{"available_mb" => 200_000}
+      }
+    }
+
+    {:ok, manifest} =
+      Manifest.load(%{
+        "apiVersion" => "mn.workflow/v1",
+        "kind" => "Workflow",
+        "manifest_version" => "1.0",
+        "graph_id" => "reservation-test",
+        "entrypoints" => ["worker"],
+        "flow" => %{
+          "nodes" => [
+            %{
+              "node_id" => "worker",
+              "agent_type" => "executor",
+              "role" => "root",
+              "resources" => %{
+                "ports" => [%{"label" => "mcp", "port" => "auto", "protocol" => "http"}]
+              }
+            }
+          ],
+          "edges" => []
+        }
+      })
+
+    reservation = %{
+      "status" => "running",
+      "scheduler" => %{
+        "placements" => [
+          %{
+            "agent_id" => "existing",
+            "node" => node["name"],
+            "resources" => %{},
+            "allocations" => %{"ports" => [%{"port" => first_port, "protocol" => "tcp"}]}
+          }
+        ]
+      }
+    }
+
+    for status <- ["running", "paused"] do
+      assert {:ok, _} = RedisStore.persist_job(job_id, Map.put(reservation, "status", status))
+      assert {:ok, summary} = RedisStore.fetch_job_summary(job_id)
+      refute Map.has_key?(summary["scheduler"], "placements")
+      assert {:ok, plan} = Scheduler.plan(manifest, nodes: [node])
+
+      assert get_in(plan, [
+               "placements",
+               Access.at(0),
+               "allocations",
+               "ports",
+               Access.at(0),
+               "port"
+             ]) == first_port + 1
+    end
+
+    assert {:ok, _} = RedisStore.persist_job(job_id, Map.put(reservation, "status", "completed"))
+    assert {:ok, plan} = Scheduler.plan(manifest, nodes: [node])
+
+    assert get_in(plan, ["placements", Access.at(0), "allocations", "ports", Access.at(0), "port"]) ==
+             first_port
+  end
+
   test "job projections update monitoring without rewriting the durable snapshot", %{
     namespace: namespace
   } do

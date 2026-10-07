@@ -42,6 +42,10 @@ and desktop presentation are separate contracts consumed by Core.
 
 ## Public Surfaces
 
+Scheduling admission reads durable execution records to account for active and
+paused resource reservations. Compact monitoring summaries omit placements and
+must not be used to decide which ports, devices, or capacity are available.
+
 - `MirrorNeuron`: in-process job, deployment, schedule, cluster, inspection,
   backup, and control facade.
 - `lib/mirror_neuron_grpc/` with `proto/*.proto`: remote control,
