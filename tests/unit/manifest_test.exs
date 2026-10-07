@@ -1139,6 +1139,34 @@ defmodule MirrorNeuron.ManifestTest do
 
     assert {:ok, _manifest} = Manifest.load(arbitrary_contract)
 
+    asynchronous_read =
+      put_in(
+        base,
+        ["response_service", "agent", "tools", "user", "navigate_to_zone", "effect"],
+        "read"
+      )
+
+    assert {:ok, _manifest} = Manifest.load(asynchronous_read)
+
+    for invalid_read <- [
+          update_in(asynchronous_read, ["response_service", "agent", "tools", "user"], fn tools ->
+            Map.delete(tools, "navigate_to_zone")
+          end),
+          put_in(
+            asynchronous_read,
+            ["response_service", "agent", "operations", "navigate_to_zone", "poll_tool"],
+            "undeclared_poll"
+          ),
+          put_in(
+            asynchronous_read,
+            ["response_service", "agent", "operations", "navigate_to_zone", "poll_argument"],
+            "undeclared_argument"
+          )
+        ] do
+      assert {:error, errors} = Manifest.load(invalid_read)
+      assert Enum.any?(errors, &String.contains?(&1, "operations"))
+    end
+
     undeclared_preflight_effect =
       put_in(
         with_preflight,

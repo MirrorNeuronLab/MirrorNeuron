@@ -904,15 +904,13 @@ defmodule MirrorNeuron.Manifest do
     Enum.flat_map(operations, fn {tool_name, operation} ->
       expected = MapSet.new(~w(id_field poll_tool poll_argument poll_interval_ms timeout_seconds))
 
-      effectful_tool =
-        nonempty_string?(get_in(user_tools, [tool_name, "effect"])) and
-          get_in(user_tools, [tool_name, "effect"]) != "read"
+      declared_tool = nonempty_string?(get_in(user_tools, [tool_name, "effect"]))
 
       poll_tool = if is_map(operation), do: operation["poll_tool"], else: nil
       poll_arguments = get_in(internal_tools, [poll_tool, "arguments"]) || %{}
 
       valid =
-        effectful_tool and is_map(operation) and MapSet.new(Map.keys(operation)) == expected and
+        declared_tool and is_map(operation) and MapSet.new(Map.keys(operation)) == expected and
           Map.has_key?(internal_tools, poll_tool) and nonempty_string?(operation["id_field"]) and
           nonempty_string?(operation["poll_argument"]) and
           Map.has_key?(poll_arguments, operation["poll_argument"]) and
@@ -923,7 +921,7 @@ defmodule MirrorNeuron.Manifest do
       if valid,
         do: [],
         else: [
-          "response_service.agent operations must correlate declared effectful tools with internal polling tools"
+          "response_service.agent operations must correlate declared user tools with internal polling tools"
         ]
     end)
   end

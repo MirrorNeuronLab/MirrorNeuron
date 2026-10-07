@@ -104,6 +104,9 @@ literal `{"enabled": true}` or include one validated bounded MCP agent. That
 agent may declare an optional live read preflight for selected effects; the
 preflight must name a declared read tool, match its arguments exactly, and
 require only scalar result fields.
+Operations may correlate any declared user tool, including asynchronous reads,
+with a declared internal polling tool. Read operations retain their read effect;
+polling arguments, intervals, and deadlines remain validated and bounded.
 Core starts it asynchronously on the owner node, routes bounded unary queries
 to that owner, retries failed or degraded warm-ups with bounded backoff, and
 stops it for archive, reset, deletion, and definition replacement. Response
