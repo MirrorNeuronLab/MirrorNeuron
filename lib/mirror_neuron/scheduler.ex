@@ -10,6 +10,7 @@ defmodule MirrorNeuron.Scheduler do
   alias MirrorNeuron.Resource
   alias MirrorNeuron.ResourceSpec
   alias MirrorNeuron.Scheduler.ResourceInference
+  alias MirrorNeuron.Scheduler.AdmissionProblem
   alias MirrorNeuron.ServiceRegistry
   alias MirrorNeuron.ServiceSpec
 
@@ -475,6 +476,10 @@ defmodule MirrorNeuron.Scheduler do
 
     %{
       "name" => name,
+      "display_name" =>
+        map_get(node, "display_name") ||
+          get_in(hardware, ["platform", "display_name"]) ||
+          get_in(hardware, ["platform", "hostname"]),
       "status" => status,
       "scheduling_eligible" => scheduling_eligible,
       "coordination_store" => stringify_map(node_coordination_store || %{}),
@@ -1219,7 +1224,44 @@ defmodule MirrorNeuron.Scheduler do
 
     requirement_text = demand_requirement_text(demand)
 
-    "agent #{demand["agent_id"]}#{requirement_text} has no eligible node (#{Enum.join(reasons, "; ")})"
+    "agent #{demand["agent_id"]}#{requirement_text} has no eligible node (#{Enum.join(reasons, "; ")})" <>
+      AdmissionProblem.encode(admission_blockers(demand, nodes, usage, service_instances))
+  end
+
+  defp admission_blockers(demand, nodes, usage, service_instances) do
+    nodes
+    |> Enum.sort_by(& &1["name"])
+    |> Enum.with_index(1)
+    |> Enum.flat_map(fn {node, index} ->
+      used = usage_for_node(usage, node["name"]) |> normalize_usage()
+
+      cond do
+        not constraints_match?(demand["constraints"], node) ->
+          []
+
+        not schedulable_node?(node) ->
+          code =
+            if node["coordination_store_rejection"],
+              do: "MN_PLACEMENT_UNSATISFIED",
+              else: "MN_SCHEDULING_UNAVAILABLE"
+
+          [AdmissionProblem.blocker(code, node, index)]
+
+        not profile_match?(demand["profile"], node) or
+            not service_requirements_match?(demand, node, service_instances) ->
+          [AdmissionProblem.blocker("MN_PLACEMENT_UNSATISFIED", node, index)]
+
+        true ->
+          AdmissionProblem.allocation_blockers(
+            fit_allocation(node, used, demand),
+            node,
+            used,
+            demand,
+            index,
+            &device_matches?/2
+          )
+      end
+    end)
   end
 
   defp demand_requirement_text(%{"placement_requirements" => %{"models" => models}})

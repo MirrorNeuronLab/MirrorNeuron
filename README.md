@@ -458,3 +458,10 @@ counter settings from the execution node as one service configuration before
 launch. A submitter's credential cannot authenticate a different node's service.
 Missing execution-node endpoint/authentication fails before dispatch. Secrets
 stay in the trusted runner environment and are excluded from diagnostic output.
+
+
+Run placement failures expose bounded measured resource blockers to the SDK.
+With updated Core and SDK services, callers receive the existing problem codes
+(for example `MN_GPU_MEMORY_UNAVAILABLE` / `2001`), a friendly PC name, free
+memory versus required memory, and safe remediation. Admission requirements are
+unchanged. See [SPEC.md](SPEC.md) for the versioned admission detail contract.

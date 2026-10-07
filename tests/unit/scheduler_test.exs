@@ -1609,6 +1609,61 @@ defmodule MirrorNeuron.SchedulerTest do
     assert [%{"node" => "cuda@lab"}] = plan["placements"]
   end
 
+  test "device memory rejection reports measured admission blockers without lowering requirements" do
+    {:ok, manifest} =
+      load_manifest(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "memory-admission",
+        "entrypoints" => ["worker"],
+        "nodes" => [
+          %{
+            "node_id" => "worker",
+            "agent_type" => "executor",
+            "role" => "root",
+            "resources" => %{
+              "devices" => [
+                %{
+                  "kind" => "gpu",
+                  "vendor" => "nvidia",
+                  "driver" => "cuda",
+                  "min_memory_mb" => 49_152
+                }
+              ]
+            }
+          }
+        ],
+        "edges" => []
+      })
+
+    node = h100_node() |> Map.put("display_name", "spark")
+
+    node =
+      update_in(node, ["hardware", "gpu"], fn devices ->
+        Enum.map(devices, &Map.put(&1, "memory_free_mb", 8192))
+      end)
+
+    assert {:error, reason} = Scheduler.plan(manifest, nodes: [node], jobs: [])
+    assert reason =~ "placement_failed:"
+    [_, payload] = String.split(reason, "\nmn_admission_v1:")
+
+    assert %{
+             "blockers" => [
+               %{
+                 "code" => "MN_GPU_MEMORY_UNAVAILABLE",
+                 "node_label" => "spark",
+                 "required" => 48.0,
+                 "available" => 8.0,
+                 "unit" => "GiB",
+                 "resource" => "gpu_memory_free_mb",
+                 "operator" => ">="
+               }
+             ]
+           } = Jason.decode!(payload)
+
+    refute payload =~ "h100@lab"
+    assert {:ok, _} = Scheduler.plan(manifest, nodes: [h100_node()], jobs: [])
+  end
+
   test "strict CUDA API and GPU memory device requirements filter placement" do
     {:ok, manifest} =
       load_manifest(%{
@@ -1646,6 +1701,7 @@ defmodule MirrorNeuron.SchedulerTest do
              )
 
     assert exact_cuda_reason =~ "devices, ports, volumes, or runtime driver not available"
+    refute exact_cuda_reason =~ "MN_GPU_MEMORY_UNAVAILABLE"
 
     assert {:error, exact_memory_reason} =
              Scheduler.plan(
@@ -1655,6 +1711,8 @@ defmodule MirrorNeuron.SchedulerTest do
              )
 
     assert exact_memory_reason =~ "devices, ports, volumes, or runtime driver not available"
+    assert exact_memory_reason =~ "MN_GPU_MEMORY_UNAVAILABLE"
+    assert exact_memory_reason =~ ~s("operator":">")
 
     assert {:error, split_memory_reason} =
              Scheduler.plan(manifest,

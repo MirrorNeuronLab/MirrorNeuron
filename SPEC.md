@@ -273,6 +273,16 @@ call must preserve the public result of the same local operation.
 Scheduling and admission consider declared CPU, memory, GPU, services, models,
 node state, and execution profiles. Lack of an admissible placement returns an
 actionable failure; it does not bypass requirements.
+Placement rejection details append `\nmn_admission_v1:` followed by bounded JSON
+with at most 100 measured blockers and a `truncated` boolean when capped. Each blocker contains a symbolic SDK code,
+one-based snapshot node index, optional validated friendly `node_label`, and
+when known `resource`, `available`, `required`, `unit`, and comparison `operator`.
+Free GPU memory is measured on otherwise compatible, unreserved devices using
+the same scheduler matching predicate. CPU/GPU reservations are capacity errors;
+missing hardware retains its hardware error identity. Core supplies facts; the
+SDK owns numeric problem codes, safe messages, and remediation hints. The
+existing rejection prefix and protobuf shapes remain compatible, and admission
+never lowers a requirement to produce better diagnostics.
 Federation handshakes advertise the owner's complete hardware profile. Resource
 reports preserve both direct scheduler eligibility and the separate federated
 owner eligibility facts, so submitters can validate a remote owner without
