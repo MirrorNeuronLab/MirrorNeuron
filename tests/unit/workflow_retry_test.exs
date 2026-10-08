@@ -1,7 +1,95 @@
 defmodule MirrorNeuron.Runtime.WorkflowRetryTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
   alias MirrorNeuron.{Manifest, Message}
+  alias MirrorNeuron.Artifacts.StagedArtifact
   alias MirrorNeuron.Runtime.{RunRetry, WorkflowLedger, WorkflowRetry, RunClock}
+
+  @tag :tmp_dir
+  test "retry reopens dependency skips after checkpoint outputs are externalized", %{
+    tmp_dir: root
+  } do
+    previous = System.get_env("MN_SHARED_STORAGE_ROOT")
+    System.put_env("MN_SHARED_STORAGE_ROOT", root)
+
+    on_exit(fn ->
+      if previous,
+        do: System.put_env("MN_SHARED_STORAGE_ROOT", previous),
+        else: System.delete_env("MN_SHARED_STORAGE_ROOT")
+    end)
+
+    manifest = %{
+      "metadata" => %{
+        "mn_storage" => %{
+          "submission_id" => "retry-skip",
+          "submission_path" => Path.join([root, "submissions", "retry-skip"])
+        }
+      }
+    }
+
+    ledger = %{
+      "enabled" => true,
+      "schema_version" => 3,
+      "run_id" => "retry-skip-run",
+      "step_order" => ["index", "investigate", "report", "unselected"],
+      "steps" => %{
+        "index" => %{"id" => "index", "status" => "failed"},
+        "investigate" => %{
+          "id" => "investigate",
+          "status" => "skipped",
+          "needs" => ["index"],
+          "output" => %{"reason" => "trigger rule cannot be satisfied"}
+        },
+        "report" => %{
+          "id" => "report",
+          "status" => "skipped",
+          "needs" => ["investigate"],
+          "output" => %{"reason" => "trigger rule cannot be satisfied"}
+        },
+        "unselected" => %{
+          "id" => "unselected",
+          "status" => "skipped",
+          "output" => %{"reason" => "branch not selected"}
+        }
+      }
+    }
+
+    checkpoint = WorkflowLedger.persistable_snapshot(ledger, manifest)
+    refute Map.has_key?(checkpoint["steps"]["investigate"], "output")
+    assert StagedArtifact.ref?(checkpoint["steps"]["investigate"]["output_ref"])
+    assert WorkflowRetry.preserved(checkpoint) == ["unselected"]
+    assert WorkflowRetry.unfinished(checkpoint) == ["index", "investigate", "report"]
+
+    assert {:ok, restored} = WorkflowRetry.restore(checkpoint, "now")
+    assert restored["steps"]["investigate"]["status"] == "pending"
+    assert restored["steps"]["report"]["status"] == "pending"
+    assert restored["steps"]["unselected"] == checkpoint["steps"]["unselected"]
+
+    reference = checkpoint["steps"]["investigate"]["output_ref"]
+
+    wrapped =
+      checkpoint
+      |> update_in(["steps", "investigate"], fn step ->
+        step
+        |> Map.delete("output_ref")
+        |> Map.put("output", %{StagedArtifact.output_key() => reference})
+      end)
+
+    assert {:ok, restored} = WorkflowRetry.restore(wrapped, "now")
+    assert restored["steps"]["investigate"]["status"] == "pending"
+
+    target = Path.join([root, "submissions", "retry-skip", reference["relative_path"]])
+    File.write!(target, "{}")
+
+    assert_raise StagedArtifact.IntegrityError, fn ->
+      WorkflowRetry.restore(checkpoint, "now")
+    end
+
+    File.rm!(target)
+
+    assert_raise StagedArtifact.NotReadyError, fn ->
+      WorkflowRetry.restore(checkpoint, "now")
+    end
+  end
 
   test "retains completed branches and graph state and resets unfinished attempts" do
     completed = %{"id" => "done", "status" => "completed", "output" => %{"answer" => 42}}

@@ -406,6 +406,9 @@ bundles, corrupt artifacts, reset job data, active cleanup and uncertain externa
 effects block dispatch with a reason. Executor/module replay requires a declared
 idempotency contract or a verified artifact handoff receipt; uncertain dispatches
 remain blocked. Logical effect keys survive retry while delivery IDs change.
+Dependency skips caused by a failed predecessor reopen on retry. Their reasons
+are read from verified checkpoint output artifacts as well as inline outputs;
+intentional branch skips and mapped-work placeholders remain preserved.
 
 Only explicitly supplied fields declared in manifest metadata
 `run_retry.configuration_fields` may change. Fields declare `type: integer`

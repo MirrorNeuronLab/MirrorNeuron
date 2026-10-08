@@ -629,6 +629,9 @@ wall-clock estimates. No new gRPC method or protobuf fields are required.
   Unfinished steps restart from retained inputs; internal progress is restored
   only by declared durable domain contracts. Arbitrary process state is excluded.
   Missing boundaries or uncertain external effects block dispatch.
+  Downstream steps skipped because a dependency could not succeed reopen on
+  retry. Classification resolves and verifies staged skip outputs; missing or
+  corrupt artifacts block retry. Intentional branch skips remain preserved.
 - Accepted retry preserves job/run identity, increments attempt and lease epoch,
   clears current terminal output references and records failure, selected
   checkpoint, explicit changes and outcome in attempt history. Redis writes and

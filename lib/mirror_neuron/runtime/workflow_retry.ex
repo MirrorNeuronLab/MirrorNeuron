@@ -1,6 +1,6 @@
 defmodule MirrorNeuron.Runtime.WorkflowRetry do
-  @moduledoc "Pure restoration of logical workflow boundaries, never process snapshots."
-  @successful ~w(completed partial skipped)
+  @moduledoc "Restoration of verified logical workflow boundaries, never process snapshots."
+  alias MirrorNeuron.Artifacts.StagedArtifact
 
   def restore(%{"enabled" => true, "schema_version" => 3, "steps" => steps} = ledger, now)
       when is_map(steps) do
@@ -56,10 +56,22 @@ defmodule MirrorNeuron.Runtime.WorkflowRetry do
       end) and is_map(ledger["child_workflows"] || %{})
   end
 
-  defp preserved_step?(step) do
-    step["status"] in @successful and
-      get_in(step, ["output", "reason"]) != "trigger rule cannot be satisfied"
+  defp preserved_step?(%{"status" => "skipped"} = step) do
+    output =
+      case step["output"] do
+        nil ->
+          if StagedArtifact.ref?(step["output_ref"]),
+            do: StagedArtifact.resolve!(step["output_ref"], timeout_ms: 0),
+            else: %{}
+
+        value ->
+          StagedArtifact.resolve_output!(value, timeout_ms: 0)
+      end
+
+    output["reason"] != "trigger rule cannot be satisfied"
   end
+
+  defp preserved_step?(step), do: step["status"] in ~w(completed partial)
 
   defp select(ledger, predicate) do
     Enum.filter(Map.get(ledger, "step_order", []), fn id -> predicate.(ledger["steps"][id]) end)
