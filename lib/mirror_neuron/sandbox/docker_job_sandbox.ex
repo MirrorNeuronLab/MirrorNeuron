@@ -36,18 +36,34 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
   defp prepared_sandbox(job_id, image, config) do
     case prepared_container_name(config) do
       name when is_binary(name) and name != "" ->
-        {:ok,
-         %{
-           "container_name" => name,
-           "image" => image,
-           "workdir_root" => @container_root
-         }}
+        with {:ok, state} <-
+               docker_cmd(["inspect", "--format", "{{.State.Status}}", name], config),
+             :ok <- ensure_running(String.trim(state), name, config) do
+          {:ok,
+           %{
+             "container_name" => name,
+             "image" => image,
+             "workdir_root" => @container_root
+           }}
+        end
 
       _ ->
         {:error,
          "docker_worker sandbox for job #{job_id} is not prepared; prepare DockerWorker resources with mn-python-sdk/API/CLI and provide docker_worker_container_name or MN_DOCKER_WORKER_CONTAINER_NAME"}
     end
   end
+
+  defp ensure_running("running", _name, _config), do: :ok
+
+  defp ensure_running(state, name, config) when state in ["created", "exited"] do
+    case docker_cmd(["start", name], config) do
+      {:ok, _output} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp ensure_running(state, _name, _config),
+    do: {:error, "docker_worker prepared container is not ready (state: #{state})"}
 
   defp prepared_container_name(config) do
     env = config_env(config)

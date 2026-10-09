@@ -29,22 +29,27 @@ defmodule MirrorNeuron.NativeResourceBoundaryTest do
     assert reason =~ "mn-python-sdk/API/CLI"
   end
 
-  test "DockerWorker sandbox consumes an SDK-prepared container name" do
+  @tag :tmp_dir
+  test "DockerWorker sandbox consumes an SDK-prepared container name", %{tmp_dir: tmp_dir} do
     assert {:ok, sandbox} =
              DockerJobSandbox.ensure("job-boundary", "worker:latest", %{
-               "docker_worker_container_name" => "mn-prepared-worker"
+               "docker_worker_container_name" => "mn-prepared-worker",
+               "docker_bin" => running_docker(tmp_dir)
              })
 
     assert sandbox["container_name"] == "mn-prepared-worker"
     assert sandbox["image"] == "worker:latest"
   end
 
-  test "SDK-prepared DockerWorker does not create a Core-owned sandbox process" do
+  @tag :tmp_dir
+  test "SDK-prepared DockerWorker does not create a Core-owned sandbox process", %{
+    tmp_dir: tmp_dir
+  } do
     job_id = "prepared-boundary-#{System.unique_integer([:positive])}"
 
     config = %{
       "docker_worker_container_name" => "mn-compose-worker",
-      "docker_bin" => "/does/not/exist"
+      "docker_bin" => running_docker(tmp_dir)
     }
 
     assert {:ok, sandbox} = DockerJobSandbox.ensure(job_id, "worker:latest", config)
@@ -137,5 +142,12 @@ defmodule MirrorNeuron.NativeResourceBoundaryTest do
              )
 
     assert reason =~ "docker_worker image build is owned by mn-python-sdk"
+  end
+
+  defp running_docker(tmp_dir) do
+    path = Path.join(tmp_dir, "running-docker")
+    File.write!(path, "#!/bin/sh\necho running\n")
+    File.chmod!(path, 0o755)
+    path
   end
 end

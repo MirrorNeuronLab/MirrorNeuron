@@ -247,6 +247,11 @@ and [CLI reference](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/cli.md)
 | --- | --- |
 | **HostLocal** | Runs trusted worker code directly in the host execution environment. |
 | **DockerWorker** | Runs prepared commands in Docker containers; image, mounts, environment, and network access remain part of the contract. |
+
+DockerWorker starts a stopped prepared container in place when a run uses it
+after runtime shutdown. It leaves running containers untouched and fails before
+dispatch when the prepared container is missing or paused; image preparation
+and replacement remain owned by the SDK.
 | **OpenShell** | Runs workers in a sandbox governed by explicit policy, uploads, and network access. |
 
 Redis is the durable coordination store. Recovery can replay eligible work;

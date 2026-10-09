@@ -214,6 +214,11 @@ DockerWorker uses Python 3 in its prepared worker image to supervise a separate
 process group per invocation. Owner loss, timeout and cancellation reap that
 group and its invocation workspace; they never remove or restart the shared
 prepared container. Failed command cleanup retains live ownership for retry.
+Before dispatch, DockerWorker verifies the exact definition-owned prepared
+container. A container stopped by runtime shutdown is started in place; a
+running container is left untouched. Missing, paused, or otherwise unavailable
+containers fail before command execution. Core never rebuilds or replaces a
+prepared container during this check.
 Idempotency records are owned by a supervised runtime process rather than an
 individual gRPC request process. An identical keyed Job, Run, or schedule
 request therefore replays the original result after its first request handler

@@ -55,7 +55,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     tmp_dir: tmp_dir
   } do
     fake_docker = Path.join(tmp_dir, "missing-python")
-    File.write!(fake_docker, "#!/bin/sh\necho 'python3 not found'\nexit 127\n")
+    write_prepared_docker(fake_docker, "#!/bin/sh\necho 'python3 not found'\nexit 127\n")
     File.chmod!(fake_docker, 0o755)
 
     assert {:error, reason} =
@@ -80,7 +80,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     fake_docker = Path.join(tmp_dir, "fake-docker")
     args_log = Path.join(tmp_dir, "args.log")
 
-    File.write!(fake_docker, """
+    write_prepared_docker(fake_docker, """
     #!/usr/bin/env bash
     printf '%s\\n' "$@" >> #{args_log}
     printf -- '---\\n' >> #{args_log}
@@ -164,7 +164,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     fake_docker = Path.join(tmp_dir, "fake-docker-prepared")
     args_log = Path.join(tmp_dir, "prepared-args.log")
 
-    File.write!(fake_docker, """
+    write_prepared_docker(fake_docker, """
     #!/usr/bin/env bash
     printf '%s\\n' "$@" >> #{args_log}
     printf -- '---\\n' >> #{args_log}
@@ -207,7 +207,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     fake_docker = Path.join(tmp_dir, "fake-docker-model-endpoint")
     args_log = Path.join(tmp_dir, "model-endpoint-args.log")
 
-    File.write!(fake_docker, """
+    write_prepared_docker(fake_docker, """
     #!/usr/bin/env bash
     printf '%s\\n' "$@" >> #{args_log}
     printf -- '---\\n' >> #{args_log}
@@ -263,7 +263,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     fake_docker = Path.join(tmp_dir, "fake-docker-managed-model")
     args_log = Path.join(tmp_dir, "managed-model-args.log")
 
-    File.write!(fake_docker, """
+    write_prepared_docker(fake_docker, """
     #!/usr/bin/env bash
     printf '%s\\n' "$@" >> #{args_log}
     printf -- '---\\n' >> #{args_log}
@@ -337,7 +337,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     fake_docker = Path.join(tmp_dir, "fake-docker-node-runtime-model")
     args_log = Path.join(tmp_dir, "node-runtime-model-args.log")
 
-    File.write!(fake_docker, """
+    write_prepared_docker(fake_docker, """
     #!/usr/bin/env bash
     printf '%s\\n' "$@" >> #{args_log}
     printf -- '---\\n' >> #{args_log}
@@ -404,7 +404,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
         else: System.put_env("MN_RUNTIME_SHARED_STORAGE_ROOT", previous_runtime_shared_root)
     end)
 
-    File.write!(fake_docker, """
+    write_prepared_docker(fake_docker, """
     #!/usr/bin/env bash
     printf '%s\\n' "$@" >> #{args_log}
     printf -- '---\\n' >> #{args_log}
@@ -470,7 +470,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     fake_docker = Path.join(tmp_dir, "fake-docker-reuse")
     args_log = Path.join(tmp_dir, "reuse-args.log")
 
-    File.write!(fake_docker, """
+    write_prepared_docker(fake_docker, """
     #!/usr/bin/env bash
     printf '%s\\n' "$@" >> #{args_log}
     printf -- '---\\n' >> #{args_log}
@@ -527,7 +527,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     fake_docker = Path.join(tmp_dir, "fake-docker-orphan-cleanup")
     args_log = Path.join(tmp_dir, "orphan-cleanup-args.log")
 
-    File.write!(fake_docker, """
+    write_prepared_docker(fake_docker, """
     #!/usr/bin/env bash
     printf '%s\n' "$@" >> #{args_log}
     printf -- '---\n' >> #{args_log}
@@ -552,7 +552,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     fake_docker = Path.join(tmp_dir, "fake-docker-cleanup-retry")
     job_id = "job-cleanup-retry"
 
-    File.write!(fake_docker, """
+    write_prepared_docker(fake_docker, """
     #!/usr/bin/env bash
     exit 0
     """)
@@ -575,7 +575,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     File.mkdir_p!(docker_worker_dir)
     File.write!(Path.join(docker_worker_dir, "Dockerfile"), "FROM scratch\n")
 
-    File.write!(fake_docker, """
+    write_prepared_docker(fake_docker, """
     #!/usr/bin/env bash
     if [ "$1" = "build" ]; then
       printf 'very long build prelude '
@@ -615,7 +615,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     File.mkdir_p!(docker_worker_dir)
     File.write!(Path.join(docker_worker_dir, "Dockerfile"), "FROM scratch\n")
 
-    File.write!(fake_docker, """
+    write_prepared_docker(fake_docker, """
     #!/usr/bin/env bash
     if [ "$1" = "build" ]; then
       printf '%s' "${DOCKER_BUILDKIT:-unset}" > #{buildkit_log}
@@ -667,7 +667,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     File.write!(Path.join(docker_worker_dir, "Dockerfile"), "FROM scratch\n")
     File.write!(Path.join(support_skill_dir, "marker.txt"), "local skill")
 
-    File.write!(fake_docker, """
+    write_prepared_docker(fake_docker, """
     #!/usr/bin/env bash
     if [ "$1" = "build" ]; then
       context="${@: -1}"
@@ -730,7 +730,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
       "[project]\nname='mirrorneuron-python-sdk'\n"
     )
 
-    File.write!(fake_docker, """
+    write_prepared_docker(fake_docker, """
     #!/usr/bin/env bash
     if [ "$1" = "build" ]; then
       context="${@: -1}"
@@ -773,6 +773,21 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
              )
 
     assert reason =~ "docker_worker image build is owned by mn-python-sdk/API/CLI"
+  end
+
+  # These fixtures represent already-running SDK-prepared containers. Tests for
+  # stopped and missing containers live at the sandbox lifecycle boundary.
+  defp write_prepared_docker(path, script) do
+    [shebang, body] = String.split(script, "\n", parts: 2)
+
+    File.write!(path, """
+    #{shebang}
+    if [ "$1" = "inspect" ] && [ "$3" = "{{.State.Status}}" ]; then
+      echo running
+      exit 0
+    fi
+    #{body}
+    """)
   end
 
   defp cleanup_docker_job_on_exit(job_id, fake_docker) do
