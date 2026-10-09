@@ -33,6 +33,10 @@ defmodule MirrorNeuron.Runtime.JobResponseReconciler do
     {:noreply, state}
   end
 
+  # Native gRPC clients can leave transport lifecycle notifications in their
+  # caller's mailbox. They do not change reconciliation state or its schedule.
+  def handle_info(_message, state), do: {:noreply, state}
+
   defp reconcile do
     case StableJob.list(include_archived: true) do
       {:ok, definitions} -> Enum.each(definitions, &JobResponse.ensure_started/1)
