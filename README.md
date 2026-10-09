@@ -117,6 +117,12 @@ stay on one owner Core. Peers exchange authenticated gRPC requests and cached
 job/run summaries; federation does not require shared Redis or a Distributed
 Erlang cluster.
 
+Owner-forwarded Job creation and executable-bundle replacement allow up to two
+minutes to persist payloads and initialize Job data. Metadata-only updates,
+ordinary reads, and connection setup keep the usual 15-second deadline. The
+SDK allows 130 seconds for the corresponding definition submission, including
+the owner's reply, and does not retry creation automatically.
+
 ```text
 CLI / REST API / Web UI
           │

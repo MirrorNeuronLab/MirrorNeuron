@@ -131,6 +131,11 @@ resources are not yet removed. The tombstone is cleared after any reachable
 owner response, preventing later implicit retries of a rejected archive or
 deletion. A confirmed archive immediately updates the submitting Core's
 projection instead of waiting for the next federation sync.
+Owner-forwarded Job creation and bundle replacement use a bounded two-minute
+request deadline for payload persistence and Job data initialization. Ordinary
+reads and metadata-only updates keep the 15-second deadline; connection setup
+is also unchanged. This preserves the same durable definition contract on
+local and remote owners without retrying submission after a timeout.
 Owner-forwarded job and run deletion use a bounded five-minute request deadline
 instead of the ordinary 15-second federation request deadline. Connection
 establishment remains bounded by the ordinary deadline, while confirmed cleanup

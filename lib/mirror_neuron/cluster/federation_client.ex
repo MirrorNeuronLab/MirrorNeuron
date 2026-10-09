@@ -12,6 +12,7 @@ defmodule MirrorNeuron.Cluster.FederationClient do
   @timeout 15_000
   @probe_timeout 2_000
   @job_response_timeout 60_000
+  @job_definition_timeout 120_000
   @destructive_job_timeout 300_000
 
   def call(node_name, function, request) when is_atom(function) do
@@ -151,7 +152,7 @@ defmodule MirrorNeuron.Cluster.FederationClient do
          {:ok, channel} <- connect(target, peer) do
       result =
         try do
-          apply(stub, function, [channel, request, [timeout: request_timeout(function)]])
+          apply(stub, function, [channel, request, [timeout: request_timeout(function, request)]])
         rescue
           error ->
             if availability_failure?(error) do
@@ -180,12 +181,20 @@ defmodule MirrorNeuron.Cluster.FederationClient do
   end
 
   @doc false
-  def request_timeout(:query_job_response), do: @job_response_timeout
+  def request_timeout(function, request \\ nil)
 
-  def request_timeout(function) when function in [:delete_job, :delete_run],
+  def request_timeout(:create_job, _request), do: @job_definition_timeout
+
+  def request_timeout(:update_job, %{manifest_json: manifest})
+      when is_binary(manifest) and manifest != "",
+      do: @job_definition_timeout
+
+  def request_timeout(:query_job_response, _request), do: @job_response_timeout
+
+  def request_timeout(function, _request) when function in [:delete_job, :delete_run],
     do: @destructive_job_timeout
 
-  def request_timeout(_function), do: @timeout
+  def request_timeout(_function, _request), do: @timeout
 
   defp discover_owner(resource_id, function, field, options) do
     peers = Keyword.get(options, :peers, FederationRegistry.list())

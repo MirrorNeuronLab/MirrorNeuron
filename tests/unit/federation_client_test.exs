@@ -2,15 +2,30 @@ defmodule MirrorNeuron.Cluster.FederationClientTest do
   use ExUnit.Case, async: true
 
   alias MirrorNeuron.Cluster.FederationClient
-  alias Mirrorneuron.Job.V1.{JobRequest, RunRequest}
+  alias Mirrorneuron.Job.V1.{CreateJobRequest, JobRequest, RunRequest, UpdateJobRequest}
   alias Mirrorneuron.Observability.V1.EventResponse
 
-  test "uses a bounded extended timeout only for semantic Job responses" do
+  test "uses bounded operation deadlines while preserving short reads" do
     assert FederationClient.request_timeout(:query_job_response) == 60_000
     assert FederationClient.request_timeout(:delete_job) == 300_000
     assert FederationClient.request_timeout(:delete_run) == 300_000
     assert FederationClient.request_timeout(:get_job_response_turn) == 15_000
     assert FederationClient.request_timeout(:get_job) == 15_000
+  end
+
+  test "allows durable definition persistence through one owner forwarding hop" do
+    assert FederationClient.request_timeout(:create_job, %CreateJobRequest{}) == 120_000
+
+    assert FederationClient.request_timeout(:update_job, %UpdateJobRequest{
+             manifest_json: "{}",
+             payloads: %{"worker.py" => "pass"}
+           }) == 120_000
+
+    assert FederationClient.request_timeout(:update_job, %UpdateJobRequest{
+             attrs_json: ~s({"job_name":"renamed"})
+           }) == 15_000
+
+    assert FederationClient.request_timeout(:get_job, %JobRequest{}) == 15_000
   end
 
   test "discovers connected job and run owners without a cached projection" do
