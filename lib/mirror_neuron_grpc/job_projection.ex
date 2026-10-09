@@ -54,6 +54,7 @@ defmodule MirrorNeuron.Grpc.JobProjection do
     |> Map.put("retry", retry_summary(record))
     |> Map.put("job_id", stable_job_id)
     |> Map.put("run_id", resolved_run_id)
+    |> put_run_data_ref(record)
     |> Map.put_new("attempt_id", "#{resolved_run_id}:#{Map.get(record, "attempt", 1)}")
     |> compact_reference("manifest_ref")
   end
@@ -79,6 +80,28 @@ defmodule MirrorNeuron.Grpc.JobProjection do
   end
 
   defp retry_summary(_), do: nil
+
+  defp put_run_data_ref(projected, record) do
+    submission_id = get_in(record, ["manifest", "metadata", "mn_storage", "submission_id"])
+    workflow_run_id = get_in(record, ["workflow_state", "run_id"])
+
+    if safe_component?(submission_id, 220) and safe_component?(workflow_run_id, 128) do
+      Map.put(projected, "run_data_ref", %{
+        "storage" => "syncthing",
+        "submission_id" => submission_id,
+        "run_id" => workflow_run_id
+      })
+    else
+      projected
+    end
+  end
+
+  defp safe_component?(value, limit) when is_binary(value),
+    do:
+      byte_size(value) <= limit and value not in [".", ".."] and
+        Regex.match?(~r/\A[A-Za-z0-9_.-]+\z/, value)
+
+  defp safe_component?(_value, _limit), do: false
 
   def runs(records) when is_list(records), do: Enum.map(records, &run/1)
 

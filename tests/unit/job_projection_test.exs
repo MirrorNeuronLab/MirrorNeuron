@@ -139,6 +139,43 @@ defmodule MirrorNeuron.Grpc.JobProjectionTest do
            )
   end
 
+  test "run data reference binds the physical output identity without private paths" do
+    record = %{
+      "job_id" => "public-run",
+      "stable_job_id" => "job-1",
+      "status" => "running",
+      "manifest" => %{
+        "metadata" => %{
+          "mn_storage" => %{
+            "submission_id" => "job-1-def-abc",
+            "submission_path" => "/private/shared/submissions/job-1-def-abc"
+          }
+        }
+      },
+      "workflow_state" => %{"run_id" => "physical-run", "steps" => %{"private" => "content"}}
+    }
+
+    assert JobProjection.run(record)["run_data_ref"] == %{
+             "storage" => "syncthing",
+             "submission_id" => "job-1-def-abc",
+             "run_id" => "physical-run"
+           }
+
+    for invalid <- [nil, "../other", "/private/path", "..", String.duplicate("x", 221)] do
+      refute Map.has_key?(
+               JobProjection.run(
+                 put_in(record, ["manifest", "metadata", "mn_storage", "submission_id"], invalid)
+               ),
+               "run_data_ref"
+             )
+    end
+
+    refute Map.has_key?(
+             JobProjection.run(put_in(record, ["workflow_state", "run_id"], "../other")),
+             "run_data_ref"
+           )
+  end
+
   test "job projections expose only sanitized response service lifecycle state" do
     definition = %{
       "job_id" => "job-response-1",
@@ -203,7 +240,9 @@ defmodule MirrorNeuron.Grpc.JobProjectionTest do
           "runtime" => %{
             "bindings" => %{
               "prepare" => %{
-                "workers" => [%{"id" => "agent-1", "role" => "research", "env" => %{"KEY" => "secret"}}]
+                "workers" => [
+                  %{"id" => "agent-1", "role" => "research", "env" => %{"KEY" => "secret"}}
+                ]
               }
             }
           }
@@ -213,9 +252,11 @@ defmodule MirrorNeuron.Grpc.JobProjectionTest do
     shape = detail["workflow_definition"]
     assert shape["workflow"]["steps"] == [%{"id" => "prepare", "label" => "Prepare"}]
     assert shape["workflow"]["edges"] == [%{"from" => "prepare", "to" => "finish"}]
+
     assert shape["runtime"]["bindings"]["prepare"]["workers"] == [
              %{"id" => "agent-1", "role" => "research"}
            ]
+
     refute Map.has_key?(detail, "manifest")
   end
 end

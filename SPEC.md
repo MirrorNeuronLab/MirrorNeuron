@@ -613,6 +613,11 @@ these fields through the existing run JSON contract. Queue and pause intervals
 are excluded; an interrupted coordinator session retains observed time and marks
 unobserved recovery gaps incomplete. Historical records are not backfilled with
 wall-clock estimates. No new gRPC method or protobuf fields are required.
+Run projections expose `run_data_ref` with only the prepared submission ID,
+physical workflow run ID and `syncthing` storage identity. This binds numeric
+usage to the public execution while it is active, without exposing manifests,
+host paths, inputs or output content. Missing/invalid identities omit the
+reference; consumers must verify replicated run identity before reading usage.
 
 ## Manual durable checkpoint retry
 
