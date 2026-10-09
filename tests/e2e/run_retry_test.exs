@@ -1,6 +1,7 @@
 defmodule MirrorNeuron.Runtime.RunRetryIntegrationTest do
   use ExUnit.Case, async: false
   alias MirrorNeuron.{Manifest, Message}
+  alias MirrorNeuron.Artifacts.{SharedStorage, StagedArtifact}
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime.{RunRetry, WorkflowLedger}
 
@@ -172,6 +173,42 @@ defmodule MirrorNeuron.Runtime.RunRetryIntegrationTest do
 
     assert {:ok, retained} = RedisStore.fetch_run_checkpoint(ctx.id)
     assert retained == ctx.checkpoint
+  end
+
+  test "a staged dependency skip reopens through the public retry contract", ctx do
+    submission = Path.join([SharedStorage.root(), "submissions", ctx.id])
+
+    {:ok, reference} =
+      StagedArtifact.stage(%{"reason" => "trigger rule cannot be satisfied"},
+        submission_id: ctx.id,
+        submission_path: submission,
+        run_id: ctx.id
+      )
+
+    ledger =
+      ctx.checkpoint["workflow"]
+      |> put_in(["steps", "work", "status"], "skipped")
+      |> put_in(["steps", "work", "output_ref"], reference)
+
+    {:ok, job} = RedisStore.persist_job(ctx.id, Map.put(ctx.job, "workflow_state", ledger))
+    checkpoint = RunRetry.checkpoint(job, ledger)
+    assert :ok = RedisStore.persist_run_checkpoint(ctx.id, checkpoint, 1)
+    on_exit(fn -> File.rm_rf!(submission) end)
+
+    assert {:ok, plan} = RunRetry.plan(ctx.id)
+    assert plan["eligible"]
+    assert plan["preserved_steps"] == ["done"]
+    assert plan["retry_steps"] == ["work"]
+
+    assert {:ok, %{"attempt" => 2}} =
+             RunRetry.submit(ctx.id, %{
+               "expected_attempt" => 1,
+               "checkpoint_revision" => plan["checkpoint_revision"],
+               "idempotency_key" => "retry-staged-skip"
+             })
+
+    assert_receive {:executed, "work", _}, 10000
+    refute_receive {:executed, "done", _}, 100
   end
 
   test "changed immutable inputs and uncertain effects block before dispatch", ctx do
