@@ -83,7 +83,9 @@ defmodule MirrorNeuron.Grpc.JobProjection do
 
   defp put_run_data_ref(projected, record) do
     submission_id = get_in(record, ["manifest", "metadata", "mn_storage", "submission_id"])
-    workflow_run_id = get_in(record, ["workflow_state", "run_id"])
+    # Active records omit the heavy ledger. Older terminal records retain the
+    # same authoritative identity in their ledger instead of this scalar.
+    workflow_run_id = record["workflow_run_id"] || get_in(record, ["workflow_state", "run_id"])
 
     if safe_component?(submission_id, 220) and safe_component?(workflow_run_id, 128) do
       Map.put(projected, "run_data_ref", %{

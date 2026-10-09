@@ -8,6 +8,12 @@ defmodule MirrorNeuron.Runtime.RunRetryIntegrationTest do
   defmodule RetryRunner do
     def run(payload, config, opts) do
       retry = Jason.decode!(config["environment"]["MN_RUN_RETRY_JSON"])
+      {:ok, record} = RedisStore.fetch_job(Keyword.fetch!(opts, :job_id))
+
+      send(
+        :persistent_term.get({__MODULE__, :test}),
+        {:active_identity, record["workflow_run_id"]}
+      )
 
       send(
         :persistent_term.get({__MODULE__, :test}),
@@ -134,6 +140,8 @@ defmodule MirrorNeuron.Runtime.RunRetryIntegrationTest do
     assert {:ok, receipt} = first
     assert second == first
     assert receipt["attempt"] == 2
+    assert_receive {:active_identity, workflow_run_id}, 10000
+    assert workflow_run_id == ctx.checkpoint["workflow"]["run_id"]
 
     assert_receive {:executed, "work",
                     %{"retry_context" => %{"active_since" => anchor, "attempt" => 2}}},
@@ -144,7 +152,11 @@ defmodule MirrorNeuron.Runtime.RunRetryIntegrationTest do
     refute_receive {:executed, "work", _}, 100
     assert {:ok, ^receipt} = RunRetry.submit(ctx.id, request)
     assert_receive {:mirror_neuron_event, %{type: :job_completed}}, 10000
-    assert {:ok, %{"status" => "completed", "attempt" => 2}} = RedisStore.fetch_job(ctx.id)
+
+    assert {:ok, %{"status" => "completed", "attempt" => 2} = completed} =
+             RedisStore.fetch_job(ctx.id)
+
+    assert completed["workflow_run_id"] == ctx.checkpoint["workflow"]["run_id"]
     assert {:ok, retained} = RedisStore.sweep_retention(terminal_job_ttl_seconds: 0)
     refute ctx.id in retained.deleted_jobs
     assert {:ok, _} = RedisStore.fetch_run_checkpoint(ctx.id)

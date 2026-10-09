@@ -161,6 +161,11 @@ defmodule MirrorNeuron.Grpc.JobProjectionTest do
              "run_id" => "physical-run"
            }
 
+    active =
+      record |> Map.put("workflow_state", nil) |> Map.put("workflow_run_id", "physical-run")
+
+    assert JobProjection.run(active)["run_data_ref"] == JobProjection.run(record)["run_data_ref"]
+
     for invalid <- [nil, "../other", "/private/path", "..", String.duplicate("x", 221)] do
       refute Map.has_key?(
                JobProjection.run(

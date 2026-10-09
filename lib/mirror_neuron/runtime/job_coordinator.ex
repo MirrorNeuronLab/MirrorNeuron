@@ -3359,6 +3359,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     %{
       job_id: state.job_id,
       run_id: Keyword.get(state.opts, :run_id, state.job_id),
+      workflow_run_id: WorkflowLedger.run_id(state.workflow_state),
       stable_job_id: Keyword.get(state.opts, :stable_job_id),
       attempt_id: "#{Keyword.get(state.opts, :run_id, state.job_id)}:#{state.attempt}",
       data_generation: Keyword.get(state.opts, :data_generation),
@@ -3456,6 +3457,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       %{
         job_id: state.job_id,
         run_id: Keyword.get(state.opts, :run_id, state.job_id),
+        workflow_run_id: WorkflowLedger.run_id(state.workflow_state),
         stable_job_id: Keyword.get(state.opts, :stable_job_id),
         attempt_id: "#{Keyword.get(state.opts, :run_id, state.job_id)}:#{state.attempt}",
         data_generation: Keyword.get(state.opts, :data_generation),
