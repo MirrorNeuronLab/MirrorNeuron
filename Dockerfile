@@ -37,11 +37,20 @@ RUN test -x /usr/bin/python3.11 \
 # removed in FastAPI 0.140. Keep the proxy on the newest compatible FastAPI
 # line until LiteLLM removes that import.
 RUN python3 -m pip install --no-cache-dir --break-system-packages \
-    "litellm[proxy]>=1.72.0" \
+    "litellm[proxy]==1.100.1" \
     "fastapi>=0.136.3,<0.140" \
     "grpcio>=1.82.1" \
     "protobuf>=7.35.1"
 RUN python3 -c "import grpc; from google.protobuf import runtime_version; runtime_version.ValidateProtobufRuntimeVersion(runtime_version.Domain.PUBLIC, 7, 35, 1, '', 'context.proto')"
+
+# Correct provider usage normalization in the installed library at build time.
+# This preserves reported counts through federated gateway streams; the source
+# hash and real streaming tests prevent an unreviewed upstream change.
+COPY scripts/install_litellm_usage_fix.py /tmp/install_litellm_usage_fix.py
+COPY tests/gateway/test_streaming_usage.py /tmp/test_streaming_usage.py
+RUN python3 /tmp/install_litellm_usage_fix.py \
+    && LITELLM_LOCAL_MODEL_COST_MAP=True python3 /tmp/test_streaming_usage.py \
+    && rm /tmp/install_litellm_usage_fix.py /tmp/test_streaming_usage.py
 
 ARG DOCKER_CLI_VERSION=29.2.1
 RUN set -eux; \

@@ -416,6 +416,15 @@ Rebuilding the Membrane image alone cannot repair missing gateway dependencies.
 The SDK stages and validates the actual RPC bindings when LiteLLM loads its
 callback. This adds no blueprint dependencies or runtime package installation.
 
+The gateway image pins LiteLLM 1.100.1 and applies a hash-checked build-time
+correction to its streaming usage normalization. OpenAI-compatible usage
+objects are converted to LiteLLM's `Usage` before final aggregation, preserving
+provider prompt, completion, reasoning and cache counts across gateway hops.
+This introduces no counting requests or token estimates. Image construction
+runs the installed library against loopback-only synthetic streams with both
+empty and non-empty choices; an upstream source change fails the build and
+requires review. Rebuild the Core/gateway image to deploy this correction.
+
 OpenShell buffers command output until completion, including artifact-handoff
 workers. Its inherited node beacon timeout does not shorten a workflow task
 deadline. Explicit workflow heartbeat controls remain authoritative; otherwise

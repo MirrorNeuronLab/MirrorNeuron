@@ -144,6 +144,13 @@ Local model:   worker → owner LiteLLM → owner Docker Model Runner
 Remote model:  worker → owner LiteLLM → peer LiteLLM → peer Docker Model Runner
 ```
 
+The Core image pins LiteLLM 1.100.1 with a reviewed build-time usage
+normalization correction. Streaming provider counts, including reasoning and
+cache details, survive gateway forwarding without extra counting requests.
+The build verifies the upstream source hash and exercises real streaming
+parsing against a local synthetic server. Rebuild the gateway image after
+upgrading Core source; source sync alone does not change its installed library.
+
 See [Federation architecture](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/cluster_architecture.md)
 and [Model runtime](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/model-runtime.md).
 
