@@ -114,7 +114,11 @@ polling arguments, intervals, and deadlines remain validated and bounded.
 Core starts it asynchronously on the owner node, routes bounded unary queries
 to that owner, retries failed or degraded warm-ups with bounded backoff, and
 stops it for archive, reset, deletion, and definition replacement. Response
-queries never create Runs. Archive and confirmed deletion force-detach a
+command failures also re-warm the same definition with one pending retry per
+Job, recovering engines lost during native responder restarts. Failed queries
+and their effects are not replayed; the caller may explicitly retry after
+recovery. Successful degraded semantic answers do not trigger this recovery.
+Response queries never create Runs. Archive and confirmed deletion force-detach a
 responder when its native shutdown is stalled, allowing the lifecycle change to
 complete while native cleanup continues in the background. Reset retains strict
 shutdown behavior because it immediately reuses the same job data.

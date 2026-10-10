@@ -160,6 +160,81 @@ defmodule MirrorNeuron.Runtime.JobResponseTest do
                     %{"operation" => "stop", "job_id" => ^job_id, "force" => true}, 5_000}
   end
 
+  test "command failures recover a restarted native responder without replaying queries" do
+    job_id = "job-response-native-restart-#{System.unique_integer([:positive])}"
+    definition = response_definition(job_id)
+    assert :ok = JobResponse.ensure_started(definition)
+    assert_receive {:job_response_command, %{"operation" => "start", "job_id" => ^job_id}}
+    assert %{state: "ready"} = await_state(job_id, "ready")
+    [{pid, _}] = Registry.lookup(MirrorNeuron.Runtime.JobResponseRegistry, job_id)
+
+    # Multiple queries may discover the same missing native engine. One owner
+    # retry restores that engine; it never resends a question or effect.
+    GenServer.cast(pid, {:query_result, "degraded", "response_failed"})
+    first = :sys.get_state(pid)
+    GenServer.cast(pid, {:query_result, "degraded", "native_unavailable"})
+    second = :sys.get_state(pid)
+    assert is_reference(first.warm_timer)
+    assert second.warm_timer == first.warm_timer
+    assert second.retry_ms == 2_000
+
+    assert_receive {:job_response_command,
+                    %{"operation" => "start", "job_id" => ^job_id, "revision" => 1}},
+                   2_000
+
+    assert %{state: "ready"} = await_state(job_id, "ready")
+    assert :sys.get_state(pid).warm_timer == nil
+    assert :sys.get_state(pid).retry_ms == 1_000
+    refute_receive {:job_response_command, %{"operation" => "query"}}, 50
+    assert :ok = JobResponse.stop(definition)
+  end
+
+  test "a degraded semantic answer does not schedule native recovery" do
+    job_id = "job-response-semantic-degraded-#{System.unique_integer([:positive])}"
+    definition = response_definition(job_id)
+    assert :ok = JobResponse.ensure_started(definition)
+    assert_receive {:job_response_command, %{"operation" => "start", "job_id" => ^job_id}}
+    assert %{state: "ready"} = await_state(job_id, "ready")
+    [{pid, _}] = Registry.lookup(MirrorNeuron.Runtime.JobResponseRegistry, job_id)
+    GenServer.cast(pid, {:query_result, "degraded", nil})
+    assert :sys.get_state(pid).warm_timer == nil
+    assert :ok = JobResponse.stop(definition)
+  end
+
+  test "a changed definition replaces a pending recovery timer" do
+    job_id = "job-response-recovery-revision-#{System.unique_integer([:positive])}"
+    definition = response_definition(job_id)
+    assert :ok = JobResponse.ensure_started(definition)
+    assert_receive {:job_response_command, %{"operation" => "start", "job_id" => ^job_id}}
+    assert %{state: "ready"} = await_state(job_id, "ready")
+    [{pid, _}] = Registry.lookup(MirrorNeuron.Runtime.JobResponseRegistry, job_id)
+    GenServer.cast(pid, {:query_result, "degraded", "response_failed"})
+    timer = :sys.get_state(pid).warm_timer
+    assert :ok = JobResponse.definition_changed(%{definition | "revision" => 2})
+
+    assert_receive {:job_response_command,
+                    %{"operation" => "start", "job_id" => ^job_id, "revision" => 2}}
+
+    assert %{state: "ready"} = await_state(job_id, "ready")
+    assert :sys.get_state(pid).warm_timer == nil
+    assert Process.read_timer(timer) == false
+    assert :ok = JobResponse.stop(definition)
+  end
+
+  defp response_definition(job_id) do
+    %{
+      "job_id" => job_id,
+      "blueprint_id" => "example",
+      "job_name" => "Example",
+      "owner_node" => to_string(MirrorNeuron.Cluster.NodeAdapter.self()),
+      "status" => "active",
+      "revision" => 1,
+      "data_dir" => "/tmp/#{job_id}",
+      "resolved_configuration" => %{},
+      "manifest" => %{"response_service" => %{"enabled" => true}}
+    }
+  end
+
   defp await_state(job_id, expected, attempts \\ 50)
 
   defp await_state(job_id, _expected, 0), do: JobResponse.status_local(job_id)

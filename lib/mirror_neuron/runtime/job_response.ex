@@ -248,12 +248,15 @@ defmodule MirrorNeuron.Runtime.JobResponse do
        ready_at: nil,
        stopped_at: nil,
        safe_error_code: nil,
-       retry_ms: 1_000
+       retry_ms: 1_000,
+       warm_timer: nil
      }}
   end
 
   @impl true
   def handle_info(:warm, state) do
+    if state.warm_timer, do: Process.cancel_timer(state.warm_timer)
+    state = %{state | warm_timer: nil}
     started = System.monotonic_time(:millisecond)
 
     case ModelServices.job_response_command(start_payload(state.definition), @warm_timeout) do
@@ -262,56 +265,66 @@ defmodule MirrorNeuron.Runtime.JobResponse do
         now = Runtime.timestamp()
         latency = System.monotonic_time(:millisecond) - started
         log_event(state.definition["job_id"], "warm", service_state, latency)
-        retry_ms = maybe_retry_degraded_warm(service_state, state.retry_ms)
 
-        {:noreply,
-         %{
-           state
-           | state: service_state,
-             ready_at: if(service_state in ["ready", "degraded"], do: now, else: state.ready_at),
-             updated_at: now,
-             safe_error_code: nil,
-             retry_ms: retry_ms
-         }}
+        next = %{
+          state
+          | state: service_state,
+            ready_at: if(service_state in ["ready", "degraded"], do: now, else: state.ready_at),
+            updated_at: now,
+            safe_error_code: nil,
+            retry_ms: if(service_state == "degraded", do: state.retry_ms, else: 1_000)
+        }
+
+        {:noreply, if(service_state == "degraded", do: schedule_warm_retry(next), else: next)}
 
       {:error, reason} ->
         code = safe_error_code(reason)
         log_event(state.definition["job_id"], "warm", "failed", nil, code)
-        Process.send_after(self(), :warm, state.retry_ms)
 
         {:noreply,
-         %{
+         schedule_warm_retry(%{
            state
            | state: "failed",
              updated_at: Runtime.timestamp(),
-             safe_error_code: code,
-             retry_ms: min(state.retry_ms * 2, @max_retry_ms)
-         }}
+             safe_error_code: code
+         })}
     end
   end
 
   @impl true
   def handle_info(_message, state), do: {:noreply, state}
 
-  defp maybe_retry_degraded_warm("degraded", retry_ms) do
-    Process.send_after(self(), :warm, retry_ms)
-    min(retry_ms * 2, @max_retry_ms)
+  defp schedule_warm_retry(%{warm_timer: nil} = state) do
+    %{
+      state
+      | warm_timer: Process.send_after(self(), :warm, state.retry_ms),
+        retry_ms: min(state.retry_ms * 2, @max_retry_ms)
+    }
   end
 
-  defp maybe_retry_degraded_warm(_service_state, _retry_ms), do: 1_000
+  defp schedule_warm_retry(state), do: state
 
   @impl true
   def handle_call(:status, _from, state), do: {:reply, public_state(state), state}
 
   @impl true
   def handle_cast({:query_result, service_state, error_code}, state) do
+    next = %{
+      state
+      | state: service_state,
+        updated_at: Runtime.timestamp(),
+        safe_error_code: error_code
+    }
+
+    # A restarted native responder has lost its engines even if this owner
+    # process was ready. Re-establish the same definition without replaying
+    # the failed request or its effects. Semantic degraded answers are not
+    # transport failures and do not need another warm-up.
     {:noreply,
-     %{
-       state
-       | state: service_state,
-         updated_at: Runtime.timestamp(),
-         safe_error_code: error_code
-     }}
+     if(service_state == "degraded" and not is_nil(error_code),
+       do: schedule_warm_retry(next),
+       else: next
+     )}
   end
 
   def handle_cast({:definition, definition}, state) do
