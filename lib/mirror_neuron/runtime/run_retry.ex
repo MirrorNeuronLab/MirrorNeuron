@@ -450,7 +450,8 @@ defmodule MirrorNeuron.Runtime.RunRetry do
       Enum.filter(WorkflowRetry.unfinished(ledger), fn id ->
         step = ledger["steps"][id]
 
-        parents = step["needs"] || []
+        parents =
+          for edge <- ledger["edges"] || [], edge["to"] == id, do: edge["from"]
 
         (Map.get(step, "attempt_count", 0) > 0 or Enum.all?(parents, &(&1 in preserved))) and
           is_nil(step["last_message"]) and is_nil(step["instance_input"]) and

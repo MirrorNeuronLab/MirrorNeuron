@@ -256,6 +256,63 @@ defmodule MirrorNeuron.Runtime.RunRetryIntegrationTest do
     refute_receive {:executed, _, _}
   end
 
+  test "unstarted downstream work waits for its unfinished parent without a saved input", ctx do
+    raw = Manifest.to_map(ctx.manifest)
+
+    raw =
+      raw
+      |> update_in(["flow", "nodes"], fn nodes ->
+        worker = Enum.find(nodes, &(&1["node_id"] == "work"))
+        nodes ++ [Map.put(worker, "node_id", "publish")]
+      end)
+      |> update_in(["flow", "steps"], &(&1 ++ [%{"id" => "publish", "run" => "publish"}]))
+      |> put_in(["flow", "graph", "edges"], [%{"from" => "work", "to" => "publish"}])
+
+    {:ok, manifest} = Manifest.load(raw)
+    ledger = WorkflowLedger.new(manifest, manifest.nodes, nil, ctx.id)
+
+    ledger =
+      ledger
+      |> put_in(["steps", "done"], ctx.checkpoint["workflow"]["steps"]["done"])
+      |> put_in(["steps", "work"], ctx.checkpoint["workflow"]["steps"]["work"])
+
+    assert ledger["steps"]["publish"]["needs"] == nil
+    assert ledger["steps"]["publish"]["last_message"] == nil
+
+    {:ok, job} =
+      RedisStore.persist_job(ctx.id, %{
+        ctx.job
+        | "manifest" => Manifest.to_map(manifest),
+          "workflow_state" => ledger
+      })
+
+    assert :ok =
+             RedisStore.persist_run_checkpoint(ctx.id, RunRetry.checkpoint(job, ledger), 1)
+
+    assert {:ok, plan} = RunRetry.plan(ctx.id)
+    assert plan["eligible"]
+    assert plan["preserved_steps"] == ["done"]
+    assert plan["retry_steps"] == ["work", "publish"]
+
+    # An entrypoint still needs its original input even before its first attempt.
+    root_without_input =
+      ledger
+      |> put_in(["steps", "work", "attempt_count"], 0)
+      |> put_in(["steps", "work", "last_message"], nil)
+      |> put_in(["steps", "work", "last_message_ref"], nil)
+
+    assert :ok =
+             RedisStore.persist_run_checkpoint(
+               ctx.id,
+               RunRetry.checkpoint(job, root_without_input),
+               1
+             )
+
+    assert {:ok, %{"eligible" => false, "reason" => reason}} = RunRetry.plan(ctx.id)
+    assert reason =~ "inputs are missing: work"
+    refute_receive {:executed, _, _}
+  end
+
   test "lingering coordinator cleanup blocks planning without consuming an attempt", ctx do
     assert {:ok, _} =
              Horde.Registry.register(MirrorNeuron.DistributedRegistry, {:job, ctx.id}, nil)
