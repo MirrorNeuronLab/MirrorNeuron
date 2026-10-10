@@ -123,6 +123,14 @@ ordinary reads, and connection setup keep the usual 15-second deadline. The
 SDK allows 130 seconds for the corresponding definition submission, including
 the owner's reply, and does not retry creation automatically.
 
+Federated unary calls reuse authenticated HTTP/2 connections. Concurrent setup
+is coalesced per peer, local identity, endpoint, and credential digest; the pool
+holds at most 64 connections and 1,024 active or waiting requests. Idle channels
+expire after five minutes. Credential or endpoint changes and transport failures
+retire a channel after its current requests finish. Failed requests are never
+replayed by the pool, and operation deadlines and durable review checks remain
+unchanged. Streaming calls and independent peer probes retain their own channels.
+
 ```text
 CLI / REST API / Web UI
           │

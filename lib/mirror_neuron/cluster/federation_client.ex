@@ -1,7 +1,7 @@
 defmodule MirrorNeuron.Cluster.FederationClient do
   @moduledoc false
 
-  alias MirrorNeuron.Cluster.FederationRegistry
+  alias MirrorNeuron.Cluster.{FederationChannels, FederationRegistry}
   alias MirrorNeuron.Cluster.NodeAdapter
   alias Mirrorneuron.Cluster.V1.{GetFederatedPeerRequest, ListServicesRequest}
   alias Mirrorneuron.Cluster.V1.ClusterService.Stub, as: ClusterStub
@@ -148,11 +148,20 @@ defmodule MirrorNeuron.Cluster.FederationClient do
 
   defp rpc_call(node_name, stub, function, request) do
     with {:ok, peer} <- FederationRegistry.fetch(node_name),
-         {:ok, target} <- target(peer),
-         {:ok, channel} <- connect(target, peer) do
+         {:ok, target} <- target(peer) do
       result =
         try do
-          apply(stub, function, [channel, request, [timeout: request_timeout(function, request)]])
+          invoke_unary(
+            channel_key(node_name, target, peer),
+            fn -> connect(target, peer) end,
+            fn channel ->
+              apply(stub, function, [
+                channel,
+                request,
+                [timeout: request_timeout(function, request)]
+              ])
+            end
+          )
         rescue
           error ->
             if availability_failure?(error) do
@@ -160,8 +169,6 @@ defmodule MirrorNeuron.Cluster.FederationClient do
             end
 
             reraise error, __STACKTRACE__
-        after
-          _ = GRPC.Stub.disconnect(channel)
         end
 
       case result do
@@ -177,6 +184,41 @@ defmodule MirrorNeuron.Cluster.FederationClient do
       end
     else
       {:error, reason} -> unavailable!(node_name, reason, function)
+    end
+  end
+
+  @doc false
+  def channel_key(node_name, target, peer) do
+    {node_name, to_string(NodeAdapter.self()), target,
+     :crypto.hash(:sha256, Map.get(peer, "peer_auth_token", ""))}
+  end
+
+  @doc false
+  def invoke_unary(key, connect, invoke, channels \\ FederationChannels) do
+    with {:ok, lease, channel} <- FederationChannels.checkout(key, connect, channels) do
+      try do
+        result = invoke.(channel)
+
+        case result do
+          {:error, reason} ->
+            FederationChannels.release(lease, availability_failure?(reason), channels)
+
+          _ ->
+            :ok
+        end
+
+        result
+      rescue
+        error ->
+          FederationChannels.release(lease, availability_failure?(error), channels)
+          reraise error, __STACKTRACE__
+      catch
+        kind, reason ->
+          FederationChannels.release(lease, true, channels)
+          :erlang.raise(kind, reason, __STACKTRACE__)
+      after
+        FederationChannels.release(lease, false, channels)
+      end
     end
   end
 

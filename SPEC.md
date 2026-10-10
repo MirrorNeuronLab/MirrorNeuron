@@ -144,6 +144,18 @@ Owner-forwarded job and run deletion use a bounded five-minute request deadline
 instead of the ordinary 15-second federation request deadline. Connection
 establishment remains bounded by the ordinary deadline, while confirmed cleanup
 has time to cancel runs and retire each owned runtime resource.
+Federated unary calls share a supervised, bounded authenticated connection pool
+on worker and control nodes. Connection identity includes the remote peer,
+local peer identity, endpoint, and a digest of the current peer credential.
+Concurrent setup is coalesced, with at most 64 retained connections and 1,024
+active or pending leases; excess callers receive an availability error. Caller
+exit or checkout timeout releases its lease. Idle connections expire after five
+minutes; an idle connection may be evicted for a new peer. Credential or endpoint
+changes and transport/authentication failures retire channels without closing
+other active requests. The pool never replays a failed command, changes an
+operation deadline, or omits a durable interaction/review check. Streaming
+operations and independent reachability probes retain their existing lifecycle.
+Connection credentials are omitted from pool process status and crash diagnostics.
 The observability event stream resolves the same run owner. A non-owner Core
 proxies the owner's replay and live server stream in one federation hop, so
 clients see workflow transitions without sharing Redis identities or polling a

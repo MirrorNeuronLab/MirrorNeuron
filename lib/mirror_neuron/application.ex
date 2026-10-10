@@ -84,6 +84,7 @@ defmodule MirrorNeuron.Application do
       MirrorNeuron.Redis,
       MirrorNeuron.Persistence.Retention,
       MirrorNeuron.Runtime.InteractionDeadlines,
+      {MirrorNeuron.Cluster.FederationChannels, name: MirrorNeuron.Cluster.FederationChannels},
       {Task.Supervisor, name: MirrorNeuron.Runtime.RecoveryTaskSupervisor},
       MirrorNeuron.Operations.Supervisor
     ] ++ grpc_child_specs()

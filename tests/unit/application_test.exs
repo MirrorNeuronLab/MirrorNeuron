@@ -30,6 +30,19 @@ defmodule MirrorNeuron.ApplicationTest do
            ] = Application.grpc_child_specs()
   end
 
+  test "supervises federated unary channels before accepting gRPC requests on every node role" do
+    children = Application.common_child_specs([])
+
+    assert {MirrorNeuron.Cluster.FederationChannels,
+            name: MirrorNeuron.Cluster.FederationChannels} in children
+
+    pool_index =
+      Enum.find_index(children, &match?({MirrorNeuron.Cluster.FederationChannels, _}, &1))
+
+    grpc_index = Enum.find_index(children, &match?({GRPC.Server.Supervisor, _}, &1))
+    assert pool_index < grpc_index
+  end
+
   describe "grpc_bind_opts/1" do
     test "binds empty and localhost values to IPv4 loopback" do
       assert Application.grpc_bind_opts("") == [ip: {127, 0, 0, 1}]
