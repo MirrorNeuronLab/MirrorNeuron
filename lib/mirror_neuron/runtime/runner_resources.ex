@@ -30,18 +30,23 @@ defmodule MirrorNeuron.Runtime.RunnerResources do
   def cleanup_docker_worker(_job_id), do: {:error, :invalid_job_id}
 
   @doc false
-  def release_run_models(run_id) when is_binary(run_id) and run_id != "" do
-    with {:ok, result} <-
-           ModelServices.native_resource_command(%{
-             "operation" => "release_run_models",
-             "run_id" => run_id
-           }),
+  def release_run_models(run_id, attempt_id \\ nil)
+
+  def release_run_models(run_id, attempt_id) when is_binary(run_id) and run_id != "" do
+    attrs = %{
+      "operation" => "release_run_models",
+      "run_id" => run_id
+    }
+
+    attrs = if is_binary(attempt_id), do: Map.put(attrs, "attempt_id", attempt_id), else: attrs
+
+    with {:ok, result} <- ModelServices.native_resource_command(attrs),
          :ok <- ensure_no_cleanup_errors(result, "model residency") do
       :ok
     end
   end
 
-  def release_run_models(_run_id), do: {:error, :invalid_run_id}
+  def release_run_models(_run_id, _attempt_id), do: {:error, :invalid_run_id}
 
   @doc false
   def cleanup_native_resources(job_id) when is_binary(job_id) and job_id != "" do

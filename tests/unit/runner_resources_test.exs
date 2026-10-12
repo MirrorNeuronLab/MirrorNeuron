@@ -120,6 +120,14 @@ defmodule MirrorNeuron.Runtime.RunnerResourcesTest do
     refute Map.has_key?(request, "job_id")
   end
 
+  test "model cleanup forwards the attempt without changing its run identity" do
+    assert :ok = RunnerResources.release_run_models("run", "run:2")
+    assert_receive {:native_resource_cleanup, request}
+    assert request["run_id"] == "run"
+    assert request["attempt_id"] == "run:2"
+    assert request["operation"] == "release_run_models"
+  end
+
   test "unload failure does not prevent cleanup of other native resources" do
     parent = self()
 

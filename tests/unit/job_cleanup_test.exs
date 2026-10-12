@@ -140,6 +140,17 @@ defmodule MirrorNeuron.Runtime.JobCleanupTest do
     end
   end
 
+  test "terminal model cleanup carries the finished attempt identity" do
+    NodeAdapterStub.reset(self())
+    job = %{"status" => "failed", "attempt_id" => "run:2"}
+    assert :ok = JobCleanup.cleanup_sandboxes("run", job, [])
+
+    for node <- [:control@lab, :connected@lab] do
+      assert_receive {:cleanup_rpc, ^node, RunnerResources, :release_run_models, ["run", "run:2"],
+                      15_000}
+    end
+  end
+
   test "paused runs retain model residency" do
     NodeAdapterStub.reset(self())
     assert :ok = JobCleanup.cleanup_sandboxes("paused-run", %{status: "paused"}, [])

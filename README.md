@@ -505,3 +505,14 @@ With updated Core and SDK services, callers receive the existing problem codes
 (for example `MN_GPU_MEMORY_UNAVAILABLE` / `2001`), a friendly PC name, free
 memory versus required memory, and safe remediation. Admission requirements are
 unchanged. See [SPEC.md](SPEC.md) for the versioned admission detail contract.
+
+## Model residency across checkpoint retries
+
+Checkpoint retries retain their run ID and use `MN_ATTEMPT_ID` for managed-model
+ownership. Preparation, gateway requests, native records, and terminal cleanup
+carry the same attempt identity. Finishing an attempt closes only its model
+references; a later attempt can prepare the model without reopening the old
+attempt. Delayed cleanup and garbage collection cannot release a later
+attempt's model. Unversioned callers keep their existing run-scoped fences.
+Upgrade Core, the native SDK, gateway callbacks, and prepared worker SDKs
+together; saved worker images keep the SDK version with which they were built.

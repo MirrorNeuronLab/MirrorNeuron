@@ -57,7 +57,13 @@ defmodule MirrorNeuron.Runtime.JobCleanup do
       |> cleanup_nodes(agents)
       |> Enum.flat_map(fn node ->
         Enum.flat_map(resources, fn {module, function, label} ->
-          case safe_cleanup_on_node(node, module, function, [job_id | extra_args]) do
+          args =
+            if module == RunnerResources and function == :release_run_models and
+                 is_binary(detail(job, "attempt_id")),
+               do: [job_id, detail(job, "attempt_id")],
+               else: [job_id | extra_args]
+
+          case safe_cleanup_on_node(node, module, function, args) do
             :ok ->
               []
 
@@ -130,6 +136,7 @@ defmodule MirrorNeuron.Runtime.JobCleanup do
   defp detail(_other, _key), do: nil
 
   defp safe_atom("status"), do: :status
+  defp safe_atom("attempt_id"), do: :attempt_id
   defp safe_atom("scheduler"), do: :scheduler
   defp safe_atom("placements"), do: :placements
   defp safe_atom("node"), do: :node

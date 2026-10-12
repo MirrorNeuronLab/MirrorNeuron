@@ -723,3 +723,14 @@ counter settings from the execution node as one service configuration before
 launch. A submitter's credential cannot authenticate a different node's service.
 Missing execution-node endpoint/authentication fails before dispatch. Secrets
 stay in the trusted runner environment and are excluded from diagnostic output.
+
+## Model residency across checkpoint retries
+
+Checkpoint retries retain their run ID and use `MN_ATTEMPT_ID` for managed-model
+ownership. Preparation, gateway requests, native records, and terminal cleanup
+carry the same attempt identity. Finishing an attempt closes only its model
+references; a later attempt can prepare the model without reopening the old
+attempt. Delayed cleanup and garbage collection cannot release a later
+attempt's model. Unversioned callers keep their existing run-scoped fences.
+Upgrade Core, the native SDK, gateway callbacks, and prepared worker SDKs
+together; saved worker images keep the SDK version with which they were built.
