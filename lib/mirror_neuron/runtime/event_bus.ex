@@ -8,7 +8,7 @@ defmodule MirrorNeuron.Runtime.EventBus do
   end
 
   def publish(job_id, event) do
-    persisted = Map.put_new(event, :job_id, job_id)
+    persisted = MirrorNeuron.Runtime.EventEnvelope.normalize(event, job_id)
 
     if safe_append_event(job_id, json_safe(persisted)) != :job_cleared do
       dispatch(job_id, persisted)
@@ -18,7 +18,7 @@ defmodule MirrorNeuron.Runtime.EventBus do
   end
 
   def publish_if_job_exists(job_id, event) do
-    persisted = Map.put_new(event, :job_id, job_id)
+    persisted = MirrorNeuron.Runtime.EventEnvelope.normalize(event, job_id)
 
     case safe_append_event_if_job_exists(job_id, json_safe(persisted)) do
       :persisted ->
