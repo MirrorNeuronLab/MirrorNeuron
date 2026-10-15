@@ -8,7 +8,7 @@ defmodule MirrorNeuron.Runner.DockerLifecycleTest do
 
   setup_all do
     container = "mn-lifecycle-test-#{System.unique_integer([:positive])}"
-    image = System.get_env("MN_TEST_DOCKER_IMAGE", "python:3.11-slim")
+    image = System.get_env("MN_TEST_DOCKER_IMAGE", "python:3.12-slim")
 
     {_, 0} =
       System.cmd("docker", [

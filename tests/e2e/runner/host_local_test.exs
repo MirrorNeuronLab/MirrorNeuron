@@ -188,7 +188,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
 
     try do
       File.mkdir_p!(upload_dir)
-      {_, 0} = System.cmd(System.find_executable("python3.11"), ["-m", "venv", python_env_dir])
+      {_, 0} = System.cmd(System.find_executable("python3.12"), ["-m", "venv", python_env_dir])
 
       File.write!(
         console_script_path,
@@ -264,7 +264,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
         "upload_path" => "bundle",
         "upload_as" => "bundle",
         "workdir" => "/sandbox/job/bundle",
-        "command" => ["python3.11", "scripts/events.py"]
+        "command" => ["python3.12", "scripts/events.py"]
       }
 
       parent = self()
@@ -326,7 +326,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
       "upload_path" => "bundle",
       "upload_as" => "bundle",
       "workdir" => "/sandbox/job/bundle",
-      "command" => ["python3.11", "scripts/echo_input.py"],
+      "command" => ["python3.12", "scripts/echo_input.py"],
       "environment" => %{"WORKER_FLAG" => "host-local-ok"}
     }
 
@@ -382,7 +382,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
         "upload_path" => "bundle",
         "upload_as" => "bundle",
         "workdir" => "/sandbox/job/bundle",
-        "command" => ["python3.11", "scripts/read_grpc_target.py"]
+        "command" => ["python3.12", "scripts/read_grpc_target.py"]
       }
 
       assert {:ok, result} =
@@ -497,7 +497,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
         "upload_path" => "bundle",
         "upload_as" => "bundle",
         "workdir" => "/sandbox/job/bundle",
-        "command" => ["python3.11", "scripts/read_package.py"],
+        "command" => ["python3.12", "scripts/read_package.py"],
         "environment" => %{"MN_BLUEPRINT_ID" => "test_python_env_blueprint"},
         "python_environment" => %{
           "requirements" => "bundle/requirements.txt"
@@ -546,7 +546,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
         "upload_path" => "bundle",
         "upload_as" => "bundle",
         "workdir" => "/sandbox/job/bundle",
-        "command" => ["python3.11", "scripts/noop.py"]
+        "command" => ["python3.12", "scripts/noop.py"]
       }
 
       missing_config =
@@ -609,7 +609,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
       "upload_path" => "bundle",
       "upload_as" => "bundle",
       "workdir" => "/sandbox/job/bundle",
-      "command" => ["python3.11", "scripts/sleep.py"],
+      "command" => ["python3.12", "scripts/sleep.py"],
       "timeout_seconds" => 0.1
     }
 
@@ -657,7 +657,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
         "upload_path" => "bundle",
         "upload_as" => "bundle",
         "workdir" => "/sandbox/job/bundle",
-        "command" => ["python3.11", "scripts/wait.py"],
+        "command" => ["python3.12", "scripts/wait.py"],
         "environment" => %{"PID_FILE" => pid_path}
       }
 
@@ -703,7 +703,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
     upload_dir = Path.join(payloads_dir, "bundle")
     pid_path = Path.join(tmp_dir, "command.pid")
     job_id = "job-host-local-cancel"
-    python = System.find_executable("python3") || System.find_executable("python3.11")
+    python = System.find_executable("python3") || System.find_executable("python3.12")
     original_path = System.get_env("PATH")
     assert is_binary(python)
 
@@ -793,7 +793,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
         "upload_path" => "bundle",
         "upload_as" => "bundle",
         "workdir" => "/sandbox/job/bundle",
-        "command" => ["python3.11", "scripts/sleep_then_done.py"],
+        "command" => ["python3.12", "scripts/sleep_then_done.py"],
         "beacon_enabled" => true,
         "beacon_interval_ms" => 10,
         "beacon_timeout_ms" => 1000,
@@ -872,7 +872,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
         "upload_path" => "bundle",
         "upload_as" => "bundle",
         "workdir" => "/sandbox/job/bundle",
-        "command" => ["python3.11", "scripts/noisy.py"],
+        "command" => ["python3.12", "scripts/noisy.py"],
         "beacon_enabled" => true,
         "beacon_interval_ms" => 10,
         "beacon_timeout_ms" => 1000,
@@ -933,7 +933,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
         "upload_path" => "bundle",
         "upload_as" => "bundle",
         "workdir" => "/sandbox/job/bundle",
-        "command" => ["python3.11", "scripts/emit_beacon.py"],
+        "command" => ["python3.12", "scripts/emit_beacon.py"],
         "beacon_enabled" => true,
         "beacon_interval_ms" => 1000,
         "beacon_timeout_ms" => 1000,
@@ -999,7 +999,7 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
         "upload_path" => "bundle",
         "upload_as" => "bundle",
         "workdir" => "/sandbox/job/bundle",
-        "command" => ["python3.11", "scripts/quiet.py"],
+        "command" => ["python3.12", "scripts/quiet.py"],
         "beacon_enabled" => true,
         "beacon_interval_ms" => 1000,
         "beacon_timeout_ms" => 20,

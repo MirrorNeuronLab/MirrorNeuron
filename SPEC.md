@@ -355,13 +355,15 @@ environment/config, captures a structured result, registers durable artifacts,
 and cleans up only owned resources. HostLocal commands run in an owned process
 group when the host supports it; cancellation, owner termination, timeout, and
 missed-beacon failure terminate that command before releasing the runner.
-The published Core image provides Python 3.11 for HostLocal blueprint commands.
+The published Core image provides Python 3.12 for HostLocal blueprint commands.
 When a prepared `python_environment` is attached, HostLocal resolves console
 script entrypoints from that environment's `bin` directory before the Core
 process path.
-Its build fails if `python3` does not resolve to Python 3.11; the base image is
-pinned by Debian release and multi-architecture digest so immutable Core
-release behavior cannot drift with an upstream rolling tag.
+Its build fails if `python3` does not resolve to Python 3.12. The Elixir and
+Python stages are pinned by Debian release and multi-architecture digest;
+the Python stage supplies CPython independently of Debian's system Python.
+HostLocal selects Python 3.12 when preparing dependency environments, and
+recognizes `python`, `python3`, and `python3.12` commands and console scripts.
 HostLocal commands receive a loopback `MN_GRPC_TARGET` derived from Core's
 internal gRPC listen port so bind and externally advertised addresses are never
 mistaken for client destinations; an explicit manifest environment override

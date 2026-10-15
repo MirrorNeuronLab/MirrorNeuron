@@ -140,7 +140,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
     configured_command =
       case Map.get(config, "command") do
         nil ->
-          "python3.11 - <<'PY'\nprint('No command configured for host-local worker')\nPY"
+          "python3.12 - <<'PY'\nprint('No command configured for host-local worker')\nPY"
 
         command when is_binary(command) ->
           substitute(command, substitutions)
@@ -186,7 +186,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
     #{command}
     ) >#{shell_escape(stdout_file)} 2>#{shell_escape(stderr_file)}
     status=$?
-    MN_EXIT_CODE="$status" python3.11 - <<'PY'
+    MN_EXIT_CODE="$status" python3.12 - <<'PY'
     import json
     import os
     import pathlib
@@ -213,7 +213,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
 
   defp rewrite_python_command([executable | args], %{python: python} = python_env) do
     cond do
-      Path.basename(executable) in ["python", "python3", "python3.11"] ->
+      Path.basename(executable) in ["python", "python3", "python3.12"] ->
         [python | args]
 
       console_script = python_console_script(executable, python_env) ->
@@ -239,7 +239,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
           |> List.first()
 
         if is_binary(interpreter) and
-             Path.basename(interpreter) in ["python", "python3", "python3.11"] do
+             Path.basename(interpreter) in ["python", "python3", "python3.12"] do
           candidate
         end
       else
@@ -1277,16 +1277,16 @@ defmodule MirrorNeuron.Runner.HostLocal do
   end
 
   defp host_python_executable do
-    ["python3.11", "python3", "python"]
+    ["python3.12", "python3", "python"]
     |> Enum.map(&System.find_executable/1)
-    |> Enum.find(&python_3_11?/1) || "python3.11"
+    |> Enum.find(&python_3_12?/1) || "python3.12"
   end
 
-  defp python_3_11?(nil), do: false
+  defp python_3_12?(nil), do: false
 
-  defp python_3_11?(python) do
+  defp python_3_12?(python) do
     case python_version(python) do
-      {:ok, "Python 3.11" <> _} -> true
+      {:ok, "Python 3.12" <> _} -> true
       _ -> false
     end
   end

@@ -540,7 +540,7 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
       rewrite_script() {
         local script="$1"
         local root="$2"
-        python3.11 - "$script" "$root" <<'PY'
+        python3.12 - "$script" "$root" <<'PY'
       import sys
       print(sys.argv[1].replace("/sandbox", sys.argv[2]))
       PY
@@ -650,7 +650,7 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
 
       if [ "$1" = "bash" ] && [ "$2" = "-lc" ]; then
         script="$3"
-        rewritten="$(python3.11 - "$script" "$root" <<'PY'
+        rewritten="$(python3.12 - "$script" "$root" <<'PY'
       import sys
       print(sys.argv[1].replace("/sandbox", sys.argv[2]))
       PY
@@ -1059,7 +1059,7 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
       rewrite_script() {
         local script="$1"
         local root="$2"
-        python3.11 - "$script" "$root" <<'PY'
+        python3.12 - "$script" "$root" <<'PY'
       import sys
       print(sys.argv[1].replace("/sandbox", sys.argv[2]))
       PY
@@ -1155,7 +1155,7 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
 
       if [ "$1" = "bash" ] && [ "$2" = "-lc" ]; then
         script="$3"
-        rewritten="$(python3.11 - "$script" "$root" <<'PY'
+        rewritten="$(python3.12 - "$script" "$root" <<'PY'
       import sys
       print(sys.argv[1].replace("/sandbox", sys.argv[2]))
       PY

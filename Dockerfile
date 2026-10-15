@@ -1,8 +1,12 @@
-# HostLocal blueprints require Python 3.11. Pin both the Debian release and the
-# multi-architecture base digest so an upstream rolling slim tag cannot change
-# the runtime Python version underneath an immutable Core release.
+# HostLocal uses the same Python 3.12 as the native SDK, API, and CLI. Both
+# stages use Bookworm and pinned multi-architecture digests.
+ARG PYTHON_IMAGE=python:3.12.14-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e
 ARG ELIXIR_IMAGE=hexpm/elixir:1.18.4-erlang-28.3-debian-bookworm-20260610-slim@sha256:00153b7780e105e742099378fca72d35c21825890d721a838b8a0a1432bdcb1a
+FROM ${PYTHON_IMAGE} AS python-runtime
 FROM ${ELIXIR_IMAGE}
+
+COPY --from=python-runtime /usr/local/ /usr/local/
+ENV PATH="/usr/local/bin:${PATH}"
 
 ARG CORE_RELEASE_TAG=""
 ARG CORE_REVISION=""
@@ -21,15 +25,25 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     protobuf-compiler \
     curl \
-    python3-minimal \
-    python3 \
-    python3-pip \
-    python3-venv \
+    libbz2-1.0 \
+    libdb5.3 \
+    libexpat1 \
+    libffi8 \
+    libgdbm6 \
+    libgdbm-compat4 \
+    liblzma5 \
+    libncursesw6 \
+    libreadline8 \
+    libsqlite3-0 \
+    libuuid1 \
+    zlib1g \
     && rm -rf /var/lib/apt/lists/*
 
-RUN test -x /usr/bin/python3.11 \
-    && python3.11 -c 'import sys; assert sys.version_info[:2] == (3, 11), sys.version' \
-    && test "$(readlink -f /usr/bin/python3)" = "/usr/bin/python3.11" \
+RUN ldconfig \
+    && test -x /usr/local/bin/python3.12 \
+    && python3.12 -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version' \
+    && test "$(readlink -f "$(command -v python3)")" = "/usr/local/bin/python3.12" \
+    && python3 -c 'import bz2, ctypes, dbm.gnu, lzma, readline, sqlite3, ssl, zlib' \
     && python3 --version \
     && python3 -m pip --version
 
