@@ -3,6 +3,23 @@ defmodule MirrorNeuron.Grpc.JobProjectionTest do
 
   alias MirrorNeuron.Grpc.JobProjection
 
+  test "job detail exposes only the installed public MCP contract before a run" do
+    declaration = %{
+      "profile" => "mn.mcp.supervision.v1",
+      "manual" => "@/knowledge/user_manual.md",
+      "manual_content" => "# Installed manual",
+      "manual_sha256" => String.duplicate("a", 64),
+      "tools" => %{},
+      "private_environment" => %{"TOKEN" => "must-not-leak"}
+    }
+
+    definition = %{"job_id" => "job-mcp", "manifest" => %{"mcp" => declaration}}
+    detail = JobProjection.detail(definition)
+    assert detail["mcp"]["manual_content"] == "# Installed manual"
+    refute Map.has_key?(detail["mcp"], "private_environment")
+    refute Map.has_key?(JobProjection.summary(definition), "mcp")
+  end
+
   test "job responses reference archived bundles without echoing manifests" do
     definition = %{
       "job_id" => "job-1",

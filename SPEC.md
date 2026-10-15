@@ -741,3 +741,8 @@ Runtime events use the shared [`mn.runtime.event.v1` contract](../mn-python-sdk/
 including level, blueprint owner, UTC timestamp and actor attribution.
 The SDK selects meaningful activity for the CLI, API, desktop and web monitors;
 raw events remain available for diagnostics.
+
+Prepared Job detail projections include the public `mcp` supervision declaration
+and staged manual/hash from the definition manifest. Summary projections omit
+it. Private environment fields are never projected. Execution remains owned by
+Core; API and SDK supervision adapters do not infer completed transitions.

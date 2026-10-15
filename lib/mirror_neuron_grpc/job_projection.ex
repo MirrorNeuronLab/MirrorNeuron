@@ -36,6 +36,7 @@ defmodule MirrorNeuron.Grpc.JobProjection do
     |> put_counts(definition)
     |> put_recent_run_ids(definition)
     |> put_response_service(definition)
+    |> put_mcp(definition)
     |> put_native_resource_ownership(definition)
     |> Map.put("workflow_definition", JobWorkflowProjection.from_definition(definition))
     |> compact_bundle_ref()
@@ -137,6 +138,18 @@ defmodule MirrorNeuron.Grpc.JobProjection do
 
   defp put_response_service(projected, definition) do
     Map.put(projected, "response_service", JobResponse.status(definition))
+  end
+
+  defp put_mcp(projected, definition) do
+    case get_in(definition, ["manifest", "mcp"]) do
+      %{"profile" => "mn.mcp.supervision.v1"} = declaration ->
+        Map.put(projected, "mcp", Map.take(declaration, ~w(
+          profile manual manual_content manual_sha256 tools service preflight activity blueprint
+        )))
+
+      _ ->
+        projected
+    end
   end
 
   defp put_native_resource_ownership(projected, definition) do
