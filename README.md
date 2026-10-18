@@ -460,6 +460,9 @@ until explicit run/job deletion or job-data reset. Logs and delivery history kee
 their bounded retention. Resource status reports `retry_checkpoint_storage`.
 Historical files alone do not establish eligibility: planning must verify the
 remaining Core record and supported checkpoint. Run retry is manual only.
+Artifact capture and retry verification have a bounded 60-second helper deadline.
+Repeated immutable descriptors are checked once within each verification; every
+new verification still checks the retained bytes and rejects changed hashes.
 
 Oversized prompts use Membrane CPU preparation first, then optional original-ID
 selection on the existing LiteLLM `default` route. No dedicated compressor model

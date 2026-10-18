@@ -748,3 +748,5 @@ Prepared Job detail projections include the public `mcp` supervision declaration
 and staged manual/hash from the definition manifest. Summary projections omit
 it. Private environment fields are never projected. Execution remains owned by
 Core; API and SDK supervision adapters do not infer completed transitions.
+
+Checkpoint artifact helpers have a 60-second execution bound. Within one inspection, identical complete artifact descriptors share verification; distinct descriptors and subsequent inspections retain independent hash, size, confinement, receipt and replay checks. A failed integrity capture still blocks checkpoint retry.

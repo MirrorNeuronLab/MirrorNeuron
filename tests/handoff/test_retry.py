@@ -50,3 +50,39 @@ def test_legacy_request_digest_cannot_authorize_checkpoint_replay(admission):
     write(path, {**state, "request_hash": "legacy-delivery-digest"})
     with pytest.raises(ValueError, match="unsupported"):
         inspect(value)
+
+
+def test_repeated_descriptors_are_verified_once_without_reusing_checks_across_calls(admission, monkeypatch):
+    import hashlib
+    import retry_verify
+
+    value, _, _, root = admission
+    run = root.parent
+    path = run / "report.json"
+    path.write_text("saved")
+    ref = {"kind": "report", "path": "report.json", "sha256": hashlib.sha256(b"saved").hexdigest(), "size_bytes": 5}
+    value.update(workflow={"repeated": [ref] * 2000}, handoff_steps=[])
+    calls = []
+    original = retry_verify.verify
+
+    def counted(*args):
+        calls.append(args)
+        return original(*args)
+
+    monkeypatch.setattr(retry_verify, "verify", counted)
+    assert inspect(value)["safe_handoff_steps"] == []
+    assert len(calls) == 1
+    path.write_text("other")
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        inspect(value)
+
+
+def test_reference_deduplication_does_not_ignore_conflicting_hashes(admission):
+    import hashlib
+
+    value, _, _, root = admission
+    (root.parent / "report.json").write_text("saved")
+    ref = {"kind": "report", "path": "report.json", "sha256": hashlib.sha256(b"saved").hexdigest(), "size_bytes": 5}
+    value.update(workflow=[ref, {**ref, "sha256": "0" * 64}], handoff_steps=[])
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        inspect(value)

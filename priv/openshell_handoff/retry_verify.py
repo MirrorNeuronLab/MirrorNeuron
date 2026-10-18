@@ -49,15 +49,25 @@ def inspect(request):
                 sha.update(chunk)
         captured[(run, relative)] = {'run_id': run, 'path': relative, 'sha256': sha.hexdigest(), 'size_bytes': size}
 
+    # A workflow repeats the same immutable references in inputs, outputs and
+    # delivery history. Verify each complete descriptor once per invocation;
+    # different hashes/metadata and every later invocation remain independent.
+    checked = set()
+
     def references(value):
         if isinstance(value, dict):
-            if value.get('version') == VERSION:
+            handoff = value.get('version') == VERSION
+            legacy = set(value) == {'path', 'sha256'} or (isinstance(value.get('kind'), str) and isinstance(value.get('path'), str)
+                    and set(value) <= {'kind', 'path', 'sha256', 'size_bytes', 'type', 'version', 'media_type'})
+            identity = digest(value) if handoff or legacy else None
+            if identity in checked:
+                return
+            if handoff:
                 run = value['producer']['run_id']
                 if run not in run_roots:
                     raise ValueError('cross-run artifact reference')
                 resolve(run_roots[run] / '.handoff', value)
-            elif set(value) == {'path', 'sha256'} or (isinstance(value.get('kind'), str) and isinstance(value.get('path'), str)
-                    and set(value) <= {'kind', 'path', 'sha256', 'size_bytes', 'type', 'version', 'media_type'}):
+            elif legacy:
                 matched = False
                 for run, root in run_roots.items():
                     candidate = confined(root / safe(value['path']))
@@ -82,6 +92,8 @@ def inspect(request):
             else:
                 for child in value.values():
                     references(child)
+            if identity is not None:
+                checked.add(identity)
         elif isinstance(value, list):
             for child in value:
                 references(child)

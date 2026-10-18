@@ -4,6 +4,8 @@ defmodule MirrorNeuron.Runtime.RetryArtifacts do
   alias MirrorNeuron.Artifacts.StagedArtifact
   alias MirrorNeuron.Runner.OpenShellArtifactStore
 
+  @verification_timeout_ms 60_000
+
   def capture(job, ledger, manifest) do
     previous =
       case MirrorNeuron.Persistence.RedisStore.fetch_run_checkpoint(job["job_id"]) do
@@ -59,7 +61,7 @@ defmodule MirrorNeuron.Runtime.RetryArtifacts do
             )
           end)
 
-        case Task.yield(task, 10_000) || Task.shutdown(task, :brutal_kill) do
+        case Task.yield(task, @verification_timeout_ms) || Task.shutdown(task, :brutal_kill) do
           {:ok, {output, 0}} ->
             case Jason.decode(output) do
               {:ok, %{"ok" => result}} when is_map(result) -> {:ok, result}
