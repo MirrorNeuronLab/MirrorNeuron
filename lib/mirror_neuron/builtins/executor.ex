@@ -274,31 +274,34 @@ defmodule MirrorNeuron.Builtins.Executor do
     # We pass the overall invocation counter (to salt sandbox directories securely between distinct payloads or retries)
     invocation = Map.get(context, :invocation, 1)
 
-    case runner.run(
-           payload,
-           runner_config,
-           message: message,
-           attempt: attempt,
-           run_id: get_in(context, [:workflow, "run_id"]),
-           step_instance:
-             (get_in(context, [:workflow, "step_id"]) || "step") <> ":" <> context.node.node_id,
-           runtime_attempt:
-             get_in(context, [:workflow, "attempt"]) || Map.get(context, :job_attempt) || attempt,
-           lease_epoch: Map.get(context, :lease_epoch),
-           invocation: invocation,
-           coordinator_node: node(context.coordinator),
-           job_id: context.job_id,
-           agent_id: context.node.node_id,
-           agent_type: Map.get(context.node, :agent_type),
-           template_type: Map.get(context.node, :type, "generic"),
-           agent_state: state.agent_state,
-           bundle_root: context.bundle_root,
-           manifest_path: context.manifest_path,
-           payloads_path: context.payloads_path,
-           event_callback: fn event_type, event_payload ->
-             report_event(context, event_type, event_payload)
-           end
-         ) do
+    case MirrorNeuron.Runtime.NodeAdmission.run(config, context.job_id, fn ->
+           runner.run(
+             payload,
+             runner_config,
+             message: message,
+             attempt: attempt,
+             run_id: get_in(context, [:workflow, "run_id"]),
+             step_instance:
+               (get_in(context, [:workflow, "step_id"]) || "step") <> ":" <> context.node.node_id,
+             runtime_attempt:
+               get_in(context, [:workflow, "attempt"]) || Map.get(context, :job_attempt) ||
+                 attempt,
+             lease_epoch: Map.get(context, :lease_epoch),
+             invocation: invocation,
+             coordinator_node: node(context.coordinator),
+             job_id: context.job_id,
+             agent_id: context.node.node_id,
+             agent_type: Map.get(context.node, :agent_type),
+             template_type: Map.get(context.node, :type, "generic"),
+             agent_state: state.agent_state,
+             bundle_root: context.bundle_root,
+             manifest_path: context.manifest_path,
+             payloads_path: context.payloads_path,
+             event_callback: fn event_type, event_payload ->
+               report_event(context, event_type, event_payload)
+             end
+           )
+         end) do
       {:ok, result} ->
         case attach_structured_result(result, runner_config) do
           {:ok, result} ->

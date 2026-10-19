@@ -97,7 +97,7 @@ defmodule MirrorNeuron.Runtime.ScheduleOccurrence do
 
   defp result(run_id, status) do
     %{
-      action: "started",
+      action: if(status == "queued", do: "queued", else: "started"),
       run_id: run_id,
       status: status,
       pid: nil,

@@ -23,6 +23,10 @@ service JobService {
   rpc DeleteRun (DeleteRunRequest) returns (JsonResponse);
   rpc SendRunInput (SendRunInputRequest) returns (JsonResponse);
   rpc CreateJobSchedule (CreateJobScheduleRequest) returns (JsonResponse);
+  rpc ListSchedules (ScheduleRequest) returns (JsonResponse);
+  rpc GetSchedule (ScheduleRequest) returns (JsonResponse);
+  rpc UpdateSchedule (ScheduleRequest) returns (JsonResponse);
+  rpc DeleteSchedule (ScheduleRequest) returns (JsonResponse);
   rpc QueryJobResponse (QueryJobResponseRequest) returns (JsonResponse);
   rpc GetJobResponseTurn (GetJobResponseTurnRequest) returns (JsonResponse);
 }
@@ -83,6 +87,8 @@ message StartRunRequest {
 message RunRequest {
   string run_id = 1;
   uint32 version = 2;
+  // CancelRun only: reject if the queued request has already been admitted.
+  bool queued_only = 3;
 }
 
 message PlanRunRetryRequest {
@@ -120,6 +126,14 @@ message CreateJobScheduleRequest {
   string source_json = 3;
   uint32 version = 4;
   string idempotency_key = 5;
+}
+
+message ScheduleRequest {
+  string schedule_id = 1;
+  string attrs_json = 2;
+  string owner_node = 3;
+  uint32 version = 4;
+  uint64 expected_revision = 5;
 }
 
 message QueryJobResponseRequest {

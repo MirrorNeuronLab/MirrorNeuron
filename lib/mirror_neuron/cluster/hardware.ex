@@ -18,6 +18,11 @@ defmodule MirrorNeuron.Cluster.Hardware do
   def clear_snapshot, do: :persistent_term.erase({__MODULE__, :snapshot})
 
   def info do
+    snapshot_info()
+    |> Map.update(:capabilities, ["exclusive_run_v1"], &Enum.uniq(["exclusive_run_v1" | &1]))
+  end
+
+  defp snapshot_info do
     case :persistent_term.get({__MODULE__, :snapshot}, nil) do
       {reported, hardware} ->
         if System.monotonic_time(:second) - reported <= 90,

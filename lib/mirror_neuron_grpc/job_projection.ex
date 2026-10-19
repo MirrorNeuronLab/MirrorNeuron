@@ -19,6 +19,7 @@ defmodule MirrorNeuron.Grpc.JobProjection do
     graph_id job_name status type job_type workflow_id attempt attempt_id
     data_generation job_data_access owner_node submitted_at started_at updated_at
     completed_at cancelled_at result_ref workflow_state_ref manifest_ref running_time
+    admission
   )
 
   def summary(definition) when is_map(definition) do
@@ -55,10 +56,20 @@ defmodule MirrorNeuron.Grpc.JobProjection do
     |> Map.put("retry", retry_summary(record))
     |> Map.put("job_id", stable_job_id)
     |> Map.put("run_id", resolved_run_id)
+    |> put_admission(record, resolved_run_id)
     |> put_run_data_ref(record)
     |> Map.put_new("attempt_id", "#{resolved_run_id}:#{Map.get(record, "attempt", 1)}")
     |> compact_reference("manifest_ref")
   end
+
+  defp put_admission(projected, %{"status" => "queued"}, run_id) do
+    case MirrorNeuron.Runtime.NodeAdmission.receipt(run_id) do
+      {:ok, admission} -> Map.put(projected, "admission", admission)
+      _ -> projected
+    end
+  end
+
+  defp put_admission(projected, _record, _run_id), do: projected
 
   defp retry_summary(%{"status" => "failed"} = record) do
     case MirrorNeuron.Persistence.RedisStore.fetch_run_checkpoint(record["job_id"]) do

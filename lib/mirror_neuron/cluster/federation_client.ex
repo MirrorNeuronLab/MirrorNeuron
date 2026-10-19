@@ -5,7 +5,15 @@ defmodule MirrorNeuron.Cluster.FederationClient do
   alias MirrorNeuron.Cluster.NodeAdapter
   alias Mirrorneuron.Cluster.V1.{GetFederatedPeerRequest, ListServicesRequest}
   alias Mirrorneuron.Cluster.V1.ClusterService.Stub, as: ClusterStub
-  alias Mirrorneuron.Job.V1.{DeleteJobRequest, JobRequest, ListJobsRequest, RunRequest}
+
+  alias Mirrorneuron.Job.V1.{
+    DeleteJobRequest,
+    JobRequest,
+    ListJobsRequest,
+    RunRequest,
+    ScheduleRequest
+  }
+
   alias Mirrorneuron.Job.V1.JobService.Stub, as: JobStub
   alias Mirrorneuron.Observability.V1.ObservabilityService.Stub, as: ObservabilityStub
 
@@ -123,6 +131,10 @@ defmodule MirrorNeuron.Cluster.FederationClient do
   end
 
   def discover_run_owner(_run_id, _options), do: nil
+
+  def discover_schedule_owner(schedule_id, options \\ []) do
+    discover_owner(schedule_id, :get_schedule, :schedule_id, options)
+  end
 
   def list_services(node_name, opts \\ []) when is_list(opts) do
     request = %ListServicesRequest{
@@ -265,6 +277,7 @@ defmodule MirrorNeuron.Cluster.FederationClient do
 
   defp discovery_request(:job_id, job_id), do: %JobRequest{job_id: job_id, version: 1}
   defp discovery_request(:run_id, run_id), do: %RunRequest{run_id: run_id, version: 1}
+  defp discovery_request(:schedule_id, id), do: %ScheduleRequest{schedule_id: id, version: 1}
 
   def sync_peer(node_name) do
     # This request uses the existing peer-scoped channel credential. The registry

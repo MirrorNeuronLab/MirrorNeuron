@@ -61,6 +61,12 @@ defmodule MirrorNeuron.Runner.DockerCompose do
       request = %PrepareDockerComposeRequest{
         manifest_json:
           Jason.encode!(%{
+            "metadata" => %{
+              "node_admission" => %{
+                "run_id" => Keyword.get(opts, :job_id, ""),
+                "reservation_generation" => config["node_admission_generation"]
+              }
+            },
             "agents" => %{
               "nodes" => [
                 %{

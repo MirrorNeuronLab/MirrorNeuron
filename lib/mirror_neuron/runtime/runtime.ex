@@ -15,7 +15,8 @@ defmodule MirrorNeuron.Runtime do
     JobRunner,
     LifecyclePolicy,
     LocalRecovery,
-    ReliabilityStrategy
+    ReliabilityStrategy,
+    NodeAdmission
   }
 
   @default_job_call_timeout_ms 15_000
@@ -87,7 +88,8 @@ defmodule MirrorNeuron.Runtime do
     "agent registry was unavailable while looking up #{agent_id} for job #{job_id}: #{reason}"
   end
 
-  def error_message({kind, message}) when kind in [:run_retry_blocked, :invalid_run_retry], do: message
+  def error_message({kind, message}) when kind in [:run_retry_blocked, :invalid_run_retry],
+    do: message
 
   def error_message({kind, details}) when kind in [:backpressure, :retry_later] do
     job_id = detail(details, "job_id") || "unknown"
@@ -153,6 +155,7 @@ defmodule MirrorNeuron.Runtime do
   def start_job(_manifest, _opts), do: {:error, "manifest must be a normalized workflow object"}
 
   defp start_job_after_preflight(job_id, manifest, opts, bundle) do
+    manifest = NodeAdmission.pin(manifest)
     manifest_ref = bundle_ref(manifest, bundle)
     reliability = ReliabilityStrategy.resolve(manifest, manifest_ref: manifest_ref)
 
@@ -161,20 +164,115 @@ defmodule MirrorNeuron.Runtime do
         MirrorNeuron.Manifest.to_map(manifest)
       )
 
-    case Scheduler.plan(manifest, opts) do
+    with :ok <- NodeAdmission.ensure_supported() do
+      accept_job_on_node(job_id, manifest, opts, manifest_ref, reliability)
+    end
+  end
+
+  defp accept_job_on_node(job_id, manifest, opts, manifest_ref, reliability) do
+    case Scheduler.plan(manifest, Keyword.merge(opts, jobs: [], exclusive_run: true)) do
       {:ok, scheduler_plan} ->
-        start_planned_job(
-          job_id,
-          manifest,
-          opts,
-          bundle,
-          manifest_ref,
-          reliability,
-          scheduler_plan
-        )
+        with :ok <-
+               persist_initial_job(
+                 job_id,
+                 manifest,
+                 manifest_ref,
+                 reliability,
+                 scheduler_plan,
+                 Keyword.put(opts, :admission_status, "queued")
+               ),
+             {:ok, job} <- RedisStore.fetch_job(job_id),
+             {:ok, admission} <- NodeAdmission.submit(job) do
+          if admission["state"] == "queued" do
+            NodeAdmission.wake()
+            {:ok, job_id, nil}
+          else
+            case NodeAdmission.dispatch(%{"run_id" => job_id}) do
+              {:error, {:admission_wait, _}} -> {:ok, job_id, nil}
+              result -> result
+            end
+          end
+        end
 
       {:error, reason} ->
         maybe_pause_placement_failure(job_id, manifest, manifest_ref, reliability, opts, reason)
+    end
+  end
+
+  @doc false
+  def start_admitted_job(job) do
+    with {:ok, manifest} <- MirrorNeuron.Manifest.load(job["manifest"]),
+         {:ok, bundle} <- admitted_bundle(job, manifest),
+         :ok <- admitted_inputs(manifest),
+         :ok <- MirrorNeuron.BlueprintValidation.run_input_validation(bundle),
+         :ok <- MirrorNeuron.ServicePreflight.run(bundle),
+         :ok <-
+           ContextEnginePreflight.ensure_available(
+             Map.get(manifest, :required_context_engine, false)
+           ),
+         {:ok, admission} <- NodeAdmission.receipt(job["job_id"]),
+         true <- admission["state"] == "preparing" do
+      opts = [
+        job_bundle: bundle,
+        job_id: job["job_id"],
+        run_id: job["run_id"] || job["job_id"],
+        stable_job_id: job["stable_job_id"],
+        job_data_dir: job["job_data_dir"],
+        job_data_access: job["job_data_access"],
+        data_generation: job["data_generation"],
+        admission: admission
+      ]
+
+      manifest = NodeAdmission.pin(manifest, admission["generation"])
+      opts = Keyword.put(opts, :job_bundle, %{bundle | manifest: manifest})
+      reliability = ReliabilityStrategy.resolve(manifest, manifest_ref: job["manifest_ref"])
+
+      case Scheduler.plan(manifest, jobs: [], exclusive_run: true, require_live_capacity: true) do
+        {:ok, plan} ->
+          start_planned_job(
+            job["job_id"],
+            manifest,
+            opts,
+            nil,
+            job["manifest_ref"],
+            reliability,
+            plan
+          )
+
+        {:error, reason} ->
+          {:error, {:admission_wait, reason}}
+      end
+    else
+      false -> {:error, :node_not_reserved}
+      error -> error
+    end
+  end
+
+  defp admitted_inputs(manifest) do
+    case MirrorNeuron.Artifacts.SubmissionReadiness.verify(MirrorNeuron.Manifest.to_map(manifest)) do
+      {:ready, _} -> :ok
+      _ -> {:error, :queued_inputs_require_review}
+    end
+  end
+
+  defp admitted_bundle(job, manifest) do
+    reference = job["manifest_ref"] || %{}
+
+    result =
+      cond do
+        is_binary(reference["bundle_fingerprint"]) ->
+          Archive.load(reference["bundle_fingerprint"])
+
+        is_binary(reference["job_path"]) ->
+          MirrorNeuron.JobBundle.load_filesystem_path(reference["job_path"])
+
+        true ->
+          MirrorNeuron.JobBundle.load(manifest)
+      end
+
+    case result do
+      {:ok, bundle} -> {:ok, %{bundle | manifest: manifest}}
+      error -> error
     end
   end
 
@@ -274,7 +372,18 @@ defmodule MirrorNeuron.Runtime do
     end
   end
 
-  def cancel_job(job_id), do: call_job(job_id, :cancel, timeout_ms: cancel_job_call_timeout_ms())
+  def cancel_job(job_id) do
+    case RedisStore.fetch_job(job_id) do
+      {:ok, %{"status" => "queued"}} ->
+        case NodeAdmission.cancel(job_id) do
+          :ok -> {:ok, %{"job_id" => job_id, "status" => "cancelled"}}
+          error -> error
+        end
+
+      _ ->
+        call_job(job_id, :cancel, timeout_ms: cancel_job_call_timeout_ms())
+    end
+  end
 
   @doc false
   def terminate_local_job(job_id) when is_binary(job_id) do
@@ -363,6 +472,7 @@ defmodule MirrorNeuron.Runtime do
 
   defp clear_durable_cancellation(job_id, cleanup_native?) do
     with :ok <- maybe_cleanup_acknowledged_native_resources(job_id, cleanup_native?),
+         :ok <- if(cleanup_native?, do: NodeAdmission.retire(job_id), else: :ok),
          {:ok, _cancellation} <- CancellationStore.mark_public_cleared(job_id),
          :ok <- RedisStore.delete_job(job_id, preserve_cancellation_fence: true),
          {:ok, cancellation} <- CancellationStore.finalize_public_clear(job_id) do
@@ -378,6 +488,7 @@ defmodule MirrorNeuron.Runtime do
   defp clear_terminal_job(job_id, job) do
     with :ok <- prepare_job_cleanup(job, false),
          :ok <- cleanup_job_resources(job_id, job),
+         :ok <- NodeAdmission.retire(job_id),
          :ok <- RedisStore.delete_job(job_id) do
       {:ok, %{}}
     end
@@ -1095,7 +1206,13 @@ defmodule MirrorNeuron.Runtime do
         "job_name" => manifest.job_name,
         "type" => manifest.type,
         "required_context_engine" => required_context_engine(manifest),
-        "status" => "pending",
+        "status" => Keyword.get(opts, :admission_status, "pending"),
+        "admission" =>
+          Keyword.get(opts, :admission, %{
+            "owner_node" => NodeAdmission.node_name(),
+            "state" => "queued",
+            "authority_epoch" => NodeAdmission.authority_epoch()
+          }),
         "submitted_at" => timestamp(),
         "updated_at" => timestamp(),
         "root_agent_ids" => manifest.entrypoints,

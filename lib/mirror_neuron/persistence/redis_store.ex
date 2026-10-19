@@ -21,6 +21,54 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   @default_recovery_eval_ttl_seconds 24 * 60 * 60
   @delivery_consumer_group "mirror_neuron_agents"
   @runtime_status_event_max_count 10_000
+
+  def fetch_run_start_request(identity) do
+    case command(["GET", key("run-start-request", identity)]) do
+      {:ok, nil} -> {:error, :not_found}
+      {:ok, encoded} -> Jason.decode(encoded)
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  def persist_run_start_request(identity, request) do
+    with {:ok, "OK"} <-
+           command(["SET", key("run-start-request", identity), Jason.encode!(request)]),
+         :ok <- wait_for_replicas(),
+         do: {:ok, request}
+  end
+
+  def fetch_node_admission(node_name) do
+    case command(["GET", key("node-admission", node_name)]) do
+      {:ok, nil} -> {:ok, MirrorNeuron.Runtime.NodeAdmissionState.new()}
+      {:ok, encoded} -> Jason.decode(encoded)
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
+  def compare_node_admission(node_name, version, next) do
+    script = """
+    local prior = redis.call('GET', KEYS[1])
+    local version = 0
+    if prior then version = cjson.decode(prior)['version'] end
+    if version ~= tonumber(ARGV[1]) then return 0 end
+    redis.call('SET', KEYS[1], ARGV[2])
+    return 1
+    """
+
+    case command([
+           "EVAL",
+           script,
+           "1",
+           key("node-admission", node_name),
+           to_string(version),
+           Jason.encode!(next)
+         ]) do
+      {:ok, 1} -> wait_for_replicas()
+      {:ok, 0} -> {:error, :admission_conflict}
+      {:error, reason} -> {:error, format_reason(reason)}
+    end
+  end
+
   @recovery_eval_statuses ["pending", "running", "blocked", "complete", "failed"]
   @terminal_recovery_eval_statuses ["complete", "failed"]
   @service_index_fields [
@@ -2667,6 +2715,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       "graph_id" => field(job, "graph_id"),
       "job_name" => field(job, "job_name"),
       "status" => field(job, "status"),
+      "admission" => field(job, "admission"),
       "running_time" => field(job, "running_time"),
       "clock_session" => field(job, "clock_session"),
       "attempt" => field(job, "attempt", 0),
@@ -3775,6 +3824,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     schedule_map
     |> stringify_map()
     |> Map.put("schedule_id", schedule_id)
+    |> Map.update("revision", 1, &(&1 + 1))
     |> Map.put_new("created_at", timestamp())
     |> Map.put("updated_at", timestamp())
   end

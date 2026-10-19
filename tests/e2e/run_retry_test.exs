@@ -396,4 +396,56 @@ defmodule MirrorNeuron.Runtime.RunRetryIntegrationTest do
     config = %{"environment" => %{"ORIGINAL_INPUT" => "unchanged"}}
     assert {:ok, ^config} = RunRetry.invocation_config(config, %{job_id: "unknown"})
   end
+
+  test "a protected checkpoint retry waits durably behind another run and starts exactly once",
+       ctx do
+    alias MirrorNeuron.Runtime.NodeAdmission
+    :sys.suspend(NodeAdmission)
+    blocker = ctx.id <> "-blocker"
+
+    on_exit(fn ->
+      MirrorNeuron.cancel(ctx.id)
+      NodeAdmission.retire(ctx.id)
+      RedisStore.delete_job(blocker)
+      :sys.resume(NodeAdmission)
+    end)
+
+    manifest = NodeAdmission.pin(ctx.manifest)
+    job = Map.put(ctx.job, "manifest", Manifest.to_map(manifest))
+    {:ok, job} = RedisStore.persist_job(ctx.id, job)
+    checkpoint = RunRetry.checkpoint(job, ctx.checkpoint["workflow"])
+    assert :ok = RedisStore.persist_run_checkpoint(ctx.id, checkpoint, 1)
+
+    {:ok, blocking_job} =
+      RedisStore.persist_job(blocker, %{
+        "job_id" => blocker,
+        "status" => "queued",
+        "job_name" => "Other co-worker",
+        "admission" => %{"owner_node" => NodeAdmission.node_name()},
+        "manifest" => Manifest.to_map(manifest),
+        "submitted_at" => MirrorNeuron.Runtime.timestamp()
+      })
+
+    assert {:ok, %{"state" => "preparing"}} = NodeAdmission.submit(blocking_job)
+
+    request = %{
+      "expected_attempt" => 1,
+      "checkpoint_revision" => checkpoint["revision"],
+      "idempotency_key" => "retry-wait",
+      "configuration_overrides" => %{}
+    }
+
+    assert {:ok, %{"status" => "queued"} = waiting} = RunRetry.submit(ctx.id, request)
+    assert waiting["admission"]["position"] == 1
+    assert {:ok, ^waiting} = RunRetry.submit(ctx.id, request)
+    refute_receive {:executed, _, _}
+
+    {:ok, _} = RedisStore.persist_terminal_job(blocker, %{"status" => "completed"})
+    assert :ok = NodeAdmission.retire(blocker)
+    assert :ok = NodeAdmission.reconcile()
+    assert_receive {:executed, "work", %{"retry_context" => %{"attempt" => 2}}}, 10_000
+    refute_receive {:executed, "done", _}
+    refute_receive {:executed, "work", _}
+    assert {:ok, %{"attempt" => 2, "status" => "accepted"}} = RunRetry.submit(ctx.id, request)
+  end
 end

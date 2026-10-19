@@ -526,3 +526,16 @@ Runtime events use the shared [`mn.runtime.event.v1` contract](../mn-python-sdk/
 including level, blueprint owner, UTC timestamp and actor attribution.
 The SDK selects meaningful activity for the CLI, API, desktop and web monitors;
 raw events remain available for diagnostics.
+
+
+### Automatic waiting for a busy PC
+
+A PC owns one active run, with all its GPUs, CPU and memory shared by that run's
+workers/models. A second start is accepted into its durable FIFO and starts
+automatically after terminal cleanup. `paused` retains the reservation. Read
+`admission` on the Run and inspect its `queue_<run_id>` schedule; cancelling that
+schedule cannot stop a run that has already begun. Core and native SDK peers must
+advertise `exclusive_run_v1`. See the exclusive run admission section of SPEC.md.
+Keyed starts retain Redis-backed request identities and receipts across Core
+restart, including reconciliation after an interrupted receipt write. Queue
+schedule revisions advance on mutation so stale cancel/reschedule controls fail.

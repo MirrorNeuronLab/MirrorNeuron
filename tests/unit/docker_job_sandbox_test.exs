@@ -58,6 +58,19 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandboxTest do
              DockerJobSandbox.ensure("job", "prepared:latest", config)
   end
 
+  test "stops only the prepared worker and accepts confirmed prior removal", %{root: root} do
+    {config, calls} = docker(root, "running")
+    assert :ok = DockerJobSandbox.stop_prepared_container(config)
+    assert File.read!(calls) == "stop --time 10 owned-worker\n"
+    {config, _calls} = docker(root, "missing")
+    assert :ok = DockerJobSandbox.stop_prepared_container(config)
+  end
+
+  test "retains cleanup failure when Docker cannot confirm worker removal", %{root: root} do
+    {config, _calls} = docker(root, "unavailable")
+    assert {:error, %{"exit_code" => 7}} = DockerJobSandbox.stop_prepared_container(config)
+  end
+
   defp docker(root, state, start_code \\ 0) do
     executable = Path.join(root, "docker")
     calls = Path.join(root, "calls")
@@ -72,6 +85,11 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandboxTest do
         ;;
       start)
         if [ '#{start_code}' != 0 ]; then echo 'start failed' >&2; exit #{start_code}; fi
+        echo owned-worker
+        ;;
+      stop)
+        if [ '#{state}' = missing ]; then echo 'No such container' >&2; exit 1; fi
+        if [ '#{state}' = unavailable ]; then echo 'Cannot connect to the Docker daemon' >&2; exit 7; fi
         echo owned-worker
         ;;
       *) exit 90 ;;

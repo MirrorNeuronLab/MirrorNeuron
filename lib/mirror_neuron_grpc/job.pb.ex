@@ -141,6 +141,7 @@ defmodule Mirrorneuron.Job.V1.RunRequest do
 
   field(:run_id, 1, type: :string, json_name: "runId")
   field(:version, 2, type: :uint32)
+  field(:queued_only, 3, type: :bool, json_name: "queuedOnly")
 end
 
 defmodule Mirrorneuron.Job.V1.PlanRunRetryRequest do
@@ -213,6 +214,21 @@ defmodule Mirrorneuron.Job.V1.CreateJobScheduleRequest do
   field(:source_json, 3, type: :string, json_name: "sourceJson")
   field(:version, 4, type: :uint32)
   field(:idempotency_key, 5, type: :string, json_name: "idempotencyKey")
+end
+
+defmodule Mirrorneuron.Job.V1.ScheduleRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.ScheduleRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:schedule_id, 1, type: :string, json_name: "scheduleId")
+  field(:attrs_json, 2, type: :string, json_name: "attrsJson")
+  field(:owner_node, 3, type: :string, json_name: "ownerNode")
+  field(:version, 4, type: :uint32)
+  field(:expected_revision, 5, type: :uint64, json_name: "expectedRevision")
 end
 
 defmodule Mirrorneuron.Job.V1.QueryJobResponseRequest do
@@ -330,6 +346,14 @@ defmodule Mirrorneuron.Job.V1.JobService.Service do
     Mirrorneuron.Job.V1.CreateJobScheduleRequest,
     Mirrorneuron.Job.V1.JsonResponse
   )
+
+  rpc(:ListSchedules, Mirrorneuron.Job.V1.ScheduleRequest, Mirrorneuron.Job.V1.JsonResponse)
+
+  rpc(:GetSchedule, Mirrorneuron.Job.V1.ScheduleRequest, Mirrorneuron.Job.V1.JsonResponse)
+
+  rpc(:UpdateSchedule, Mirrorneuron.Job.V1.ScheduleRequest, Mirrorneuron.Job.V1.JsonResponse)
+
+  rpc(:DeleteSchedule, Mirrorneuron.Job.V1.ScheduleRequest, Mirrorneuron.Job.V1.JsonResponse)
 
   rpc(
     :QueryJobResponse,

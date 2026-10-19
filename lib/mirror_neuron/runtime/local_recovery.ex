@@ -340,15 +340,42 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
         job_data_access: job["job_data_access"],
         data_generation: job["data_generation"],
         scheduler_plan: job["scheduler"],
+        admission: job["admission"],
         requested_recovery_policy: job["requested_recovery_policy"],
         recovery_policy: job["recovery_policy"],
         reliability: job["reliability"]
       ]
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)
 
-    spec = {JobRunner, {job_id, bundle.manifest, opts}}
+    bundle =
+      if get_in(job, ["manifest", "metadata", "node_admission"]) do
+        %{
+          bundle
+          | manifest:
+              MirrorNeuron.Runtime.NodeAdmission.pin(
+                bundle.manifest,
+                get_in(job, ["admission", "generation"])
+              )
+        }
+      else
+        bundle
+      end
 
-    case Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) do
+    spec = {JobRunner, {job_id, bundle.manifest, opts}}
+    stored_owner = get_in(job, ["manifest", "metadata", "node_admission", "owner_node"])
+
+    start_result =
+      if stored_owner && stored_owner != MirrorNeuron.Runtime.NodeAdmission.node_name() do
+        {:error, :run_owner_unavailable}
+      else
+        MirrorNeuron.Runtime.NodeAdmission.run(
+          if(stored_owner, do: %{"node_admission_owner" => stored_owner}, else: %{}),
+          job_id,
+          fn -> Horde.DynamicSupervisor.start_child(MirrorNeuron.Runtime.JobSupervisor, spec) end
+        )
+      end
+
+    case start_result do
       {:ok, _pid} ->
         maybe_mark_started(job, event_type, reason)
 

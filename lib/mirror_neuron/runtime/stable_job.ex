@@ -484,13 +484,33 @@ defmodule MirrorNeuron.Runtime.StableJob do
   end
 
   defp finish_started_run({:ok, run_id, pid}, definition, run_id, replacement) do
+    run =
+      case RedisStore.fetch_job(run_id) do
+        {:ok, value} -> value
+        _ -> %{}
+      end
+
+    queued = run["status"] == "queued"
+
+    admission =
+      case MirrorNeuron.Runtime.NodeAdmission.receipt(run_id) do
+        {:ok, value} -> value
+        _ -> run["admission"]
+      end
+
     {:ok,
      replacement
      |> Map.merge(%{
-       action: if(replacement.replaced_run_ids == [], do: "started", else: "replaced"),
+       action:
+         if(queued,
+           do: "queued",
+           else: if(replacement.replaced_run_ids == [], do: "started", else: "replaced")
+         ),
        job_id: definition["job_id"],
        run_id: run_id,
-       status: "pending",
+       status: if(queued, do: "queued", else: "pending"),
+       admission: admission,
+       message: admission && admission["message"],
        pid: pid
      })}
   end
@@ -633,7 +653,14 @@ defmodule MirrorNeuron.Runtime.StableJob do
         "job_data_access" => access,
         "data_generation" => definition["data_generation"]
       })
+      |> Map.put("queued_definition", %{
+        "bundle_fingerprint" => get_in(definition, ["bundle_ref", "bundle_fingerprint"]),
+        "configuration_hash" =>
+          :crypto.hash(:sha256, :erlang.term_to_binary(definition["resolved_configuration"]))
+          |> Base.encode16(case: :lower)
+      })
       |> maybe_put("schedule_dispatch", Keyword.get(opts, :schedule_metadata))
+      |> maybe_put("run_start_request", Keyword.get(opts, :start_request_identity))
 
     environment = %{
       "MN_JOB_ID" => definition["job_id"],
@@ -994,7 +1021,10 @@ defmodule MirrorNeuron.Runtime.StableJob do
 
   defp continue_scheduled_service_transition(definition, nil, cleanup, opts) do
     with {:ok, started} <- do_start_run_result(definition, opts) do
-      action = if cleanup.replaced_run_ids == [], do: "started", else: "replaced"
+      action =
+        if started.status == "queued",
+          do: "queued",
+          else: if(cleanup.replaced_run_ids == [], do: "started", else: "replaced")
 
       {:ok,
        started
@@ -1033,10 +1063,10 @@ defmodule MirrorNeuron.Runtime.StableJob do
          cleanup,
          _opts
        )
-       when status in ["pending", "validated", "scheduled", "running"] do
+       when status in ["queued", "pending", "validated", "scheduled", "running"] do
     {:ok,
      Map.merge(cleanup, %{
-       action: "already_running",
+       action: if(status == "queued", do: "already_queued", else: "already_running"),
        job_id: definition["job_id"],
        run_id: run["run_id"],
        status: run["status"],

@@ -131,6 +131,7 @@ defmodule MirrorNeuron.Scheduler do
            |> normalize_nodes(lookup_node_state, coordination_store)
            |> apply_coordination_store_eligibility(coordination_store),
          nodes <- exclude_nodes(nodes, Keyword.get(opts, :exclude_nodes, [])),
+         nodes <- exclusive_capacity(nodes, opts),
          :ok <- ensure_coordination_store(nodes, coordination_store),
          :ok <- ensure_nodes(nodes),
          blob_refs <- BlobRef.collect(Manifest.to_map(manifest)),
@@ -138,6 +139,11 @@ defmodule MirrorNeuron.Scheduler do
            opts
            |> Keyword.get_lazy(:jobs, &active_jobs/0)
            |> usage_from_jobs(Keyword.get(opts, :ignore_job_ids, [])),
+         usage <-
+           if(Keyword.get(opts, :exclusive_run, false),
+             do: Map.new(nodes, &{&1["name"], Map.put(empty_usage(), "share_devices", true)}),
+             else: usage
+           ),
          only_agent_ids <- Keyword.get(opts, :only_agent_ids),
          service_instances <- Keyword.get(opts, :service_instances),
          {:ok, placements, placed_demands, _usage} <-
@@ -182,6 +188,47 @@ defmodule MirrorNeuron.Scheduler do
       "requirements" => %{},
       "generated_at" => MirrorNeuron.Runtime.timestamp()
     }
+  end
+
+  defp exclusive_capacity(nodes, opts) do
+    if Keyword.get(opts, :exclusive_run, false) and
+         not Keyword.get(opts, :require_live_capacity, false) do
+      Enum.map(nodes, fn node ->
+        total = number_value(get_in(node, ["hardware", "memory", "total_mb"]))
+
+        capacity =
+          if total,
+            do: Map.put(node["capacity"], "memory_mb", total * Resource.limit_ratio(:memory)),
+            else: node["capacity"]
+
+        devices =
+          Enum.map(node["devices"], fn device ->
+            if is_number(device["memory_total_mb"]),
+              do: Map.put(device, "memory_free_mb", device["memory_total_mb"]),
+              else: device
+          end)
+
+        node |> Map.put("capacity", capacity) |> Map.put("devices", devices)
+      end)
+    else
+      if Keyword.get(opts, :exclusive_run, false) do
+        Enum.map(nodes, fn node ->
+          case number_value(get_in(node, ["hardware", "memory", "available_mb"])) do
+            value when is_number(value) ->
+              put_in(
+                node,
+                ["capacity", "memory_mb"],
+                max(value, 0) * Resource.limit_ratio(:memory)
+              )
+
+            _ ->
+              node
+          end
+        end)
+      else
+        nodes
+      end
+    end
   end
 
   defp normalize_job_type(manifest) do
@@ -683,6 +730,7 @@ defmodule MirrorNeuron.Scheduler do
 
   defp normalize_usage(%{"resources" => resources} = usage) do
     %{
+      "share_devices" => Map.get(usage, "share_devices", false),
       "resources" => normalize_resources(resources),
       "devices" => Map.get(usage, "devices", MapSet.new()) |> to_mapset(),
       "ports" => Map.get(usage, "ports", MapSet.new()) |> to_mapset()
@@ -704,9 +752,21 @@ defmodule MirrorNeuron.Scheduler do
 
   defp add_usage(used, resources, allocation) do
     used = normalize_usage(used)
+    combined = add_resources(used["resources"], resources)
+
+    combined =
+      if used["share_devices"],
+        do:
+          Map.put(
+            combined,
+            "gpu_count",
+            max(used["resources"]["gpu_count"] || 0, resources["gpu_count"] || 0)
+          ),
+        else: combined
 
     %{
-      "resources" => add_resources(used["resources"], resources),
+      "share_devices" => used["share_devices"],
+      "resources" => combined,
       "devices" => MapSet.union(used["devices"], allocated_device_ids(allocation)),
       "ports" => MapSet.union(used["ports"], allocated_port_keys(allocation))
     }
@@ -716,8 +776,22 @@ defmodule MirrorNeuron.Scheduler do
     left = normalize_usage(left)
     right = normalize_usage(right)
 
+    shared = left["share_devices"] || right["share_devices"]
+    resources = add_resources(left["resources"], right["resources"])
+
+    resources =
+      if shared,
+        do:
+          Map.put(
+            resources,
+            "gpu_count",
+            max(left["resources"]["gpu_count"] || 0, right["resources"]["gpu_count"] || 0)
+          ),
+        else: resources
+
     %{
-      "resources" => add_resources(left["resources"], right["resources"]),
+      "share_devices" => shared,
+      "resources" => resources,
       "devices" => MapSet.union(left["devices"], right["devices"]),
       "ports" => MapSet.union(left["ports"], right["ports"])
     }
@@ -1303,7 +1377,12 @@ defmodule MirrorNeuron.Scheduler do
     used_resources = normalize_usage(used)["resources"]
 
     Enum.all?(@resource_keys, fn key ->
-      Map.get(used_resources, key, 0) + Map.get(ask, key, 0) <= Map.get(capacity, key, 0)
+      required =
+        if key == "gpu_count" and Map.get(used, "share_devices", false),
+          do: max(Map.get(used_resources, key, 0), Map.get(ask, key, 0)),
+          else: Map.get(used_resources, key, 0) + Map.get(ask, key, 0)
+
+      required <= Map.get(capacity, key, 0)
     end)
   end
 
@@ -1419,7 +1498,9 @@ defmodule MirrorNeuron.Scheduler do
   defp allocate_devices(node, used, resource_request) do
     requests = ResourceSpec.scheduling_devices(resource_request)
     devices = Map.get(node, "devices", [])
-    used_device_ids = used["devices"]
+
+    used_device_ids =
+      if Map.get(used, "share_devices", false), do: MapSet.new(), else: used["devices"]
 
     Enum.reduce_while(requests, {:ok, [], used_device_ids}, fn request,
                                                                {:ok, selected, used_ids} ->

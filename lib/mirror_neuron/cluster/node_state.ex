@@ -205,6 +205,7 @@ defmodule MirrorNeuron.Cluster.NodeState do
       attrs =
         %{"node_role" => MirrorNeuron.Application.node_role()}
         |> Map.put("hardware", hardware)
+        |> Map.put("admission", admission_advertisement())
         |> Map.put("coordination_store", coordination_store)
         |> Map.put("coordination_store_blocked", not coordination_healthy)
         |> Map.merge(Profile.node_advertisement())
@@ -239,6 +240,17 @@ defmodule MirrorNeuron.Cluster.NodeState do
       Application.get_env(:mirror_neuron, :coordination_store, RedisStore)
 
     coordination_store.coordination_store_status()
+  end
+
+  defp admission_advertisement do
+    case MirrorNeuron.Runtime.NodeAdmission.snapshot() do
+      {:ok, state} ->
+        Map.take(state, ["holder", "queue", "generation", "legacy"])
+        |> Map.put("capability", "exclusive_run_v1")
+
+      _ ->
+        %{"capability" => "exclusive_run_v1", "state" => "unavailable"}
+    end
   end
 
   def mark_profile_health(node, profile_name, status, attrs \\ %{}) do

@@ -20,6 +20,11 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
   @interface_version 1
   @unavailable_status GRPC.Status.unavailable()
 
+  defdelegate list_schedules(request, stream), to: MirrorNeuron.Grpc.Handlers.Schedule
+  defdelegate get_schedule(request, stream), to: MirrorNeuron.Grpc.Handlers.Schedule
+  defdelegate update_schedule(request, stream), to: MirrorNeuron.Grpc.Handlers.Schedule
+  defdelegate delete_schedule(request, stream), to: MirrorNeuron.Grpc.Handlers.Schedule
+
   def create_job(request, stream) do
     owner_node = Support.blank_to_nil(request.owner_node) || to_string(NodeAdapter.self())
 
@@ -168,8 +173,35 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
 
   def start_run(request, stream) do
     case remote_job_owner(request.job_id) do
-      nil -> start_local_run(request)
-      owner -> forward_call(owner, :start_run, request, stream)
+      nil ->
+        start_local_run(request)
+
+      owner ->
+        ensure_peer_admission!(owner)
+        forward_call(owner, :start_run, request, stream)
+    end
+  end
+
+  defp ensure_peer_admission!(owner) do
+    response =
+      FederationClient.call_cluster(
+        owner,
+        :get_resource,
+        %Mirrorneuron.Cluster.V1.GetResourceRequest{version: 1}
+      )
+
+    report = Support.decode_json_map(response.resource_json)
+
+    supported =
+      Enum.any?(report["nodes"] || [], fn node ->
+        node["name"] == owner and get_in(node, ["admission", "capability"]) == "exclusive_run_v1"
+      end)
+
+    unless supported do
+      raise GRPC.RPCError,
+        status: GRPC.Status.failed_precondition(),
+        message:
+          "The selected PC does not advertise exclusive_run_v1. Update its runtime before starting protected work."
     end
   end
 
@@ -181,12 +213,15 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
       |> Keyword.put(:replace_existing_run, request.replace_existing_run)
 
     result =
-      Idempotency.run(
-        "start-run:#{request.job_id}",
+      MirrorNeuron.Runtime.RunStartRequest.run(
+        request.job_id,
         request.idempotency_key,
         {request.run_id, request.inputs_json, request.replace_existing_run},
-        fn ->
-          MirrorNeuron.start_run_result(request.job_id, opts)
+        fn run_id, identity ->
+          MirrorNeuron.start_run_result(
+            request.job_id,
+            opts |> Keyword.put(:run_id, run_id) |> Keyword.put(:start_request_identity, identity)
+          )
         end
       )
 
@@ -297,8 +332,21 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     end
   end
 
-  def cancel_run(request, stream),
-    do: route_run_control(request, :cancel_run, &MirrorNeuron.cancel/1, stream)
+  def cancel_run(request, stream) do
+    cancel =
+      if request.queued_only do
+        fn id ->
+          case MirrorNeuron.Runtime.NodeAdmission.cancel(id) do
+            :ok -> {:ok, %{"job_id" => id, "status" => "cancelled"}}
+            error -> error
+          end
+        end
+      else
+        &MirrorNeuron.cancel/1
+      end
+
+    route_run_control(request, :cancel_run, cancel, stream)
+  end
 
   def delete_run(request, stream) do
     case remote_run_owner(request.run_id) do

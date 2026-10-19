@@ -157,6 +157,29 @@ defmodule MirrorNeuron.Runtime.JobCleanupTest do
     refute_receive {:cleanup_rpc, _, RunnerResources, :release_run_models, _, _}
   end
 
+  test "protected terminal cleanup drains its owner without touching an independent PC" do
+    NodeAdapterStub.reset(self())
+
+    job = %{
+      "status" => "completed",
+      "manifest" => %{"metadata" => %{"node_admission" => %{"owner_node" => "placed@lab"}}}
+    }
+
+    assert :ok = JobCleanup.cleanup_sandboxes("protected-run", job, [])
+
+    for {module, function} <- [
+          {HostLocal, :terminate_job},
+          {OpenShellJobSandbox, :cleanup_job_local},
+          {DockerJobSandbox, :cleanup_job_local},
+          {RunnerResources, :stop_run_workers},
+          {RunnerResources, :release_run_models}
+        ] do
+      assert_receive {:cleanup_rpc, :placed@lab, ^module, ^function, ["protected-run"], 15_000}
+    end
+
+    refute_receive {:cleanup_rpc, _, _, _, _, _}
+  end
+
   test "pause cleanup targets only interrupted agents on every placement owner" do
     NodeAdapterStub.reset(self())
     job = %{scheduler: %{placements: [%{node: :placed@lab}]}}

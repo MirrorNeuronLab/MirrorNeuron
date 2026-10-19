@@ -3369,6 +3369,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       job_name: state.manifest.job_name,
       required_context_engine: Map.get(state.manifest, :required_context_engine, false),
       status: state.status,
+      admission: Keyword.get(state.opts, :admission),
       clock_session: state.clock_session,
       attempt: state.attempt,
       attempt_started_at: state.attempt_started_at,

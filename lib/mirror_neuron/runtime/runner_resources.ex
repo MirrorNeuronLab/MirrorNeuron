@@ -17,6 +17,25 @@ defmodule MirrorNeuron.Runtime.RunnerResources do
   ]
 
   @doc false
+  def stop_run_workers(run_id) do
+    with {:ok, job} <- RedisStore.fetch_job(run_id) do
+      stopped =
+        job
+        |> node_configs()
+        |> Enum.filter(&docker_worker_config?/1)
+        |> Enum.uniq_by(&detail(&1, "docker_worker_container_name"))
+        |> Enum.reduce_while(:ok, fn config, :ok ->
+          case MirrorNeuron.Sandbox.DockerJobSandbox.stop_prepared_container(config) do
+            :ok -> {:cont, :ok}
+            error -> {:halt, error}
+          end
+        end)
+
+      with :ok <- stopped, do: cleanup_prepared_compose_projects(job)
+    end
+  end
+
+  @doc false
   def cleanup_docker_worker(job_id) when is_binary(job_id) and job_id != "" do
     request = %CleanupDockerWorkerRequest{job_id: job_id, version: 1}
 

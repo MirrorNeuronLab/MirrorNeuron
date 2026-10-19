@@ -74,6 +74,17 @@ defmodule MirrorNeuron.Runtime.ScheduleOccurrenceTest do
     refute_receive {:started, _}
   end
 
+  test "a waiting occurrence replays as queued without starting it again" do
+    assert {:ok, first} =
+             run(fn id -> {:ok, %{started(id) | action: "queued", status: "queued"}} end)
+
+    assert first.status == "queued"
+    assert {:ok, replay} = run(fn _ -> flunk("duplicate queued start") end)
+    assert replay.action == "queued"
+    assert replay.status == "queued"
+    assert replay.run_id == first.run_id
+  end
+
   test "reconciles a committed run after receipt persistence fails" do
     Agent.update(Store, &%{&1 | fail_commit: true})
     parent = self()

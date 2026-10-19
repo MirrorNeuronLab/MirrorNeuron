@@ -118,7 +118,7 @@ defmodule MirrorNeuron.Runtime.RunRetry do
     end
   end
 
-  defp do_submit(job, attrs) do
+  defp do_submit(job, attrs, admitted \\ false) do
     with {:ok, prepared} <- prepare(job, attrs["configuration_overrides"] || %{}),
          true <-
            attrs["expected_attempt"] == job["attempt"] and
@@ -148,10 +148,41 @@ defmodule MirrorNeuron.Runtime.RunRetry do
         reliability: job["reliability"]
       ]
 
-      case Horde.DynamicSupervisor.start_child(
-             MirrorNeuron.Runtime.JobSupervisor,
-             {JobRunner, {job["job_id"], prepared.bundle.manifest, opts}}
-           ) do
+      start = fn manifest ->
+        admission =
+          case MirrorNeuron.Runtime.NodeAdmission.receipt(job["job_id"]) do
+            {:ok, receipt} -> receipt
+            _ -> job["admission"]
+          end
+
+        opts = Keyword.put(opts, :admission, admission)
+
+        Horde.DynamicSupervisor.start_child(
+          MirrorNeuron.Runtime.JobSupervisor,
+          {JobRunner,
+           {job["job_id"], manifest,
+            Keyword.put(opts, :job_bundle, %{prepared.bundle | manifest: manifest})}}
+        )
+      end
+
+      result =
+        if admitted do
+          with {:ok, receipt} <- MirrorNeuron.Runtime.NodeAdmission.receipt(job["job_id"]) do
+            start.(
+              MirrorNeuron.Runtime.NodeAdmission.pin(
+                prepared.bundle.manifest,
+                receipt["generation"]
+              )
+            )
+          end
+        else
+          MirrorNeuron.Runtime.NodeAdmission.retry(job, prepared.bundle.manifest, request, start)
+        end
+
+      case result do
+        {:queued, receipt} ->
+          {:ok, receipt}
+
         {:ok, _pid} ->
           {:ok, current} = RedisStore.fetch_job(job["job_id"])
 
@@ -175,10 +206,28 @@ defmodule MirrorNeuron.Runtime.RunRetry do
     end
   end
 
+  @doc false
+  def dispatch_queued(%{"queued_retry" => request} = job) do
+    # Admission holds this run's start gate. Reverify the original checkpoint
+    # and inputs before opening a new attempt; never turn a retry into fresh work.
+    case do_submit(
+           Map.put(job, "status", "failed"),
+           Map.drop(request, ["request_digest", "effective_configuration_overrides"]),
+           true
+         ) do
+      {:ok, _} -> {:ok, job["job_id"], nil}
+      error -> error
+    end
+  end
+
   # Called only after JobRunner has acquired a new fenced lease.
   def begin_attempt(job_id, manifest, %{job: prior, workflow: workflow, request: request}, lease) do
     with {:ok, current} <- RedisStore.fetch_job(job_id),
-         true <- current["status"] == "failed" and current["attempt"] == prior["attempt"] do
+         true <-
+           (current["status"] == "failed" or
+              (current["status"] == "queued" and
+                 get_in(current, ["queued_retry", "request_digest"]) == request["request_digest"])) and
+             current["attempt"] == prior["attempt"] do
       attempt = prior["attempt"] + 1
 
       history =
@@ -222,6 +271,7 @@ defmodule MirrorNeuron.Runtime.RunRetry do
         "restart_reason" => "checkpoint_retry",
         "recovery_mode" => "checkpoint_retry",
         "retry_request" => request,
+        "queued_retry" => nil,
         "attempt_history" => history,
         "retry_receipts" => receipts,
         "pending_workflow_completion" => nil,
@@ -365,9 +415,14 @@ defmodule MirrorNeuron.Runtime.RunRetry do
          {:ok, nil} <- RedisStore.get_lease("job:#{job["job_id"]}") do
       if is_binary(job["stable_job_id"]) do
         with {:ok, runs} <- StableJob.list_runs(job["stable_job_id"]) do
-          if Enum.any?(runs, &(&1["status"] in ~w(pending running paused cancelling))),
-            do: {:error, {:run_retry_blocked, "Another run is active. Stop it before retrying."}},
-            else: :ok
+          if Enum.any?(
+               runs,
+               &(&1["run_id"] != (job["run_id"] || job["job_id"]) and
+                   &1["status"] in ~w(queued pending running paused cancelling))
+             ),
+             do:
+               {:error, {:run_retry_blocked, "Another run is active. Stop it before retrying."}},
+             else: :ok
         end
       else
         :ok

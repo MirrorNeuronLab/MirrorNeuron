@@ -23,6 +23,9 @@ defmodule MirrorNeuron.Resource do
     |> put_usable_totals()
   end
 
+  def set(%{"operation" => "node_admission"} = attrs),
+    do: MirrorNeuron.Runtime.NodeAdmission.command(attrs)
+
   def set(attrs) when is_map(attrs) do
     with {:ok, updates} <- normalize_limits(attrs),
          next_limits <- Map.merge(limits(), updates),
@@ -97,6 +100,7 @@ defmodule MirrorNeuron.Resource do
 
     %{
       "name" => name,
+      "admission" => node_admission(node, name),
       "display_name" => node_display_name(node, platform, name),
       "hostname" =>
         Map.get(node, :hostname) || Map.get(node, "hostname") || map_get(platform, "hostname"),
@@ -157,6 +161,21 @@ defmodule MirrorNeuron.Resource do
       "runtime_drivers" => [],
       "host_paths" => []
     }
+  end
+
+  defp node_admission(node, name) do
+    if to_string(name) == MirrorNeuron.Runtime.NodeAdmission.node_name() do
+      case MirrorNeuron.Runtime.NodeAdmission.snapshot() do
+        {:ok, state} ->
+          Map.take(state, ["holder", "queue", "generation", "legacy"])
+          |> Map.put("capability", "exclusive_run_v1")
+
+        _ ->
+          %{"capability" => "exclusive_run_v1", "state" => "unavailable"}
+      end
+    else
+      node_attr(node, :admission, %{})
+    end
   end
 
   defp node_attr(node, key, default) when is_map(node) do

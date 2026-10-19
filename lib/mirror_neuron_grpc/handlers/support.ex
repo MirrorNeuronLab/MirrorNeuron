@@ -172,6 +172,16 @@ defmodule MirrorNeuron.Grpc.Handlers.Support do
   defp runtime_error_status({:service_run_cleanup_failed, _run_id, _reason}),
     do: GRPC.Status.failed_precondition()
 
+  defp runtime_error_status(reason)
+       when reason in [
+              :run_already_admitted,
+              :run_not_queued,
+              :stale_node_reservation,
+              :node_requests_active
+            ],
+       do: GRPC.Status.failed_precondition()
+
+  defp runtime_error_status(:node_admission_unavailable), do: GRPC.Status.unavailable()
   defp runtime_error_status(:revision_mismatch), do: GRPC.Status.failed_precondition()
   defp runtime_error_status(:invalid_revision), do: GRPC.Status.invalid_argument()
   defp runtime_error_status(:invalid_page_token), do: GRPC.Status.invalid_argument()

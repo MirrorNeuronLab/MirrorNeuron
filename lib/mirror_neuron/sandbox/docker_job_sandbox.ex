@@ -10,6 +10,25 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
   def cleanup_job_local(job_id, _config \\ %{}),
     do: MirrorNeuron.Runner.DockerCommand.terminate_job(job_id)
 
+  def stop_prepared_container(config) when is_map(config) do
+    case prepared_container_name(config) do
+      name when is_binary(name) and name != "" ->
+        case docker_cmd(["stop", "--time", "10", name], config) do
+          {:ok, _output} ->
+            :ok
+
+          {:error, %{"logs" => logs}} = error ->
+            if String.contains?(logs, "No such container"), do: :ok, else: error
+
+          error ->
+            error
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
   def reset_prepared_container(config) when is_map(config) do
     case prepared_container_name(config) do
       name when is_binary(name) and name != "" ->

@@ -43,7 +43,11 @@ defmodule MirrorNeuron.Runtime.JobCleanup do
   def cleanup_sandboxes(job_id, job, agents) when is_list(agents) do
     resources =
       if detail(job, "status") in ["completed", "failed", "cancelled", "deleted"] do
-        @sandbox_resources ++ [{RunnerResources, :release_run_models, "model residency"}]
+        @sandbox_resources ++
+          [
+            {RunnerResources, :stop_run_workers, "prepared workers"},
+            {RunnerResources, :release_run_models, "model residency"}
+          ]
       else
         @sandbox_resources
       end
@@ -88,7 +92,8 @@ defmodule MirrorNeuron.Runtime.JobCleanup do
   end
 
   defp cleanup_nodes(job, agents) do
-    connected_nodes = [NodeAdapter.self() | NodeAdapter.list()]
+    owner = get_in(job, ["manifest", "metadata", "node_admission", "owner_node"])
+    connected_nodes = if owner, do: [owner], else: [NodeAdapter.self() | NodeAdapter.list()]
 
     placement_nodes =
       job

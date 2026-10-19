@@ -46,6 +46,36 @@ defmodule MirrorNeuron.SchedulerTest do
     Manifest.load(raw)
   end
 
+  test "one reserved GPU can serve multiple workers and models within one run" do
+    {:ok, manifest} =
+      load_manifest(%{
+        "manifest_version" => "1.0",
+        "graph_id" => "shared-run-gpu",
+        "entrypoints" => ["a", "b"],
+        "nodes" =>
+          Enum.map(["a", "b"], fn id ->
+            %{
+              "node_id" => id,
+              "agent_type" => "executor",
+              "resources" => %{"cpu_cores" => 1, "memory_mb" => 1024, "gpu_count" => 1}
+            }
+          end),
+        "edges" => [],
+        "policies" => %{"recovery_mode" => "local_restart"}
+      })
+
+    assert {:ok, plan} =
+             Scheduler.plan(manifest, nodes: [cuda_node()], jobs: [], exclusive_run: true)
+
+    assert length(plan["placements"]) == 2
+    assert Enum.all?(plan["placements"], &(&1["node"] == "cuda@lab"))
+
+    ids =
+      Enum.map(plan["placements"], &get_in(&1, ["allocations", "devices", Access.at(0), "id"]))
+
+    assert Enum.uniq(ids) == ["cuda-0"]
+  end
+
   test "plan inspection helpers return stable defaults" do
     plan = %{
       "placements" => [

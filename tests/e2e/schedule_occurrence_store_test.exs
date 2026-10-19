@@ -12,6 +12,20 @@ defmodule MirrorNeuron.Persistence.ScheduleOccurrenceStoreTest do
     %{schedule_id: schedule_id, lock: lock}
   end
 
+  test "schedule revisions advance for ordinary and fenced writes", %{schedule_id: id, lock: lock} do
+    assert {:ok, %{"revision" => 1} = first} = RedisStore.fetch_schedule(id)
+    assert {:ok, %{"revision" => 2} = second} = RedisStore.persist_schedule(id, first)
+
+    assert {:ok, %{"revision" => 3}} =
+             RedisStore.persist_schedule_fenced(
+               id,
+               second,
+               lock.lease_name,
+               lock.owner,
+               lock.lease["epoch"]
+             )
+  end
+
   test "atomic reservation has one winner and survives a new state lease", %{
     schedule_id: id,
     lock: lock

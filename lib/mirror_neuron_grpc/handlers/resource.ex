@@ -44,10 +44,11 @@ defmodule MirrorNeuron.Grpc.Handlers.Resource do
     }
   end
 
-  def set_resource(request, _stream) do
+  def set_resource(request, stream) do
     MirrorNeuron.Grpc.NetworkOnly.reject_if_enabled!("SetResource")
 
     with {:ok, attrs} <- Jason.decode(request.resource_json),
+         :ok <- authorize_admission(attrs, stream),
          {:ok, resource} <- MirrorNeuron.resource_set(attrs) do
       %SetResourceResponse{
         resource_json: Support.versioned_json(resource),
@@ -63,4 +64,11 @@ defmodule MirrorNeuron.Grpc.Handlers.Resource do
         raise GRPC.RPCError, status: :invalid_argument, message: to_string(reason)
     end
   end
+
+  defp authorize_admission(%{"operation" => "node_admission"}, stream) do
+    MirrorNeuron.Grpc.Auth.authorize_identity!(stream)
+    :ok
+  end
+
+  defp authorize_admission(_attrs, _stream), do: :ok
 end

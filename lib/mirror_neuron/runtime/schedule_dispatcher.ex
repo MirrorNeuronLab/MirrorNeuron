@@ -35,6 +35,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
         |> Map.put("schedule_id", schedule_id)
         |> Map.put("job_id", job_id)
         |> Map.put("owner_node", definition["owner_node"])
+        |> Map.put("authority_epoch", MirrorNeuron.Runtime.NodeAdmission.authority_epoch())
         |> Map.put("manifest", definition["manifest"])
         |> Map.put("bundle_ref", definition["bundle_ref"])
         |> Map.put("source", stringify(Keyword.get(opts, :source, %{})))
@@ -59,8 +60,23 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
   defp ensure_stable_job_active(_definition), do: {:error, :job_not_active}
 
   def update_schedule(schedule_id, attrs, opts \\ []) do
+    case RedisStore.fetch_schedule(schedule_id) do
+      {:ok, %{"target_run_id" => run_id}} ->
+        MirrorNeuron.Runtime.NodeAdmission.defer(
+          run_id,
+          attrs["run_at"] || attrs[:run_at],
+          Keyword.get(opts, :expected_revision, 0)
+        )
+
+      _ ->
+        update_ordinary_schedule(schedule_id, attrs, opts)
+    end
+  end
+
+  defp update_ordinary_schedule(schedule_id, attrs, opts) do
     mutate_schedule(schedule_id, fn existing ->
-      with {:ok, normalized} <-
+      with :ok <- check_expected_revision(existing, opts),
+           {:ok, normalized} <-
              existing
              |> Map.merge(stringify(attrs || %{}))
              |> SchedulePolicy.normalize(Map.get(existing, "manifest", %{}), opts) do
@@ -69,13 +85,17 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
            normalized,
            Map.take(existing, [
              "schedule_id",
+             "owner_node",
+             "authority_epoch",
+             "job_id",
              "manifest",
              "bundle_ref",
              "source",
              "dispatches",
              "active_run_ids",
              "counters",
-             "created_at"
+             "created_at",
+             "revision"
            ])
          )}
       end
@@ -99,7 +119,18 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     end)
   end
 
-  def delete_schedule(schedule_id, _opts \\ []), do: delete_schedule_locked(schedule_id)
+  def delete_schedule(schedule_id, opts \\ []) do
+    case RedisStore.fetch_schedule(schedule_id) do
+      {:ok, %{"target_run_id" => run_id}} ->
+        MirrorNeuron.Runtime.NodeAdmission.cancel(
+          run_id,
+          Keyword.get(opts, :expected_revision, 0)
+        )
+
+      _ ->
+        delete_schedule_locked(schedule_id, opts)
+    end
+  end
 
   def get_schedule(schedule_id), do: RedisStore.fetch_schedule(schedule_id)
 
@@ -194,6 +225,12 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
 
   defp process_due_schedule(schedule, now) do
     cond do
+      is_binary(schedule["target_run_id"]) ->
+        if schedule["owner_node"] == MirrorNeuron.Runtime.NodeAdmission.node_name(),
+          do: MirrorNeuron.Runtime.NodeAdmission.wake()
+
+        %{checked: 1, dispatched: 0, skipped: 1, failed: 0, missed: 0, blocked: 0}
+
       schedule["kind"] == "resource_wait" ->
         process_resource_wait_schedule(schedule, now)
 
@@ -351,24 +388,40 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     end
   end
 
-  defp start_scheduled_run(%{"job_id" => job_id}, metadata)
+  defp start_scheduled_run(schedule, metadata) do
+    epoch = schedule["authority_epoch"]
+
+    if epoch == nil or MirrorNeuron.Runtime.NodeAdmission.authorized?(epoch) do
+      start_authorized_scheduled_run(schedule, metadata)
+    else
+      {:error, "Scheduled start requires review because its authorization changed."}
+    end
+  end
+
+  defp start_authorized_scheduled_run(%{"job_id" => job_id}, metadata)
        when is_binary(job_id) and job_id != "" do
     opts = [schedule_metadata: metadata, inputs: Map.get(metadata, "payload", %{})]
     StableJob.scheduled_transition(job_id, reserved_run_option(opts, :run_id, metadata))
   end
 
-  defp start_scheduled_run(schedule, metadata) do
+  defp start_authorized_scheduled_run(schedule, metadata) do
     with {:ok, bundle_or_manifest} <- load_dispatch_bundle(schedule, metadata) do
       case Runtime.start_job(
              dispatch_manifest(bundle_or_manifest),
              reserved_run_option(dispatch_opts(bundle_or_manifest), :job_id, metadata)
            ) do
         {:ok, run_id, pid} ->
+          status =
+            case RedisStore.fetch_job(run_id) do
+              {:ok, run} -> run["status"] || "pending"
+              _ -> "pending"
+            end
+
           {:ok,
            %{
-             action: "started",
+             action: if(status == "queued", do: "queued", else: "started"),
              run_id: run_id,
-             status: "pending",
+             status: status,
              pid: pid,
              replaced_run_ids: [],
              cleanup_deferred: false,
@@ -896,15 +949,26 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     end
   end
 
-  defp delete_schedule_locked(schedule_id) do
+  defp delete_schedule_locked(schedule_id, opts) do
     with_schedule_state_lock(schedule_id, fn lock ->
-      RedisStore.delete_schedule_fenced(
-        schedule_id,
-        lock.lease_name,
-        lock.owner,
-        lock.lease["epoch"]
-      )
+      with {:ok, current} <- RedisStore.fetch_schedule(schedule_id),
+           :ok <- check_expected_revision(current, opts) do
+        RedisStore.delete_schedule_fenced(
+          schedule_id,
+          lock.lease_name,
+          lock.owner,
+          lock.lease["epoch"]
+        )
+      end
     end)
+  end
+
+  defp check_expected_revision(schedule, opts) do
+    expected = Keyword.get(opts, :expected_revision, 0)
+
+    if expected == 0 or expected == schedule["revision"],
+      do: :ok,
+      else: {:error, :revision_mismatch}
   end
 
   defp with_schedule_state_lock(schedule_id, operation) do
