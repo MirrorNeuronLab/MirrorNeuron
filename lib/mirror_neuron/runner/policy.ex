@@ -31,8 +31,16 @@ defmodule MirrorNeuron.Runner.Policy do
         declares_forwards?(config),
         "OpenShell node #{node_id} must not publish or forward host ports"
       )
+      |> validate_handoff(config, node_id)
     else
       []
+    end
+  end
+
+  defp validate_handoff(errors, config, node_id) do
+    case MirrorNeuron.Runner.OpenShellArtifactHandoff.validate(config) do
+      :ok -> errors
+      {:error, reason} -> ["#{node_id}: #{reason}" | errors]
     end
   end
 

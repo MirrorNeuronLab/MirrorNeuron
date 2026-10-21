@@ -373,6 +373,10 @@ most 1,200 Unicode code points after trimming. Core preserves this planner
 guidance without changing effects, argument validation, or execution authority.
 Deploy this validator with the matching SDK common and job-response packages
 before loading description-bearing blueprint declarations.
+Core also accepts the SDK-derived manual (at most 64 KiB), standard Job activity
+watch, typed scalar arguments, and schema-checked fixed polling arguments.
+These fields retain the existing MCP tool and correlation boundaries.
+
 Managed desktop Core requires its configured node identity at startup. The CLI
 persists that identity independently of the network address and reports an
 unnamed or mismatched Core as unready. After Wi-Fi changes, `mn runtime reconnect`
@@ -408,6 +412,7 @@ OpenShell executor to use owner-node immutable artifact commits. The SDK's
 `mn_sdk.artifact_handoff` helpers declare outputs and resolve verified inputs.
 OpenShell is optional per worker. Stock SDK block and auxiliary workers use this same handoff
 and require it when OpenShell is selected; HostLocal and Docker defaults remain.
+Manifest handoff validation runs only for nodes selecting an OpenShell runner.
 Core stages the complete referenced common JSON/byte input graph from the actual
 owner run and supplies private sandbox run directories. Core also binds
 `MN_BUNDLE_ROOT` and `MN_BLUEPRINT_MANIFEST_PATH` to the private invocation;

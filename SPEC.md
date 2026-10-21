@@ -108,6 +108,11 @@ literal `{"enabled": true}` or include one validated bounded MCP agent. That
 agent may declare an optional live read preflight for selected effects; the
 preflight must name a declared read tool, match its arguments exactly, and
 require only scalar result fields.
+SDK-derived response declarations retain their bounded UTF-8 manual, standard
+Job activity watch, scalar tool schemas, and fixed operation-poll arguments.
+Fixed arguments must match the declared poll-tool schema and cannot replace its
+correlation identity. Core validates these existing MCP projections before Job
+creation; the native response engine remains their execution owner.
 Operations may correlate any declared user tool, including asynchronous reads,
 with a declared internal polling tool. Read operations retain their read effect;
 polling arguments, intervals, and deadlines remain validated and bounded.

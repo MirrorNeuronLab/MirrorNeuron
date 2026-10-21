@@ -42,6 +42,7 @@ defmodule MirrorNeuron.Manifest do
     LifecyclePolicy,
     RouteCondition,
     SchedulePolicy,
+    ResponseAgentSpec,
     WorkflowTrigger
   }
 
@@ -310,16 +311,7 @@ defmodule MirrorNeuron.Manifest do
       |> Enum.filter(&(is_nil(&1.node_id) or &1.node_id == ""))
       |> Enum.map(fn _ -> "node_id is required for every node" end)
 
-    handoff_errors =
-      Enum.flat_map(manifest.nodes, fn node ->
-        case MirrorNeuron.Runner.OpenShellArtifactHandoff.validate(node.config || %{}) do
-          :ok -> []
-          {:error, reason} -> ["#{node.node_id}: #{reason}"]
-        end
-      end)
-
     errors
-    |> add_errors(handoff_errors)
     |> add_errors(Enum.map(Enum.uniq(duplicates), &"duplicate node_id #{&1}"))
     |> add_errors(unsupported)
     |> add_errors(unsupported_templates)
@@ -748,8 +740,8 @@ defmodule MirrorNeuron.Manifest do
 
     []
     |> maybe_add_error(
-      not valid_response_agent_keys?(Map.keys(agent)),
-      "response_service.agent must contain kind, service, tools, operations, and memory, with optional preflight"
+      not ResponseAgentSpec.valid_keys?(Map.keys(agent)),
+      "response_service.agent must contain kind, service, tools, operations, and memory, with optional preflight, manual_content, and activity"
     )
     |> maybe_add_error(
       agent["kind"] != "bounded_mcp",
@@ -779,6 +771,7 @@ defmodule MirrorNeuron.Manifest do
     )
     |> add_errors(validate_response_agent_preflight(agent, user_tools))
     |> add_errors(validate_response_agent_operations(operations, user_tools, internal_tools))
+    |> add_errors(ResponseAgentSpec.projection_errors(agent, internal_tools))
     |> maybe_add_error(
       MapSet.new(Map.keys(memory)) != MapSet.new(~w(enabled mode path types max_active_records)) or
         memory["enabled"] !== true or memory["mode"] != "explicit" or
@@ -790,14 +783,6 @@ defmodule MirrorNeuron.Manifest do
   end
 
   defp validate_response_agent(_agent), do: ["response_service.agent must be an object"]
-
-  defp valid_response_agent_keys?(keys) do
-    required = MapSet.new(~w(kind service tools operations memory))
-    actual = MapSet.new(keys)
-    allowed = MapSet.put(required, "preflight")
-
-    MapSet.subset?(required, actual) and MapSet.subset?(actual, allowed)
-  end
 
   defp validate_response_agent_preflight(agent, user_tools) do
     if Map.has_key?(agent, "preflight") do
@@ -888,33 +873,27 @@ defmodule MirrorNeuron.Manifest do
 
   defp validate_response_agent_arguments(arguments) do
     Enum.flat_map(arguments, fn {name, schema} ->
-      valid_schema =
-        is_map(schema) and Map.keys(schema) -- ~w(type enum) == [] and
-          (schema["type"] == "string" or nonempty_unique_strings?(schema["enum"])) and
-          (is_nil(schema["type"]) or schema["type"] == "string") and
-          (is_nil(schema["enum"]) or nonempty_unique_strings?(schema["enum"]))
-
-      if nonempty_string?(name) and valid_schema,
+      if nonempty_string?(name) and ResponseAgentSpec.valid_argument_schema?(schema),
         do: [],
-        else: ["response_service.agent tool arguments must declare string or enum schemas"]
+        else: ["response_service.agent tool arguments must declare scalar or enum schemas"]
     end)
   end
 
   defp validate_response_agent_operations(operations, user_tools, internal_tools)
        when map_size(operations) > 0 do
     Enum.flat_map(operations, fn {tool_name, operation} ->
-      expected = MapSet.new(~w(id_field poll_tool poll_argument poll_interval_ms timeout_seconds))
-
       declared_tool = nonempty_string?(get_in(user_tools, [tool_name, "effect"]))
 
       poll_tool = if is_map(operation), do: operation["poll_tool"], else: nil
       poll_arguments = get_in(internal_tools, [poll_tool, "arguments"]) || %{}
 
       valid =
-        declared_tool and is_map(operation) and MapSet.new(Map.keys(operation)) == expected and
+        declared_tool and is_map(operation) and
+          ResponseAgentSpec.valid_operation_keys?(Map.keys(operation)) and
           Map.has_key?(internal_tools, poll_tool) and nonempty_string?(operation["id_field"]) and
           nonempty_string?(operation["poll_argument"]) and
           Map.has_key?(poll_arguments, operation["poll_argument"]) and
+          ResponseAgentSpec.valid_poll_arguments?(operation, poll_arguments) and
           is_integer(operation["poll_interval_ms"]) and
           operation["poll_interval_ms"] in 250..10_000 and
           is_integer(operation["timeout_seconds"]) and operation["timeout_seconds"] in 1..600
