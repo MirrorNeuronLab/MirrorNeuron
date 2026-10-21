@@ -13,6 +13,51 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
     :ok
   end
 
+  test "auxiliary workers receive the physical workflow run without message headers" do
+    config = %{
+      "command" => [
+        "sh",
+        "-c",
+        "printf '%s\\n' \"$MN_WORKFLOW_RUN_ID\" \"$MN_RUN_ID\""
+      ],
+      "environment" => %{
+        "MN_RUN_ID" => "execution-id",
+        "MN_WORKFLOW_RUN_ID" => "definition-time-label"
+      }
+    }
+
+    assert {:ok, result} =
+             HostLocal.run(%{}, config,
+               job_id: "execution-id",
+               agent_id: "auxiliary-service",
+               run_id: "physical-workflow-run"
+             )
+
+    assert result["stdout"] == "physical-workflow-run\nexecution-id"
+  end
+
+  test "runtime workflow headers outrank configured environment and runner options" do
+    message =
+      MirrorNeuron.Message.new("execution-id", "source", "worker", "input", %{},
+        headers: %{"mn.workflow.run_id" => "header-workflow-run"}
+      )
+
+    config = %{
+      "command" => ["sh", "-c", "printf '%s\\n' \"$MN_WORKFLOW_RUN_ID\""],
+      "environment" => %{"MN_WORKFLOW_RUN_ID" => "definition-time-label"}
+    }
+
+    assert {:ok, result} =
+             HostLocal.run(%{}, config,
+               job_id: "execution-id",
+               agent_id: "worker",
+               run_id: "option-workflow-run",
+               message: message
+             )
+
+    assert result["stdout"] == "header-workflow-run"
+  end
+
   test "list_all_files includes hidden runtime payload directories" do
     tmp_dir =
       Path.join(

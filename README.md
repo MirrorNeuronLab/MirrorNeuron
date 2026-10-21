@@ -379,6 +379,12 @@ distinct keys. The original ledger key is available as
 `MN_WORKFLOW_STEP_IDEMPOTENCY_KEY`. New logical steps receive their own attempt
 through normal ledger admission.
 
+HostLocal auxiliary services receive `MN_WORKFLOW_RUN_ID` from the owning
+runtime even when their initial message has no workflow headers. Runtime
+workflow fields override definition-time environment values, matching the
+Docker and OpenShell runner contract. This physical identity can differ from
+the `MN_RUN_ID` execution identity and identifies the shared run-output folder.
+
 ## Response tool descriptions
 
 Bounded response-agent tools accept an optional non-empty `description` of at

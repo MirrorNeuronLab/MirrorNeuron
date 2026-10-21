@@ -2,6 +2,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
   alias MirrorNeuron.Message
   alias MirrorNeuron.Config
   alias MirrorNeuron.Runner.HostProcess
+  alias MirrorNeuron.Runner.WorkflowEnvironment
 
   @result_start "__MN_RESULT_START__"
   @result_end "__MN_RESULT_END__"
@@ -154,6 +155,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
       runtime_env(input_file, context_file, message_file, body_file, workdir, message, opts)
       |> Map.merge(beacon_env(config, opts, message))
       |> Map.merge(extra_env(config))
+      |> Map.merge(WorkflowEnvironment.from_options(Keyword.put(opts, :message, message)))
       |> apply_python_environment_env(python_env)
       |> Enum.map(fn {key, value} -> {key, value} end)
 
@@ -1369,8 +1371,6 @@ defmodule MirrorNeuron.Runner.HostLocal do
     %{
       "MN_INPUT_FILE" => input_file,
       "MN_CONTEXT_FILE" => context_file,
-      "MN_BLOCK_EVENT_PROTOCOL" => "mn.block_events/v1",
-      "MN_BLOCK_EVENT_PUBLICATION_PROTOCOL" => "mn.published_files/v1",
       "MN_MESSAGE_FILE" => message_file,
       "MN_BODY_FILE" => body_file,
       "MN_BODY_CONTENT_TYPE" => Message.content_type(message),
@@ -1382,28 +1382,6 @@ defmodule MirrorNeuron.Runner.HostLocal do
       "MN_GRPC_TARGET" => "127.0.0.1:#{Config.integer("MN_GRPC_PORT", :grpc_port)}",
       "MN_WORKDIR" => workdir
     }
-    |> Map.merge(workflow_env(message))
-  end
-
-  defp workflow_env(message) do
-    workflow = workflow_context(message)
-
-    %{
-      "MN_WORKFLOW_RUN_ID" => Map.get(workflow, "run_id"),
-      "MN_WORKFLOW_STEP_ID" => Map.get(workflow, "step_id"),
-      "MN_WORKFLOW_GRAPH_REVISION" => Map.get(workflow, "graph_revision"),
-      "MN_WORKFLOW_TEMPLATE_ID" => Map.get(workflow, "template_id"),
-      "MN_WORKFLOW_REGION_ID" => Map.get(workflow, "region_id"),
-      "MN_WORKFLOW_ATTEMPT_ID" => Map.get(workflow, "attempt_id"),
-      "MN_WORKFLOW_ATTEMPT" => Map.get(workflow, "attempt"),
-      "MN_WORKFLOW_DEADLINE_AT" => Map.get(workflow, "deadline_at"),
-      "MN_WORKFLOW_HEARTBEAT_DEADLINE_AT" => Map.get(workflow, "heartbeat_deadline_at"),
-      "MN_WORKFLOW_STEP_IDEMPOTENCY_KEY" => Map.get(workflow, "idempotency_key"),
-      "MN_WORKFLOW_IDEMPOTENCY_KEY" =>
-        MirrorNeuron.Runner.WorkflowEnvironment.invocation_key(message)
-    }
-    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
-    |> Map.new(fn {key, value} -> {key, to_string(value)} end)
   end
 
   defp workflow_context(message) do

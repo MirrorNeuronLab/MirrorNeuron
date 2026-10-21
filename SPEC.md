@@ -87,6 +87,11 @@ agent and stable message ID. It survives delivery replay and differs between
 parallel workers. `MN_WORKFLOW_STEP_IDEMPOTENCY_KEY` retains the ledger key;
 completion and stale-attempt fencing continue using the original message headers.
 
+HostLocal uses the same runtime workflow-environment projection as Docker and
+OpenShell. Auxiliary messages without workflow headers receive the owning
+physical workflow run ID from runner options. Runtime workflow values outrank
+definition-time environment values; `MN_RUN_ID` retains the execution identity.
+
 The service workflow entrypoint has no implicit batch deadline or beacon
 deadline. An explicit entrypoint `timeout_seconds` and optional
 `beacon_timeout_ms` remain authoritative; downstream and batch steps retain

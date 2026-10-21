@@ -21,6 +21,8 @@ defmodule MirrorNeuron.Runner.WorkflowEnvironment do
       "MN_WORKFLOW_REGION_ID" => headers["mn.workflow.region_id"],
       "MN_WORKFLOW_ATTEMPT_ID" => headers["mn.workflow.attempt_id"],
       "MN_WORKFLOW_ATTEMPT" => headers["mn.workflow.attempt"],
+      "MN_WORKFLOW_DEADLINE_AT" => headers["mn.workflow.deadline_at"],
+      "MN_WORKFLOW_HEARTBEAT_DEADLINE_AT" => headers["mn.workflow.heartbeat_deadline_at"],
       "MN_WORKFLOW_STEP_IDEMPOTENCY_KEY" => headers["mn.workflow.idempotency_key"],
       "MN_WORKFLOW_IDEMPOTENCY_KEY" => invocation_key(Keyword.get(opts, :message))
     }
