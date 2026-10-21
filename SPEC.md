@@ -905,6 +905,12 @@ identity. Its closed start/complete/summary commands bind the Job, actual
 workflow run, allowance name/limit and stable request scope. It never changes
 physical resource percentages or node-admission state.
 
+The job coordinator registers an allowance owner under the stable Job ID and
+actual workflow run ID before starting workers. Resource commands resolve that
+exact pair, independently of the execution ID used by ordinary coordinator
+controls. The registration follows coordinator lifetime and is restored on
+checkpoint retry; another Job or workflow run cannot share its allowance.
+
 The registered job coordinator serializes admission. It rejects stopped/paused
 owners, mismatched runs, undeclared or changed limits, malformed requests and
 invalid accounting. New starts and completions are persisted through the existing

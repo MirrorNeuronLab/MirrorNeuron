@@ -127,7 +127,14 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       }
     }
 
-    {:ok, state, {:continue, :bootstrap}}
+    case MirrorNeuron.Runtime.WorkflowBudget.register_owner(
+           Keyword.get(opts, :stable_job_id) || job_id,
+           WorkflowLedger.run_id(state.workflow_state),
+           manifest.policies
+         ) do
+      :ok -> {:ok, state, {:continue, :bootstrap}}
+      {:error, reason} -> {:stop, reason}
+    end
   end
 
   @impl true

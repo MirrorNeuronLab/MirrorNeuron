@@ -5,11 +5,16 @@ defmodule MirrorNeuron.Runtime.WorkflowBudgetTest do
   defmodule Owner do
     use GenServer
     def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
-    def init({policies, persist}), do: {:ok, {%{}, policies, persist}}
+    def init({policies, persist}), do: {:ok, {%{}, policies, persist, "run"}}
 
-    def handle_call({:workflow_budget, attrs}, _, {ledger, policies, persist} = state) do
-      case WorkflowBudget.apply_command(ledger, policies, "run", attrs, persist) do
-        {:ok, result, next} -> {:reply, {:ok, result}, {next, policies, persist}}
+    def init({policies, persist, job_id, run_id}) do
+      :ok = WorkflowBudget.register_owner(job_id, run_id, policies)
+      {:ok, {%{}, policies, persist, run_id}}
+    end
+
+    def handle_call({:workflow_budget, attrs}, _, {ledger, policies, persist, run_id} = state) do
+      case WorkflowBudget.apply_command(ledger, policies, run_id, attrs, persist) do
+        {:ok, result, next} -> {:reply, {:ok, result}, {next, policies, persist, run_id}}
         {:error, _} = error -> {:reply, error, state}
       end
     end
@@ -49,6 +54,93 @@ defmodule MirrorNeuron.Runtime.WorkflowBudgetTest do
     |> Map.merge(%{"action" => "complete", "status" => status, "metadata" => %{"tokens" => 42}})
   end
 
+  test "the coordinator registers the stable Job and actual workflow run identity" do
+    job_id = "budget-job-#{System.unique_integer([:positive])}"
+    execution_id = "execution-#{System.unique_integer([:positive])}"
+
+    assert {:ok, manifest} =
+             MirrorNeuron.Manifest.load(%{
+               "apiVersion" => "mn.workflow/v1",
+               "kind" => "Workflow",
+               "manifest_version" => "1.0",
+               "graph_id" => "budget-owner",
+               "entrypoints" => ["worker"],
+               "policies" => policies(),
+               "flow" => %{
+                 "nodes" => [%{"node_id" => "worker", "agent_type" => "router"}],
+                 "edges" => [],
+                 "steps" => [%{"id" => "research", "agent_id" => "worker"}]
+               }
+             })
+
+    assert {:ok, state, {:continue, :bootstrap}} =
+             MirrorNeuron.Runtime.JobCoordinator.init(
+               {execution_id, manifest, [stable_job_id: job_id, run_id: execution_id]}
+             )
+
+    workflow_run_id = MirrorNeuron.Runtime.WorkflowLedger.run_id(state.workflow_state)
+    assert is_binary(workflow_run_id)
+    refute workflow_run_id == execution_id
+
+    assert [{owner, nil}] =
+             Horde.Registry.lookup(
+               MirrorNeuron.DistributedRegistry,
+               {:workflow_budget, job_id, workflow_run_id}
+             )
+
+    assert owner == self()
+
+    assert Horde.Registry.lookup(
+             MirrorNeuron.DistributedRegistry,
+             {:workflow_budget, execution_id, workflow_run_id}
+           ) == []
+  end
+
+  test "real registry dispatch isolates stable Jobs and workflow runs" do
+    job_id = "budget-job-#{System.unique_integer([:positive])}"
+    owner = start_supervised!({Owner, {policies(), fn _ -> :ok end, job_id, "run"}})
+    attrs = Map.put(request(), "job_id", job_id)
+
+    assert {:ok, admitted} = WorkflowBudget.command(attrs)
+    assert admitted["job_id"] == job_id
+    assert admitted["run_id"] == "run"
+    assert admitted["status"] == "admitted"
+    assert {:ok, ^admitted} = WorkflowBudget.command(attrs)
+
+    assert {:ok, _} = WorkflowBudget.command(complete_request(attrs))
+    assert {:ok, summary} = WorkflowBudget.command(Map.put(summary_request(), "job_id", job_id))
+    assert summary["used"] == 1
+    assert hd(summary["actions"])["status"] == "completed"
+
+    start_supervised!({Owner, {policies(), fn _ -> :ok end, job_id, "another-run"}},
+      id: :other_run
+    )
+
+    assert {:ok, fresh} =
+             WorkflowBudget.command(
+               summary_request()
+               |> Map.put("job_id", job_id)
+               |> Map.put("run_id", "another-run")
+             )
+
+    assert fresh["used"] == 0
+
+    for other <- [Map.put(attrs, "job_id", job_id <> "-other"), Map.put(attrs, "run_id", "stale")] do
+      assert {:error, "workflow budget owner is unavailable"} = WorkflowBudget.command(other)
+    end
+
+    GenServer.stop(owner)
+    assert {:error, "workflow budget owner is unavailable"} = WorkflowBudget.command(attrs)
+  end
+
+  test "declared allowances require complete owner identity" do
+    assert :ok = WorkflowBudget.register_owner(nil, nil, %{})
+
+    for {job_id, run_id} <- [{"job", nil}, {nil, "run"}, {"", "run"}, {"job", ""}] do
+      assert {:error, _} = WorkflowBudget.register_owner(job_id, run_id, policies())
+    end
+  end
+
   test "concurrent workers share one durable allowance" do
     parent = self()
 
@@ -66,7 +158,7 @@ defmodule MirrorNeuron.Runtime.WorkflowBudgetTest do
       1..12
       |> Task.async_stream(
         fn id ->
-          WorkflowBudget.command(request(id), owner: fn "job" -> owner end)
+          WorkflowBudget.command(request(id), owner: fn "job", "run" -> owner end)
         end,
         max_concurrency: 12
       )
@@ -74,17 +166,17 @@ defmodule MirrorNeuron.Runtime.WorkflowBudgetTest do
 
     assert Enum.count(results, &(&1["status"] == "admitted")) == 3
     assert Enum.count(results, &(&1["status"] == "budget_exhausted")) == 9
-    assert {:ok, ledger} = WorkflowBudget.command(summary_request(), owner: fn _ -> owner end)
+    assert {:ok, ledger} = WorkflowBudget.command(summary_request(), owner: fn _, _ -> owner end)
     assert ledger["used"] == 3 and ledger["remaining"] == 0
     assert length(ledger["actions"]) == 12
     assert Enum.sum(Enum.map(ledger["actions"], & &1["cost"])) == 3
     assert_receive {:persisted, _}
 
     for id <- 1..12 do
-      assert {:ok, _} = WorkflowBudget.command(request(id), owner: fn _ -> owner end)
+      assert {:ok, _} = WorkflowBudget.command(request(id), owner: fn _, _ -> owner end)
     end
 
-    assert {:ok, replay} = WorkflowBudget.command(summary_request(), owner: fn _ -> owner end)
+    assert {:ok, replay} = WorkflowBudget.command(summary_request(), owner: fn _, _ -> owner end)
     assert replay == ledger
   end
 
@@ -212,12 +304,12 @@ defmodule MirrorNeuron.Runtime.WorkflowBudgetTest do
         ] do
       assert {:error, _} =
                WorkflowBudget.command(malformed,
-                 owner: fn _ -> flunk("Invalid request reached owner") end
+                 owner: fn _, _ -> flunk("Invalid request reached owner") end
                )
     end
 
     assert {:error, _} =
-             WorkflowBudget.command(request(), owner: fn _ -> :nonexistent_budget_owner end)
+             WorkflowBudget.command(request(), owner: fn _, _ -> :nonexistent_budget_owner end)
   end
 
   test "zero allowance denies work and completion cannot invent a reservation" do

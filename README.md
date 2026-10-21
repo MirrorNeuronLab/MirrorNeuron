@@ -603,7 +603,9 @@ schedule revisions advance on mutation so stale cancel/reschedule controls fail.
 Compiled `policies.workflow_budgets` declare named action limits for an actual
 workflow run. The SDK's `RunActionBudget` uses authenticated resource commands;
 the job coordinator owns atomic admission and persists reservations before
-granting work. Isolated workers share that owner rather than copied local
+granting work. Core resolves the owner by the stable Job ID and actual workflow
+run ID supplied by workers, independently of the execution's coordinator ID.
+Isolated workers share that owner rather than copied local
 counters. Duplicate requests/completions are idempotent; changed requests,
 foreign scopes and stale runs reject. Unknown starts stay charged. The allowance
 survives checkpoint recovery and resets only for an explicitly new workflow run.

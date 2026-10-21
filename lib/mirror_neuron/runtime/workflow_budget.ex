@@ -7,6 +7,29 @@ defmodule MirrorNeuron.Runtime.WorkflowBudget do
   @max_journal_bytes 4_000_000
   @identity_fields ~w(action_type stage entity_id tool scope revision)
 
+  # Workers carry the stable Job and physical workflow identity. Neither is
+  # the execution ID used by the coordinator's ordinary {:job, id} name.
+  def register_owner(job_id, run_id, policies) do
+    case Map.get(policies, "workflow_budgets") do
+      declarations when is_map(declarations) and map_size(declarations) > 0 ->
+        if bounded?(job_id, 256) and bounded?(run_id, 256) do
+          case Horde.Registry.register(
+                 MirrorNeuron.DistributedRegistry,
+                 {:workflow_budget, job_id, run_id},
+                 nil
+               ) do
+            {:ok, _} -> :ok
+            {:error, _} = error -> error
+          end
+        else
+          {:error, "workflow budget owner requires Job and workflow run identity"}
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
   def validate_declarations(policies) when is_map(policies) do
     case Map.get(policies, "workflow_budgets") do
       nil ->
@@ -34,10 +57,14 @@ defmodule MirrorNeuron.Runtime.WorkflowBudget do
 
   def command(attrs, opts \\ []) do
     with :ok <- validate_request(attrs) do
-      lookup = Keyword.get(opts, :owner, &Naming.via_job/1)
+      lookup = Keyword.get(opts, :owner, &Naming.via_workflow_budget/2)
 
       try do
-        GenServer.call(lookup.(attrs["job_id"]), {:workflow_budget, attrs}, 10_000)
+        GenServer.call(
+          lookup.(attrs["job_id"], attrs["run_id"]),
+          {:workflow_budget, attrs},
+          10_000
+        )
       catch
         :exit, _ -> {:error, "workflow budget owner is unavailable"}
       end
