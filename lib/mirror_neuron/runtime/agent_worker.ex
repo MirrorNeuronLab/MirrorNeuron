@@ -13,6 +13,8 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   alias MirrorNeuron.Runtime.EventBus
   alias MirrorNeuron.Runtime.Naming
   alias MirrorNeuron.Runtime.RouteCondition
+  alias MirrorNeuron.Runtime.WorkflowMessage
+  alias MirrorNeuron.Runtime.WorkflowAdmission
   alias MirrorNeuron.Scheduler
 
   @default_heartbeat_interval_ms 30_000
@@ -288,6 +290,9 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
 
         schedule_delivery_reclaim(next_state, retry_result)
 
+      {:defer, reason, next_state} ->
+        schedule_delivery_reclaim(next_state, report_delivery_retry(delivery, reason, state))
+
       {:error, reason, next_state} ->
         retry_result = report_delivery_retry(delivery, reason, state)
         send(state.coordinator, {:agent_failed, state.node.node_id, reason})
@@ -362,6 +367,15 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     do: %{state | delivery_timer_ref: nil, delivery_token: nil}
 
   defp process_message_result(message, state) do
+    case WorkflowAdmission.prepare(message, state) do
+      {:ok, admitted} -> process_admitted_message(admitted, state)
+      :skip -> {:ok, state}
+      {:defer, reason} -> {:defer, reason, state}
+      {:error, reason} -> {:error, reason, state}
+    end
+  end
+
+  defp process_admitted_message(message, state) do
     state = %{state | inflight_message: message}
     persist_observation(state)
 
@@ -547,16 +561,16 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   defp execute_action({:emit_message, message}, incoming, state, action_index) do
     normalized = Message.normalize!(message, job_id: state.job_id, from: state.node.node_id)
     to_node = Message.to(normalized)
-    message_id = deterministic_output_id(state, incoming, to_node, action_index)
+    message_id = WorkflowMessage.output_id(state, incoming, to_node, action_index)
 
     normalized =
       normalized
       |> put_in(["envelope", "message_id"], message_id)
       |> Map.update(
         "headers",
-        with_attempt_epoch(Message.headers(normalized), state),
+        WorkflowMessage.with_attempt_epoch(Message.headers(normalized), state),
         fn headers ->
-          with_attempt_epoch(headers || %{}, state)
+          WorkflowMessage.with_attempt_epoch(headers || %{}, state)
         end
       )
 
@@ -978,79 +992,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     do: %{state | heartbeat_timer_ref: nil, heartbeat_token: nil}
 
   defp build_message(state, incoming, to_node, message_type, payload, opts) do
-    headers =
-      incoming
-      |> Message.headers()
-      |> workflow_headers_for_target(state, incoming, to_node)
-      |> Map.merge(Keyword.get(opts, :headers, %{}))
-      |> with_attempt_epoch(state)
-
-    Message.new(
-      state.job_id,
-      state.node.node_id,
-      to_node,
-      message_type,
-      payload,
-      class: Keyword.get(opts, :class, Message.class(incoming)),
-      correlation_id: Keyword.get(opts, :correlation_id, Message.correlation_id(incoming)),
-      causation_id: Keyword.get(opts, :causation_id, Message.id(incoming)),
-      content_type: Keyword.get(opts, :content_type, Message.content_type(incoming)),
-      content_encoding: Keyword.get(opts, :content_encoding, Message.content_encoding(incoming)),
-      headers: headers,
-      artifacts: Keyword.get(opts, :artifacts, Message.artifacts(incoming)),
-      stream: Keyword.get(opts, :stream, Message.stream(incoming)),
-      message_id:
-        Keyword.get_lazy(opts, :message_id, fn ->
-          deterministic_output_id(
-            state,
-            incoming,
-            to_node,
-            Keyword.get(opts, :delivery_key, message_type)
-          )
-        end)
-    )
-  end
-
-  defp with_attempt_epoch(headers, state) when is_map(headers) do
-    case state.runtime_context[:lease_epoch] do
-      epoch when is_integer(epoch) -> Map.put(headers, "mn.attempt_epoch", epoch)
-      _epoch -> headers
-    end
-  end
-
-  defp deterministic_output_id(state, incoming, to_node, delivery_key) do
-    [Message.id(incoming), state.node.node_id, to_node, to_string(delivery_key)]
-    |> Enum.join(":")
-    |> then(&:crypto.hash(:sha256, &1))
-    |> Base.url_encode64(padding: false)
-  end
-
-  defp workflow_headers_for_target(headers, state, incoming, to_node) do
-    agent_steps = Map.get(state.runtime_context, :workflow_agent_steps, %{})
-
-    case Map.get(agent_steps, to_node) do
-      nil ->
-        headers
-
-      step_id ->
-        headers
-        |> Map.drop([
-          "mn.workflow.step_id",
-          "mn.workflow.graph_revision",
-          "mn.workflow.template_id",
-          "mn.workflow.region_id",
-          "mn.workflow.attempt_id",
-          "mn.workflow.attempt",
-          "mn.workflow.deadline_at",
-          "mn.workflow.heartbeat_deadline_at",
-          "mn.workflow.idempotency_key"
-        ])
-        |> Map.put("mn.workflow.run_id", Map.get(state.runtime_context, :workflow_run_id))
-        |> Map.put("mn.workflow.step_id", step_id)
-        |> Map.put("mn.workflow.source_step_id", workflow_step_id(incoming))
-        |> Enum.reject(fn {_key, value} -> is_nil(value) end)
-        |> Map.new()
-    end
+    WorkflowMessage.build(state, incoming, to_node, message_type, payload, opts)
   end
 
   defp workflow_context(message, state) do

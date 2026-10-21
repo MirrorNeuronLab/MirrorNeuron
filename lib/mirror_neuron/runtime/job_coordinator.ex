@@ -336,6 +336,22 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   @impl true
+  def handle_call(
+        {:workflow_admit_message, agent_id, message},
+        _from,
+        %{status: "running"} = state
+      ) do
+    {result, ledger, events} =
+      MirrorNeuron.Runtime.WorkflowAdmission.admit(state.workflow_state, agent_id, message)
+
+    next = %{state | workflow_state: ledger}
+    publish_workflow_events(next, events)
+    {:reply, result, next}
+  end
+
+  def handle_call({:workflow_admit_message, _agent_id, _message}, _from, state),
+    do: {:reply, {:defer, :workflow_owner_not_running}, state}
+
   def handle_call({:workflow_budget, attrs}, _from, %{status: "running"} = state) do
     persist = fn budgets ->
       RedisStore.persist_job(

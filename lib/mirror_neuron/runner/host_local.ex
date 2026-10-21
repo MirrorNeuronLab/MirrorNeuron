@@ -1398,7 +1398,9 @@ defmodule MirrorNeuron.Runner.HostLocal do
       "MN_WORKFLOW_ATTEMPT" => Map.get(workflow, "attempt"),
       "MN_WORKFLOW_DEADLINE_AT" => Map.get(workflow, "deadline_at"),
       "MN_WORKFLOW_HEARTBEAT_DEADLINE_AT" => Map.get(workflow, "heartbeat_deadline_at"),
-      "MN_WORKFLOW_IDEMPOTENCY_KEY" => Map.get(workflow, "idempotency_key")
+      "MN_WORKFLOW_STEP_IDEMPOTENCY_KEY" => Map.get(workflow, "idempotency_key"),
+      "MN_WORKFLOW_IDEMPOTENCY_KEY" =>
+        MirrorNeuron.Runner.WorkflowEnvironment.invocation_key(message)
     }
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new(fn {key, value} -> {key, to_string(value)} end)

@@ -21,11 +21,27 @@ defmodule MirrorNeuron.Runner.WorkflowEnvironment do
       "MN_WORKFLOW_REGION_ID" => headers["mn.workflow.region_id"],
       "MN_WORKFLOW_ATTEMPT_ID" => headers["mn.workflow.attempt_id"],
       "MN_WORKFLOW_ATTEMPT" => headers["mn.workflow.attempt"],
-      "MN_WORKFLOW_IDEMPOTENCY_KEY" => headers["mn.workflow.idempotency_key"]
+      "MN_WORKFLOW_STEP_IDEMPOTENCY_KEY" => headers["mn.workflow.idempotency_key"],
+      "MN_WORKFLOW_IDEMPOTENCY_KEY" => invocation_key(Keyword.get(opts, :message))
     }
 
     fields
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new(fn {key, value} -> {key, to_string(value)} end)
   end
+
+  def invocation_key(message) when is_map(message) do
+    case Message.headers(message)["mn.workflow.idempotency_key"] do
+      key when is_binary(key) and key != "" ->
+        [key, Message.to(message), Message.id(message)]
+        |> :erlang.term_to_binary()
+        |> then(&:crypto.hash(:sha256, &1))
+        |> Base.url_encode64(padding: false)
+
+      _ ->
+        nil
+    end
+  end
+
+  def invocation_key(_message), do: nil
 end

@@ -5,6 +5,52 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
   alias MirrorNeuron.Manifest
   alias MirrorNeuron.Artifacts.StagedArtifact
   alias MirrorNeuron.Runtime.WorkflowLedger
+  alias MirrorNeuron.Runtime.WorkflowAdmission
+
+  test "admission returns the ledger attempt to the handler and replay reuses it" do
+    {ledger, []} = WorkflowLedger.new(manifest(), runtime_nodes()) |> WorkflowLedger.job_running()
+    message = Message.new("job-1", "runtime", "step_a", "init", %{})
+
+    {{:ok, admitted}, ledger, [started]} = WorkflowAdmission.admit(ledger, "step_a", message)
+    assert started.type == :workflow_step_attempt_started
+    assert Message.id(admitted) == Message.id(message)
+    key = Message.headers(admitted)["mn.workflow.idempotency_key"]
+    assert is_binary(key) and key != ""
+    assert Message.headers(admitted)["mn.workflow.attempt_id"] == "step_a:attempt:1"
+
+    # A recovered delivery still contains the original, undecorated message.
+    restored = Jason.decode!(Jason.encode!(ledger))
+    {{:ok, replay}, restored, []} = WorkflowAdmission.admit(restored, "step_a", message)
+    assert Message.headers(replay)["mn.workflow.idempotency_key"] == key
+    assert restored["steps"]["step_a"]["attempt_count"] == 1
+
+    now = DateTime.utc_now()
+    {paused, _} = WorkflowLedger.pause(restored, DateTime.to_iso8601(now))
+
+    {resumed, _} =
+      WorkflowLedger.resume(paused, DateTime.to_iso8601(DateTime.add(now, 5, :second)))
+
+    {{:ok, after_pause}, _, []} = WorkflowAdmission.admit(resumed, "step_a", message)
+    assert Message.headers(after_pause) == Message.headers(admitted)
+  end
+
+  test "admission waits for dependencies and never borrows another message's attempt" do
+    ledger = dag_state(["a", "b"], [edge("a", "b")])
+    blocked = Message.new("job-1", "a", "b", "completed", %{})
+
+    assert {{:defer, :workflow_dependencies_pending}, _, _} =
+             WorkflowAdmission.admit(ledger, "b", blocked)
+
+    message = Message.new("job-1", "runtime", "a", "init", %{})
+    {{:ok, _}, ledger, [_]} = WorkflowAdmission.admit(ledger, "a", message)
+    other = Message.new("job-1", "runtime", "a", "init", %{})
+
+    assert {{:error, :missing_workflow_attempt_context}, _, _} =
+             WorkflowAdmission.admit(ledger, "a", other)
+
+    terminal = put_in(ledger, ["steps", "a", "status"], "completed")
+    assert {:skip, _, _} = WorkflowAdmission.admit(terminal, "a", message)
+  end
 
   test "tracks workflow attempts, retries timed out steps, and fails after attempts are exhausted" do
     {state, []} = WorkflowLedger.new(manifest(), runtime_nodes()) |> WorkflowLedger.job_running()

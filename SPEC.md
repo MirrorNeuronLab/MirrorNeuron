@@ -74,6 +74,19 @@ ownership identity needed to distinguish a durable prepared definition from an
 abandoned node-local preparation; it never exposes cleanup commands or paths. A submitted bundle is loaded, normalized, validated, checked
 for services and requirements, admitted to resources, and started under
 per-run supervision.
+
+Before a workflow handler executes, Core admits its source delivery through the
+owning ledger and returns the authoritative attempt context. Deliveries waiting
+for dependencies are retried without running the handler.
+
+Routing within one logical step retains its attempt, deadlines, graph identity
+and step idempotency key. Crossing a logical-step boundary clears that context
+for the destination's ledger admission. Runner `MN_WORKFLOW_IDEMPOTENCY_KEY`
+identifies the individual worker delivery, derived from the step key, target
+agent and stable message ID. It survives delivery replay and differs between
+parallel workers. `MN_WORKFLOW_STEP_IDEMPOTENCY_KEY` retains the ledger key;
+completion and stale-attempt fencing continue using the original message headers.
+
 The service workflow entrypoint has no implicit batch deadline or beacon
 deadline. An explicit entrypoint `timeout_seconds` and optional
 `beacon_timeout_ms` remain authoritative; downstream and batch steps retain

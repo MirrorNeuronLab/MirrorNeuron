@@ -366,6 +366,19 @@ for vulnerabilities; do not disclose them in public issues.
 
 MirrorNeuron Core is released under the [MIT License](LICENSE).
 
+## Workflow invocation identity
+
+Before a workflow handler executes, Core admits its source delivery through the
+owning ledger and returns the authoritative attempt context. Deliveries waiting
+for dependencies are retried without running the handler.
+
+Workflow messages keep attempt context between workers in the same logical step.
+Docker, OpenShell artifact handoff and HostLocal runners provide a stable
+`MN_WORKFLOW_IDEMPOTENCY_KEY` per worker delivery; parallel specialists have
+distinct keys. The original ledger key is available as
+`MN_WORKFLOW_STEP_IDEMPOTENCY_KEY`. New logical steps receive their own attempt
+through normal ledger admission.
+
 ## Response tool descriptions
 
 Bounded response-agent tools accept an optional non-empty `description` of at
