@@ -26,6 +26,9 @@ defmodule MirrorNeuron.Resource do
   def set(%{"operation" => "node_admission"} = attrs),
     do: MirrorNeuron.Runtime.NodeAdmission.command(attrs)
 
+  def set(%{"operation" => "workflow_budget"} = attrs),
+    do: MirrorNeuron.Runtime.WorkflowBudget.command(attrs)
+
   def set(attrs) when is_map(attrs) do
     with {:ok, updates} <- normalize_limits(attrs),
          next_limits <- Map.merge(limits(), updates),

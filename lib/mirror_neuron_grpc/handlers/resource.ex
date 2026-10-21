@@ -70,5 +70,10 @@ defmodule MirrorNeuron.Grpc.Handlers.Resource do
     :ok
   end
 
+  defp authorize_admission(%{"operation" => "workflow_budget"}, stream) do
+    MirrorNeuron.Grpc.Auth.authorize_identity!(stream)
+    :ok
+  end
+
   defp authorize_admission(_attrs, _stream), do: :ok
 end

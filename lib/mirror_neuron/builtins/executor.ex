@@ -26,15 +26,17 @@ defmodule MirrorNeuron.Builtins.Executor do
 
   @impl true
   def init(node) do
-    {:ok,
-     %{
-       config: Profile.apply_to_config(node.config),
-       runs: 0,
-       agent_state: %{},
-       last_output_payload: nil,
-       last_result: nil,
-       last_error: nil
-     }}
+    with :ok <- MirrorNeuron.Builtins.BlockEventResult.validate_config(node.config["block_event"]) do
+      {:ok,
+       %{
+         config: Profile.apply_to_config(node.config),
+         runs: 0,
+         agent_state: %{},
+         last_output_payload: nil,
+         last_result: nil,
+         last_error: nil
+       }}
+    end
   end
 
   @impl true
@@ -90,7 +92,13 @@ defmodule MirrorNeuron.Builtins.Executor do
                bounded_default_payload(result, payload, attempts, lease, state.config, context) do
           routed_output_payload = routed_output_payload(result, default_payload, payload)
 
-          case structured_actions(result, state, normalized_message, routed_output_payload) do
+          case structured_actions(
+                 result,
+                 state,
+                 normalized_message,
+                 routed_output_payload,
+                 context
+               ) do
             {:ok, structured_state, structured_actions} ->
               {structured_output_actions, structured_control_actions} =
                 Enum.split_with(structured_actions, &output_action?/1)
@@ -203,37 +211,41 @@ defmodule MirrorNeuron.Builtins.Executor do
   end
 
   defp default_output_actions(config, payload) do
-    output_actions =
-      case Map.fetch(config, "output_message_type") do
-        {:ok, nil} ->
-          []
+    if config["block_event"] do
+      []
+    else
+      output_actions =
+        case Map.fetch(config, "output_message_type") do
+          {:ok, nil} ->
+            []
 
-        {:ok, output_message_type} ->
-          [
-            {:emit, output_message_type, payload,
-             [
-               class: "event",
-               headers: %{
-                 "schema_ref" => "com.mirrorneuron.executor.result",
-                 "schema_version" => "1.0.0"
-               }
-             ]}
-          ]
+          {:ok, output_message_type} ->
+            [
+              {:emit, output_message_type, payload,
+               [
+                 class: "event",
+                 headers: %{
+                   "schema_ref" => "com.mirrorneuron.executor.result",
+                   "schema_version" => "1.0.0"
+                 }
+               ]}
+            ]
 
-        :error ->
-          [
-            {:emit, "executor_result", payload,
-             [
-               class: "event",
-               headers: %{
-                 "schema_ref" => "com.mirrorneuron.executor.result",
-                 "schema_version" => "1.0.0"
-               }
-             ]}
-          ]
-      end
+          :error ->
+            [
+              {:emit, "executor_result", payload,
+               [
+                 class: "event",
+                 headers: %{
+                   "schema_ref" => "com.mirrorneuron.executor.result",
+                   "schema_version" => "1.0.0"
+                 }
+               ]}
+            ]
+        end
 
-    output_actions ++ maybe_complete_run(config, payload)
+      output_actions ++ maybe_complete_run(config, payload)
+    end
   end
 
   defp maybe_complete_run(config, payload) do
@@ -281,8 +293,7 @@ defmodule MirrorNeuron.Builtins.Executor do
              message: message,
              attempt: attempt,
              run_id: get_in(context, [:workflow, "run_id"]),
-             step_instance:
-               (get_in(context, [:workflow, "step_id"]) || "step") <> ":" <> context.node.node_id,
+             step_instance: step_instance(context, runner_config, message),
              runtime_attempt:
                get_in(context, [:workflow, "attempt"]) || Map.get(context, :job_attempt) ||
                  attempt,
@@ -326,23 +337,65 @@ defmodule MirrorNeuron.Builtins.Executor do
     end
   end
 
-  defp structured_actions(result, state, incoming, default_payload) do
+  defp step_instance(context, %{"block_event" => _}, message),
+    do: "event:" <> context.node.node_id <> ":" <> Message.id(message)
+
+  defp step_instance(context, _config, _message),
+    do: (get_in(context, [:workflow, "step_id"]) || "step") <> ":" <> context.node.node_id
+
+  defp structured_actions(result, state, incoming, default_payload, context) do
     case decode_structured_result(result) do
       :ignore ->
-        {:ok, state.agent_state, []}
+        if state.config["block_event"],
+          do:
+            {:error, %{"error" => "event worker omitted its typed result", "retryable" => false}},
+          else: {:ok, state.agent_state, []}
 
       {:error, reason} ->
         {:error, reason}
 
       {:ok, payload} ->
-        next_state = Map.get(payload, "next_state", state.agent_state)
+        if Map.has_key?(payload, "event_result") do
+          with {:ok, next_state, emissions, events} <-
+                 MirrorNeuron.Builtins.BlockEventResult.interpret(
+                   payload,
+                   state.agent_state,
+                   state.config
+                 ),
+               {:ok, publication_warnings} <-
+                 MirrorNeuron.Builtins.BlockEventPublication.publish(
+                   payload,
+                   state.config,
+                   context
+                 ) do
+            # Optional delivery warnings may disappear after repair. Keep them
+            # outside the ordered action list so replay cannot renumber durable
+            # business events, step completion or message delivery actions.
+            Enum.each(
+              publication_warnings,
+              &report_event(context, :block_publication_warning, &1)
+            )
 
-        actions =
-          structured_event_actions(payload) ++
-            structured_emit_actions(payload, incoming) ++
-            structured_completion_actions(payload, default_payload)
+            actions =
+              structured_event_actions(%{"events" => events}) ++
+                structured_emit_actions(%{"emit_messages" => emissions}, incoming)
 
-        {:ok, next_state, actions}
+            {:ok, next_state, actions}
+          end
+        else
+          if state.config["block_event"] do
+            {:error, %{"error" => "event worker omitted its typed result", "retryable" => false}}
+          else
+            next_state = Map.get(payload, "next_state", state.agent_state)
+
+            actions =
+              structured_event_actions(payload) ++
+                structured_emit_actions(payload, incoming) ++
+                structured_completion_actions(payload, default_payload)
+
+            {:ok, next_state, actions}
+          end
+        end
     end
   end
 
@@ -477,7 +530,7 @@ defmodule MirrorNeuron.Builtins.Executor do
 
   defp structured_payload?(decoded) when is_map(decoded) do
     Enum.any?(
-      ["emit_messages", "events", "next_state", "complete_step", "complete_run"],
+      ["event_result", "emit_messages", "events", "next_state", "complete_step", "complete_run"],
       &Map.has_key?(decoded, &1)
     )
   end

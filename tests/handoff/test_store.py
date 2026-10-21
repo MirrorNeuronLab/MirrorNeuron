@@ -12,7 +12,7 @@ from store import handle, locked
 
 @pytest.fixture
 def transaction(tmp_path):
-    root = tmp_path / "runtime-run" / ".handoff"
+    root = tmp_path / "submission" / "outputs" / "runs" / "runtime-run" / ".handoff"
     identity = {"job_id": "job", "run_id": "runtime-run", "step_instance": "generate", "attempt": 1, "lease_epoch": 1}
     base = {"root": str(root), "identity": identity}
     state = handle({**base, "op": "begin", "request_hash": "request", "workspace": "/sandbox/job/attempts", "sandbox": {"sandbox_name": "old"}})
@@ -110,3 +110,47 @@ def test_cleanup_failure_keeps_commit(transaction):
     handle({**base, "op": "cleanup", "warning": "unavailable"})
     result = handle({**base, "op": "begin", "request_hash": "request"})
     assert result["phase"] == "committed" and result["cleanup_pending"]
+
+
+@pytest.mark.parametrize("optional", [True, False])
+def test_export_delivery_policy_and_recovery_use_committed_bytes(transaction, tmp_path, monkeypatch, optional):
+    import store
+    base, _, _, ref, commit = transaction
+    commit["execution"]["structured_result"].update(exports={"review.html": ref},
+        optional_exports=["review.html"] if optional else [])
+    handle(commit)
+    copy = store.shutil.copyfileobj
+    monkeypatch.setattr(store.shutil, "copyfileobj", lambda *_a: (_ for _ in ()).throw(OSError("destination unavailable")))
+    request = {**base, "op": "export", "target": str(tmp_path / "submission/outputs/user")}
+    if optional:
+        result = handle(request)
+        assert result["export_warnings"] == [{"code": "optional_artifact_delivery_failed", "artifact_id": "review.html", "error_type": "OSError"}]
+    else:
+        with pytest.raises(OSError):
+            handle(request)
+    assert not list((tmp_path / "submission/outputs/user").glob(".export-*"))
+    monkeypatch.setattr(store.shutil, "copyfileobj", copy)
+    assert handle(request)["export_warnings"] == []
+    assert (tmp_path / "submission/outputs/user/review.html").read_bytes() == b"hello"
+    assert handle({**base, "op": "begin", "request_hash": "request"})["phase"] == "committed"
+
+
+@pytest.mark.parametrize("policy", [["missing"], ["review.html", "review.html"], "review.html", [[]]])
+def test_invalid_optional_export_policy_cannot_change_delivery_authority(transaction, tmp_path, policy):
+    base, _, _, ref, commit = transaction
+    commit["execution"]["structured_result"].update(exports={"review.html": ref}, optional_exports=policy)
+    handle(commit)
+    with pytest.raises(ValueError, match="export policy"):
+        handle({**base, "op": "export", "target": str(tmp_path / "submission/outputs/user")})
+    assert not (tmp_path / "submission/outputs/user/review.html").exists()
+
+
+def test_optional_export_cannot_hide_corrupt_committed_bytes(transaction, tmp_path):
+    base, _, _, ref, commit = transaction
+    commit["execution"]["structured_result"].update(exports={"review.html": ref}, optional_exports=["review.html"])
+    handle(commit)
+    published = Path(base["root"]) / "commits" / ref["commit_id"] / "outputs/index.html"
+    published.chmod(0o600)
+    published.write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="mismatch"):
+        handle({**base, "op": "export", "target": str(tmp_path / "submission/outputs/user")})

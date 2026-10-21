@@ -1,5 +1,11 @@
 defmodule TestFetchJob do
   def run do
+    # This regression exercises Redis persistence with an injected, supported
+    # native owner; it does not start worker or model processes.
+    hardware = MirrorNeuron.Cluster.Hardware.info()
+    MirrorNeuron.Cluster.Hardware.update_snapshot(
+      Map.put(hardware, :native_sdk_grpc, %{capabilities: ["exclusive_run_v1"]})
+    )
     # Create the job exactly as it would be created
     job_id = "test-job-1"
     raw_manifest = %{

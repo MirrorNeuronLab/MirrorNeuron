@@ -12,6 +12,7 @@ import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from files import VERSION, digest, read, references, regular, safe, sync_dir, verify, write, mkdir, validate_declarations
+from committed_inputs import admit
 
 
 @contextmanager
@@ -121,15 +122,32 @@ def handle(request):
             target = Path(request["target"])
             target.mkdir(parents=True, exist_ok=True)
             index = {}
-            for ref in references(request["payload"]):
-                source = resolve(root, ref)
+            admitted = admit(root, request["payload"],
+                             max_files=request.get("max_files", 256),
+                             max_bytes=request.get("max_bytes", 64_000_000))
+            for ref in [*references(request["payload"]), *admitted]:
+                committed_ref = ref.get("committed_ref")
+                ref = {k: v for k, v in ref.items() if k != "committed_ref"}
                 key = ref["commit_id"] + "/" + safe(ref["path"])
+                if key in index:
+                    if index[key]["reference"] != ref:
+                        raise ValueError("conflicting artifact input identity")
+                    if committed_ref and committed_ref not in index[key].get("committed_refs", []):
+                        index[key].setdefault("committed_refs", []).append(committed_ref)
+                    continue
+                if (len(index) >= request.get("max_files", 256)
+                        or sum(e["reference"]["size_bytes"] for e in index.values()) + ref["size_bytes"]
+                        > request.get("max_bytes", 64_000_000)):
+                    raise ValueError("artifact input quota exceeded")
+                source = resolve(root, ref)
                 name = "files/" + ref["sha256"]
                 dest = target / name
                 dest.parent.mkdir(exist_ok=True)
                 shutil.copyfile(source, dest)
                 dest.chmod(0o444)
                 index[key] = {"reference": ref, "file": name}
+                if committed_ref:
+                    index[key]["committed_refs"] = [committed_ref]
             write(target / "index.json", index)
             return list(entry["reference"] for entry in index.values())
         elif op == "commit":
@@ -195,21 +213,40 @@ def handle(request):
             committed = receipt(root, state)
             if not committed or committed["execution"]["exit_code"] != 0:
                 raise ValueError("only successful committed artifacts may be exported")
-            exports = committed["execution"].get("structured_result", {}).get("exports", {})
+            result = committed["execution"].get("structured_result", {})
+            exports, optional = result.get("exports", {}), result.get("optional_exports", [])
+            if (not isinstance(exports, dict) or len(exports) > 10000 or not isinstance(optional, list)
+                    or len(optional) > 10000 or any(not isinstance(name, str) for name in optional)
+                    or len(set(optional)) != len(optional) or not set(optional) <= set(exports)):
+                raise ValueError("invalid publication export policy")
+            plans, warnings = [], []
             for name, ref in exports.items():
-                source = resolve(root, ref)
                 destination = target / safe(name)
-                destination.parent.mkdir(parents=True, exist_ok=True)
                 if not destination.parent.resolve().is_relative_to(target.resolve()):
                     raise ValueError("export escapes output directory")
-                fd, name = tempfile.mkstemp(prefix=".export-", dir=destination.parent)
-                with os.fdopen(fd, "wb") as sink, source.open("rb") as stream:
-                    shutil.copyfileobj(stream, sink)
-                    sink.flush()
-                    os.fsync(sink.fileno())
-                os.replace(name, destination)
-                sync_dir(destination.parent)
-            return state
+                plans.append((name, resolve(root, ref), destination))
+            for name, source, destination in sorted(plans, key=lambda plan: plan[0] in optional):
+                temporary = None
+                try:
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    if not destination.parent.resolve().is_relative_to(target.resolve()):
+                        raise ValueError("export escapes output directory")
+                    fd, temporary = tempfile.mkstemp(prefix=".export-", dir=destination.parent)
+                    with os.fdopen(fd, "wb") as sink, source.open("rb") as stream:
+                        shutil.copyfileobj(stream, sink)
+                        sink.flush()
+                        os.fsync(sink.fileno())
+                    os.replace(temporary, destination)
+                    sync_dir(destination.parent)
+                except OSError as error:
+                    if name not in optional:
+                        raise
+                    warnings.append({"code": "optional_artifact_delivery_failed", "artifact_id": name,
+                                     "error_type": type(error).__name__})
+                finally:
+                    if temporary is not None:
+                        Path(temporary).unlink(missing_ok=True)
+            return {**state, "export_warnings": warnings}
         elif op == "cleanup":
             if not receipt(root, state):
                 raise ValueError("cannot clean an uncommitted execution")

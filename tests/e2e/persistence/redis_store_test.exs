@@ -1820,7 +1820,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert Enum.all?(failures, &(&1.node == to_string(remote_node)))
 
     assert Enum.map(failures, & &1.resource) ==
-             ["HostLocal", "OpenShell", "DockerWorker", "model residency"]
+             ["HostLocal", "OpenShell", "DockerWorker", "prepared workers", "model residency"]
 
     assert_receive {:cleanup_rpc, ^remote_node, MirrorNeuron.Runner.HostLocal, :terminate_job,
                     [^job_id], 15_000}

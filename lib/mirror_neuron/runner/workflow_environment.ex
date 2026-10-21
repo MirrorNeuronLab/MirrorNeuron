@@ -12,6 +12,8 @@ defmodule MirrorNeuron.Runner.WorkflowEnvironment do
       end
 
     fields = %{
+      "MN_BLOCK_EVENT_PROTOCOL" => "mn.block_events/v1",
+      "MN_BLOCK_EVENT_PUBLICATION_PROTOCOL" => "mn.published_files/v1",
       "MN_WORKFLOW_RUN_ID" => headers["mn.workflow.run_id"] || Keyword.get(opts, :run_id),
       "MN_WORKFLOW_STEP_ID" => headers["mn.workflow.step_id"],
       "MN_WORKFLOW_GRAPH_REVISION" => headers["mn.workflow.graph_revision"],

@@ -20,5 +20,7 @@ defmodule MirrorNeuron.Runner.WorkflowEnvironmentTest do
     assert merged["MN_WORKFLOW_RUN_ID"] == "physical-runtime-id"
     assert merged["MN_WORKFLOW_STEP_ID"] == "parent:r1:task1"
     assert merged["MN_WORKFLOW_ATTEMPT"] == "2"
+    assert merged["MN_BLOCK_EVENT_PROTOCOL"] == "mn.block_events/v1"
+    assert merged["MN_BLOCK_EVENT_PUBLICATION_PROTOCOL"] == "mn.published_files/v1"
   end
 end

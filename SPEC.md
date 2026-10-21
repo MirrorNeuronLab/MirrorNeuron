@@ -597,6 +597,74 @@ notifications and coordinated draining remain required before release.
 
 ## OpenShell artifact handoff v1
 
+Native event executors declare `block_event.version = mn.block_events/v1` with
+finite output ports and observation types. The runner environment advertises the
+supported protocol; older runtimes cannot silently execute the new SDK binding.
+Typed results carry immutable previous/next state identities, a result reference,
+bounded emissions and optional isolated transport evidence. Core rejects unknown
+ports/types, route/completion fields, oversized envelopes and stale transitions
+before returning state/actions. Same-next replay is admitted with stable emission
+idempotency keys. Ordinary default output routing is suppressed only for declared
+event executors; Core retains logical-step completion. OpenShell transactions use
+the physical message identity and include prior state in verified input admission.
+Unversioned state requires a fresh run. The matching SDK/blocks event API is dev27.
+
+Dev32-matched event workers require
+`MN_BLOCK_EVENT_PUBLICATION_PROTOCOL=mn.published_files/v1`, supplied by Core
+before execution. They may expose a verified publication manifest under
+`publication`. Only after state/port/observation acceptance does the executor
+deliver its files. Common references resolve from the trusted physical run;
+isolated references resolve through the committed handoff graph. All receipts
+and referenced bytes verify before any public name is replaced. Verification
+captures bounded immutable bytes so later source changes cannot alter the copy.
+The inventory permits at most 10,000 references / 64 MiB, within the existing
+4 MiB event envelope bound. Destinations are confined to the actual run and
+submission outputs, with canonical names and symlink rejection. Explicit file
+names cannot use hidden top-level names, `blocks`, or `artifacts/results`;
+worker publication cannot replace runtime state, locks, handoff receipts or
+result pointers. File
+permissions survive delivery; undeclared modes are private (0600), and the
+stronger private policy wins for duplicate references. Required copy errors
+remain retryable and preserve prior state. Optional copy errors produce Core
+`block_publication_warning` events; invalid policies, unsafe paths and corrupt
+files reject, even for optional files. Logical run files are always restored;
+isolated configured-folder exports still require `artifact_handoff.export_outputs=true`.
+Optional warnings use Core telemetry outside the ordered durable action list,
+so repaired delivery cannot renumber business events or completion actions.
+Same-next replay repairs delivery without
+redispatching the SDK hook. A stale transition cannot publish. Individual file
+replacement is atomic; the receipt is the complete-inventory barrier, not a
+filesystem transaction across public filenames.
+
+OpenShell selection remains per worker. Stock SDK block and auxiliary handlers require this
+handoff; Core and SDK validation reject missing/conflicting modes before effects.
+Core admits `mn.committed_json/v1` and `mn.committed_bytes/v1` inputs only from
+the current physical run directory, verifies their complete referenced graph,
+and promotes immutable copies into the private handoff input index. Traversal,
+symlinks, identity conflicts and input count/byte quota violations fail closed.
+`MN_RUN_DIR` and related paths always identify private sandbox storage.
+`MN_BUNDLE_ROOT` is the private invocation workspace and
+`MN_BLUEPRINT_MANIFEST_PATH` is its SDK-staged `runtime/manifest.json`;
+inherited owner or image paths cannot replace these bindings. Canonical stock
+workers resolve their exact compiled instances through that descriptor.
+SDK `mn.block_handoff/v1` inventories expose every output file as an ordinary
+handoff declaration while retaining original common reference identities for
+SDK/domain consumers. Their outputs use the existing seal/transfer/receipt
+transaction. Core does not import blueprint hooks or execute domain code while
+admitting artifacts. HostLocal and Docker worker choices remain unchanged.
+
+Private `MN_JOB_OUTPUT_DIR` points to `local/job-outputs`; it is distinct from
+`MN_ARTIFACT_OUTPUT_DIR`, whose contents must all have declared handoff references.
+Matching SDK dev31 publication turns logical output manifests into current
+attempt/producer references under `exports`. Owner delivery remains an explicit
+`artifact_handoff.export_outputs: true` policy. Successful receipt replay repairs
+missing exported files after sandbox cleanup, without redispatching work.
+`optional_exports` may name only unique declared export names (at most 10,000).
+All references and paths verify before copying. Optional copy `OSError`s produce
+`export_warnings`; required copy failures, bad policies, corrupt bytes and path
+escapes remain failures. Temporary export files are removed on failure. The
+`artifact_handoff.export_outputs` setting accepts only a boolean when present.
+
 `artifact_handoff.version = "mn.artifact_handoff/v1"` selects an immutable
 artifact protocol. It cannot coexist with `sync_shared_storage=true`; no error
 falls back to whole-tree synchronization. Optional positive quotas are
@@ -808,3 +876,31 @@ Roll out Core and the native SDK together. Before deployment, run the opt-in rea
 two-PC check: A runs on Spark; B queues there; C runs on the other PC; B starts
 exactly once after A's cleanup. Source/unit verification does not substitute for
 that hardware smoke test or authorize a deployment.
+
+## Workflow action allowance protocol
+
+`policies.workflow_budgets` contains one to 32 named compiled `{limit: integer}`
+allowances, each from zero to 100,000. The canonical SDK resolves authored
+configuration references before submission. `SetResource` operation
+`workflow_budget`, schema `mn.workflow_budget/v1`, requires authenticated client
+identity. Its closed start/complete/summary commands bind the Job, actual
+workflow run, allowance name/limit and stable request scope. It never changes
+physical resource percentages or node-admission state.
+
+The registered job coordinator serializes admission. It rejects stopped/paused
+owners, mismatched runs, undeclared or changed limits, malformed requests and
+invalid accounting. New starts and completions are persisted through the existing
+fenced job snapshot/replica barrier before acknowledgment. Persistence failure
+cannot grant work. Successful replay returns the original reservation; a changed
+request or completion rejects. Unknown starts remain charged and completion does
+not refund capacity. Pool state is restored for checkpoint retry and cannot be
+silently reused by a new run. Summary reads observe one coordinator snapshot.
+
+Each allowance journal has at most 100,000 records and 4,000,000 encoded bytes;
+individual metadata objects are bounded to 16 KiB. Capacity rejection occurs
+before another grant, with no truncation or hidden reset. These are action units,
+not monetary billing or a provider retry mechanism. Native model/tool effect
+journals, leases and Core delivery remain responsible for dispatch safety.
+SDK/blocks dev30 and this Core protocol must be rolled out together. Current
+verification uses offline owner transitions, synthetic transports and fake
+OpenShell sandboxes; it does not authorize a live deployment.

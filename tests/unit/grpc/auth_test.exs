@@ -60,6 +60,21 @@ defmodule MirrorNeuron.Grpc.AuthTest do
     assert :ok = Auth.authorize_identity!(stream)
   end
 
+  test "workflow action admission rejects anonymous resource callers" do
+    System.put_env("MN_GRPC_AUTH_TOKEN", "configured-operator-token")
+
+    request = %Mirrorneuron.Cluster.V1.SetResourceRequest{
+      resource_json: Jason.encode!(%{"operation" => "workflow_budget"})
+    }
+
+    error =
+      assert_raise GRPC.RPCError, fn ->
+        MirrorNeuron.Grpc.Handlers.Resource.set_resource(request, %Stream{headers: %{}})
+      end
+
+    assert error.status == GRPC.Status.unauthenticated()
+  end
+
   test "authorizes only the peer credential matching the federation identity" do
     System.put_env("MN_GRPC_AUTH_TOKEN", "configured-operator-token")
     token = MirrorNeuron.Grpc.Tokens.peer_token("mirror_neuron@peer")

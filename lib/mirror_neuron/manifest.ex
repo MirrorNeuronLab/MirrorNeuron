@@ -582,6 +582,7 @@ defmodule MirrorNeuron.Manifest do
     |> add_errors(ResourceSpec.validate_manifest(manifest))
     |> add_errors(RunnerPolicy.validate_manifest(manifest))
     |> add_errors(LifecyclePolicy.validate_manifest(manifest))
+    |> add_errors(MirrorNeuron.Runtime.WorkflowBudget.validation_errors(policies))
   end
 
   defp validate_scheduler_policy(errors, %{policies: policies})

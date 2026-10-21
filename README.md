@@ -381,9 +381,49 @@ Direct distributed-Erlang deployments retain their existing naming policy.
 
 ### OpenShell artifact handoff v1
 
+Native SDK event blocks use `mn.block_events/v1`. Core advertises the supported
+protocol to runners, validates the declared port/observation contract and applies
+state only against the exact previous reference (or the same next reference on
+replay). Stale transitions cannot overwrite later state. Emission idempotency keys
+remain stable across retries. The SDK's process hook supplies logical-port values;
+Core keeps routing, delivery and logical completion. OpenShell event transactions
+are scoped to the physical message, and admit the previous state's verified
+handoff graph before sandbox execution. This is source work requiring matching
+SDK/blocks dev27 for the base event contract. CCTV v5.1 now uses native ingress
+with the dev32 additions below; its three downstream workers remain pending.
+
+Matching dev32 source adds event file publication. The SDK verifies
+`outputs.published_files` without copying public names. Core accepts the event's
+state transition first, then verifies every receipt/file and materializes outputs
+under the physical run and configured submission output directory. Stale events
+cannot overwrite later reports. Same-next replay repairs delivery after sandbox
+cleanup without another domain invocation. Required copy errors retry; optional
+copy failures produce `block_publication_warning` events. Integrity, path and
+policy failures reject. Core advertises the publication protocol to runners;
+the new SDK rejects missing support before hooks execute. The offline tests use
+synthetic transports and do not qualify live OpenShell or CCTV hardware.
+
 Set `artifact_handoff: {"version": "mn.artifact_handoff/v1"}` on an
 OpenShell executor to use owner-node immutable artifact commits. The SDK's
 `mn_sdk.artifact_handoff` helpers declare outputs and resolve verified inputs.
+OpenShell is optional per worker. Stock SDK block and auxiliary workers use this same handoff
+and require it when OpenShell is selected; HostLocal and Docker defaults remain.
+Core stages the complete referenced common JSON/byte input graph from the actual
+owner run and supplies private sandbox run directories. Core also binds
+`MN_BUNDLE_ROOT` and `MN_BLUEPRINT_MANIFEST_PATH` to the private invocation;
+the matching SDK stages the compiled descriptor with the selected domain files.
+The SDK packages output
+graphs in `mn.block_handoff/v1`; Core verifies their declarations and commits
+their bytes before downstream delivery. No blueprint transport wrapper or owner
+store mount is needed. Use the matching SDK source/release with this Core change.
+Main SDK dev31 block publication uses separate private logical output storage
+(`local/job-outputs`) and declared handoff storage (`MN_ARTIFACT_OUTPUT_DIR`).
+With `artifact_handoff.export_outputs: true`, Core delivers the SDK's verified
+publication exports to the owner output folder and can repair delivery from a
+committed receipt after sandbox cleanup, without another domain invocation.
+SDK optional-file declarations retain required-report delivery when an optional
+copy is unavailable. Core reports `export_warnings`; corrupt bytes and unsafe
+paths remain errors, and required copy errors remain failures.
 This mode rejects `sync_shared_storage: true`; that flag explicitly selects the
 legacy whole-tree contract for unmigrated blueprints. Deploy the matching SDK
 in worker images when upgrading Core.
@@ -539,3 +579,15 @@ advertise `exclusive_run_v1`. See the exclusive run admission section of SPEC.md
 Keyed starts retain Redis-backed request identities and receipts across Core
 restart, including reconciliation after an interrupted receipt write. Queue
 schedule revisions advance on mutation so stale cancel/reschedule controls fail.
+
+## Workflow action allowances
+
+Compiled `policies.workflow_budgets` declare named action limits for an actual
+workflow run. The SDK's `RunActionBudget` uses authenticated resource commands;
+the job coordinator owns atomic admission and persists reservations before
+granting work. Isolated workers share that owner rather than copied local
+counters. Duplicate requests/completions are idempotent; changed requests,
+foreign scopes and stale runs reject. Unknown starts stay charged. The allowance
+survives checkpoint recovery and resets only for an explicitly new workflow run.
+Provider effects still need their native journals. Deploy the matching dev30
+SDK/blocks and Core support together; offline tests do not qualify a live rollout.

@@ -88,6 +88,16 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
     refute NodeAdmission.authorized?(epoch)
   end
 
+  test "protected starts require the native owner's exclusive-run capability" do
+    alias MirrorNeuron.Cluster.Hardware
+    on_exit(fn -> Hardware.clear_snapshot() end)
+    Hardware.update_snapshot(%{capabilities: ["exclusive_run_v1"]})
+    assert {:error, message} = NodeAdmission.ensure_supported()
+    assert message =~ "native runtime"
+    Hardware.update_snapshot(%{native_sdk_grpc: %{capabilities: ["exclusive_run_v1"]}})
+    assert :ok = NodeAdmission.ensure_supported()
+  end
+
   test "concurrent starts from clients produce one holder and unique durable queue entries" do
     receipts =
       1..20

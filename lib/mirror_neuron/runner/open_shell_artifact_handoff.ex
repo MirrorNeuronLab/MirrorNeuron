@@ -10,7 +10,12 @@ defmodule MirrorNeuron.Runner.OpenShellArtifactHandoff do
   def validate(config) do
     case config["artifact_handoff"] do
       nil ->
-        :ok
+        if get_in(config, ["environment", "MN_WORKFLOW_STEP_HANDLER"]) in [
+             "mn_sdk.integrations.block_worker",
+             "mn_sdk.integrations.block_auxiliary"
+           ],
+           do: {:error, "OpenShell block workers require artifact_handoff v1"},
+           else: :ok
 
       %{"version" => @version} ->
         cond do
@@ -32,6 +37,9 @@ defmodule MirrorNeuron.Runner.OpenShellArtifactHandoff do
 
           config["reuse_shared_sandbox"] == false ->
             {:error, "artifact_handoff requires a job sandbox"}
+
+          config["artifact_handoff"]["export_outputs"] not in [nil, true, false] ->
+            {:error, "artifact_handoff export_outputs must be a boolean"}
 
           true ->
             :ok
@@ -134,15 +142,17 @@ defmodule MirrorNeuron.Runner.OpenShellArtifactHandoff do
   defp resume(_base, %{"phase" => "unknown_blocked"} = state, _payload, _config, _opts),
     do: {:error, Map.put(state, "retryable", false)}
 
-  defp resume(base, %{"phase" => "prepared"} = state, payload, config, opts) do
+  defp resume(base, %{"phase" => "prepared"}, payload, config, opts) do
     with {:ok, sandbox} <- OpenShellJobSandbox.ensure(Keyword.fetch!(opts, :job_id), config),
          {:ok, state} <- OpenShellArtifactStore.call(base, "prepared", %{"sandbox" => sandbox}),
          {:ok, staged} <- OpenShell.stage_workspace(payload, config, opts) do
       try do
         with {:ok, inputs} <-
                prepare_inputs(base, %{
-                 "payload" => payload,
-                 "target" => Path.join(staged, ".inputs")
+                 "payload" => input_admission_payload(payload, config, opts),
+                 "target" => Path.join(staged, ".inputs"),
+                 "max_files" => Map.get(config["artifact_handoff"], "max_files", 256),
+                 "max_bytes" => Map.get(config["artifact_handoff"], "max_bytes", 64_000_000)
                }),
              :ok <- prepare(staged, state, inputs, config, opts),
              {:ok, :uploaded} <-
@@ -173,6 +183,14 @@ defmodule MirrorNeuron.Runner.OpenShellArtifactHandoff do
   end
 
   defp resume(base, state, _payload, config, opts), do: transfer(base, state, config, opts)
+
+  defp input_admission_payload(payload, %{"block_event" => _}, opts) do
+    state = Keyword.get(opts, :agent_state, %{})
+    state_input = if state["handoff"], do: state["handoff"], else: state["reference"]
+    %{"input" => payload, "event_state" => state_input}
+  end
+
+  defp input_admission_payload(payload, _config, _opts), do: payload
 
   defp prepare_inputs(base, fields, remaining \\ 40) do
     case OpenShellArtifactStore.call(base, "inputs", fields) do
@@ -224,6 +242,8 @@ defmodule MirrorNeuron.Runner.OpenShellArtifactHandoff do
         "MN_MESSAGE_FILE" => Path.join(remote, "mirror_neuron_message.json"),
         "MN_CONTEXT_FILE" => Path.join(remote, "mirror_neuron_context.json"),
         "MN_WORKDIR" => OpenShell.resolve_workdir(config, remote),
+        "MN_BUNDLE_ROOT" => remote,
+        "MN_BLUEPRINT_MANIFEST_PATH" => Path.join(remote, "runtime/manifest.json"),
         "MN_RUN_ID" => state["producer"]["run_id"],
         "MN_WORKFLOW_RUN_ID" => state["producer"]["run_id"],
         "MN_JOB_ID" => state["producer"]["job_id"],
@@ -235,7 +255,12 @@ defmodule MirrorNeuron.Runner.OpenShellArtifactHandoff do
         "MN_STEP_RESULT_FILE" => Path.join(remote, "result.json"),
         "MN_JOB_SHARED_STORAGE_ROOT" => Path.join(remote, "local"),
         "MN_RUNS_ROOT" => Path.join(remote, "local/runs"),
-        "MN_JOB_OUTPUT_DIR" => Path.join(remote, "outputs"),
+        "MN_RUN_DIR" => Path.join([remote, "local/runs", state["producer"]["run_id"]]),
+        "MN_ARTIFACT_MAX_FILES" =>
+          to_string(Map.get(config["artifact_handoff"], "max_files", 256)),
+        "MN_ARTIFACT_MAX_BYTES" =>
+          to_string(Map.get(config["artifact_handoff"], "max_bytes", 64_000_000)),
+        "MN_JOB_OUTPUT_DIR" => Path.join(remote, "local/job-outputs"),
         "MN_JOB_INPUT_DIR" => Path.join(remote, ".inputs")
       })
 
@@ -412,11 +437,11 @@ defmodule MirrorNeuron.Runner.OpenShellArtifactHandoff do
   defp export_and_outcome(base, state, config) do
     if config["artifact_handoff"]["export_outputs"] == true and
          state["receipt"]["execution"]["exit_code"] == 0 do
-      with {:ok, _} <-
+      with {:ok, exported} <-
              OpenShellArtifactStore.call(base, "export", %{
                "target" => config["environment"]["MN_JOB_OUTPUT_DIR"]
              }) do
-        outcome(base, state)
+        outcome(base, Map.put(state, "export_warnings", Map.get(exported, "export_warnings", [])))
       end
     else
       outcome(base, state)
@@ -433,6 +458,11 @@ defmodule MirrorNeuron.Runner.OpenShellArtifactHandoff do
         "retryable" => false,
         "cleanup_warning" => state["cleanup_warning"]
       })
+
+    result =
+      if state["export_warnings"] not in [nil, []],
+        do: Map.put(result, "export_warnings", state["export_warnings"]),
+        else: result
 
     if execution["exit_code"] == 0,
       do: {:ok, result},

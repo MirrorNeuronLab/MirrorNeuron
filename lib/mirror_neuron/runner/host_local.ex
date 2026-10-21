@@ -1369,6 +1369,8 @@ defmodule MirrorNeuron.Runner.HostLocal do
     %{
       "MN_INPUT_FILE" => input_file,
       "MN_CONTEXT_FILE" => context_file,
+      "MN_BLOCK_EVENT_PROTOCOL" => "mn.block_events/v1",
+      "MN_BLOCK_EVENT_PUBLICATION_PROTOCOL" => "mn.published_files/v1",
       "MN_MESSAGE_FILE" => message_file,
       "MN_BODY_FILE" => body_file,
       "MN_BODY_CONTENT_TYPE" => Message.content_type(message),

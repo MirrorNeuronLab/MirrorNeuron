@@ -112,6 +112,11 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         ),
       attempt_history: Map.get(existing_job || %{}, "attempt_history", []),
       retry_receipts: Map.get(existing_job || %{}, "retry_receipts", %{}),
+      workflow_budgets:
+        if(Keyword.has_key?(opts, :checkpoint_retry),
+          do: Map.get(existing_job || %{}, "workflow_budgets", %{}),
+          else: %{}
+        ),
       restart_budget: Map.get(existing_job || %{}, "restart_budget"),
       attempt_not_before: Map.get(existing_job || %{}, "attempt_not_before"),
       submission_storage: %{
@@ -331,6 +336,32 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   @impl true
+  def handle_call({:workflow_budget, attrs}, _from, %{status: "running"} = state) do
+    persist = fn budgets ->
+      RedisStore.persist_job(
+        state.job_id,
+        job_snapshot(Map.put(state, :workflow_budgets, budgets))
+      )
+    end
+
+    case MirrorNeuron.Runtime.WorkflowBudget.apply_command(
+           Map.get(state, :workflow_budgets, %{}),
+           state.manifest.policies,
+           WorkflowLedger.run_id(state.workflow_state),
+           attrs,
+           persist
+         ) do
+      {:ok, response, budgets} ->
+        {:reply, {:ok, response}, Map.put(state, :workflow_budgets, budgets)}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:workflow_budget, _attrs}, _from, state),
+    do: {:reply, {:error, "workflow budget owner is not running"}, state}
+
   def handle_call(:pause, _from, %{status: "running"} = state) do
     state = state |> cancel_policy_timers() |> cancel_recovery_tasks()
     EventBus.publish(state.job_id, %{type: :job_pausing, timestamp: Runtime.timestamp()})
@@ -3376,6 +3407,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       attempt_not_before: state.attempt_not_before,
       attempt_history: state.attempt_history,
       retry_receipts: state.retry_receipts,
+      workflow_budgets: Map.get(state, :workflow_budgets, %{}),
       restart_budget: state.restart_budget,
       restart_reason: state.restart_reason,
       recovery_mode:
@@ -3671,7 +3703,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
     MirrorNeuron.Runtime.RedisEnvironment.agent_env()
     |> Map.merge(%{
-      "MN_JOB_ID" => Keyword.get(state.opts, :stable_job_id, state.job_id),
+      "MN_JOB_ID" => Keyword.get(state.opts, :stable_job_id) || state.job_id,
       "MN_RUN_ID" => run_id,
       "MN_ATTEMPT_ID" => "#{run_id}:#{state.attempt}",
       "MN_JOB_DATA_DIR" => Keyword.get(state.opts, :job_data_dir),
