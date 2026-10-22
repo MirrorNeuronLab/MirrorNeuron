@@ -7,14 +7,38 @@ defmodule MirrorNeuron.WorkflowInvocationTest do
     {:ok, _} = Application.ensure_all_started(:mirror_neuron)
     assert {:ok, "PONG"} = Redix.command(MirrorNeuron.Redis.Connection, ["PING"])
     original_hardware = System.get_env("MN_NODE_HARDWARE_JSON")
+    original_namespace = System.get_env("MN_REDIS_NAMESPACE")
+
+    delivery_settings = %{
+      "MN_MESSAGE_ACK_TIMEOUT_MS" => "200",
+      "MN_MESSAGE_LEASE_RENEW_MS" => "50",
+      "MN_MESSAGE_DELIVERY_POLL_MS" => "20"
+    }
+
+    original_delivery_settings =
+      Map.new(delivery_settings, fn {key, _} -> {key, System.get_env(key)} end)
+
+    System.put_env(delivery_settings)
+    namespace = "workflow_invocation_#{System.unique_integer([:positive])}"
+    System.put_env("MN_REDIS_NAMESPACE", namespace)
     hardware = Jason.decode!(original_hardware || "{}")
     hardware = Map.put(hardware, "native_sdk_grpc", %{"capabilities" => ["exclusive_run_v1"]})
     System.put_env("MN_NODE_HARDWARE_JSON", Jason.encode!(hardware))
+    assert {:ok, _} = MirrorNeuron.Cluster.NodeState.advertise_self()
 
     on_exit(fn ->
       if original_hardware,
         do: System.put_env("MN_NODE_HARDWARE_JSON", original_hardware),
         else: System.delete_env("MN_NODE_HARDWARE_JSON")
+
+      if original_namespace,
+        do: System.put_env("MN_REDIS_NAMESPACE", original_namespace),
+        else: System.delete_env("MN_REDIS_NAMESPACE")
+
+      Enum.each(original_delivery_settings, fn
+        {key, nil} -> System.delete_env(key)
+        {key, value} -> System.put_env(key, value)
+      end)
     end)
 
     :ok
@@ -185,5 +209,185 @@ defmodule MirrorNeuron.WorkflowInvocationTest do
         """
       ]
     }
+  end
+
+  test "generated source collects both upstream boundaries before publishing" do
+    left = compiled_step("left", [], %{"value" => "left result"})
+    right = compiled_step("right", [], %{"value" => "right result"})
+
+    publish =
+      compiled_step("publish", ~w(left right), %{
+        "left" => %{"$ref" => "upstream", "step_id" => "left", "path" => ["result", "value"]},
+        "right" => %{"$ref" => "upstream", "step_id" => "right", "path" => ["result", "value"]}
+      })
+
+    job = run_compiled([left, right, publish], ~w(left right))
+    assert get_in(job, ["workflow_state", "steps", "publish", "attempt_count"]) == 1
+
+    assert get_in(job, ["result", "output", "last_message", "outputs", "result"]) ==
+             %{"left" => "left result", "right" => "right result"}
+  end
+
+  test "child planner executes through its generated source and sink before the next step" do
+    inspect_step = compiled_step("inspect", [], %{"context" => %{}})
+
+    planner =
+      compiled_step("planner", [], %{
+        "child_plan" => %{
+          "decision" => "stop",
+          "revision" => 0,
+          "reason" => "Investigation complete",
+          "output" => %{"answer" => "Evidence reviewed"}
+        }
+      })
+
+    report =
+      compiled_step("report", ["inspect"], %{
+        "answer" => %{
+          "$ref" => "upstream",
+          "step_id" => "inspect",
+          "path" => ["result", "answer"]
+        }
+      })
+
+    children = %{
+      "inspect" => %{
+        "planner" => "planner",
+        "templates" => %{"planner" => planner.step},
+        "inputs" => %{"context" => ["outputs", "result", "context"]},
+        "outputs" => %{"result" => []},
+        "max_rounds" => 2,
+        "max_steps_per_round" => 2
+      }
+    }
+
+    job =
+      run_compiled([inspect_step, report], ["inspect"], children, planner.nodes, planner.edges)
+
+    assert get_in(job, ["workflow_state", "steps", "inspect:p0", "status"]) == "completed"
+
+    assert get_in(job, ["result", "output", "last_message", "outputs", "result"]) ==
+             %{"answer" => "Evidence reviewed"}
+  end
+
+  defp compiled_step(id, upstreams, fields) do
+    start = id <> "__start"
+    worker = id <> "__worker"
+    finish = id <> "__end"
+
+    %{
+      upstreams: upstreams,
+      step: %{
+        "id" => id,
+        "run" => start,
+        "agent_id" => start,
+        "agent_ids" => [start, worker, finish]
+      },
+      nodes: [
+        %{
+          "node_id" => start,
+          "agent_type" => "step_source",
+          "config" => %{
+            "step_id" => id,
+            "required_upstreams" => upstreams,
+            "fields" => fields,
+            "output_message_type" => id <> "_started"
+          }
+        },
+        %{
+          "node_id" => worker,
+          "agent_type" => "router",
+          "config" => %{"emit_type" => id <> "_worked"}
+        },
+        %{
+          "node_id" => finish,
+          "agent_type" => "step_sink",
+          "config" => %{
+            "step_id" => id,
+            "fields" => %{"result" => %{"$ref" => "flow_output"}},
+            "output_message_type" => id <> "_completed"
+          }
+        }
+      ],
+      edges: [
+        %{"from_node" => start, "to_node" => worker, "message_type" => id <> "_started"},
+        %{"from_node" => worker, "to_node" => finish, "message_type" => id <> "_worked"}
+      ]
+    }
+  end
+
+  defp run_compiled(steps, entrypoints, children \\ %{}, extra_nodes \\ [], extra_edges \\ []) do
+    last_id = List.last(steps).step["id"]
+
+    terminal = %{
+      "node_id" => "workflow__terminal",
+      "agent_type" => "aggregator",
+      "config" => %{"complete_after" => 1, "terminal_sink" => true, "complete_run" => true}
+    }
+
+    terminal_edge = %{
+      "from_node" => last_id <> "__end",
+      "to_node" => "workflow__terminal",
+      "message_type" => last_id <> "_completed"
+    }
+
+    dependencies =
+      for step <- steps,
+          upstream <- step.upstreams,
+          do: %{"from" => upstream, "to" => step.step["id"]}
+
+    boundary_edges =
+      for %{"from" => from, "to" => to} <- dependencies do
+        %{
+          "from_node" => from <> "__end",
+          "to_node" => to <> "__start",
+          "message_type" => from <> "_completed"
+        }
+      end
+
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "workflow_admission_regression",
+      "apiVersion" => "mn.workflow/v1",
+      "kind" => "Workflow",
+      "entrypoints" => Enum.map(entrypoints, &(&1 <> "__start")),
+      "flow" => %{
+        "steps" => Enum.map(steps, & &1.step),
+        "graph" => %{"edges" => dependencies},
+        "child_workflows" => children,
+        "nodes" => Enum.flat_map(steps, & &1.nodes) ++ extra_nodes ++ [terminal],
+        "edges" =>
+          Enum.flat_map(steps, & &1.edges) ++ boundary_edges ++ extra_edges ++ [terminal_edge]
+      },
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, job_id} = MirrorNeuron.run_manifest(manifest)
+
+    on_exit(fn ->
+      MirrorNeuron.Runtime.cancel_job(job_id)
+      MirrorNeuron.Runtime.NodeAdmission.retire(job_id)
+      RedisStore.delete_job(job_id)
+    end)
+
+    case MirrorNeuron.Runtime.await_completion(job_id, 10_000) do
+      {:ok, job} ->
+        assert job["status"] == "completed",
+               inspect(Map.take(job, ["error", "result", "workflow_state"]), limit: :infinity)
+
+        job
+
+      error ->
+        state = :sys.get_state(MirrorNeuron.Runtime.Naming.via_job(job_id))
+
+        source =
+          :sys.get_state(MirrorNeuron.Runtime.Naming.via_agent(job_id, last_id <> "__start"))
+
+        statuses =
+          Map.new(state.workflow_state["steps"], fn {id, step} -> {id, step["status"]} end)
+
+        collection = Map.take(source.local_state, [:attempt_id, :dispatched, :upstream_outputs])
+        flunk(inspect({error, statuses, collection}, limit: :infinity))
+    end
   end
 end

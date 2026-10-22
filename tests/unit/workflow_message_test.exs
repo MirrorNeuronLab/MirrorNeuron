@@ -61,6 +61,25 @@ defmodule MirrorNeuron.Runtime.WorkflowMessageTest do
            )
   end
 
+  test "child instance messages retain their attempt across template workers" do
+    message =
+      incoming()
+      |> put_in(["headers", "mn.workflow.step_id"], "inspect:r1:task")
+      |> put_in(["headers", "mn.workflow.template_id"], "intake")
+      |> put_in(["headers", "mn.workflow.attempt_id"], "inspect:r1:task:attempt:1")
+      |> put_in(["headers", "mn.workflow.idempotency_key"], "run:inspect:r1:task:1:input")
+
+    outgoing =
+      WorkflowMessage.build(state("intake__start"), message, "intake__worker", "work", %{})
+
+    assert Message.headers(outgoing) == Map.put(Message.headers(message), "mn.attempt_epoch", 3)
+
+    next = WorkflowMessage.build(state("intake__end"), outgoing, "next__start", "done", %{})
+    assert Message.headers(next)["mn.workflow.step_id"] == "next"
+    assert Message.headers(next)["mn.workflow.source_step_id"] == "inspect:r1:task"
+    refute Map.has_key?(Message.headers(next), "mn.workflow.idempotency_key")
+  end
+
   test "parallel specialists have independent keys and delivery replay keeps each key" do
     message = incoming()
 

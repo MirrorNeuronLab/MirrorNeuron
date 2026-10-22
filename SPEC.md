@@ -83,6 +83,13 @@ per-run supervision.
 Before a workflow handler executes, Core admits its source delivery through the
 owning ledger and returns the authoritative attempt context. Deliveries waiting
 for dependencies are retried without running the handler.
+Generated step sources admit every upstream delivery into the same owning
+attempt so they can collect all declared inputs. This permission belongs only
+to the compiled source boundary; other handlers cannot borrow a different
+delivery's attempt. Child instances are admitted by their instance step ID,
+and routing within their compiled template retains that instance's context.
+Targets following child work consume the final ledger-owned parent output;
+the parent sink's preliminary notification cannot start those targets.
 
 Routing within one logical step retains its attempt, deadlines, graph identity
 and step idempotency key. Crossing a logical-step boundary clears that context

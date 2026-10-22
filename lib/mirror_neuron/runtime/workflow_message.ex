@@ -44,12 +44,16 @@ defmodule MirrorNeuron.Runtime.WorkflowMessage do
   defp headers_for_target(headers, state, incoming, to_node) do
     agent_steps = Map.get(state.runtime_context, :workflow_agent_steps, %{})
     source_step = Message.headers(incoming)["mn.workflow.step_id"]
+    source_template = Message.headers(incoming)["mn.workflow.template_id"]
 
     case Map.get(agent_steps, to_node) do
       nil ->
         headers
 
       ^source_step ->
+        headers
+
+      ^source_template ->
         headers
 
       step_id ->

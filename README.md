@@ -378,6 +378,9 @@ Docker, OpenShell artifact handoff and HostLocal runners provide a stable
 distinct keys. The original ledger key is available as
 `MN_WORKFLOW_STEP_IDEMPOTENCY_KEY`. New logical steps receive their own attempt
 through normal ledger admission.
+Generated step sources collect multiple upstream deliveries under one attempt.
+Child-workflow workers keep the child instance's attempt across source, worker,
+join and sink boundaries; the template identity does not replace the instance.
 
 HostLocal auxiliary services receive `MN_WORKFLOW_RUN_ID` from the owning
 runtime even when their initial message has no workflow headers. Runtime

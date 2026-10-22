@@ -241,7 +241,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
 
   def decorate_message(state, agent_id, message, extra_headers \\ %{}) do
     if enabled?(state) do
-      step_id = step_for_agent(state, agent_id)
+      step_id = step_id_for_message(state, agent_id, message)
 
       if step_id do
         step = get_step(state, step_id)
@@ -302,7 +302,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
         not dependencies_satisfied?(state, step) ->
           block_step_for_dependencies(state, step, message, now)
 
-        step_running_with_different_message?(step, message) ->
+        step_running_with_different_message?(step, agent_id, message) ->
           ignore_duplicate_step_message(
             state,
             step,
@@ -644,7 +644,12 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
         {:ok, message, next_step} = retry_message(state, step, now)
         {Map.delete(next_step, "checkpoint_retry_delivery"), message}
       else
-        {step, step_last_message(step)}
+        # A parent sink emits before its child rounds finish. Managed targets
+        # must consume the ledger's final parent outputs, not that early body.
+        message =
+          if ChildWorkflow.managed_target?(state, step), do: nil, else: step_last_message(step)
+
+        {step, message}
       end
 
     case saved_message do
@@ -1905,6 +1910,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
         "label" => to_string(Map.get(raw, "label") || step_id),
         "run" => run_id,
         "agent_ids" => agent_ids,
+        "input_agent_id" => if(node && Map.get(node, :agent_type) == "step_source", do: agent_id),
         "required" => Map.get(control, "required", true) != false,
         "failure_policy" => to_string(Map.get(control, "failure_policy") || "fail_workflow"),
         "trigger_rule" => trigger_rule,
@@ -2098,10 +2104,11 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   defp step_terminal?(step),
     do: Map.get(step, "status") in @terminal_step_statuses
 
-  defp step_running_with_different_message?(step, message) do
+  defp step_running_with_different_message?(step, agent_id, message) do
     current = Map.get(step, "current_attempt")
 
     Map.get(step, "status") == "running" and is_map(current) and
+      Map.get(step, "input_agent_id") != agent_id and
       Map.get(current, "message_id") != safe_message_id(message)
   end
 
