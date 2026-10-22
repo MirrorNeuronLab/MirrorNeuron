@@ -246,6 +246,12 @@ messages follow the declared failure/dead-letter path.
 
 ## Lifecycle and Persistence
 
+Updating an archived stable job with `status: active` restores the same definition
+under the existing revision and start gate. Its owner, data generation, bundle,
+configuration and run history remain intact. Reactivation reconciles its response
+service without starting a run or reenabling paused schedules. Archiving continues
+to require the dedicated archive operation; generic updates cannot bypass it.
+
 Stable-job, run, and agent lifecycle transitions are validated and persisted.
 Persistent shared data is derived as `$MN_HOME/job-data/<job-id>` and is never
 owned by run retention or cleanup. Run state, submissions, sandboxes, logs, and

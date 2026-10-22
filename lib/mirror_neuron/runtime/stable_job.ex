@@ -108,15 +108,14 @@ defmodule MirrorNeuron.Runtime.StableJob do
   def update(job_id, attrs, opts \\ [])
 
   def update(job_id, attrs, opts) when is_map(attrs) do
-    allowed = ~w(resolved_configuration schedules storage job_name)
-
     with_start_gate(job_id, fn ->
       with {:ok, definition} <- get(job_id),
            :ok <- ensure_revision(definition, Keyword.get(opts, :expected_revision)),
-           {:ok, normalized_attrs} <- normalize_update(definition, stringify(attrs)) do
+           {:ok, normalized_attrs} <- normalize_update(definition, stringify(attrs)),
+           {:ok, updated} <-
+             MirrorNeuron.Runtime.StableJobUpdate.apply(definition, normalized_attrs) do
         updated =
-          definition
-          |> Map.merge(Map.take(normalized_attrs, allowed))
+          updated
           |> increment_revision()
           |> Map.put("updated_at", Runtime.timestamp())
 
