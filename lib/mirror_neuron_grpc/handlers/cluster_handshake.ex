@@ -165,6 +165,7 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
       "connection_mode" => "federated",
       "job_owner_eligible" => true,
       "scheduling_eligible" => true,
+      "admission" => admission_node_info(),
       "grpc_host" => advertised_host(),
       "grpc_port" => advertised_grpc_port(),
       "host_shared_storage_root" =>
@@ -193,6 +194,17 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
     }
   end
 
+  defp admission_node_info do
+    case MirrorNeuron.Runtime.NodeAdmission.snapshot() do
+      {:ok, state} ->
+        Map.take(state, ["holder", "queue", "generation", "legacy"])
+        |> Map.put("capability", "exclusive_run_v1")
+
+      _ ->
+        %{"capability" => "exclusive_run_v1", "state" => "unavailable"}
+    end
+  end
+
   defp litellm_node_info do
     host =
       MirrorNeuron.Config.optional_string("MN_LITELLM_ADVERTISE_HOST", :litellm_advertise_host) ||
@@ -209,7 +221,14 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
   end
 
   defp coordination_store_node_info do
-    case MirrorNeuron.Persistence.RedisStore.coordination_store_status() do
+    store =
+      Application.get_env(
+        :mirror_neuron,
+        :coordination_store,
+        MirrorNeuron.Persistence.RedisStore
+      )
+
+    case store.coordination_store_status() do
       {:ok, status} ->
         status
 

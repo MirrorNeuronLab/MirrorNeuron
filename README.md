@@ -600,6 +600,9 @@ automatically after terminal cleanup. `paused` retains the reservation. Read
 `admission` on the Run and inspect its `queue_<run_id>` schedule; cancelling that
 schedule cannot stop a run that has already begun. Core and native SDK peers must
 advertise `exclusive_run_v1`. See the exclusive run admission section of SPEC.md.
+Federation refreshes carry each PC's current holder and queue into node/resource
+reports, so new co-workers prefer an idle compatible PC. Existing prepared Jobs
+keep their owner and its local resources; refreshing capacity does not move them.
 Keyed starts retain Redis-backed request identities and receipts across Core
 restart, including reconciliation after an interrupted receipt write. Queue
 schedule revisions advance on mutation so stale cancel/reschedule controls fail.

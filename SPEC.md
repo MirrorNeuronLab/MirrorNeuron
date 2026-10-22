@@ -343,6 +343,12 @@ Federation handshakes advertise the owner's complete hardware profile. Resource
 reports preserve both direct scheduler eligibility and the separate federated
 owner eligibility facts, so submitters can validate a remote owner without
 making that owner a member of their local scheduler.
+Authenticated federation advertisements and refreshes also preserve the owner's
+current admission capability, holder, FIFO, generation and legacy reservations
+through node inspection and resource reports. Private native request claims are
+excluded. New definition placement can prefer an idle compatible PC over a busy
+peer; only the owner-local atomic claim authorizes execution. Prepared definitions
+retain their existing owner and are not migrated by an inventory refresh.
 Federated peer availability is based on authenticated gRPC reachability probes
 at five-second intervals. Three consecutive failures mark a peer unavailable;
 the first successful probe restores healthy status. Job and run projection

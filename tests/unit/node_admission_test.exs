@@ -6,6 +6,10 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
     def self, do: Process.get(:admission_node, :spark@test)
   end
 
+  defmodule UnavailableStore do
+    def fetch_node_admission(_node), do: {:error, :unavailable}
+  end
+
   defmodule Store do
     use Agent
 
@@ -28,6 +32,9 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
     def list_jobs, do: {:ok, []}
     def fetch_job(_), do: {:error, :not_found}
 
+    def coordination_store_status,
+      do: {:ok, %{"identity" => "test-store", "healthy" => true, "writable_primary" => true}}
+
     def fetch_schedule(id) do
       case Agent.get(__MODULE__, & &1.schedules[id]) do
         nil -> {:error, :not_found}
@@ -49,10 +56,11 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
 
   setup do
     start_supervised!(Store)
-    keys = [:node_admission_store, :cluster_node_adapter]
+    keys = [:node_admission_store, :cluster_node_adapter, :coordination_store]
     before = Map.new(keys, &{&1, Application.get_env(:mirror_neuron, &1)})
     Application.put_env(:mirror_neuron, :node_admission_store, Store)
     Application.put_env(:mirror_neuron, :cluster_node_adapter, Node)
+    Application.put_env(:mirror_neuron, :coordination_store, Store)
 
     on_exit(fn ->
       Enum.each(before, fn {key, value} ->
@@ -96,6 +104,66 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
     assert message =~ "native runtime"
     Hardware.update_snapshot(%{native_sdk_grpc: %{capabilities: ["exclusive_run_v1"]}})
     assert :ok = NodeAdmission.ensure_supported()
+  end
+
+  test "federation advertises the current holder and FIFO without private request claims" do
+    alias MirrorNeuron.Grpc.Handlers.ClusterHandshake
+
+    missing_config =
+      Enum.filter(
+        [runtime_shared_storage_root: System.tmp_dir!()] ++ MirrorNeuron.Config.app_env!(),
+        fn {key, _} ->
+          Application.fetch_env(:mirror_neuron, key) == :error
+        end
+      )
+
+    Application.put_all_env(mirror_neuron: missing_config)
+
+    on_exit(fn ->
+      Enum.each(missing_config, fn {key, _} -> Application.delete_env(:mirror_neuron, key) end)
+    end)
+
+    {:ok, _} = NodeAdmission.submit(job("research"))
+    {:ok, _} = NodeAdmission.submit(job("litigation"))
+    token = String.duplicate("a", 32)
+
+    assert {:ok, _} =
+             NodeAdmission.command(%{
+               "operation" => "node_admission",
+               "action" => "request_acquire",
+               "run_id" => "research",
+               "generation" => 1,
+               "token" => token
+             })
+
+    admission = ClusterHandshake.node_advertisement_info()["admission"]
+    assert admission["capability"] == "exclusive_run_v1"
+    assert admission["holder"]["run_id"] == "research"
+    assert Enum.map(admission["queue"], & &1["run_id"]) == ["litigation"]
+    assert admission["generation"] == 1
+    assert admission["legacy"] == []
+    refute Map.has_key?(admission, "requests")
+    refute Jason.encode!(admission) =~ token
+
+    assert {:ok, _} =
+             NodeAdmission.command(%{
+               "operation" => "node_admission",
+               "action" => "request_release",
+               "token" => token
+             })
+
+    assert :ok = NodeAdmission.retire("research")
+    {:ok, _} = NodeAdmission.submit(job("next"))
+    refreshed = ClusterHandshake.node_advertisement_info()["admission"]
+    assert refreshed["holder"]["run_id"] == "litigation"
+    assert refreshed["generation"] == 2
+
+    Application.put_env(:mirror_neuron, :node_admission_store, UnavailableStore)
+
+    assert ClusterHandshake.node_advertisement_info()["admission"] == %{
+             "capability" => "exclusive_run_v1",
+             "state" => "unavailable"
+           }
   end
 
   test "concurrent starts from clients produce one holder and unique durable queue entries" do

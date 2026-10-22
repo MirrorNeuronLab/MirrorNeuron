@@ -59,6 +59,7 @@ defmodule MirrorNeuron.Cluster.Manager do
                   if(node == NodeAdapter.self(), do: "local", else: "local_distribution")
                 ),
               peer_available: Map.get(state, "peer_available", true),
+              admission: Map.get(state, "admission", %{}),
               litellm: node_litellm(node, state),
               coordination_store: node_coordination_store(node, state),
               drain: Map.get(state, "drain"),

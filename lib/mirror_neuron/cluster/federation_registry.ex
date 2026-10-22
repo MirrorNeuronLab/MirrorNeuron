@@ -517,6 +517,7 @@ defmodule MirrorNeuron.Cluster.FederationRegistry do
            "local_scheduler_eligible" => Map.get(public, "scheduling_eligible", true),
            "job_owner_eligible" => true,
            "peer_available" => true,
+           "admission" => Map.get(public, "admission", %{}),
            "grpc_host" => Map.get(public, "grpc_host"),
            "grpc_port" => Map.get(public, "grpc_port"),
            "litellm" => Map.get(public, "litellm", %{}),

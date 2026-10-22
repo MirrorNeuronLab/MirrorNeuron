@@ -15,6 +15,8 @@ defmodule MirrorNeuron.Cluster.FederationRegistryTest do
   end
 
   defmodule CoordinationStoreStub do
+    def fetch_resource_limits, do: {:ok, %{}}
+
     def coordination_store_status do
       {:ok,
        %{
@@ -173,6 +175,51 @@ defmodule MirrorNeuron.Cluster.FederationRegistryTest do
 
     assert {:error, :shared_coordination_store} =
              FederationRegistry.register("mirror_neuron@peer", shared, "scoped")
+  end
+
+  test "peer refresh propagates busy and idle admission through node and resource reports" do
+    alias MirrorNeuron.Cluster.Manager
+    alias MirrorNeuron.Execution.LeaseManager
+    alias MirrorNeuron.Runtime.NodeAdmissionState
+
+    unless Process.whereis(LeaseManager), do: start_supervised!(LeaseManager)
+    previous_resource_store = Application.get_env(:mirror_neuron, :resource_limits_store)
+    Application.put_env(:mirror_neuron, :resource_limits_store, CoordinationStoreStub)
+    on_exit(fn -> restore_app_env(:resource_limits_store, previous_resource_store) end)
+
+    {:ok, busy, _} =
+      NodeAdmissionState.transition(NodeAdmissionState.new(), "submit", %{"run_id" => "research"})
+
+    {:ok, busy, _} =
+      NodeAdmissionState.transition(busy, "submit", %{"run_id" => "litigation"})
+
+    for state <- [busy, NodeAdmissionState.new()] do
+      admission =
+        state
+        |> Map.take(["holder", "queue", "generation", "legacy"])
+        |> Map.put("capability", "exclusive_run_v1")
+
+      assert {:ok, _, _} =
+               FederationRegistry.register(
+                 "mirror_neuron@peer",
+                 Map.put(peer_info(), "admission", admission),
+                 "scoped"
+               )
+
+      assert {:ok, stored} = NodeStateStoreStub.fetch_node_state("mirror_neuron@peer")
+      assert stored["admission"] == admission
+
+      node = Enum.find(Manager.nodes(), &(&1.name == "mirror_neuron@peer"))
+      assert node.admission == admission
+      refute node.scheduling_eligible
+      assert node.job_owner_eligible
+
+      resource =
+        MirrorNeuron.Resource.list()["nodes"]
+        |> Enum.find(&(&1["name"] == "mirror_neuron@peer"))
+
+      assert resource["admission"] == admission
+    end
   end
 
   test "authenticated endpoint refresh retains job ownership and projections" do
