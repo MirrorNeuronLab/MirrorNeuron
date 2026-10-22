@@ -348,6 +348,9 @@ The node-local LiteLLM gateway admits inference through a bounded shared FIFO
 queue so parallel worker containers cannot start enough simultaneous local
 model decoders to starve Core lease and coordination work. Queue admission,
 wait, release, timeout, and saturation are emitted as structured events.
+Completion and embedding lanes each default to five concurrent calls per model
+group. Private owner routes also admit at most five calls per lane; an explicitly
+lower configured concurrency limit remains authoritative.
 
 ## Cluster and Resources
 

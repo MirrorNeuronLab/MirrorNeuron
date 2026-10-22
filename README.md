@@ -600,6 +600,12 @@ attempt's model. Unversioned callers keep their existing run-scoped fences.
 Upgrade Core, the native SDK, gateway callbacks, and prepared worker SDKs
 together; saved worker images keep the SDK version with which they were built.
 
+The LiteLLM gateway defaults to five concurrent completion calls and five
+concurrent embedding calls per model group. Its private model-owner routes
+also use `max_parallel_requests: 5`. Set `MN_LITELLM_MAX_CONCURRENT_REQUESTS`
+and `MN_LITELLM_MAX_CONCURRENT_EMBEDDINGS` to apply lower per-group limits;
+queue size and timeout settings remain independent.
+
 ## Standard runtime activity
 
 Runtime events use the shared [`mn.runtime.event.v1` contract](../mn-python-sdk/docs/runtime-activity.md),
