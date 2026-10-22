@@ -640,3 +640,7 @@ foreign scopes and stale runs reject. Unknown starts stay charged. The allowance
 survives checkpoint recovery and resets only for an explicitly new workflow run.
 Provider effects still need their native journals. Deploy the matching dev30
 SDK/blocks and Core support together; offline tests do not qualify a live rollout.
+
+Public workflow definitions retain the SDK's service startup/shutdown metadata
+so clients can finish startup progress when a live service begins serving.
+The actual service step remains running until its owning lifecycle ends.

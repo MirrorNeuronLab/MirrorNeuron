@@ -281,4 +281,27 @@ defmodule MirrorNeuron.Grpc.JobProjectionTest do
 
     refute Map.has_key?(detail, "manifest")
   end
+
+  test "service startup contract survives the public projection without private fields" do
+    shape =
+      MirrorNeuron.Grpc.JobWorkflowProjection.from_definition(%{
+        "manifest" => %{
+          "workflow" => %{
+            "steps" => [],
+            "service_lifecycle" => %{
+              "schema_version" => "mn.service.workflow.v1",
+              "phases" => %{"serve" => "service", "archive" => "shutdown"},
+              "service_steps" => ["serve"],
+              "auxiliary_services" => ["control"],
+              "private" => "hidden"
+            }
+          }
+        }
+      })
+
+    contract = shape["workflow"]["service_lifecycle"]
+    assert contract["phases"] == %{"serve" => "service", "archive" => "shutdown"}
+    assert contract["auxiliary_services"] == ["control"]
+    refute Map.has_key?(contract, "private")
+  end
 end

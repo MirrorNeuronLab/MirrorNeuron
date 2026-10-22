@@ -969,3 +969,8 @@ journals, leases and Core delivery remain responsible for dispatch safety.
 SDK/blocks dev30 and this Core protocol must be rolled out together. Current
 verification uses offline owner transitions, synthetic transports and fake
 OpenShell sandboxes; it does not authorize a live deployment.
+
+The public workflow definition preserves the bounded, SDK-compiled
+`workflow.service_lifecycle` contract (`mn.service.workflow.v1`), containing
+startup/service/shutdown phase assignments and required monitored services.
+It remains a presentation contract: serving does not complete ledger steps.

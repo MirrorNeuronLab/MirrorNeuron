@@ -17,6 +17,7 @@ defmodule MirrorNeuron.Grpc.JobWorkflowProjection do
       %{
         "workflow" =>
           Map.take(workflow, @workflow_fields)
+          |> put_service_lifecycle(workflow["service_lifecycle"])
           |> Map.put("steps", project_list(workflow["steps"], @step_fields))
           |> Map.put("edges", project_list(workflow["edges"], @edge_fields)),
         "runtime" => %{"bindings" => project_bindings(bindings)}
@@ -28,6 +29,32 @@ defmodule MirrorNeuron.Grpc.JobWorkflowProjection do
 
   def from_definition(_definition),
     do: %{"workflow" => %{"steps" => [], "edges" => []}, "runtime" => %{"bindings" => %{}}}
+
+  defp put_service_lifecycle(workflow, %{"schema_version" => "mn.service.workflow.v1"} = value) do
+    raw_phases = if is_map(value["phases"]), do: value["phases"], else: %{}
+
+    phases =
+      for {id, phase} <- Enum.take(raw_phases, 2048),
+          is_binary(id) and phase in ["startup", "service", "shutdown"],
+          into: %{},
+          do: {id, phase}
+
+    lifecycle = %{
+      "schema_version" => "mn.service.workflow.v1",
+      "phases" => phases,
+      "service_steps" => service_ids(value["service_steps"]),
+      "auxiliary_services" => service_ids(value["auxiliary_services"])
+    }
+
+    Map.put(workflow, "service_lifecycle", lifecycle)
+  end
+
+  defp put_service_lifecycle(workflow, _value), do: workflow
+
+  defp service_ids(value) when is_list(value),
+    do: value |> Enum.filter(&is_binary/1) |> Enum.take(2048)
+
+  defp service_ids(_value), do: []
 
   defp project_list(value, keys) when is_list(value) do
     for item <- value, is_map(item), do: Map.take(item, keys)
