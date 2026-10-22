@@ -7,6 +7,36 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
   alias MirrorNeuron.Runtime.WorkflowLedger
   alias MirrorNeuron.Runtime.WorkflowAdmission
 
+  test "runner failures retain the exception and structured diagnostics through terminal actions" do
+    state = dag_state(["a"], []) |> receive_message("a") |> elem(0)
+    state = put_in(state, ["agent_to_step", "specialist"], "a")
+
+    reason = %{
+      "exit_code" => 1,
+      "runner" => "host_local",
+      "attempts" => 1,
+      "logs" =>
+        String.duplicate("stack frame\n", 600) <>
+          "FileNotFoundError: source manifest is unavailable"
+    }
+
+    {state, events, [{:fail_job, "a", error}]} =
+      WorkflowLedger.on_agent_failed(state, "specialist", reason, timestamp(1))
+
+    assert error["code"] == "runtime.command.failed"
+    assert error["details"]["exit_code"] == 1
+    assert error["details"]["agent_id"] == "specialist"
+    assert error["details"]["logs"] =~ "FileNotFoundError: source manifest is unavailable"
+
+    assert error["desc"] ==
+             "Command exited with code 1: FileNotFoundError: source manifest is unavailable"
+
+    assert get_in(state, ["steps", "a", "terminal_reason"]) == error["desc"]
+    failed = Enum.find(events, &(&1.type == :workflow_step_failed))
+    assert failed["error"]["details"]["exit_code"] == 1
+    assert failed["reason"] == error["desc"]
+  end
+
   test "admission returns the ledger attempt to the handler and replay reuses it" do
     {ledger, []} = WorkflowLedger.new(manifest(), runtime_nodes()) |> WorkflowLedger.job_running()
     message = Message.new("job-1", "runtime", "step_a", "init", %{})

@@ -11,6 +11,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   alias MirrorNeuron.Runtime.Backpressure
   alias MirrorNeuron.Runtime.Delivery
   alias MirrorNeuron.Runtime.EventBus
+  alias MirrorNeuron.Runtime.ErrorEnvelope
   alias MirrorNeuron.Runtime.Naming
   alias MirrorNeuron.Runtime.RouteCondition
   alias MirrorNeuron.Runtime.WorkflowMessage
@@ -301,6 +302,9 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   end
 
   defp report_delivery_retry(delivery, reason, state) do
+    error =
+      ErrorEnvelope.normalize(reason, component: "agent_worker", agent_id: state.node.node_id)
+
     result =
       Delivery.retry(
         state.job_id,
@@ -316,7 +320,8 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       %{
         "message_id" => delivery.message_id,
         "attempt" => delivery.attempt,
-        "reason" => inspect(reason),
+        "reason" => ErrorEnvelope.desc(error),
+        "error" => error,
         "delay_ms" => retry_delay(result)
       }
     })

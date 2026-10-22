@@ -13,6 +13,45 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
     :ok
   end
 
+  test "installed handlers receive the invocation descriptor despite stale environment paths" do
+    root =
+      Path.join(System.tmp_dir!(), "host-local-descriptor-#{System.unique_integer([:positive])}")
+
+    payloads = Path.join(root, "payloads")
+    File.mkdir_p!(Path.join(payloads, "runtime"))
+
+    File.write!(
+      Path.join(payloads, "runtime/manifest.json"),
+      ~s({"metadata":{"test":"invocation"}})
+    )
+
+    on_exit(fn -> File.rm_rf!(root) end)
+
+    config = %{
+      "upload_path" => ".",
+      "upload_as" => ".",
+      "workdir" => "/sandbox/job/runtime",
+      "environment" => %{
+        "MN_BUNDLE_ROOT" => "/stale/source/bundle",
+        "MN_BLUEPRINT_MANIFEST_PATH" => "/stale/image/manifest.json"
+      },
+      "command" => [
+        "sh",
+        "-c",
+        ~s(test "$MN_BLUEPRINT_MANIFEST_PATH" = "$MN_BUNDLE_ROOT/runtime/manifest.json" && test "$MN_BUNDLE_ROOT/runtime" -ef "$PWD" && cat "$MN_BLUEPRINT_MANIFEST_PATH")
+      ]
+    }
+
+    assert {:ok, result} =
+             HostLocal.run(%{}, config,
+               job_id: "descriptor-job",
+               agent_id: "installed-handler",
+               payloads_path: payloads
+             )
+
+    assert Jason.decode!(result["stdout"])["metadata"]["test"] == "invocation"
+  end
+
   test "auxiliary workers receive the physical workflow run without message headers" do
     config = %{
       "command" => [

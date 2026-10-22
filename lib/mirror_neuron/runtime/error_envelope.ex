@@ -147,6 +147,9 @@ defmodule MirrorNeuron.Runtime.ErrorEnvelope do
       code = code_from_map(reason) ->
         code
 
+      command_failure?(reason) ->
+        "runtime.command.failed"
+
       keyword(opts, :component) == "job_runner" ->
         "runtime.job_runner.failed"
 
@@ -176,6 +179,7 @@ defmodule MirrorNeuron.Runtime.ErrorEnvelope do
       "workflow.step.heartbeat_timeout" -> "Workflow step missed heartbeat deadline"
       "workflow.step.retry_exhausted" -> "Workflow step exhausted retries"
       "scheduler.lease_unavailable" -> "Scheduler lease unavailable"
+      "runtime.command.failed" -> message
       "runtime.job_runner.failed" -> "Job runner failed"
       "runtime.job.failed" -> "Runtime job failed"
       _ -> humanize_message(message)
@@ -195,6 +199,9 @@ defmodule MirrorNeuron.Runtime.ErrorEnvelope do
 
       {"scheduler.lease_unavailable", _} ->
         "Check scheduler lease ownership, Redis connectivity, and runtime node health."
+
+      {"runtime.command.failed", _} ->
+        "Review the failed step and command diagnostics. Correct the reported cause before retrying."
 
       {"runtime.job_runner.failed", _} ->
         "Check runtime node health, job lease state, and coordinator startup logs."
@@ -239,6 +246,19 @@ defmodule MirrorNeuron.Runtime.ErrorEnvelope do
   defp reason_message(%{reason: reason}) when is_binary(reason), do: reason
   defp reason_message(%{"desc" => desc}) when is_binary(desc), do: desc
   defp reason_message(%{desc: desc}) when is_binary(desc), do: desc
+
+  defp reason_message(reason) when is_map(reason) do
+    if command_failure?(reason) do
+      map = stringify_keys(reason)
+      logs = command_logs(map)
+      last_line = logs |> String.split("\n", trim: true) |> List.last()
+      summary = if last_line, do: ": " <> String.trim(last_line), else: ""
+      "Command exited with code #{map["exit_code"]}" <> summary
+    else
+      inspect(reason, limit: 50, printable_limit: 2_048)
+    end
+  end
+
   defp reason_message(reason) when is_binary(reason), do: reason
   defp reason_message(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp reason_message(reason), do: inspect(reason, limit: 50, printable_limit: 2_048)
@@ -251,25 +271,59 @@ defmodule MirrorNeuron.Runtime.ErrorEnvelope do
   defp reason_type(_reason), do: "term"
 
   defp extract_details(reason) when is_map(reason) do
-    reason
-    |> stringify_keys()
-    |> Map.drop([
-      "schema_version",
-      "code",
-      "desc",
-      "details",
-      "severity",
-      "occurred_at",
-      "event_id",
-      "trace_id",
-      "span_id",
-      "remediation",
-      "links"
-    ])
-    |> truncate_values()
+    reason = stringify_keys(reason)
+
+    if command_failure?(reason) do
+      reason
+      |> Map.take(["runner", "exit_code", "runner_exit_code", "attempts", "node_name"])
+      |> Map.put("logs", diagnostic_tail(command_logs(reason)))
+    else
+      reason
+      |> Map.drop([
+        "schema_version",
+        "code",
+        "desc",
+        "details",
+        "severity",
+        "occurred_at",
+        "event_id",
+        "trace_id",
+        "span_id",
+        "remediation",
+        "links"
+      ])
+      |> truncate_values()
+    end
   end
 
   defp extract_details(_reason), do: %{}
+
+  defp command_failure?(reason) when is_map(reason) do
+    code = Map.get(reason, "exit_code", Map.get(reason, :exit_code))
+    is_integer(code) and code != 0
+  end
+
+  defp command_failure?(_reason), do: false
+
+  defp command_logs(reason) do
+    [reason["stderr"], reason["logs"], reason["stdout"]]
+    |> Enum.find("", &(is_binary(&1) and String.trim(&1) != ""))
+    |> MirrorNeuron.Runner.Result.redact_secrets()
+    |> String.replace(~r/(authorization\s*[:=]\s*(?:bearer\s+)?)[^\s]+/i, "\\1[REDACTED]")
+    |> String.replace(
+      ~r/((?:api[_-]?key|token|password|secret)\s*[:=]\s*)[^\s,;]+/i,
+      "\\1[REDACTED]"
+    )
+  end
+
+  defp diagnostic_tail(text) do
+    if String.length(text) > @message_limit do
+      "[earlier output omitted]\n" <>
+        String.slice(text, -(@message_limit - 32), @message_limit - 32)
+    else
+      text
+    end
+  end
 
   defp code_from_map(reason) when is_map(reason) do
     map = stringify_keys(reason)

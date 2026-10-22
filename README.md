@@ -385,6 +385,19 @@ workflow fields override definition-time environment values, matching the
 Docker and OpenShell runner contract. This physical identity can differ from
 the `MN_RUN_ID` execution identity and identifies the shared run-output folder.
 
+## HostLocal blueprint diagnostics
+
+HostLocal supplies invocation-owned `MN_BUNDLE_ROOT` and
+`MN_BLUEPRINT_MANIFEST_PATH` bindings so installed SDK handlers can load the
+staged blueprint descriptor. A source manifest lookup must not depend on the
+handler's `site-packages` directory. Deploy the updated Core on execution nodes;
+a desktop-only update cannot repair this runner contract.
+
+Command failures preserve their `mn.error.v1` code, exit status, runner, attempt
+count and sanitized diagnostic tail through workflow failure and run completion.
+The summary uses the last diagnostic line; long traceback prefixes cannot hide
+the final exception. Existing shortened historical errors remain shortened.
+
 ## Response tool descriptions
 
 Bounded response-agent tools accept an optional non-empty `description` of at
@@ -593,6 +606,10 @@ raw events remain available for diagnostics.
 
 
 ### Automatic waiting for a busy PC
+
+Resource node reports include `cpu_load_average_1m` from the native hardware
+snapshot. Missing samples are null. This is one-minute CPU load, distinct from
+CPU utilization and reserved capacity.
 
 A PC owns one active run, with all its GPUs, CPU and memory shared by that run's
 workers/models. A second start is accepted into its durable FIFO and starts

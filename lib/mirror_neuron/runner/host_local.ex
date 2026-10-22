@@ -155,6 +155,7 @@ defmodule MirrorNeuron.Runner.HostLocal do
       runtime_env(input_file, context_file, message_file, body_file, workdir, message, opts)
       |> Map.merge(beacon_env(config, opts, message))
       |> Map.merge(extra_env(config))
+      |> Map.merge(bundle_environment(base_dir))
       |> Map.merge(WorkflowEnvironment.from_options(Keyword.put(opts, :message, message)))
       |> apply_python_environment_env(python_env)
       |> Enum.map(fn {key, value} -> {key, value} end)
@@ -166,6 +167,15 @@ defmodule MirrorNeuron.Runner.HostLocal do
     else
       {normalize_command(configured_command, python_env), env, workdir}
     end
+  end
+
+  # These paths identify the invocation copy, never an inherited SDK/image or
+  # submitter path. Installed SDK handlers cannot discover it from __file__.
+  defp bundle_environment(base_dir) do
+    %{
+      "MN_BUNDLE_ROOT" => base_dir,
+      "MN_BLUEPRINT_MANIFEST_PATH" => Path.join([base_dir, "runtime", "manifest.json"])
+    }
   end
 
   defp max_command_length do

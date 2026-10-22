@@ -120,6 +120,7 @@ defmodule MirrorNeuron.Resource do
       "drain" => Map.get(node, :drain) || Map.get(node, "drain"),
       "cpu_cores" => integer_value(map_get(cpu, "logical_processors")),
       "cpu_model" => cpu_model(cpu),
+      "cpu_load_average_1m" => map_get(cpu, "load_average_1m"),
       "gpu_count" => gpu_count(gpu),
       "gpu_model" => List.first(gpu_models),
       "gpu_models" => gpu_models,

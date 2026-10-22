@@ -445,7 +445,8 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
       if step_terminal?(step) do
         ignore_terminal_step_event(state, step, "agent_failed", %{"reason" => reason}, now)
       else
-        {next_state, events, actions} = fail_current_attempt(state, step, stringify(reason), now)
+        reason = if is_map(reason), do: step_error(reason, step, agent_id: agent_id), else: reason
+        {next_state, events, actions} = fail_current_attempt(state, step, reason, now)
         activate_ready_steps(next_state, events, actions, now)
       end
     else
@@ -1198,6 +1199,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
 
   defp fail_current_attempt(state, %{"current_attempt" => nil} = step, reason, now) do
     error = step_error(reason, step)
+    reason = if is_map(reason), do: ErrorEnvelope.desc(error), else: stringify(reason)
 
     step =
       Map.merge(step, %{
@@ -1213,6 +1215,8 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   defp fail_current_attempt(state, step, reason, now) do
     current = Map.get(step, "current_attempt") || %{}
     error = step_error(reason, step)
+    failure = if is_map(reason), do: error, else: stringify(reason)
+    reason = if is_map(reason), do: ErrorEnvelope.desc(error), else: stringify(reason)
 
     finished_attempt =
       current
@@ -1297,7 +1301,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
             "status" => "failed"
           })
 
-        {state, [event], [{:fail_job, step["id"], reason}]}
+        {state, [event], [{:fail_job, step["id"], failure}]}
     end
   end
 
@@ -2265,7 +2269,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
       severity: Keyword.get(opts, :severity, "ERROR"),
       retryable: Keyword.get(opts, :retryable),
       step_id: Map.get(step, "id"),
-      agent_id: primary_agent_id(step),
+      agent_id: Keyword.get(opts, :agent_id, primary_agent_id(step)),
       attempt: attempt,
       max_attempts: Map.get(step, "max_attempts")
     )

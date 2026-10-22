@@ -34,7 +34,11 @@ defmodule MirrorNeuron.ResourceTest do
               "hostname" => "local-lab",
               "display_name" => "Local Lab"
             },
-            "cpu" => %{"logical_processors" => 8, "model" => "AMD Ryzen AI Max+ 395"},
+            "cpu" => %{
+              "logical_processors" => 8,
+              "model" => "AMD Ryzen AI Max+ 395",
+              "load_average_1m" => 2.5
+            },
             "memory" => %{
               "total_bytes" => 16 * 1024 * 1024 * 1024,
               "available_bytes" => 12 * 1024 * 1024 * 1024
@@ -165,6 +169,7 @@ defmodule MirrorNeuron.ResourceTest do
     assert draining["drain"] == %{"status" => "blocked_no_placement", "reason" => "kernel update"}
     assert draining["platform"]["os"] == "linux"
     assert draining["cpu_model"] == "AMD Ryzen AI Max+ 395"
+    assert draining["cpu_load_average_1m"] == 2.5
     assert draining["gpu_model"] == "NVIDIA RTX 4090"
     assert draining["gpu_models"] == ["NVIDIA RTX 4090", "NVIDIA RTX 6000 Ada"]
     assert length(draining["devices"]) == 2
@@ -176,6 +181,7 @@ defmodule MirrorNeuron.ResourceTest do
     assert "host_local" in draining["runtime_drivers"]
 
     federated = Enum.at(report["nodes"], 1)
+    assert federated["cpu_load_average_1m"] == nil
     assert federated["connection_mode"] == "federated"
     assert federated["scheduling_eligible"] == false
     assert federated["local_scheduler_eligible"] == true

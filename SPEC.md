@@ -1,5 +1,10 @@
 # MirrorNeuron Core Specification
 
+Resource node projections preserve the native hardware snapshot's optional
+`cpu.load_average_1m` as `cpu_load_average_1m`. Missing samples remain null.
+This is measured one-minute load, not a reservation or CPU utilization ratio;
+clients must label it accordingly and avoid treating unknown nodes as idle.
+
 Child-round plan nodes accept an optional non-empty `label` of at most 1,024 UTF-8 bytes. Core persists it on the child instance and includes it in public topology events; omitted labels retain the template label or instance ID. Labels do not alter task identity, dependencies or execution.
 
 ## Managed model residency
@@ -86,6 +91,18 @@ identifies the individual worker delivery, derived from the step key, target
 agent and stable message ID. It survives delivery replay and differs between
 parallel workers. `MN_WORKFLOW_STEP_IDEMPOTENCY_KEY` retains the ledger key;
 completion and stale-attempt fencing continue using the original message headers.
+
+HostLocal binds `MN_BUNDLE_ROOT` to its staged invocation copy and
+`MN_BLUEPRINT_MANIFEST_PATH` to that copy's `runtime/manifest.json`, overriding
+inherited or definition-time paths. Installed SDK handlers use this binding;
+their package location is not the blueprint location.
+
+Runner command failures retain a structured `mn.error.v1` receipt through the
+workflow ledger and terminal run action. `runtime.command.failed` carries the
+exit code, runner and attempt count, a concise final diagnostic line, and a
+secret-redacted bounded output tail so Python's final exception survives long
+tracebacks. Raw stdout/result payload copies are excluded from this receipt.
+Retry events publish the same readable description and structured error.
 
 HostLocal uses the same runtime workflow-environment projection as Docker and
 OpenShell. Auxiliary messages without workflow headers receive the owning
