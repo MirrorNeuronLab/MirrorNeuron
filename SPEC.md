@@ -134,7 +134,11 @@ emitting rate-limited `submission_storage_waiting` events, then emits
 fails before any source message on the configured
 `MN_SHARED_STORAGE_READY_TIMEOUT_SECONDS` deadline (default 1800) with a
 `submission_storage_timeout` event. Legacy submissions without an inventory
-remain immediate.
+remain immediate. Fresh and FIFO-queued starts both delegate staged-input
+readiness to this coordinator gate after admission. An inventory or file still
+replicating is not a terminal admission failure or a human-review request;
+malformed inventory metadata remains a terminal validation failure. Cancelling a
+pending run prevents later readiness timers from dispatching its inputs.
 Only maps explicitly tagged with `type: blob_ref` are content-addressed payload
 references. Integrity descriptors such as input-readiness inventories may carry
 a `sha256` field without being materialized from the blob store.

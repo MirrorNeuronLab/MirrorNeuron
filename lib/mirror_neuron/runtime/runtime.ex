@@ -201,9 +201,10 @@ defmodule MirrorNeuron.Runtime do
 
   @doc false
   def start_admitted_job(job) do
+    # JobCoordinator owns the bounded staged-input wait before entrypoint
+    # delivery. Admission must not reject a normal replication delay here.
     with {:ok, manifest} <- MirrorNeuron.Manifest.load(job["manifest"]),
          {:ok, bundle} <- admitted_bundle(job, manifest),
-         :ok <- admitted_inputs(manifest),
          :ok <- MirrorNeuron.BlueprintValidation.run_input_validation(bundle),
          :ok <- MirrorNeuron.ServicePreflight.run(bundle),
          :ok <-
@@ -245,13 +246,6 @@ defmodule MirrorNeuron.Runtime do
     else
       false -> {:error, :node_not_reserved}
       error -> error
-    end
-  end
-
-  defp admitted_inputs(manifest) do
-    case MirrorNeuron.Artifacts.SubmissionReadiness.verify(MirrorNeuron.Manifest.to_map(manifest)) do
-      {:ready, _} -> :ok
-      _ -> {:error, :queued_inputs_require_review}
     end
   end
 

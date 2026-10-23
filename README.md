@@ -633,6 +633,17 @@ Keyed starts retain Redis-backed request identities and receipts across Core
 restart, including reconciliation after an interrupted receipt write. Queue
 schedule revisions advance on mutation so stale cancel/reschedule controls fail.
 
+After admission, SDK-staged inputs may still be replicating to the owner PC.
+The job coordinator keeps the run `pending`, publishes `submission_storage_waiting`,
+and starts work automatically after its inventory and every file pass verification.
+Both immediate and FIFO-queued starts use this same gate. Incomplete replication
+does not request human review or fail admission; invalid metadata and the existing
+`MN_SHARED_STORAGE_READY_TIMEOUT_SECONDS` deadline still fail before any input is
+delivered. Cancelling while waiting prevents a later start.
+`tests/e2e/submission_readiness_test.exs` covers delayed inventory/files, partial
+and corrupt copies, queue dispatch, cancellation, timeout and invalid metadata
+through stable Job launches with an isolated Redis namespace and temporary files.
+
 ## Workflow action allowances
 
 Compiled `policies.workflow_budgets` declare named action limits for an actual
