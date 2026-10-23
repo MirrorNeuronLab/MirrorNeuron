@@ -1,7 +1,7 @@
 defmodule MirrorNeuron.Runtime.WorkflowPause do
   @moduledoc false
 
-  @clocks ["deadline_at", "heartbeat_deadline_at", "retry_at"]
+  @clocks ["deadline_at", "heartbeat_deadline_at", "progress_deadline_at", "retry_at"]
   @active ["queued", "running", "retry_wait", "waiting"]
 
   def pause(state, now), do: Map.put_new(state, "paused_at", now)

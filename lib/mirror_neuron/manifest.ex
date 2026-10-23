@@ -353,6 +353,12 @@ defmodule MirrorNeuron.Manifest do
     graph = if is_map(Map.get(flow, "graph")), do: Map.get(flow, "graph"), else: %{}
     graph_edges = Map.get(graph, "edges", [])
 
+    errors =
+      add_errors(
+        errors,
+        MirrorNeuron.Runtime.WorkflowActivity.validation_errors(flow, manifest.nodes)
+      )
+
     if is_list(steps) and steps != [] do
       step_ids =
         steps

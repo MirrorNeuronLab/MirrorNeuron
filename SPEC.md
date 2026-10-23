@@ -1,5 +1,27 @@
 # MirrorNeuron Core Specification
 
+## Activity-supervised workflows
+
+`workflow.execution.supervision: "activity"` uses live SDK progress and process
+heartbeats instead of an implicit batch elapsed deadline. Core requires HostLocal
+executor nodes with enabled, required agent beacons; buffered runners are rejected.
+An explicit step or runner `timeout_seconds` remains an intentional hard budget.
+Existing workflows without this declaration retain their deadline semantics.
+
+A step may run for any total duration while its progress sequence advances.
+Automatic process/runtime beacons only establish liveness. Core tracks progress
+per physical worker, rejects duplicate counters, and fails a step after five
+minutes without progress with `workflow.step.progress_timeout`. Missing heartbeats
+retain their existing failure and cleanup behavior. A bounded SDK external wait
+carries a stable identity and allowance (at most one day); repeated beacons cannot
+extend that wait. Pause excludes paused time from the progress clock. Progress,
+wait identity and expiry survive persisted-ledger recovery. Only the owning step
+boundary can commit completion; late heartbeats cannot revive terminal work.
+
+Deploy matching Core, SDK and common components on every execution owner, then
+reprepare saved Job definitions before launching new work. Existing failed or
+running definitions and retained retry checkpoints are not rewritten.
+
 Resource node projections preserve the native hardware snapshot's optional
 `cpu.load_average_1m` as `cpu_load_average_1m`. Missing samples remain null.
 This is measured one-minute load, not a reservation or CPU utilization ratio;

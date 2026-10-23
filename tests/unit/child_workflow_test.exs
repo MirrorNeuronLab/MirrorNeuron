@@ -87,6 +87,43 @@ defmodule MirrorNeuron.Runtime.ChildWorkflowTest do
     assert restored["steps"]["inspect:r1:read"]["label"] == "Scan source: src/api.py"
   end
 
+  test "activity-supervised parents follow child progress without retaining an idle worker deadline" do
+    definition = manifest()
+
+    definition = %{
+      definition
+      | flow: Map.put(definition.flow, "execution", %{"supervision" => "activity"})
+    }
+
+    {state, actions} = started(definition)
+    assert state["steps"]["inspect"]["progress_deadline_at"] == nil
+    assert state["child_templates"]["query"]["supervision"] == "activity"
+    {state, _, actions} = finish(state, actions, plan(0))
+    {:redeliver, id, agent, message} = Enum.find(actions, &match?({:redeliver, _, _, _}, &1))
+    now = DateTime.utc_now()
+
+    {state, _} =
+      WorkflowLedger.on_message_received(state, agent, message, DateTime.to_iso8601(now))
+
+    Enum.reduce(1..12, state, fn number, state ->
+      at = now |> DateTime.add(number * 30, :second) |> DateTime.to_iso8601()
+
+      payload = %{
+        "step_id" => id,
+        "agent_id" => agent,
+        "source" => "agent",
+        "pid" => 7,
+        "progress_sequence" => number
+      }
+
+      {state, _, []} = WorkflowLedger.on_agent_event(state, agent, "agent_beacon", payload, at)
+      {state, [], []} = WorkflowLedger.reconcile(state, at)
+      assert state["steps"]["inspect"]["status"] == "running"
+      assert state["steps"][id]["status"] == "running"
+      state
+    end)
+  end
+
   test "invalid child labels are rejected before dispatch" do
     for label <- [42, "", String.duplicate("x", 1025)] do
       {state, actions} = started()

@@ -95,6 +95,9 @@ defmodule MirrorNeuron.Runtime.ChildWorkflow do
       state = put_in(state, ["child_workflows", id], child)
       # The generated sink has handed off completion; the parent timeout remains authoritative.
       state = put_in(state, ["steps", id, "heartbeat_deadline_at"], nil)
+      # Child workers now own progress supervision. The parent observes their
+      # durable completion rather than an idle executor that has already exited.
+      state = put_in(state, ["steps", id, "progress_deadline_at"], nil)
       state = add_planner(state, id, now)
       {state, [event(state, id, :workflow_child_started)]}
     end

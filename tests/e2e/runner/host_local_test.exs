@@ -1008,7 +1008,9 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
         import os
 
         prefix = os.environ["MN_AGENT_BEACON_STDOUT_PREFIX"]
-        print(prefix + json.dumps({"message": "custom unit of work", "progress": 0.42}), flush=True)
+        print(prefix + json.dumps({"message": "custom unit of work", "progress": 0.42,
+            "progress_sequence": 7, "pid": os.getpid(), "wait_id": "review-1",
+            "wait_timeout_ms": 3600000}), flush=True)
         print(json.dumps({"ok": True}), flush=True)
         """
       )
@@ -1049,6 +1051,9 @@ defmodule MirrorNeuron.Runner.HostLocalTest do
                         "status" => "working",
                         "message" => "custom unit of work",
                         "progress" => 0.42,
+                        "progress_sequence" => 7,
+                        "wait_id" => "review-1",
+                        "wait_timeout_ms" => 3_600_000,
                         "agent_id" => "agent-beacon-worker"
                       }}
     after

@@ -156,6 +156,9 @@ defmodule MirrorNeuron.Runtime.ErrorEnvelope do
       keyword(opts, :component) == "job_coordinator" ->
         "runtime.job.failed"
 
+      match_text?(reason, ["progress deadline"]) ->
+        "workflow.step.progress_timeout"
+
       match_text?(reason, ["heartbeat"]) ->
         "workflow.step.heartbeat_timeout"
 
@@ -177,6 +180,7 @@ defmodule MirrorNeuron.Runtime.ErrorEnvelope do
     case to_string(code) do
       "workflow.step.timeout" -> "Workflow step timed out"
       "workflow.step.heartbeat_timeout" -> "Workflow step missed heartbeat deadline"
+      "workflow.step.progress_timeout" -> "Workflow step stopped making progress"
       "workflow.step.retry_exhausted" -> "Workflow step exhausted retries"
       "scheduler.lease_unavailable" -> "Scheduler lease unavailable"
       "runtime.command.failed" -> message

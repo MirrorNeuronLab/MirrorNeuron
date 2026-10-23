@@ -8,6 +8,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   alias MirrorNeuron.Runtime.ChildWorkflow
   alias MirrorNeuron.Runtime.ErrorEnvelope
   alias MirrorNeuron.Runtime.WorkflowTrigger
+  alias MirrorNeuron.Runtime.WorkflowActivity
 
   @schema_version 3
   @default_timeout_seconds 300
@@ -372,7 +373,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   defp handle_step_agent_event(state, agent_id, step, event_type, payload, now) do
     case event_type do
       "agent_beacon" ->
-        step = refresh_beacon(step, payload, now)
+        step = refresh_beacon(step, payload, now) |> WorkflowActivity.observe(payload, now)
         state = put_step(state, step)
         {state, [workflow_event(:workflow_step_beacon, step, beacon_payload(payload, now))], []}
 
@@ -540,6 +541,16 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
          ],
          [
            {:terminate_agent, primary_agent_id(step), "workflow step heartbeat deadline exceeded"}
+           | actions
+         ]}
+
+      expired?(Map.get(step, "progress_deadline_at"), now) ->
+        {state, events, actions} =
+          fail_current_attempt(state, step, "workflow step progress deadline exceeded", now)
+
+        {state, events,
+         [
+           {:terminate_agent, primary_agent_id(step), "workflow step progress deadline exceeded"}
            | actions
          ]}
 
@@ -1174,6 +1185,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
         "terminal_error" => nil,
         "last_error" => nil
       })
+      |> WorkflowActivity.start(now)
 
     state =
       state
@@ -1782,7 +1794,8 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
           step,
           runtime_by_id,
           graph,
-          Map.get(step, "id") == service_entrypoint_id
+          Map.get(step, "id") == service_entrypoint_id or WorkflowActivity.enabled?(flow),
+          WorkflowActivity.enabled?(flow)
         )
       end)
       |> Enum.reject(&is_nil/1)
@@ -1804,7 +1817,15 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
       |> Enum.flat_map(&normalize_template_specs(&1["templates"]))
 
     (normalize_template_specs(Map.get(dynamic, "templates", %{})) ++ child_templates)
-    |> Enum.map(&step_definition(&1, runtime_by_id, graph, false))
+    |> Enum.map(
+      &step_definition(
+        &1,
+        runtime_by_id,
+        graph,
+        WorkflowActivity.enabled?(flow),
+        WorkflowActivity.enabled?(flow)
+      )
+    )
     |> Enum.reject(&is_nil/1)
   end
 
@@ -1821,7 +1842,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
 
   defp normalize_template_specs(_templates), do: []
 
-  defp step_definition(raw, runtime_by_id, graph, unbounded_by_default?) do
+  defp step_definition(raw, runtime_by_id, graph, unbounded_by_default?, activity?) do
     step_id = to_string(Map.get(raw, "id") || "")
 
     if step_id == "" do
@@ -1892,6 +1913,9 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
               (timeout_seconds || @default_timeout_seconds) * 1_000
             )
 
+          activity? ->
+            45_000
+
           is_nil(timeout_seconds) ->
             nil
 
@@ -1926,6 +1950,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
             Map.get(retry, "backoff_seconds")
           ),
         "retry_backoff_multiplier" => positive_number(Map.get(retry, "backoff_multiplier"), 2),
+        "supervision" => if(activity?, do: "activity"),
         "timeout_seconds" => timeout_seconds,
         "beacon_timeout_ms" => beacon_timeout_ms
       }
