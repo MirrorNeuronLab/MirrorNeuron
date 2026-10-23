@@ -102,6 +102,12 @@ abandoned node-local preparation; it never exposes cleanup commands or paths. A 
 for services and requirements, admitted to resources, and started under
 per-run supervision.
 
+Automatically generated run IDs use `run_<job-initials>-<8 hex characters>`;
+standard `job_<initials>-<8 hex characters>` IDs retain their initials, while
+operator-defined job names supply word initials. Keyed starts persist the chosen
+compact run ID before dispatch and retain the full request digest separately for
+idempotency. Previously persisted and explicitly supplied run IDs are unchanged.
+
 Before a workflow handler executes, Core admits its source delivery through the
 owning ledger and returns the authoritative attempt context. Deliveries waiting
 for dependencies are retried without running the handler.

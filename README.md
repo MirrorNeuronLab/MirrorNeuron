@@ -112,6 +112,11 @@ into an executable **bundle**. A **job** stores the durable configured definitio
 a **run** identifies an execution of it. Use the public job ID for definition
 operations and the public run ID for execution controls, logs, and results.
 
+New generated run IDs use the job's initials and a fresh eight-character hex
+suffix, for example `job_cv-baa84224` → `run_cv-a1b2c3d4`. Idempotent starts
+persist that compact ID separately from their full internal request hash.
+Existing IDs and explicitly supplied run IDs keep their original values.
+
 Batch jobs can retain multiple runs. Service jobs retain at most one attached
 run, and pause/resume preserves that identity. Retries belong to the same run
 and have their own attempt identity.

@@ -4,15 +4,17 @@ defmodule MirrorNeuron.JobId do
   @hash_length 8
 
   def generate(graph_id) do
-    hash =
-      :crypto.hash(
-        :sha256,
-        "#{graph_id}:#{System.system_time(:nanosecond)}:#{random_token()}"
-      )
-      |> Base.encode16(case: :lower)
-      |> binary_part(0, @hash_length)
+    "#{graph_initials(graph_id)}-#{short_hash(graph_id)}"
+  end
 
-    "#{graph_initials(graph_id)}-#{hash}"
+  def generate_run(job_id) do
+    prefix =
+      case Regex.run(~r/\Ajob_([a-z0-9]+)-[a-f0-9]{8}\z/, to_string(job_id)) do
+        [_, initials] -> initials
+        nil -> graph_initials(job_id)
+      end
+
+    "run_#{prefix}-#{short_hash(job_id)}"
   end
 
   def graph_initials(graph_id) do
@@ -27,6 +29,15 @@ defmodule MirrorNeuron.JobId do
       "" -> "job"
       initials -> initials
     end
+  end
+
+  defp short_hash(value) do
+    :crypto.hash(
+      :sha256,
+      "#{value}:#{System.system_time(:nanosecond)}:#{random_token()}"
+    )
+    |> Base.encode16(case: :lower)
+    |> binary_part(0, @hash_length)
   end
 
   defp random_token do

@@ -92,6 +92,8 @@ defmodule MirrorNeuron.Runtime.RunStartRequestTest do
              )
 
     assert_receive {id, identity}
+    assert id =~ ~r/^run_j1-[a-f0-9]{8}$/
+    assert identity =~ ~r/^[a-f0-9]{64}$/
 
     assert {:ok, %{"run_id" => ^id}} =
              run(
@@ -102,5 +104,65 @@ defmodule MirrorNeuron.Runtime.RunStartRequestTest do
                end,
                {"", "{}", false}
              )
+  end
+
+  test "keyed starts use the job initials and distinct run identities for distinct requests" do
+    start = fn id, _ -> {:ok, %{run_id: id}} end
+    gate = fn _, callback -> callback.() end
+
+    assert {:ok, first} =
+             RunStartRequest.run(
+               "job_cv-baa84224",
+               "first",
+               {"", "{}", false},
+               start,
+               Store,
+               gate
+             )
+
+    assert {:ok, second} =
+             RunStartRequest.run(
+               "job_cv-baa84224",
+               "second",
+               {"", "{}", false},
+               start,
+               Store,
+               gate
+             )
+
+    assert first["run_id"] =~ ~r/^run_cv-[a-f0-9]{8}$/
+    assert second["run_id"] =~ ~r/^run_cv-[a-f0-9]{8}$/
+    refute first["run_id"] == second["run_id"]
+
+    assert {:ok, ^first} =
+             RunStartRequest.run(
+               "job_cv-baa84224",
+               "first",
+               {"", "{}", false},
+               fn _, _ -> flunk("duplicate start") end,
+               Store,
+               gate
+             )
+  end
+
+  test "saved generated run ids remain authoritative across the naming change" do
+    parent = self()
+
+    assert {:error, :unavailable} =
+             run(
+               fn _, identity ->
+                 old_id = "run_" <> identity
+                 {:ok, request} = Store.fetch_run_start_request(identity)
+                 Store.persist_run_start_request(identity, Map.put(request, "run_id", old_id))
+                 send(parent, {:saved_id, old_id})
+                 {:error, :unavailable}
+               end,
+               {"", "{}", false}
+             )
+
+    assert_receive {:saved_id, old_id}
+
+    assert {:ok, %{"run_id" => ^old_id}} =
+             run(fn id, _ -> {:ok, %{run_id: id}} end, {"", "{}", false})
   end
 end

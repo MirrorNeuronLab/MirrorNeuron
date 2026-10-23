@@ -456,7 +456,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
          :ok <- ensure_replacement_run_id(requested_run_id, replace_existing, existing_run_ids),
          :ok <- maybe_ensure_job_data_access(definition, access, service and replace_existing),
          {:ok, %JobBundle{} = bundle} <- load_bundle(definition),
-         run_id <- requested_run_id || Runtime.generate_job_id(bundle.manifest.graph_id),
+         run_id <- requested_run_id || JobId.generate_run(job_id),
          :ok <- JobData.validate_id(run_id),
          :ok <- ensure_fresh_replacement_run_id(run_id, existing_run_ids, replace_existing),
          :ok <- ensure_run_id_available(run_id),

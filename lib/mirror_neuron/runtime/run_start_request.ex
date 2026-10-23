@@ -2,6 +2,7 @@ defmodule MirrorNeuron.Runtime.RunStartRequest do
   @moduledoc "Durable identity and crash reconciliation for keyed start requests."
 
   alias MirrorNeuron.Grpc.JobProjection
+  alias MirrorNeuron.JobId
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime.StableJob
 
@@ -16,7 +17,7 @@ defmodule MirrorNeuron.Runtime.RunStartRequest do
     fingerprint = digest(payload)
 
     gate.("request_" <> identity, fn ->
-      with {:ok, request} <- request(store, identity, fingerprint, run_id),
+      with {:ok, request} <- request(store, identity, fingerprint, run_id, job_id),
            true <- request["fingerprint"] == fingerprint do
         case request["result"] do
           %{} = result -> {:ok, result}
@@ -29,11 +30,11 @@ defmodule MirrorNeuron.Runtime.RunStartRequest do
     end)
   end
 
-  defp request(store, identity, fingerprint, run_id) do
+  defp request(store, identity, fingerprint, run_id, job_id) do
     case store.fetch_run_start_request(identity) do
       {:error, :not_found} ->
         store.persist_run_start_request(identity, %{
-          "run_id" => blank(run_id) || "run_" <> identity,
+          "run_id" => blank(run_id) || JobId.generate_run(job_id),
           "fingerprint" => fingerprint
         })
 
