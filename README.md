@@ -157,6 +157,13 @@ ordinary reads, and connection setup keep the usual 15-second deadline. The
 SDK allows 130 seconds for the corresponding definition submission, including
 the owner's reply, and does not retry creation automatically.
 
+Native SDK unary calls release their gRPC connections after each command,
+including failures. If retirement of a previous definition's native resources
+fails after a replacement commits, the replacement response retains its saved
+revision and reports `resource_cleanup_errors`. These bounded records contain
+the owned identities and `native_resource_cleanup_failed`, without raw command
+diagnostics. The existing resource cleanup lifecycle can retry retirement.
+
 Federated unary calls reuse authenticated HTTP/2 connections. Concurrent setup
 is coalesced per peer, local identity, endpoint, and credential digest; the pool
 holds at most 64 connections and 1,024 active or waiting requests. Idle channels

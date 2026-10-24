@@ -48,6 +48,14 @@ source does not update an installed binary runtime.
 
 ## Purpose
 
+Native SDK unary commands close their owned gRPC channel on success, failure,
+or an exception. Connection cleanup never replays a command. A committed Job
+bundle replacement remains committed when retirement of its previous native
+resources fails. Its response reports JSON-safe `resource_cleanup_errors` with
+the exact owned resource identities and `reason: native_resource_cleanup_failed`;
+raw native command diagnostics are excluded. Ownership records remain available
+for the existing cleanup retry path.
+
 OpenShell artifact-handoff workers preserve the stable `MN_JOB_ID` projected by
 Core, matching HostLocal workers. Artifact receipts and lease checks retain the
 physical execution identity; crossing a runner boundary does not change the

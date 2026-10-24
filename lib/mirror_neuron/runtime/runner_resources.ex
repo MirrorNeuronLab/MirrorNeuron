@@ -195,13 +195,13 @@ defmodule MirrorNeuron.Runtime.RunnerResources do
                ) do
           []
         else
-          reason ->
+          _reason ->
             [
               %{
                 node: to_string(owner_node || NodeAdapter.self()),
                 kind: kind,
                 external_ids: external_ids,
-                reason: reason
+                reason: "native_resource_cleanup_failed"
               }
             ]
         end

@@ -2,6 +2,7 @@ defmodule MirrorNeuron.ModelServices do
   @moduledoc false
 
   alias MirrorNeuron.ServiceRegistry
+  alias MirrorNeuron.NativeSdkClient
   alias Mirrorneuron.Cluster.V1.ClusterService
 
   alias Mirrorneuron.Cluster.V1.{
@@ -345,9 +346,13 @@ defmodule MirrorNeuron.ModelServices do
 
   @doc false
   def grpc_prepare_runtime_model(target, request, timeout) do
-    with {:ok, channel} <- GRPC.Stub.connect(target, timeout: timeout),
-         {:ok, response} <-
-           ClusterService.Stub.prepare_runtime_model(channel, request, timeout: timeout) do
+    with {:ok, response} <-
+           NativeSdkClient.call(
+             target,
+             request,
+             timeout,
+             &ClusterService.Stub.prepare_runtime_model/3
+           ) do
       {:ok, response}
     else
       {:error, %GRPC.RPCError{} = error} ->
@@ -368,9 +373,13 @@ defmodule MirrorNeuron.ModelServices do
 
   @doc false
   def grpc_prepare_docker_worker(target, request, timeout) do
-    with {:ok, channel} <- GRPC.Stub.connect(target, timeout: timeout),
-         {:ok, response} <-
-           ClusterService.Stub.prepare_docker_worker(channel, request, timeout: timeout) do
+    with {:ok, response} <-
+           NativeSdkClient.call(
+             target,
+             request,
+             timeout,
+             &ClusterService.Stub.prepare_docker_worker/3
+           ) do
       {:ok, response}
     else
       {:error, %GRPC.RPCError{} = error} ->
@@ -385,9 +394,13 @@ defmodule MirrorNeuron.ModelServices do
 
   @doc false
   def grpc_cleanup_docker_worker(target, request, timeout) do
-    with {:ok, channel} <- GRPC.Stub.connect(target, timeout: timeout),
-         {:ok, response} <-
-           ClusterService.Stub.cleanup_docker_worker(channel, request, timeout: timeout) do
+    with {:ok, response} <-
+           NativeSdkClient.call(
+             target,
+             request,
+             timeout,
+             &ClusterService.Stub.cleanup_docker_worker/3
+           ) do
       {:ok, response}
     else
       {:error, %GRPC.RPCError{} = error} ->
@@ -401,9 +414,13 @@ defmodule MirrorNeuron.ModelServices do
 
   @doc false
   def grpc_prepare_docker_compose(target, request, timeout) do
-    with {:ok, channel} <- GRPC.Stub.connect(target, timeout: timeout),
-         {:ok, response} <-
-           ClusterService.Stub.prepare_docker_compose(channel, request, timeout: timeout) do
+    with {:ok, response} <-
+           NativeSdkClient.call(
+             target,
+             request,
+             timeout,
+             &ClusterService.Stub.prepare_docker_compose/3
+           ) do
       {:ok, response}
     else
       {:error, %GRPC.RPCError{} = error} ->
@@ -418,9 +435,13 @@ defmodule MirrorNeuron.ModelServices do
 
   @doc false
   def grpc_docker_compose_status(target, request, timeout) do
-    with {:ok, channel} <- GRPC.Stub.connect(target, timeout: timeout),
-         {:ok, response} <-
-           ClusterService.Stub.get_docker_compose_status(channel, request, timeout: timeout) do
+    with {:ok, response} <-
+           NativeSdkClient.call(
+             target,
+             request,
+             timeout,
+             &ClusterService.Stub.get_docker_compose_status/3
+           ) do
       {:ok, response}
     else
       {:error, %GRPC.RPCError{} = error} ->
@@ -434,9 +455,13 @@ defmodule MirrorNeuron.ModelServices do
 
   @doc false
   def grpc_cleanup_docker_compose(target, request, timeout) do
-    with {:ok, channel} <- GRPC.Stub.connect(target, timeout: timeout),
-         {:ok, response} <-
-           ClusterService.Stub.cleanup_docker_compose(channel, request, timeout: timeout) do
+    with {:ok, response} <-
+           NativeSdkClient.call(
+             target,
+             request,
+             timeout,
+             &ClusterService.Stub.cleanup_docker_compose/3
+           ) do
       {:ok, response}
     else
       {:error, %GRPC.RPCError{} = error} ->
@@ -450,9 +475,13 @@ defmodule MirrorNeuron.ModelServices do
 
   @doc false
   def grpc_sync_litellm_gateway(target, request, timeout) do
-    with {:ok, channel} <- GRPC.Stub.connect(target, timeout: timeout),
-         {:ok, response} <-
-           ClusterService.Stub.sync_lite_llm_gateway(channel, request, timeout: timeout) do
+    with {:ok, response} <-
+           NativeSdkClient.call(
+             target,
+             request,
+             timeout,
+             &ClusterService.Stub.sync_lite_llm_gateway/3
+           ) do
       {:ok, response}
     else
       {:error, %GRPC.RPCError{} = error} ->
@@ -466,9 +495,13 @@ defmodule MirrorNeuron.ModelServices do
 
   @doc false
   def grpc_remove_litellm_gateway_route(target, request, timeout) do
-    with {:ok, channel} <- GRPC.Stub.connect(target, timeout: timeout),
-         {:ok, response} <-
-           ClusterService.Stub.remove_lite_llm_gateway_route(channel, request, timeout: timeout) do
+    with {:ok, response} <-
+           NativeSdkClient.call(
+             target,
+             request,
+             timeout,
+             &ClusterService.Stub.remove_lite_llm_gateway_route/3
+           ) do
       {:ok, response}
     else
       {:error, %GRPC.RPCError{} = error} ->
@@ -483,8 +516,8 @@ defmodule MirrorNeuron.ModelServices do
 
   @doc false
   def grpc_set_resource(target, request, timeout) do
-    with {:ok, channel} <- GRPC.Stub.connect(target, timeout: timeout),
-         {:ok, response} <- ClusterService.Stub.set_resource(channel, request, timeout: timeout) do
+    with {:ok, response} <-
+           NativeSdkClient.call(target, request, timeout, &ClusterService.Stub.set_resource/3) do
       {:ok, response}
     else
       {:error, %GRPC.RPCError{} = error} ->

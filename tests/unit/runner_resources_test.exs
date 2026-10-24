@@ -332,6 +332,35 @@ defmodule MirrorNeuron.Runtime.RunnerResourcesTest do
                     }}
   end
 
+  test "retired cleanup failures remain JSON-safe without exposing native diagnostics" do
+    Application.put_env(
+      :mirror_neuron,
+      :native_sdk_grpc_native_resource_client,
+      fn _target, _request, _timeout ->
+        {:error, {:timeout, "private command and credential must-not-leak"}}
+      end
+    )
+
+    retired = %{
+      "metadata" => %{
+        "mn_native_resources" => %{
+          "resources" => [
+            %{"kind" => "docker_worker", "external_id" => "owned-retired-worker"}
+          ]
+        }
+      }
+    }
+
+    assert {:error, [failure]} =
+             RunnerResources.cleanup_retired_native_resources(retired, %{})
+
+    assert failure.reason == "native_resource_cleanup_failed"
+    assert failure.external_ids == ["owned-retired-worker"]
+    encoded = Jason.encode!(%{"resource_cleanup_errors" => [failure]})
+    refute encoded =~ "must-not-leak"
+    assert Jason.decode!(encoded)["resource_cleanup_errors"] |> length() == 1
+  end
+
   test "Compose cleanup discovers projects from persisted manifest flow nodes" do
     job = %{
       "manifest" => %{
