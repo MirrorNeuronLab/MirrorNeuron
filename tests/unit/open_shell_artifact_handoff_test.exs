@@ -99,6 +99,37 @@ defmodule MirrorNeuron.OpenShellArtifactHandoffTest do
     assert File.read!(Path.join(ctx.root, "calls")) == "1"
   end
 
+  test "stable Job identity reaches the worker while receipts retain physical ownership", ctx do
+    worker = Path.join(ctx.root, "worker.py")
+    original = File.read!(worker)
+
+    File.write!(
+      worker,
+      """
+      import os
+      assert os.environ['MN_JOB_ID'] == 'stable-job'
+      assert os.environ['MN_WORKFLOW_RUN_ID'] == 'actual-run'
+      assert os.environ['MN_BLUEPRINT_FAKE_LLM'] == '1'
+      assert os.environ['MN_BLUEPRINT_FAKE_SKILLS'] == '1'
+      """ <> original
+    )
+
+    config =
+      update_in(
+        ctx.config,
+        ["environment"],
+        &Map.merge(&1, %{
+          "MN_JOB_ID" => "stable-job",
+          "MN_BLUEPRINT_FAKE_LLM" => "1",
+          "MN_BLUEPRINT_FAKE_SKILLS" => "1"
+        })
+      )
+
+    assert {:ok, result} = OpenShell.run(%{}, config, ctx.opts)
+    assert result["artifact_receipt"]["producer"]["job_id"] == "handoff-test"
+    assert result["artifact_receipt"]["producer"]["run_id"] == "actual-run"
+  end
+
   test "stock SDK block binding uses private run storage and verified artifact commits", ctx do
     sdk = Path.expand("../mn-python-sdk")
     domain = Path.join(ctx.root, "domain")

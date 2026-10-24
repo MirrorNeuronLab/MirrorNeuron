@@ -246,7 +246,10 @@ defmodule MirrorNeuron.Runner.OpenShellArtifactHandoff do
         "MN_BLUEPRINT_MANIFEST_PATH" => Path.join(remote, "runtime/manifest.json"),
         "MN_RUN_ID" => state["producer"]["run_id"],
         "MN_WORKFLOW_RUN_ID" => state["producer"]["run_id"],
-        "MN_JOB_ID" => state["producer"]["job_id"],
+        # StableJob projects the public Job identity into worker configuration.
+        # The producer's job_id is the physical execution used by leases.
+        "MN_JOB_ID" =>
+          Map.get(config["environment"] || %{}, "MN_JOB_ID", state["producer"]["job_id"]),
         "MN_AGENT_ID" => Keyword.fetch!(opts, :agent_id),
         "MN_ARTIFACT_OUTPUT_DIR" => Path.join(remote, "outputs"),
         "MN_ARTIFACT_INPUT_INDEX" => Path.join(remote, ".inputs/index.json"),

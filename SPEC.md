@@ -48,6 +48,11 @@ source does not update an installed binary runtime.
 
 ## Purpose
 
+OpenShell artifact-handoff workers preserve the stable `MN_JOB_ID` projected by
+Core, matching HostLocal workers. Artifact receipts and lease checks retain the
+physical execution identity; crossing a runner boundary does not change the
+Job identity seen by SDK handlers.
+
 OpenShell shared-output downloads precede invocation workspace cleanup. With
 shared storage enabled, the command wrapper retains its directory until transfer
 succeeds; a failed transfer retains the mirror for recovery. Persistent workspaces
