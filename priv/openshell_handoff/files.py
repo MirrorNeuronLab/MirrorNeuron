@@ -39,11 +39,13 @@ def mkdir(path):
     sync_dir(path.parent)
 
 
-def write(path, value):
+def write(path, value, *, mode=None):
     path = Path(path)
     mkdir(path.parent)
     temp = path.with_name(path.name + ".tmp")
     with temp.open("wb") as stream:
+        if mode is not None:
+            os.fchmod(stream.fileno(), mode)
         stream.write(encode(value))
         stream.flush()
         os.fsync(stream.fileno())

@@ -81,6 +81,9 @@ atomic replacement merge up to 10,000 entries / 8 MiB without losing concurrent
 publishers or reordering existing entries. Isolated exports retain a copy in the
 physical run as well as the configured destination. Matching SDK download
 projection verifies these files without relying on domain result JSON fields.
+The public inventory is atomically published with mode `0644`, independently of
+Core's umask, so the host Syncthing process can read root-owned metadata. Private
+handoff receipts retain their existing permissions.
 
 This specification covers only Core. Source-manifest compilation, terminal and
 HTTP adapters, domain blueprints, reusable Python agents/skills, context memory,

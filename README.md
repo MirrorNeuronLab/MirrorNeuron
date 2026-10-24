@@ -67,6 +67,8 @@ Verified event publications and enabled isolated exports also maintain a portabl
 public-file inventory for SDK/API downloads. Terminal shared runs request a
 Syncthing scan of their own committed output subtree so Docker writes replicate
 promptly. Use matching Core and SDK sources for this delivery contract.
+The public inventory remains readable to the host sync process under Core's
+restrictive umask; private handoff receipt permissions are unchanged.
 
 Agent workflows become harder to operate when they span many steps, wait for
 input, call external services, or need to survive a restart. MirrorNeuron gives

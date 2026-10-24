@@ -50,6 +50,25 @@ def test_completed_event_files_repair_from_the_same_sdk_receipt(publication):
     assert [item["relative_path"] for item in output_metadata(block.store.run_dir)] == ["reports/report.md", "views/index.html"]
 
 
+def test_public_inventory_is_sync_readable_without_widening_private_receipts(publication):
+    from output_index import INDEX, VERSION as INDEX_VERSION
+
+    block, request = publication
+    previous = os.umask(0o077)
+    try:
+        private = block.store.run_dir / ".handoff/private-receipt.json"
+        write(private, {"private": True})
+        # Replacing an older root-only inventory must repair its readability.
+        write(block.store.run_dir / INDEX, {"schema_version": INDEX_VERSION, "output_files": []})
+        assert (block.store.run_dir / INDEX).stat().st_mode & 0o777 == 0o600
+        published_files.deliver(request)
+    finally:
+        os.umask(previous)
+    for root in (block.store.run_dir, Path(request["output_dir"])):
+        assert (root / INDEX).stat().st_mode & 0o777 == 0o644
+    assert private.stat().st_mode & 0o777 == 0o600
+
+
 def test_optional_copy_failure_is_qualified_and_replay_repairs_it(publication):
     block, request = publication
     output = Path(request["output_dir"])

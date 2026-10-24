@@ -65,4 +65,6 @@ def record(directory, files):
         entries(value)
         if len(json.dumps(value).encode()) > MAX_BYTES:
             raise ValueError("published output inventory exceeds size limit")
-        write(root / INDEX, value)
+        # Core runs as root with a restrictive umask; the host sync process
+        # must read this public metadata before another node can list outputs.
+        write(root / INDEX, value, mode=0o644)
