@@ -13,6 +13,7 @@ import tempfile
 
 from files import mkdir, regular, safe, sync_dir, verify
 from store import resolve
+from output_index import record as record_outputs
 
 MAX_FILES = 10000
 MAX_BYTES = 64 * 1024 * 1024
@@ -216,6 +217,9 @@ def deliver(request):
             if name not in failed:
                 warnings.append({"code": "optional_artifact_delivery_failed", "artifact_id": name})
                 failed.add(name)
+    delivered = {name: ref for name, ref in request["publication"]["files"].items() if name not in failed}
+    for root in sorted(directories):
+        record_outputs(root, delivered)
     return {"warnings": warnings}
 
 

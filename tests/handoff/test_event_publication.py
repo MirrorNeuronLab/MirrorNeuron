@@ -46,6 +46,8 @@ def test_completed_event_files_repair_from_the_same_sdk_receipt(publication):
     assert published_files.deliver(request) == {"warnings": []}
     assert request["publication"] == before
     assert (Path(request["output_dir"]) / "reports/report.md").read_bytes() == b"# Reviewed scene\n"
+    from mn_sdk.run_outputs import output_metadata
+    assert [item["relative_path"] for item in output_metadata(block.store.run_dir)] == ["reports/report.md", "views/index.html"]
 
 
 def test_optional_copy_failure_is_qualified_and_replay_repairs_it(publication):

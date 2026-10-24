@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from files import VERSION, digest, read, references, regular, safe, sync_dir, verify, write, mkdir, validate_declarations
 from committed_inputs import admit
+from output_index import public_name, record as record_outputs
 
 
 @contextmanager
@@ -221,15 +222,21 @@ def handle(request):
                 raise ValueError("invalid publication export policy")
             plans, warnings = [], []
             for name, ref in exports.items():
-                destination = target / safe(name)
-                if not destination.parent.resolve().is_relative_to(target.resolve()):
-                    raise ValueError("export escapes output directory")
-                plans.append((name, resolve(root, ref), destination))
-            for name, source, destination in sorted(plans, key=lambda plan: plan[0] in optional):
+                public_name(name)
+                source = resolve(root, ref)
+                # Keep downloads bound to this physical run as well as the
+                # configured folder. The sandbox's private index is not copied.
+                for directory in {target, root.parent}:
+                    destination = directory / name
+                    if not destination.parent.resolve().is_relative_to(directory.resolve()) or destination.is_symlink():
+                        raise ValueError("export escapes output directory")
+                    plans.append((name, source, destination, directory))
+            failed = set()
+            for name, source, destination, directory in sorted(plans, key=lambda plan: plan[0] in optional):
                 temporary = None
                 try:
                     destination.parent.mkdir(parents=True, exist_ok=True)
-                    if not destination.parent.resolve().is_relative_to(target.resolve()):
+                    if not destination.parent.resolve().is_relative_to(directory.resolve()) or destination.is_symlink():
                         raise ValueError("export escapes output directory")
                     fd, temporary = tempfile.mkstemp(prefix=".export-", dir=destination.parent)
                     with os.fdopen(fd, "wb") as sink, source.open("rb") as stream:
@@ -241,11 +248,16 @@ def handle(request):
                 except OSError as error:
                     if name not in optional:
                         raise
-                    warnings.append({"code": "optional_artifact_delivery_failed", "artifact_id": name,
-                                     "error_type": type(error).__name__})
+                    if name not in failed:
+                        warnings.append({"code": "optional_artifact_delivery_failed", "artifact_id": name,
+                                         "error_type": type(error).__name__})
+                    failed.add(name)
                 finally:
                     if temporary is not None:
                         Path(temporary).unlink(missing_ok=True)
+            delivered = {name: ref for name, ref in exports.items() if name not in failed}
+            for directory in {target, root.parent}:
+                record_outputs(directory, delivered)
             return {**state, "export_warnings": warnings}
         elif op == "cleanup":
             if not receipt(root, state):

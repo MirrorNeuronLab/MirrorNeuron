@@ -110,7 +110,12 @@ defmodule MirrorNeuron.Artifacts.SharedStorage do
            if(File.dir?(user_dir), do: run_output_files(user_dir), else: {:ok, []}),
          files = Enum.sort_by(run_files ++ user_files, & &1["path"]),
          receipt = %{"run_id" => run_id, "status" => status, "output_files" => files},
-         :ok <- completion_update(run_dir, epoch, "publish", receipt) do
+         :ok <- completion_update(run_dir, epoch, "publish", receipt),
+         :ok <-
+           MirrorNeuron.Artifacts.SyncthingPublication.publish(
+             root(),
+             Path.join(submission, "outputs")
+           ) do
       :ok
     else
       false -> {:error, :invalid_run_output_path}

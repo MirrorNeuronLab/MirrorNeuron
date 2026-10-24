@@ -132,6 +132,11 @@ def test_export_delivery_policy_and_recovery_use_committed_bytes(transaction, tm
     monkeypatch.setattr(store.shutil, "copyfileobj", copy)
     assert handle(request)["export_warnings"] == []
     assert (tmp_path / "submission/outputs/user/review.html").read_bytes() == b"hello"
+    from mn_sdk.run_outputs import output_metadata
+    run = Path(base["root"]).parent
+    outputs = output_metadata(run)
+    assert len(outputs) == 1 and outputs[0]["path"] == str(run / "review.html")
+    assert outputs[0]["sha256"] == ref["sha256"]
     assert handle({**base, "op": "begin", "request_hash": "request"})["phase"] == "committed"
 
 
@@ -154,3 +159,13 @@ def test_optional_export_cannot_hide_corrupt_committed_bytes(transaction, tmp_pa
     published.write_bytes(b"tampered")
     with pytest.raises(ValueError, match="mismatch"):
         handle({**base, "op": "export", "target": str(tmp_path / "submission/outputs/user")})
+
+
+@pytest.mark.parametrize("name", [".mn-published-files.json", ".locks/runtime", "blocks/private.json", "artifacts/results/attempt.json"])
+def test_exports_cannot_overwrite_runtime_index_or_private_records(transaction, tmp_path, name):
+    base, _, _, ref, commit = transaction
+    commit["execution"]["structured_result"]["exports"] = {name: ref}
+    handle(commit)
+    with pytest.raises(ValueError, match="reserved"):
+        handle({**base, "op": "export", "target": str(tmp_path / "submission/outputs/user")})
+    assert not (tmp_path / "submission/outputs/user").exists()

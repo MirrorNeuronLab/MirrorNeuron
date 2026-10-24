@@ -67,6 +67,20 @@ For SDK-staged shared submissions, terminal runs publish `outputs/runs/<run-id>/
 with the final status and an inventory of durable regular files. The submitting
 host uses this receipt to wait for replication before copying declared outputs.
 Core never writes to a submitter-only host path on a remote worker node.
+After committing that receipt, an enabled Syncthing integration requests a scan
+of the owning submission's output subtree. The request uses the configured local
+advertise host, GUI port, folder ID and API key, with a bounded timeout and no
+redirects. This publishes Docker bind-mount writes promptly without waiting for
+the periodic folder rescan.
+
+Accepted event publications and explicitly enabled isolated exports maintain
+`.mn-published-files.json` (`mn.published_outputs/v1`) after verified file delivery.
+The portable inventory contains only declared public names, kinds, byte sizes and
+SHA-256 values; private handoff records are excluded. Local process locking and
+atomic replacement merge up to 10,000 entries / 8 MiB without losing concurrent
+publishers or reordering existing entries. Isolated exports retain a copy in the
+physical run as well as the configured destination. Matching SDK download
+projection verifies these files without relying on domain result JSON fields.
 
 This specification covers only Core. Source-manifest compilation, terminal and
 HTTP adapters, domain blueprints, reusable Python agents/skills, context memory,

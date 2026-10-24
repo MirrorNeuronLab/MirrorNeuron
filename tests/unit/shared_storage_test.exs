@@ -26,17 +26,20 @@ defmodule MirrorNeuron.Artifacts.SharedStorageTest do
   setup do
     old_shared = System.get_env("MN_SHARED_STORAGE_ROOT")
     old_runtime = System.get_env("MN_RUNTIME_SHARED_STORAGE_ROOT")
+    old_syncthing = System.get_env("MN_SYNCTHING_ENABLED")
 
     root =
       Path.join(System.tmp_dir!(), "mn_shared_storage_test_#{System.unique_integer([:positive])}")
 
     System.put_env("MN_SHARED_STORAGE_ROOT", root)
     System.delete_env("MN_RUNTIME_SHARED_STORAGE_ROOT")
+    System.put_env("MN_SYNCTHING_ENABLED", "0")
     File.mkdir_p!(root)
 
     on_exit(fn ->
       restore_env("MN_SHARED_STORAGE_ROOT", old_shared)
       restore_env("MN_RUNTIME_SHARED_STORAGE_ROOT", old_runtime)
+      restore_env("MN_SYNCTHING_ENABLED", old_syncthing)
       File.rm_rf(root)
     end)
 

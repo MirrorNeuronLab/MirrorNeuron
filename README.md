@@ -63,6 +63,11 @@ Child-round plan nodes accept an optional non-empty `label` of at most 1,024 UTF
 OpenShell workers synchronize shared outputs before cleaning their invocation
 workspace. Failed transfers preserve the sandbox copy for recovery.
 
+Verified event publications and enabled isolated exports also maintain a portable
+public-file inventory for SDK/API downloads. Terminal shared runs request a
+Syncthing scan of their own committed output subtree so Docker writes replicate
+promptly. Use matching Core and SDK sources for this delivery contract.
+
 Agent workflows become harder to operate when they span many steps, wait for
 input, call external services, or need to survive a restart. MirrorNeuron gives
 that work an explicit execution model and a durable record of progress.
