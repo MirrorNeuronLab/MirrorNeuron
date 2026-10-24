@@ -23,7 +23,7 @@ CI build numbers are for internal artifacts only. Public releases use clean SemV
 
 MirrorNeuron core publishes GitHub Release OTP tarballs and a public Docker
 runtime image. GitHub Actions builds the OTP assets; the multi-platform Docker
-image is published from the local release machine by `mn-deploy/release_all.sh`.
+image is published from the local release machine by `mn-deploy/scripts/release_all.sh`.
 Core does not publish runtime releases to Hex, PyPI, npm, or a custom source
 ZIP.
 
@@ -47,7 +47,7 @@ Installers use the immutable `vX.Y.Z` tag. The image carries OCI version and
 revision labels matching the release tag and commit.
 
 For a release backfill, run
-`mn-deploy/publish_public_core_to_google_artifact_registry.sh --apply --version
+`mn-deploy/scripts/publish_public_core_to_google_artifact_registry.sh --apply --version
 vX.Y.Z`. On Apple Silicon the publisher registers QEMU amd64 emulation and
 uses Erlang's QEMU-compatible single-mapped JIT setting while building.
 
@@ -69,7 +69,7 @@ git push origin v1.0.1
 Pushing the tag starts the release workflow. The workflow validates the tag,
 runs tests, builds platform-specific OTP releases, writes SHA256 checksums,
 creates a GitHub Release, and uploads the OTP tarballs plus checksum file.
-The workspace-level `mn-deploy/release_all.sh` then publishes and verifies the
+The workspace-level `mn-deploy/scripts/release_all.sh` then publishes and verifies the
 multi-platform GAR runtime image from the local release machine.
 
 ## Create a Prerelease
