@@ -38,7 +38,7 @@ defmodule MirrorNeuron.Runtime.JobRelocation do
          :ok <- activation_proven(activated, request) do
       # Definition resources are retired only after destination activation is
       # proven. Data/history stay as a recovery copy and are never GC'd as RAM.
-      cleanup = cleanup_source(journal)
+      cleanup = cleanup_source(request.job_id, journal)
       finish(request.job_id, journal, cleanup)
     end
   end
@@ -79,14 +79,32 @@ defmodule MirrorNeuron.Runtime.JobRelocation do
 
   def command(_), do: {:error, :invalid_relocation_request}
 
-  defp cleanup_source(journal) do
+  defp cleanup_source(job_id, journal) do
     retired = %{
       "metadata" => %{
         "mn_native_resources" => %{"resources" => journal["source_resources"] || []}
       }
     }
 
-    RunnerResources.cleanup_retired_native_resources(retired, %{})
+    with :ok <- RunnerResources.cleanup_retired_native_resources(retired, %{}) do
+      Enum.reduce_while(journal["source_schedule_ids"] || [], :ok, fn id, :ok ->
+        missing = "schedule #{id} was not found"
+
+        case RedisStore.fetch_schedule(id) do
+          {:ok, %{"job_id" => ^job_id, "enabled" => false}} ->
+            case RedisStore.delete_schedule(id) do
+              :ok -> {:cont, :ok}
+              error -> {:halt, error}
+            end
+
+          {:error, ^missing} ->
+            {:cont, :ok}
+
+          _ ->
+            {:halt, {:error, :relocation_schedule_cleanup_pending}}
+        end
+      end)
+    end
   end
 
   defp stage_proven(%{"status" => status, "job_id" => id, "relocation" => journal}, request)
@@ -117,9 +135,16 @@ defmodule MirrorNeuron.Runtime.JobRelocation do
 
       case StableJob.get(request.job_id) do
         {:ok, destination} ->
-          if matching?(destination["relocation"], request),
-            do: prepare_destination(request, source["relocation"], destination),
-            else: {:error, :job_already_exists}
+          cond do
+            matching?(destination["relocation"], request) ->
+              prepare_destination(request, source["relocation"], destination)
+
+            replaceable_destination?(destination, source["relocation"]) ->
+              prepare_destination(request, source["relocation"], nil)
+
+            true ->
+              {:error, :job_already_exists}
+          end
 
         {:error, ^missing} ->
           prepare_destination(request, source["relocation"], nil)
@@ -215,6 +240,8 @@ defmodule MirrorNeuron.Runtime.JobRelocation do
                 "source_node" => local(),
                 "target_node" => request.target_node,
                 "phase" => "freezing",
+                "source_data_generation" => definition["data_generation"] || 1,
+                "source_schedule_ids" => definition["schedule_ids"] || [],
                 "source_resources" =>
                   (get_in(definition, ["manifest", "metadata", "mn_native_resources", "resources"]) ||
                      [])
@@ -366,9 +393,44 @@ defmodule MirrorNeuron.Runtime.JobRelocation do
          true <- get_in(source, ["relocation", "phase"]) == "frozen",
          true <- matching?(source["relocation"], request),
          true <- source["relocation"]["data_sha256"] == data_digest(inventory) do
-      {:ok, Map.put(source["relocation"], "phase", "receiving")}
+      receiving_journal(job_id, source["relocation"])
     else
       _ -> {:error, :relocation_verification_failed}
+    end
+  end
+
+  @doc false
+  def replaceable_destination?(destination, journal) do
+    source = journal["source_node"]
+
+    (destination["status"] == "relocated" and destination["owner_node"] == source and
+       get_in(destination, ["relocation", "target_node"]) == source and
+       get_in(destination, ["relocation", "phase"]) == "completed") or
+      (destination["status"] == "relocation_staged" and
+         get_in(destination, ["relocation", "source_node"]) == source and
+         get_in(destination, ["relocation", "transfer_id"]) != journal["transfer_id"])
+  end
+
+  defp receiving_journal(id, journal) do
+    missing = "job #{id} was not found"
+
+    case StableJob.get(id) do
+      {:error, ^missing} ->
+        {:ok, Map.put(journal, "phase", "receiving")}
+
+      {:ok, previous} ->
+        if replaceable_destination?(previous, journal) do
+          {:ok,
+           journal
+           |> Map.put("phase", "receiving")
+           |> Map.put("replaces_revision", previous["revision"])
+           |> Map.put("retired_schedule_ids", previous["schedule_ids"] || [])}
+        else
+          {:error, :job_already_exists}
+        end
+
+      error ->
+        error
     end
   end
 

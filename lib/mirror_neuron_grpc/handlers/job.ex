@@ -25,8 +25,11 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     # source redirect here would make ownership-commit verification circular.
     local_transfer =
       case MirrorNeuron.Runtime.StableJob.get(request.job_id) do
-        {:ok, %{"status" => "relocated"}} -> true
-        _ -> false
+        {:ok, %{"status" => "relocated", "relocation" => journal}} ->
+          request.target_node == journal["target_node"]
+
+        _ ->
+          false
       end
 
     if request.action in ["move", "abort"] and not local_transfer and

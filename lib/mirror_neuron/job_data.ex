@@ -68,22 +68,50 @@ defmodule MirrorNeuron.JobData do
   end
 
   @doc false
-  def install_restore(job_id, staging, identity) do
+  def install_restore(job_id, staging, identity, opts \\ []) do
     with :ok <- prepare_root(),
          {:ok, destination} <- path(job_id),
          true <-
            Path.dirname(staging) == root() and
              Regex.match?(~r/\A\.restore-[a-f0-9]{32}\z/, Path.basename(staging)),
          true <- is_binary(identity) and byte_size(identity) in 1..300,
+         true <-
+           not Keyword.has_key?(opts, :replace_identity) or
+             valid_restore_identity?(opts[:replace_identity]),
          :ok <- reject_symlinks_in_tree(staging, :job_data_symlink_not_allowed),
          :ok <- reject_symlink(destination) do
       marker = ".mn-restore-identity"
 
       cond do
         File.exists?(destination) ->
-          if File.read(Path.join(destination, marker)) == {:ok, identity},
-            do: {:ok, destination},
-            else: {:error, :job_data_already_exists}
+          cond do
+            File.read(Path.join(destination, marker)) == {:ok, identity} ->
+              {:ok, destination}
+
+            Keyword.has_key?(opts, :replace_identity) and
+                File.read(Path.join(destination, marker)) == opts[:replace_identity] ->
+              retired =
+                Path.join(
+                  root(),
+                  ".retired-" <>
+                    (:crypto.hash(:sha256, identity)
+                     |> Base.encode16(case: :lower)
+                     |> binary_part(0, 32))
+                )
+
+              if File.exists?(retired) do
+                {:error, :job_data_already_exists}
+              else
+                with :ok <- File.write(Path.join(staging, marker), identity),
+                     :ok <- handoff_restore(staging),
+                     :ok <- File.rename(destination, retired),
+                     :ok <- File.rename(staging, destination),
+                     do: {:ok, destination}
+              end
+
+            true ->
+              {:error, :job_data_already_exists}
+          end
 
         true ->
           with :ok <- File.write(Path.join(staging, marker), identity),
@@ -96,6 +124,12 @@ defmodule MirrorNeuron.JobData do
       error -> error
     end
   end
+
+  defp valid_restore_identity?({:ok, identity}),
+    do: is_binary(identity) and byte_size(identity) in 1..300
+
+  defp valid_restore_identity?({:error, :enoent}), do: true
+  defp valid_restore_identity?(_), do: false
 
   defp handoff_restore(staging) do
     # These are newly received, verified files, never an existing user's tree.

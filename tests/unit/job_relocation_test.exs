@@ -36,4 +36,39 @@ defmodule MirrorNeuron.Runtime.JobRelocationTest do
                result_json: "[]"
              })
   end
+
+  test "only a completed former placement or a superseded inactive import can be replaced" do
+    journal = %{"source_node" => "mini", "transfer_id" => "new"}
+
+    previous = %{
+      "status" => "relocated",
+      "owner_node" => "mini",
+      "relocation" => %{"target_node" => "mini", "phase" => "completed"}
+    }
+
+    assert JobRelocation.replaceable_destination?(previous, journal)
+    refute JobRelocation.replaceable_destination?(Map.put(previous, "status", "active"), journal)
+
+    refute JobRelocation.replaceable_destination?(
+             Map.put(previous, "owner_node", "unrelated"),
+             journal
+           )
+
+    refute JobRelocation.replaceable_destination?(
+             put_in(previous, ["relocation", "phase"], "cleanup_pending"),
+             journal
+           )
+
+    inactive = %{
+      "status" => "relocation_staged",
+      "relocation" => %{"source_node" => "mini", "transfer_id" => "aborted"}
+    }
+
+    assert JobRelocation.replaceable_destination?(inactive, journal)
+
+    refute JobRelocation.replaceable_destination?(
+             put_in(inactive, ["relocation", "source_node"], "unrelated"),
+             journal
+           )
+  end
 end

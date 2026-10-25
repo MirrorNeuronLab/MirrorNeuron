@@ -15,6 +15,7 @@ defmodule MirrorNeuron.Backup.RelocationRestore do
 
     history = root |> Path.join("history.json") |> File.read!() |> Jason.decode!()
     ids = Enum.map(history["runs"] || [], &restore_run!(&1, definition, root))
+    retire_schedules!(definition)
     schedule_ids = Enum.map(history["schedules"] || [], &restore_schedule!(&1, definition))
 
     updated =
@@ -57,13 +58,17 @@ defmodule MirrorNeuron.Backup.RelocationRestore do
              existing["status"] not in ~w(completed failed cancelled),
            do: raise(ArgumentError, "relocation history conflicts with an existing run")
 
+        id
+
       {:error, ^missing} ->
-        :ok
+        restore_new_run!(item, definition, root, run, id)
 
       _ ->
         raise ArgumentError, "could not verify historical run identity"
     end
+  end
 
+  defp restore_new_run!(item, definition, root, run, id) do
     {:ok, artifacts} = JobStore.ensure_job_dir(id)
     copy_contents!(Path.join([root, "artifacts", id]), artifacts)
     submission = "relocated-" <> definition["relocation"]["transfer_id"] <> "-" <> id
@@ -98,6 +103,24 @@ defmodule MirrorNeuron.Backup.RelocationRestore do
     {:ok, _} = RedisStore.persist_job(id, run)
     {:ok, _} = RedisStore.replace_job_events(id, item["events"] || [])
     id
+  end
+
+  defp retire_schedules!(definition) do
+    job_id = definition["job_id"]
+
+    Enum.each(definition["relocation"]["retired_schedule_ids"] || [], fn id ->
+      case RedisStore.fetch_schedule(id) do
+        {:ok, %{"job_id" => job, "enabled" => false}} when job == job_id ->
+          :ok = RedisStore.delete_schedule(id)
+
+        {:ok, _} ->
+          raise ArgumentError, "retired schedule ownership changed"
+
+        {:error, reason} ->
+          if reason != "schedule #{id} was not found",
+            do: raise(ArgumentError, "could not retire paused schedule")
+      end
+    end)
   end
 
   defp restore_schedule!(schedule, definition) do

@@ -84,8 +84,12 @@ Retries resume the durable transfer. Interrupted imports finish from saved
 evidence. Committed transfers retry activation and source resource cleanup in a
 separate reconciler. Before commit, `mn job relocate JOB --node NODE --abort`
 restores source availability; after commit, retry finishes destination activation.
-Source data remains as a recovery copy. Existing destination Job IDs are never
-silently overwritten.
+Source data remains as a recovery copy. Unrelated destination Job IDs are never replaced. Returning to a previous PC
+replaces only its proven inactive former placement, guarded by the definition
+revision and restore identity. The previous data tree remains a recovery copy.
+Superseded inactive imports use the same checks. Original schedules are retired
+only after destination activation; the imported schedules stay paused. Receiving
+caches are rebuilt from current history rather than recursively copied.
 
 The additive RPCs and fields retain interface version 1. Native owners must
 advertise `resource_admission_v2`; upgrade Core and native SDK together. Old

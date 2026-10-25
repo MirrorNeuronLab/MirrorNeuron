@@ -177,4 +177,34 @@ defmodule MirrorNeuron.JobDataTest do
 
     assert Path.wildcard(Path.join(root, ".restore-*"), match_dot: true) == []
   end
+
+  test "return restores preserve the retired copy and reject a stale identity", %{root: root} do
+    {:ok, destination} = JobData.initialize("return-job")
+    File.write!(Path.join(destination, "input.txt"), "old recovery copy")
+    expected = {:error, :enoent}
+
+    assert {:ok, ^destination} =
+             JobData.with_restore_staging(fn staging ->
+               File.write!(Path.join(staging, "input.txt"), "new authoritative data")
+
+               JobData.install_restore("return-job", staging, "new-transfer",
+                 replace_identity: expected
+               )
+             end)
+
+    assert File.read!(Path.join(destination, "input.txt")) == "new authoritative data"
+    [retired] = Path.wildcard(Path.join(root, ".retired-*"), match_dot: true)
+    assert File.read!(Path.join(retired, "input.txt")) == "old recovery copy"
+
+    assert {:error, :job_data_already_exists} =
+             JobData.with_restore_staging(fn staging ->
+               File.write!(Path.join(staging, "input.txt"), "delayed stale import")
+
+               JobData.install_restore("return-job", staging, "stale-transfer",
+                 replace_identity: expected
+               )
+             end)
+
+    assert File.read!(Path.join(destination, "input.txt")) == "new authoritative data"
+  end
 end

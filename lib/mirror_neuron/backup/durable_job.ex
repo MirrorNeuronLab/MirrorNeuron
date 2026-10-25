@@ -34,7 +34,7 @@ defmodule MirrorNeuron.Backup.DurableJob do
 
           entries =
             Files.tree(bundle.root_path, "bundle") ++
-              Files.tree(data_dir, "job-data") ++
+              job_data_entries(data_dir) ++
               Files.tree(temp, "history") ++
               artifact_entries(runs) ++
               blob_entries([definition | runs]) ++
@@ -100,7 +100,10 @@ defmodule MirrorNeuron.Backup.DurableJob do
 
       JobData.with_restore_staging(fn data_dir ->
         {:ok, exists} = RedisStore.job_definition_exists?(job_id)
-        if exists, do: raise(ArgumentError, "restore job already exists")
+
+        if exists and
+             not get_in(Keyword.get(relocation_opts, :relocation, %{}), ["replaces_revision"]),
+           do: raise(ArgumentError, "restore job already exists")
 
         try do
           copy_contents(Path.join(temp, "job-data"), data_dir)
@@ -129,6 +132,8 @@ defmodule MirrorNeuron.Backup.DurableJob do
                  relocation_opts ++
                    [
                      job_id: job_id,
+                     created_at:
+                       if(relocation_opts != [], do: definition["created_at"], else: nil),
                      restored_data_dir: data_dir,
                      restore_identity: restore_identity(backup, relocation_opts),
                      resolved_configuration: options["resolved_configuration"] || %{},
@@ -221,6 +226,16 @@ defmodule MirrorNeuron.Backup.DurableJob do
       {"blobs/" <> sha, BlobStore.path(sha), false, 0o600}
     end)
     |> Enum.uniq_by(&elem(&1, 0))
+  end
+
+  defp job_data_entries(data_dir) do
+    # Receiving caches are reconstructed from current history and artifacts.
+    # Copying them as user data would recursively grow every subsequent move.
+    Files.tree(data_dir, "job-data")
+    |> Enum.reject(fn {name, _, _, _} ->
+      name in ["job-data/.mn-restore", "job-data/.mn-restore-identity"] or
+        String.starts_with?(name, "job-data/.mn-restore/")
+    end)
   end
 
   defp historical_staging_entries(runs) do

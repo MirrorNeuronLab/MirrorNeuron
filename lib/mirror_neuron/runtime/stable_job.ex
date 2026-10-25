@@ -46,10 +46,10 @@ defmodule MirrorNeuron.Runtime.StableJob do
   end
 
   defp create_loaded(bundle, job_id, opts) do
-    with {:ok, false} <- RedisStore.job_definition_exists?(job_id),
+    with {:ok, previous} <- restore_predecessor(job_id, opts),
          {:ok, storage} <- storage_declarations(bundle, Keyword.get(opts, :storage, %{})),
          {:ok, seed_paths} <- seed_paths(bundle, storage),
-         {:ok, data_dir} <- initialize_data(job_id, seed_paths, opts) do
+         {:ok, data_dir} <- initialize_data(job_id, seed_paths, opts, previous) do
       now = Runtime.timestamp()
 
       definition = %{
@@ -67,11 +67,19 @@ defmodule MirrorNeuron.Runtime.StableJob do
         "owner_node" => to_string(Keyword.get(opts, :owner_node, NodeAdapter.self())),
         "status" =>
           if(Keyword.has_key?(opts, :relocation), do: "relocation_staged", else: "active"),
-        "revision" => 1,
-        "data_generation" => 1,
+        "revision" => if(previous, do: previous["revision"] + 1, else: 1),
+        "data_generation" =>
+          if(previous,
+            do:
+              max(
+                previous["data_generation"] || 1,
+                get_in(Keyword.get(opts, :relocation, %{}), ["source_data_generation"]) || 1
+              ) + 1,
+            else: get_in(Keyword.get(opts, :relocation, %{}), ["source_data_generation"]) || 1
+          ),
         "data_dir" => data_dir,
         "run_ids" => [],
-        "created_at" => now,
+        "created_at" => Keyword.get(opts, :created_at) || now,
         "updated_at" => now
       }
 
@@ -80,7 +88,12 @@ defmodule MirrorNeuron.Runtime.StableJob do
           do: Map.put(definition, "relocation", Keyword.fetch!(opts, :relocation)),
           else: definition
 
-      case RedisStore.create_job_definition(job_id, definition) do
+      persisted =
+        if previous,
+          do: RedisStore.compare_job_definition(job_id, previous["revision"], definition),
+          else: RedisStore.create_job_definition(job_id, definition)
+
+      case persisted do
         {:ok, saved} = result ->
           _ = JobResponse.definition_changed(saved)
           result
@@ -94,10 +107,48 @@ defmodule MirrorNeuron.Runtime.StableJob do
     end
   end
 
-  defp initialize_data(job_id, seed_paths, opts) do
+  defp restore_predecessor(job_id, opts) do
+    with {:ok, exists} <- RedisStore.job_definition_exists?(job_id) do
+      if exists do
+        with {:ok, previous} <- get(job_id),
+             journal when is_map(journal) <- Keyword.get(opts, :relocation),
+             true <- journal["replaces_revision"] == previous["revision"],
+             true <-
+               MirrorNeuron.Runtime.JobRelocation.replaceable_destination?(previous, journal) do
+          {:ok, path} = JobData.path(job_id)
+          identity = File.read(Path.join(path, ".mn-restore-identity"))
+
+          if match?({:ok, _}, identity) or identity == {:error, :enoent},
+            do: {:ok, Map.put(previous, :restore_data_identity, identity)},
+            else: identity
+        else
+          _ -> {:error, :job_already_exists}
+        end
+      else
+        {:ok, nil}
+      end
+    end
+  end
+
+  defp initialize_data(job_id, seed_paths, opts, previous) do
     case Keyword.get(opts, :restored_data_dir) do
-      nil -> JobData.initialize(job_id, seed_paths)
-      staging -> JobData.install_restore(job_id, staging, Keyword.fetch!(opts, :restore_identity))
+      nil ->
+        JobData.initialize(job_id, seed_paths)
+
+      staging ->
+        replacement =
+          if previous do
+            [replace_identity: previous[:restore_data_identity]]
+          else
+            []
+          end
+
+        JobData.install_restore(
+          job_id,
+          staging,
+          Keyword.fetch!(opts, :restore_identity),
+          replacement
+        )
     end
   end
 

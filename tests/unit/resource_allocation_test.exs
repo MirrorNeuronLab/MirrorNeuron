@@ -69,6 +69,7 @@ defmodule MirrorNeuron.Runtime.ResourceAllocationTest do
 
   test "shared weights are charged once but private contexts remain reserved" do
     cap = Map.put(capacity(), "shared_model_keys", %{"gpu-0" => ["engine-digest-settings"]})
+
     req =
       request(16384)
       |> put_in(["devices", Access.at(0), "ids"], ["gpu-0"])
