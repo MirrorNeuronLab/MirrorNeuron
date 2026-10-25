@@ -102,7 +102,7 @@ defmodule MirrorNeuron.Backup.DurableJob do
         {:ok, exists} = RedisStore.job_definition_exists?(job_id)
 
         if exists and
-             not get_in(Keyword.get(relocation_opts, :relocation, %{}), ["replaces_revision"]),
+             is_nil(get_in(Keyword.get(relocation_opts, :relocation, %{}), ["replaces_revision"])),
            do: raise(ArgumentError, "restore job already exists")
 
         try do
