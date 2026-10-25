@@ -378,11 +378,18 @@ defmodule MirrorNeuron.Runtime.JobRelocation do
         target_node: journal["target_node"] || request.target_node
     }
 
-    case FederationClient.call(node, :relocate_job, remote) do
-      {:ok, response} -> Jason.decode(response.result_json)
-      error -> error
+    FederationClient.call(node, :relocate_job, remote) |> decode_peer_receipt()
+  end
+
+  @doc false
+  def decode_peer_receipt(%Mirrorneuron.Job.V1.JsonResponse{result_json: json}) do
+    case Jason.decode(json) do
+      {:ok, receipt} when is_map(receipt) -> {:ok, receipt}
+      _ -> {:error, :invalid_relocation_state}
     end
   end
+
+  def decode_peer_receipt(_), do: {:error, :invalid_relocation_state}
 
   defp matching?(journal, request) when is_map(journal),
     do:

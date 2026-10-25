@@ -24,4 +24,16 @@ defmodule MirrorNeuron.Runtime.JobRelocationTest do
 
     refute digest == JobRelocation.data_digest(Map.delete(files, "history/history.json"))
   end
+
+  test "decodes the federation client's response struct and rejects malformed receipts" do
+    assert {:ok, %{"status" => "relocation_staged"}} =
+             JobRelocation.decode_peer_receipt(%Mirrorneuron.Job.V1.JsonResponse{
+               result_json: ~s({"status":"relocation_staged"})
+             })
+
+    assert {:error, :invalid_relocation_state} =
+             JobRelocation.decode_peer_receipt(%Mirrorneuron.Job.V1.JsonResponse{
+               result_json: "[]"
+             })
+  end
 end

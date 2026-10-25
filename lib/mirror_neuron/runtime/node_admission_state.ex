@@ -202,7 +202,8 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionState do
         {:error, :stale_node_reservation}
 
       held != nil or id in state["legacy"] ->
-        {:ok, put_in(state, ["requests", token], id), %{"status" => "acquired", "token" => token}}
+        {:ok, put_in(state, ["requests", token], id),
+         %{"status" => "acquired", "token" => token, "allocation" => (held || %{})["allocation"]}}
 
       id == "" ->
         entry = %{

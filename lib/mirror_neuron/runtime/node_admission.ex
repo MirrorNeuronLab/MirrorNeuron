@@ -483,15 +483,21 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
 
     if is_binary(run_id) and byte_size(run_id) <= 160 and is_binary(token) and
          Regex.match?(~r/\A[a-f0-9]{32}\z/, token) do
-      result =
-        mutate(action, %{
-          "run_id" => run_id,
-          "token" => token,
-          "generation" => attrs["generation"]
-        })
+      request = attrs["request"] || %{"mode" => "exclusive_node"}
 
-      wake()
-      result
+      with {:ok, normalized} <-
+             ResourceAllocation.request(%{"policies" => %{"resource_allocation" => request}}) do
+        result =
+          mutate(action, %{
+            "run_id" => run_id,
+            "token" => token,
+            "request" => normalized,
+            "generation" => attrs["generation"]
+          })
+
+        wake()
+        result
+      end
     else
       {:error, :invalid_node_admission_command}
     end

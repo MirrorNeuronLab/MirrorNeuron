@@ -39,7 +39,9 @@ only with a matching native resident-engine attestation covering model, engine
 and context settings. Attestation currently requires one physical GPU; multi-GPU
 hosts retain full weight charges. Docker workers bind reserved CUDA device IDs;
 agent selections are translated into the restricted container's ordinal space.
-Running workers cannot be reassigned.
+Running workers cannot be reassigned. Shared managed-model requests must fit the
+run's reserved memory and single physical GPU. Multi-GPU engine binding is not
+attested, so those managed-model requests require an exclusive profile.
 
 Ports and overlapping writable host volumes remain exclusive. Shared profiles
 currently require explicit ports. Prepared workers and model services must honor
