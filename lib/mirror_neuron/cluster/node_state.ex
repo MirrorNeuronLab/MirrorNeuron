@@ -245,11 +245,11 @@ defmodule MirrorNeuron.Cluster.NodeState do
   defp admission_advertisement do
     case MirrorNeuron.Runtime.NodeAdmission.snapshot() do
       {:ok, state} ->
-        Map.take(state, ["holder", "queue", "generation", "legacy"])
-        |> Map.put("capability", "exclusive_run_v1")
+        Map.take(state, ["reservations", "queue", "generation", "legacy"])
+        |> Map.put("capability", "resource_admission_v2")
 
       _ ->
-        %{"capability" => "exclusive_run_v1", "state" => "unavailable"}
+        %{"capability" => "resource_admission_v2", "state" => "unavailable"}
     end
   end
 
