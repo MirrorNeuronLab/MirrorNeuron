@@ -956,19 +956,24 @@ Core; API and SDK supervision adapters do not infer completed transitions.
 Checkpoint artifact helpers have a 60-second execution bound. Within one inspection, identical complete artifact descriptors share verification; distinct descriptors and subsequent inspections retain independent hash, size, confinement, receipt and replay checks. A failed integrity capture still blocks checkpoint retry.
 
 
-## Exclusive run admission per PC
+## Resource admission per PC
 
-The owner Core admits at most one active run per physical PC, including CPU-only
-runs. Its durable node claim reserves CPU, memory and all advertised GPUs for the
-run identity. Several workers and models reuse that claim. Different PCs advance
-independently. Resource requirements still validate hardware fit; GPU count is
-not multiplied by the number of models in one run.
+The owner Core admits compatible runs against declared CPU, RAM, disk and GPU
+budgets. Missing profiles preserve whole-PC exclusivity; shared profiles must
+cover their workers and peak model use. GPU constraints select compatible devices,
+including per-device shared or exclusive reservations. Native attestation is
+required before resident shared weights reduce a reservation. The executable
+policy, headroom and unified-memory accounting are defined in
+[Run resource allocation](docs/resource-allocation.md).
 
-Starts atomically join the owner-local FIFO or claim the idle PC through a Redis
-version compare-and-set. An accepted busy start returns `status: queued`, an
+Starts atomically reserve capacity through a Redis version compare-and-set.
+Busy manual `start_now` requests return `accepted: false` before execution
+persistence. Explicit `enqueue_if_busy` requests and scheduled occurrences can
+join the owner-local durable queue. An accepted busy start returns `status: queued`, an
 `admission` receipt with `queue_id`, `owner_node`, friendly node label, queue
 position and blocker, and no execution PID. It starts automatically without
-confirmation. Existing queued work cannot be bypassed. Queued requests retain
+confirmation. Bounded backfill protects older work after three bypasses while
+allowing requests that fit the remaining capacity. Queued requests retain
 their physical run ID, stable job, manifest, staged inputs, configuration hash,
 bundle fingerprint and data generation. Repeated starts use the existing
 idempotency identity. Reconciliation repairs requests persisted just before a
@@ -982,7 +987,7 @@ that same request identity. Changed payloads or unrelated run IDs remain conflic
 fencing generations; `NodeAdmissionState` owns deterministic transitions. State
 is stored at the owner under the node-admission namespace. Availability snapshots
 never grant admission. Remote starts use authenticated federation and require
-`exclusive_run_v1`; the owner also requires that capability from its native SDK.
+`resource_admission_v2`; the owner also requires that capability from its native SDK.
 Workers, managed models, embeddings and model fallback stay on that PC. Hosted
 API providers remain supported. Native worker and inference gateways check the
 claim and generation. Model engines load only after admission and cold model
@@ -994,7 +999,7 @@ after a terminal run has stopped commands/containers, drained native inference
 leases and released run-owned GPU residency. A missing process, timeout, owner
 partition or stale advertisement cannot release it. Pre-existing distributed
 runs remain protected on their participating nodes through confirmed cleanup.
-Explicit checkpoint retries reacquire the same PC or wait in its FIFO queue.
+Explicit checkpoint retries reacquire capacity on the same PC or explicitly queue.
 Queued retries preserve their checkpoint selection and idempotency receipt;
 dispatch verifies the checkpoint and original inputs again before a new attempt.
 
@@ -1002,7 +1007,7 @@ The node queue is projected as `resource_wait` schedules named `queue_<run_id>`.
 `ListSchedules`, `GetSchedule`, `UpdateSchedule`, and `DeleteSchedule` expose these
 through the authenticated Job service. Deleting a queue schedule cancels only an
 unstarted execution. Updating `run_at` defers that same execution until a future
-ISO timestamp; it holds no resources and joins FIFO when due. Revision checks and
+ISO timestamp; it holds no resources and becomes eligible when due. Revision checks and
 the admission start gate protect cancellation/scheduling races. Scheduled
 occurrences use the same queue and preserve occurrence deduplication/overlap
 rules. Changed definitions, revoked owner credentials, or missing inputs fail for review and allow the next

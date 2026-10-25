@@ -663,21 +663,23 @@ The SDK selects meaningful activity for the CLI, API, desktop and web monitors;
 raw events remain available for diagnostics.
 
 
-### Automatic waiting for a busy PC
+### Resource availability and waiting for a busy PC
 
 Resource node reports include `cpu_load_average_1m` from the native hardware
 snapshot. Missing samples are null. This is one-minute CPU load, distinct from
 CPU utilization and reserved capacity.
 
-A PC owns one active run, with all its GPUs, CPU and memory shared by that run's
-workers/models. A second start is accepted into its durable FIFO and starts
-automatically after terminal cleanup. `paused` retains the reservation. Read
+A run reserves its declared CPU, RAM, disk and compatible GPU capacity. Compatible
+shared runs can use the same PC; a definition without a resource profile retains
+whole-PC exclusivity. Manual starts check availability first and require an
+explicit queue choice when busy. Queued work starts after verified cleanup frees
+enough capacity. `paused` retains the reservation. Read
 `admission` on the Run and inspect its `queue_<run_id>` schedule; cancelling that
 schedule cannot stop a run that has already begun. Core and native SDK peers must
-advertise `exclusive_run_v1`. See the exclusive run admission section of SPEC.md.
-Federation refreshes carry each PC's current holder and queue into node/resource
-reports, so new co-workers prefer an idle compatible PC. Existing prepared Jobs
-keep their owner and its local resources; refreshing capacity does not move them.
+advertise `resource_admission_v2`. See [Run resource allocation](docs/resource-allocation.md).
+Federation refreshes carry each PC's reservations and queue into node/resource
+reports. Existing prepared Jobs keep their owner until an explicit idle Job move
+transfers the definition and data; refreshing capacity does not move them.
 Keyed starts retain Redis-backed request identities and receipts across Core
 restart, including reconciliation after an interrupted receipt write. Queue
 schedule revisions advance on mutation so stale cancel/reschedule controls fail.
@@ -685,7 +687,7 @@ schedule revisions advance on mutation so stale cancel/reschedule controls fail.
 After admission, SDK-staged inputs may still be replicating to the owner PC.
 The job coordinator keeps the run `pending`, publishes `submission_storage_waiting`,
 and starts work automatically after its inventory and every file pass verification.
-Both immediate and FIFO-queued starts use this same gate. Incomplete replication
+Both immediate and queued starts use this same gate. Incomplete replication
 does not request human review or fail admission; invalid metadata and the existing
 `MN_SHARED_STORAGE_READY_TIMEOUT_SECONDS` deadline still fail before any input is
 delivered. Cancelling while waiting prevents a later start.
