@@ -658,6 +658,8 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
 
   defp reconcile_holder(holder) do
     MirrorNeuron.Runtime.StableJob.with_start_gate(gate_id(holder["run_id"]), fn ->
+      missing = "job #{holder["run_id"]} was not found"
+
       case store().fetch_job(holder["run_id"]) do
         {:ok, %{"status" => status} = job} when status in @terminal ->
           unless recovering?(job) do
@@ -670,7 +672,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
             end
           end
 
-        {:error, :not_found} ->
+        {:error, reason} when reason == :not_found or reason == missing ->
           # No worker dispatch precedes the durable execution record. The start
           # gate proves that an interrupted uncommitted claim is safe to retire.
           if holder["committed"] == false,

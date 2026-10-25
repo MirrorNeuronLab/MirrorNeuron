@@ -113,13 +113,15 @@ defmodule MirrorNeuron.Runtime.JobRelocation do
          {:ok, source} <- peer(request.source_node, "inspect", request, %{}),
          true <- matching?(source["relocation"], request),
          true <- source["status"] in ["relocating", "relocated"] do
+      missing = "job #{request.job_id} was not found"
+
       case StableJob.get(request.job_id) do
         {:ok, destination} ->
           if matching?(destination["relocation"], request),
             do: prepare_destination(request, source["relocation"], destination),
             else: {:error, :job_already_exists}
 
-        {:error, :not_found} ->
+        {:error, ^missing} ->
           prepare_destination(request, source["relocation"], nil)
 
         error ->

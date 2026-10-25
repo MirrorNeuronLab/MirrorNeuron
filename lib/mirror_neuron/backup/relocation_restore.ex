@@ -49,13 +49,15 @@ defmodule MirrorNeuron.Backup.RelocationRestore do
          run["status"] not in ~w(completed failed cancelled),
        do: raise(ArgumentError, "relocation history must contain terminal runs")
 
+    missing = "job #{id} was not found"
+
     case RedisStore.fetch_job(id) do
       {:ok, existing} ->
         if existing["stable_job_id"] != definition["job_id"] or
              existing["status"] not in ~w(completed failed cancelled),
            do: raise(ArgumentError, "relocation history conflicts with an existing run")
 
-      {:error, :not_found} ->
+      {:error, ^missing} ->
         :ok
 
       _ ->
