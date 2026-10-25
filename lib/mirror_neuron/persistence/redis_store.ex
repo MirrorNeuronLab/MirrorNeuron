@@ -958,6 +958,57 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
+  @doc false
+  def create_job_definition(job_id, definition) when is_map(definition) do
+    with :ok <- validate_identifier("job_id", job_id),
+         {:ok, result} <-
+           command([
+             "EVAL",
+             """
+             if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
+             redis.call('SET', KEYS[1], ARGV[1])
+             redis.call('SADD', KEYS[2], ARGV[2])
+             return 1
+             """,
+             "2",
+             key("job-definition", job_id),
+             key(@job_definitions_set),
+             Jason.encode!(definition),
+             job_id
+           ]) do
+      case result do
+        1 -> with :ok <- wait_for_replicas(), do: {:ok, definition}
+        0 -> {:error, :job_already_exists}
+        _ -> {:error, :invalid_definition_store_result}
+      end
+    end
+  end
+
+  @doc false
+  def compare_job_definition(job_id, revision, definition) when is_map(definition) do
+    with :ok <- validate_identifier("job_id", job_id),
+         {:ok, result} <-
+           command([
+             "EVAL",
+             """
+             local prior = redis.call('GET', KEYS[1])
+             if not prior or tonumber(cjson.decode(prior).revision) ~= tonumber(ARGV[1]) then return 0 end
+             redis.call('SET', KEYS[1], ARGV[2])
+             return 1
+             """,
+             "1",
+             key("job-definition", job_id),
+             to_string(revision),
+             Jason.encode!(definition)
+           ]) do
+      case result do
+        1 -> with :ok <- wait_for_replicas(), do: {:ok, definition}
+        0 -> {:error, :revision_mismatch}
+        _ -> {:error, :invalid_definition_store_result}
+      end
+    end
+  end
+
   def persist_job_definition(_job_id, _definition),
     do: {:error, "job definition must be an object"}
 

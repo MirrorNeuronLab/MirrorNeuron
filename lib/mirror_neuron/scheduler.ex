@@ -132,6 +132,7 @@ defmodule MirrorNeuron.Scheduler do
            |> apply_coordination_store_eligibility(coordination_store),
          nodes <- exclude_nodes(nodes, Keyword.get(opts, :exclude_nodes, [])),
          nodes <- exclusive_capacity(nodes, opts),
+         nodes <- allocated_capacity(nodes, Keyword.get(opts, :run_allocation)),
          :ok <- ensure_coordination_store(nodes, coordination_store),
          :ok <- ensure_nodes(nodes),
          blob_refs <- BlobRef.collect(Manifest.to_map(manifest)),
@@ -189,6 +190,19 @@ defmodule MirrorNeuron.Scheduler do
       "generated_at" => MirrorNeuron.Runtime.timestamp()
     }
   end
+
+  defp allocated_capacity(nodes, %{"mode" => "shared"} = allocation) do
+    allowed = MapSet.new(Enum.map(allocation["devices"] || [], & &1["id"]))
+
+    Enum.map(nodes, fn node ->
+      devices = Enum.filter(node["devices"], &MapSet.member?(allowed, &1["id"]))
+      capacity = Map.merge(node["capacity"], allocation["resources"])
+      capacity = Map.put(capacity, "gpu_count", length(devices))
+      node |> Map.put("devices", devices) |> Map.put("capacity", capacity)
+    end)
+  end
+
+  defp allocated_capacity(nodes, _), do: nodes
 
   defp exclusive_capacity(nodes, opts) do
     if Keyword.get(opts, :exclusive_run, false) and

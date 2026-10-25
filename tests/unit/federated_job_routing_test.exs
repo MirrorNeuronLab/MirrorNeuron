@@ -3,6 +3,18 @@ defmodule MirrorNeuron.Cluster.FederatedJobRoutingTest do
 
   alias MirrorNeuron.Cluster.FederatedJobRouting
 
+  test "a relocated source redirects the job but keeps historical runs local" do
+    assert FederatedJobRouting.job_owner("job-moved",
+             local_lookup: fn _ ->
+               {:ok, %{"status" => "relocated", "owner_node" => "target@pc"}}
+             end
+           ) == "target@pc"
+
+    assert FederatedJobRouting.run_owner("old-run",
+             local_lookup: fn _ -> {:ok, %{"status" => "completed"}} end
+           ) == nil
+  end
+
   test "keeps a locally owned job local" do
     owner =
       FederatedJobRouting.job_owner("job-local",

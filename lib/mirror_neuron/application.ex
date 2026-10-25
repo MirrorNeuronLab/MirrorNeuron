@@ -65,6 +65,7 @@ defmodule MirrorNeuron.Application do
               MirrorNeuron.Bundle.Manager,
               MirrorNeuron.Runtime.LocalRecovery,
               MirrorNeuron.Runtime.NodeAdmission,
+              MirrorNeuron.Runtime.JobRelocationReconciler,
               MirrorNeuron.Bundle.Scanner
             ]
       end

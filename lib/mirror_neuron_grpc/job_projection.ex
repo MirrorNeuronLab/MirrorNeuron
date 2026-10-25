@@ -7,7 +7,7 @@ defmodule MirrorNeuron.Grpc.JobProjection do
   @summary_fields ~w(
     job_id blueprint_id graph_id job_name type owner_node status revision data_generation
     latest_run_id created_at updated_at bundle_ref retired_definition_resources
-    resource_cleanup_errors
+    resource_cleanup_errors relocation
   )
   @detail_fields @summary_fields ++
                    ~w(resolved_configuration schedules schedule_ids storage)
@@ -129,7 +129,10 @@ defmodule MirrorNeuron.Grpc.JobProjection do
 
   defp put_counts(projected, definition) do
     projected
-    |> Map.put("run_count", list_count(definition["run_ids"]))
+    |> Map.put(
+      "run_count",
+      list_count(definition["run_ids"]) + list_count(definition["historical_run_ids"])
+    )
     |> Map.put("schedule_count", list_count(definition["schedule_ids"]))
   end
 
@@ -140,7 +143,7 @@ defmodule MirrorNeuron.Grpc.JobProjection do
   defp put_recent_run_ids(projected, definition) do
     recent =
       definition
-      |> Map.get("run_ids", [])
+      |> then(&((&1["historical_run_ids"] || []) ++ (&1["run_ids"] || [])))
       |> Enum.take(-5)
       |> Enum.reverse()
 

@@ -1051,3 +1051,7 @@ The public workflow definition preserves the bounded, SDK-compiled
 `workflow.service_lifecycle` contract (`mn.service.workflow.v1`), containing
 startup/service/shutdown phase assignments and required monitored services.
 It remains a presentation contract: serving does not complete ledger steps.
+
+## Resource admission and ownership transfer
+
+[Run resource allocation](docs/resource-allocation.md) defines the executable policy and lifecycle contract. Admission reserves before execution persistence; uncertain cleanup cannot fund another start. Transfers require a frozen source, verified inactive destination and ownership commit before activation.

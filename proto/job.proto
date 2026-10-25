@@ -12,6 +12,8 @@ service JobService {
   rpc DeleteJob (DeleteJobRequest) returns (JsonResponse);
   rpc ExportJobBackup (JobRequest) returns (stream JobBackupChunk);
   rpc RestoreJobBackup (stream JobBackupChunk) returns (JsonResponse);
+  rpc CheckRunAdmission (RunAdmissionRequest) returns (JsonResponse);
+  rpc RelocateJob (JobRelocationRequest) returns (JsonResponse);
   rpc StartRun (StartRunRequest) returns (JsonResponse);
   rpc ListRuns (JobRequest) returns (JsonResponse);
   rpc GetRun (RunRequest) returns (JsonResponse);
@@ -82,6 +84,13 @@ message StartRunRequest {
   uint32 version = 4;
   string idempotency_key = 5;
   bool replace_existing_run = 6;
+  string admission_policy = 7;
+}
+
+message RunAdmissionRequest {
+  string job_id = 1;
+  string run_id = 2;
+  uint32 version = 3;
 }
 
 message RunRequest {
@@ -89,6 +98,7 @@ message RunRequest {
   uint32 version = 2;
   // CancelRun only: reject if the queued request has already been admitted.
   bool queued_only = 3;
+  string admission_policy = 4;
 }
 
 message PlanRunRetryRequest {
@@ -104,6 +114,7 @@ message RetryRunRequest {
   string checkpoint_revision = 4;
   string idempotency_key = 5;
   uint32 version = 6;
+  string admission_policy = 7;
 }
 
 message DeleteRunRequest {
@@ -149,6 +160,15 @@ message GetJobResponseTurnRequest {
   string job_id = 1;
   string turn_id = 2;
   uint32 version = 3;
+}
+
+message JobRelocationRequest {
+  string job_id = 1;
+  string action = 2;
+  string target_node = 3;
+  string source_node = 4;
+  string transfer_id = 5;
+  uint32 version = 6;
 }
 
 message JsonResponse {

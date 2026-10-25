@@ -48,6 +48,74 @@ defmodule MirrorNeuron.JobData do
     end
   end
 
+  @doc false
+  def with_restore_staging(callback) do
+    with :ok <- prepare_root() do
+      staging =
+        Path.join(
+          root(),
+          ".restore-" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+        )
+
+      File.mkdir_p!(staging)
+
+      try do
+        callback.(staging)
+      after
+        remove_tree(staging)
+      end
+    end
+  end
+
+  @doc false
+  def install_restore(job_id, staging, identity) do
+    with :ok <- prepare_root(),
+         {:ok, destination} <- path(job_id),
+         true <-
+           Path.dirname(staging) == root() and
+             Regex.match?(~r/\A\.restore-[a-f0-9]{32}\z/, Path.basename(staging)),
+         true <- is_binary(identity) and byte_size(identity) in 1..300,
+         :ok <- reject_symlinks_in_tree(staging, :job_data_symlink_not_allowed),
+         :ok <- reject_symlink(destination) do
+      marker = ".mn-restore-identity"
+
+      cond do
+        File.exists?(destination) ->
+          if File.read(Path.join(destination, marker)) == {:ok, identity},
+            do: {:ok, destination},
+            else: {:error, :job_data_already_exists}
+
+        true ->
+          with :ok <- File.write(Path.join(staging, marker), identity),
+               :ok <- handoff_restore(staging),
+               :ok <- File.rename(staging, destination),
+               do: {:ok, destination}
+      end
+    else
+      false -> {:error, :invalid_restore_staging}
+      error -> error
+    end
+  end
+
+  defp handoff_restore(staging) do
+    # These are newly received, verified files, never an existing user's tree.
+    with {:ok, %File.Stat{uid: uid, gid: gid}} <- File.stat(Path.dirname(root())) do
+      Enum.reduce_while(
+        [staging | Path.wildcard(Path.join(staging, "**/*"), match_dot: true)],
+        :ok,
+        fn path, :ok ->
+          with {:ok, stat} <- File.lstat(path),
+               :ok <- maybe_chown(path, stat.uid, uid),
+               :ok <- maybe_chgrp(path, stat.gid, gid) do
+            {:cont, :ok}
+          else
+            error -> {:halt, error}
+          end
+        end
+      )
+    end
+  end
+
   def delete(job_id) do
     with :ok <- reject_symlink(root()),
          {:ok, job_path} <- path(job_id),

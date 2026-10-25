@@ -10,6 +10,8 @@ defmodule MirrorNeuron.Grpc.JobServer do
         reset_job_data: :ResetJobData,
         delete_job: :DeleteJob,
         export_job_backup: :ExportJobBackup,
+        check_run_admission: :CheckRunAdmission,
+        relocate_job: :RelocateJob,
         start_run: :StartRun,
         list_runs: :ListRuns,
         get_run: :GetRun,

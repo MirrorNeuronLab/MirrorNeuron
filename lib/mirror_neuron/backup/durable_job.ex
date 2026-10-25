@@ -40,11 +40,14 @@ defmodule MirrorNeuron.Backup.DurableJob do
               blob_entries([definition | runs]) ++
               staged_entries(definition) ++ historical_staging_entries(runs)
 
+          inventory = Files.inventory(entries)
+          definition = MirrorNeuron.Runtime.JobRelocation.attest_export(definition, inventory)
+
           backup = %{
             "schema_version" => "mn.backup.v3",
             "created_at" => MirrorNeuron.Runtime.timestamp(),
             "definition" => definition,
-            "files" => Files.inventory(entries),
+            "files" => inventory,
             "restore_policy" => "new_job_no_execution_replay"
           }
 
@@ -78,54 +81,103 @@ defmodule MirrorNeuron.Backup.DurableJob do
 
       job_id = options["job_id"] || "job_" <> JobId.generate(definition["graph_id"])
 
+      relocation_opts =
+        if is_map(options["relocation"]) do
+          {:ok, journal} =
+            MirrorNeuron.Runtime.JobRelocation.verify_restore(
+              job_id,
+              options["relocation"],
+              backup["files"]
+            )
+
+          [relocation: journal]
+        else
+          []
+        end
+
       if JobData.validate_id(job_id) != :ok,
         do: raise(ArgumentError, "invalid restore job identity")
 
-      {:ok, exists} = RedisStore.job_definition_exists?(job_id)
-      if exists, do: raise(ArgumentError, "restore job already exists")
-      {:ok, data_dir} = JobData.initialize(job_id)
+      JobData.with_restore_staging(fn data_dir ->
+        {:ok, exists} = RedisStore.job_definition_exists?(job_id)
+        if exists, do: raise(ArgumentError, "restore job already exists")
 
-      try do
-        copy_contents(Path.join(temp, "job-data"), data_dir)
-        evidence_dir = Path.join([data_dir, ".mn-restore", definition["job_id"]])
-        File.mkdir_p!(evidence_dir)
-        copy_contents(Path.join(temp, "history"), evidence_dir)
-        copy_contents(Path.join(temp, "artifacts"), Path.join(evidence_dir, "artifacts"))
-        copy_contents(Path.join(temp, "staging"), Path.join(evidence_dir, "staging"))
+        try do
+          copy_contents(Path.join(temp, "job-data"), data_dir)
 
-        write_json(
-          evidence_dir,
-          "provenance.json",
-          Map.take(backup, ~w(schema_version created_at definition))
-        )
+          evidence_dir =
+            Path.join(
+              [data_dir, ".mn-restore", definition["job_id"]] ++
+                if(relocation_opts == [], do: [], else: [options["relocation"]["transfer_id"]])
+            )
 
-        install_blobs(temp)
+          File.mkdir_p!(evidence_dir)
+          copy_contents(Path.join(temp, "history"), evidence_dir)
+          copy_contents(Path.join(temp, "artifacts"), Path.join(evidence_dir, "artifacts"))
+          copy_contents(Path.join(temp, "staging"), Path.join(evidence_dir, "staging"))
 
-        case StableJob.create(Path.join(temp, "bundle"),
-               job_id: job_id,
-               resolved_configuration: options["resolved_configuration"] || %{},
-               storage: options["storage"] || %{}
-             ) do
-          {:ok, created} ->
-            restore_schedules!(job_id, Path.join(temp, "history/history.json"))
-            {:ok, saved} = StableJob.get(created["job_id"])
-            {:ok, Map.put(saved, "restored_from_job_id", definition["job_id"])}
+          write_json(
+            evidence_dir,
+            "provenance.json",
+            Map.take(backup, ~w(schema_version created_at definition))
+          )
 
-          {:error, reason} ->
-            JobData.delete(job_id)
-            {:error, reason}
-        end
-      rescue
-        error ->
-          case StableJob.get(job_id) do
-            {:ok, _} -> StableJob.delete(job_id, confirmed: true)
-            _ -> :ok
+          install_blobs(temp)
+
+          case StableJob.create(
+                 Path.join(temp, "bundle"),
+                 relocation_opts ++
+                   [
+                     job_id: job_id,
+                     restored_data_dir: data_dir,
+                     restore_identity: restore_identity(backup, relocation_opts),
+                     resolved_configuration: options["resolved_configuration"] || %{},
+                     storage: options["storage"] || %{}
+                   ]
+               ) do
+            {:ok, created} ->
+              if relocation_opts == [] do
+                restore_schedules!(job_id, Path.join(temp, "history/history.json"))
+              else
+                {:ok, _} = MirrorNeuron.Backup.RelocationRestore.finalize(created)
+              end
+
+              {:ok, saved} = StableJob.get(created["job_id"])
+              {:ok, Map.put(saved, "restored_from_job_id", definition["job_id"])}
+
+            {:error, reason} ->
+              {:error, reason}
           end
+        rescue
+          error ->
+            if relocation_opts == [] do
+              case StableJob.get(job_id) do
+                {:ok, _} -> StableJob.delete(job_id, confirmed: true)
+                _ -> :ok
+              end
+            end
 
-          JobData.delete(job_id)
-          reraise error, __STACKTRACE__
-      end
+            reraise error, __STACKTRACE__
+        end
+      end)
     end)
+  end
+
+  defp restore_identity(backup, relocation_opts) do
+    case Keyword.get(relocation_opts, :relocation) do
+      %{"transfer_id" => id, "data_sha256" => digest} ->
+        "relocation:" <> id <> ":" <> digest
+
+      _ ->
+        :crypto.hash(
+          :sha256,
+          :erlang.term_to_binary(
+            {backup["definition"],
+             MirrorNeuron.Runtime.JobRelocation.data_digest(backup["files"])}
+          )
+        )
+        |> Base.encode16(case: :lower)
+    end
   end
 
   defp restore_schedules!(job_id, path) do

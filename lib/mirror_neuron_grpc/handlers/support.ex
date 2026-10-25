@@ -136,6 +136,22 @@ defmodule MirrorNeuron.Grpc.Handlers.Support do
 
   defp runtime_error_status(:confirmation_required), do: GRPC.Status.failed_precondition()
   defp runtime_error_status(:job_not_active), do: GRPC.Status.failed_precondition()
+
+  defp runtime_error_status(reason)
+       when reason in [
+              :relocation_requires_idle_job,
+              :relocation_cleanup_pending,
+              :pause_schedules_before_relocation,
+              :relocation_requires_portable_storage,
+              :relocation_target_is_owner,
+              :invalid_relocation_state,
+              :relocation_already_committed,
+              :relocation_verification_failed,
+              :job_relocation_in_progress
+            ],
+       do: GRPC.Status.failed_precondition()
+
+  defp runtime_error_status(:invalid_relocation_request), do: GRPC.Status.invalid_argument()
   defp runtime_error_status({:run_retry_blocked, _}), do: GRPC.Status.failed_precondition()
   defp runtime_error_status({:invalid_run_retry, _}), do: GRPC.Status.invalid_argument()
 
@@ -156,6 +172,13 @@ defmodule MirrorNeuron.Grpc.Handlers.Support do
     do: GRPC.Status.unavailable()
 
   defp runtime_error_status({:agent_unavailable, _details}), do: GRPC.Status.unavailable()
+  defp runtime_error_status({:admission_blocked, _}), do: GRPC.Status.resource_exhausted()
+
+  defp runtime_error_status({:resource_requirement_unmet, _}),
+    do: GRPC.Status.failed_precondition()
+
+  defp runtime_error_status(:invalid_admission_policy), do: GRPC.Status.invalid_argument()
+  defp runtime_error_status(:invalid_resource_allocation), do: GRPC.Status.invalid_argument()
   defp runtime_error_status({:backpressure, _details}), do: GRPC.Status.resource_exhausted()
   defp runtime_error_status({:retry_later, _details}), do: GRPC.Status.resource_exhausted()
   defp runtime_error_status({:invalid_live_input, _reason}), do: GRPC.Status.invalid_argument()

@@ -171,7 +171,8 @@ defmodule MirrorNeuron.Runtime.RunRetry do
             start.(
               MirrorNeuron.Runtime.NodeAdmission.pin(
                 prepared.bundle.manifest,
-                receipt["generation"]
+                receipt["generation"],
+                receipt["allocation"]
               )
             )
           end

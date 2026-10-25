@@ -37,6 +37,9 @@ defmodule MirrorNeuron.Cluster.FederatedJobRouting do
 
   defp owner(resource_id, dependencies) do
     case dependencies[:local_lookup].(resource_id) do
+      {:ok, %{"status" => "relocated", "owner_node" => owner}} ->
+        owner
+
       {:ok, _resource} ->
         nil
 

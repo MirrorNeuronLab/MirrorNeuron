@@ -14,6 +14,16 @@ defmodule MirrorNeuron.Scheduler.AdmissionProblem do
       })
   end
 
+  def encode_rejection(blockers) do
+    "\nmn_admission_v1:" <>
+      Jason.encode!(%{
+        "blockers" => Enum.take(blockers, 100),
+        "truncated" => length(blockers) > 100,
+        "accepted" => false,
+        "status" => "runnable_later"
+      })
+  end
+
   def blocker(code, node, index, measurements \\ %{}) do
     %{"code" => code, "node_index" => index}
     |> Map.merge(measurements)

@@ -710,3 +710,8 @@ SDK/blocks and Core support together; offline tests do not qualify a live rollou
 Public workflow definitions retain the SDK's service startup/shutdown metadata
 so clients can finish startup progress when a live service begins serving.
 The actual service step remains running until its owning lifecycle ends.
+
+Resource-aware admission, queueing, reclamation and idle Job transfers are described in [Run resource allocation](docs/resource-allocation.md).
+
+Regenerate the Job wire bindings in Core and the sibling SDK with
+`bash scripts/generate_job_proto.sh ../mn-python-sdk` (requires protoc and uv).

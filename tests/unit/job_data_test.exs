@@ -132,4 +132,49 @@ defmodule MirrorNeuron.JobDataTest do
     assert {:error, :seed_symlink_not_allowed} =
              JobData.initialize("job_linked_seed", %{"knowledge" => linked})
   end
+
+  test "restores atomically and never overwrites another restore or user data" do
+    assert {:ok, destination} =
+             JobData.with_restore_staging(fn staging ->
+               File.write!(Path.join(staging, "input.txt"), "verified")
+               JobData.install_restore("restored-job", staging, "transfer-one")
+             end)
+
+    assert File.read!(Path.join(destination, "input.txt")) == "verified"
+    File.write!(Path.join(destination, "input.txt"), "new user work")
+
+    assert {:ok, ^destination} =
+             JobData.with_restore_staging(fn staging ->
+               File.write!(Path.join(staging, "input.txt"), "late retry")
+               JobData.install_restore("restored-job", staging, "transfer-one")
+             end)
+
+    assert {:error, :job_data_already_exists} =
+             JobData.with_restore_staging(fn staging ->
+               JobData.install_restore("restored-job", staging, "another-transfer")
+             end)
+
+    assert File.read!(Path.join(destination, "input.txt")) == "new user work"
+  end
+
+  test "failed restore cleans only staging and refuses symlinks", %{root: root} do
+    assert {:ok, destination} = JobData.initialize("existing-job")
+    File.write!(Path.join(destination, "user.txt"), "keep")
+
+    assert {:error, :job_data_symlink_not_allowed} =
+             JobData.with_restore_staging(fn staging ->
+               File.ln_s!(destination, Path.join(staging, "escape"))
+               JobData.install_restore("new-job", staging, "transfer")
+             end)
+
+    assert File.read!(Path.join(destination, "user.txt")) == "keep"
+    refute File.exists?(Path.join(root, "new-job"))
+    assert Path.wildcard(Path.join(root, ".restore-*"), match_dot: true) == []
+
+    assert_raise RuntimeError, fn ->
+      JobData.with_restore_staging(fn _ -> raise "interrupted" end)
+    end
+
+    assert Path.wildcard(Path.join(root, ".restore-*"), match_dot: true) == []
+  end
 end

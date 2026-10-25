@@ -109,6 +109,16 @@ defmodule MirrorNeuron.Runtime do
     "MN_SERVICE_RUN_EXISTS: type: service job already has a run (#{Enum.join(run_ids, ", ")}); resume, pause, cancel, delete, or explicitly replace it"
   end
 
+  def error_message({:admission_blocked, receipt}) do
+    "placement_failed: resources are currently unavailable" <>
+      MirrorNeuron.Scheduler.AdmissionProblem.encode_rejection(receipt["blockers"] || [])
+  end
+
+  def error_message({:resource_requirement_unmet, blockers}) do
+    "placement_failed: resource requirements are not met" <>
+      MirrorNeuron.Scheduler.AdmissionProblem.encode(blockers)
+  end
+
   def error_message(:replacement_requires_service_job),
     do: "replace_existing_run is valid only for a type: service job"
 
@@ -170,32 +180,69 @@ defmodule MirrorNeuron.Runtime do
   end
 
   defp accept_job_on_node(job_id, manifest, opts, manifest_ref, reliability) do
-    case Scheduler.plan(manifest, Keyword.merge(opts, jobs: [], exclusive_run: true)) do
-      {:ok, scheduler_plan} ->
-        with :ok <-
-               persist_initial_job(
-                 job_id,
-                 manifest,
-                 manifest_ref,
-                 reliability,
-                 scheduler_plan,
-                 Keyword.put(opts, :admission_status, "queued")
-               ),
-             {:ok, job} <- RedisStore.fetch_job(job_id),
-             {:ok, admission} <- NodeAdmission.submit(job) do
-          if admission["state"] == "queued" do
-            NodeAdmission.wake()
-            {:ok, job_id, nil}
-          else
-            case NodeAdmission.dispatch(%{"run_id" => job_id}) do
-              {:error, {:admission_wait, _}} -> {:ok, job_id, nil}
-              result -> result
-            end
-          end
-        end
+    policy =
+      Keyword.get(
+        opts,
+        :admission_policy,
+        if(Keyword.has_key?(opts, :schedule_metadata), do: "enqueue_if_busy", else: "start_now")
+      )
 
-      {:error, reason} ->
+    with {:ok, scheduler_plan} <-
+           Scheduler.plan(manifest, Keyword.merge(opts, jobs: [], exclusive_run: true)),
+         {:ok, admission} <-
+           MirrorNeuron.Runtime.StableJob.with_start_gate(NodeAdmission.gate_id(job_id), fn ->
+             job = %{
+               "job_id" => job_id,
+               "stable_job_id" => Keyword.get(opts, :stable_job_id),
+               "job_name" => manifest.job_name,
+               "manifest" => MirrorNeuron.Manifest.to_map(manifest),
+               "submitted_at" => timestamp()
+             }
+
+             with {:ok, admission} <- NodeAdmission.reserve(job, policy) do
+               admission = Map.put(admission, "authority_epoch", NodeAdmission.authority_epoch())
+
+               persisted =
+                 persist_initial_job(
+                   job_id,
+                   manifest,
+                   manifest_ref,
+                   reliability,
+                   scheduler_plan,
+                   opts
+                   |> Keyword.put(:admission_status, "queued")
+                   |> Keyword.put(:admission, admission)
+                 )
+
+               case persisted do
+                 :ok ->
+                   {:ok, admission}
+
+                 error ->
+                   if admission["state"] == "preparing",
+                     do: NodeAdmission.retire(job_id),
+                     else: NodeAdmission.cancel_uncommitted(job_id)
+
+                   error
+               end
+             end
+           end) do
+      NodeAdmission.wake()
+
+      if admission["state"] == "queued" do
+        {:ok, job_id, nil}
+      else
+        case NodeAdmission.dispatch(%{"run_id" => job_id}) do
+          {:error, {:admission_wait, _}} -> {:ok, job_id, nil}
+          result -> result
+        end
+      end
+    else
+      {:error, reason} when is_binary(reason) ->
         maybe_pause_placement_failure(job_id, manifest, manifest_ref, reliability, opts, reason)
+
+      error ->
+        error
     end
   end
 
@@ -224,11 +271,15 @@ defmodule MirrorNeuron.Runtime do
         admission: admission
       ]
 
-      manifest = NodeAdmission.pin(manifest, admission["generation"])
+      manifest = NodeAdmission.pin(manifest, admission["generation"], admission["allocation"])
       opts = Keyword.put(opts, :job_bundle, %{bundle | manifest: manifest})
       reliability = ReliabilityStrategy.resolve(manifest, manifest_ref: job["manifest_ref"])
 
-      case Scheduler.plan(manifest, jobs: [], exclusive_run: true, require_live_capacity: true) do
+      case Scheduler.plan(manifest,
+             jobs: [],
+             exclusive_run: true,
+             run_allocation: admission["allocation"]
+           ) do
         {:ok, plan} ->
           start_planned_job(
             job["job_id"],

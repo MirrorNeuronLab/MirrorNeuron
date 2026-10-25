@@ -29,6 +29,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
       end)
     end
 
+    def fetch_resource_limits, do: {:ok, %{}}
     def list_jobs, do: {:ok, []}
     def fetch_job(_), do: {:error, :not_found}
 
@@ -56,9 +57,19 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
 
   setup do
     start_supervised!(Store)
-    keys = [:node_admission_store, :cluster_node_adapter, :coordination_store]
+    MirrorNeuron.Cluster.Hardware.update_snapshot(%{})
+    on_exit(fn -> MirrorNeuron.Cluster.Hardware.clear_snapshot() end)
+
+    keys = [
+      :node_admission_store,
+      :cluster_node_adapter,
+      :coordination_store,
+      :resource_limits_store
+    ]
+
     before = Map.new(keys, &{&1, Application.get_env(:mirror_neuron, &1)})
     Application.put_env(:mirror_neuron, :node_admission_store, Store)
+    Application.put_env(:mirror_neuron, :resource_limits_store, Store)
     Application.put_env(:mirror_neuron, :cluster_node_adapter, Node)
     Application.put_env(:mirror_neuron, :coordination_store, Store)
 
@@ -99,10 +110,10 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
   test "protected starts require the native owner's exclusive-run capability" do
     alias MirrorNeuron.Cluster.Hardware
     on_exit(fn -> Hardware.clear_snapshot() end)
-    Hardware.update_snapshot(%{capabilities: ["exclusive_run_v1"]})
+    Hardware.update_snapshot(%{capabilities: ["resource_admission_v2"]})
     assert {:error, message} = NodeAdmission.ensure_supported()
     assert message =~ "native runtime"
-    Hardware.update_snapshot(%{native_sdk_grpc: %{capabilities: ["exclusive_run_v1"]}})
+    Hardware.update_snapshot(%{native_sdk_grpc: %{capabilities: ["resource_admission_v2"]}})
     assert :ok = NodeAdmission.ensure_supported()
   end
 
@@ -137,8 +148,8 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
              })
 
     admission = ClusterHandshake.node_advertisement_info()["admission"]
-    assert admission["capability"] == "exclusive_run_v1"
-    assert admission["holder"]["run_id"] == "research"
+    assert admission["capability"] == "resource_admission_v2"
+    assert admission["reservations"]["research"]["run_id"] == "research"
     assert Enum.map(admission["queue"], & &1["run_id"]) == ["litigation"]
     assert admission["generation"] == 1
     assert admission["legacy"] == []
@@ -155,13 +166,13 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
     assert :ok = NodeAdmission.retire("research")
     {:ok, _} = NodeAdmission.submit(job("next"))
     refreshed = ClusterHandshake.node_advertisement_info()["admission"]
-    assert refreshed["holder"]["run_id"] == "litigation"
+    assert refreshed["reservations"]["litigation"]["run_id"] == "litigation"
     assert refreshed["generation"] == 2
 
     Application.put_env(:mirror_neuron, :node_admission_store, UnavailableStore)
 
     assert ClusterHandshake.node_advertisement_info()["admission"] == %{
-             "capability" => "exclusive_run_v1",
+             "capability" => "resource_admission_v2",
              "state" => "unavailable"
            }
   end
@@ -176,7 +187,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
     {:ok, state} = NodeAdmission.snapshot()
     assert length(state["queue"]) == 19
     assert length(Enum.uniq(Enum.map(state["queue"], & &1["run_id"]))) == 19
-    id = state["holder"]["run_id"]
+    id = state["reservations"] |> Map.keys() |> hd()
     assert {:ok, %{"state" => "preparing"}} = NodeAdmission.submit(job(id))
     Store.roundtrip()
     assert {:ok, ^state} = NodeAdmission.snapshot()
@@ -222,7 +233,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
     {:ok, next} = NodeAdmission.submit(job("d"))
     assert next["position"] == 1
     {:ok, state} = NodeAdmission.snapshot()
-    assert state["holder"]["run_id"] == "b"
+    assert state["reservations"] |> Map.keys() |> hd() == "b"
 
     assert NodeAdmission.run(
              %{"node_admission_owner" => "spark@test", "node_admission_generation" => 1},
@@ -237,6 +248,6 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
            ) == :started
 
     Process.put(:admission_node, :other@test)
-    assert {:ok, %{"holder" => %{"run_id" => "c"}}} = NodeAdmission.snapshot()
+    assert {:ok, %{"reservations" => %{"c" => %{"run_id" => "c"}}}} = NodeAdmission.snapshot()
   end
 end

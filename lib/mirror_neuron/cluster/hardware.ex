@@ -19,18 +19,22 @@ defmodule MirrorNeuron.Cluster.Hardware do
 
   def info do
     snapshot_info()
-    |> Map.update(:capabilities, ["exclusive_run_v1"], &Enum.uniq(["exclusive_run_v1" | &1]))
+    |> Map.update(
+      :capabilities,
+      ["resource_admission_v2"],
+      &Enum.uniq(["resource_admission_v2" | &1])
+    )
   end
 
   defp snapshot_info do
     case :persistent_term.get({__MODULE__, :snapshot}, nil) do
       {reported, hardware} ->
         if System.monotonic_time(:second) - reported <= 90,
-          do: hardware,
-          else: unavailable_memory(hardware)
+          do: Map.put(hardware, :admission_telemetry_current, true),
+          else: Map.put(unavailable_memory(hardware), :admission_telemetry_current, false)
 
       nil ->
-        initial_info()
+        Map.put(initial_info(), :admission_telemetry_current, false)
     end
   end
 

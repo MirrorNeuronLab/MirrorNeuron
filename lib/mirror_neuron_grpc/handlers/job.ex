@@ -20,6 +20,23 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
   @interface_version 1
   @unavailable_status GRPC.Status.unavailable()
 
+  def relocate_job(request, stream) do
+    # Stage/inspect/activate address a physical node directly. Following the
+    # source redirect here would make ownership-commit verification circular.
+    local_transfer =
+      case MirrorNeuron.Runtime.StableJob.get(request.job_id) do
+        {:ok, %{"status" => "relocated"}} -> true
+        _ -> false
+      end
+
+    if request.action in ["move", "abort"] and not local_transfer and
+         remote_job_owner(request.job_id) do
+      forward_call(remote_job_owner(request.job_id), :relocate_job, request, stream)
+    else
+      MirrorNeuron.Runtime.JobRelocation.command(request) |> respond()
+    end
+  end
+
   defdelegate list_schedules(request, stream), to: MirrorNeuron.Grpc.Handlers.Schedule
   defdelegate get_schedule(request, stream), to: MirrorNeuron.Grpc.Handlers.Schedule
   defdelegate update_schedule(request, stream), to: MirrorNeuron.Grpc.Handlers.Schedule
@@ -58,6 +75,9 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
 
   def get_job(request, stream) do
     case MirrorNeuron.get_job(request.job_id) do
+      {:ok, %{"status" => "relocated", "owner_node" => owner}} ->
+        forward_call(owner, :get_job, request, stream)
+
       {:ok, definition} ->
         response(JobProjection.detail(definition))
 
@@ -171,6 +191,39 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     end
   end
 
+  def check_run_admission(request, stream) do
+    case remote_job_owner(request.job_id) do
+      nil ->
+        with {:ok, definition} <- MirrorNeuron.Runtime.StableJob.get(request.job_id),
+             true <- definition["status"] == "active",
+             {:ok, manifest} <- admission_manifest(definition, request.run_id),
+             {:ok, check} <-
+               MirrorNeuron.Runtime.NodeAdmission.check(
+                 manifest,
+                 Support.blank_to_nil(request.run_id)
+               ) do
+          response(check)
+        else
+          false -> respond({:error, :job_not_active})
+          error -> respond(error)
+        end
+
+      owner ->
+        forward_call(owner, :check_run_admission, request, stream)
+    end
+  end
+
+  defp admission_manifest(definition, ""), do: {:ok, definition["manifest"]}
+
+  defp admission_manifest(definition, run_id) do
+    with {:ok, run} <- MirrorNeuron.Persistence.RedisStore.fetch_job(run_id),
+         true <- run["stable_job_id"] == definition["job_id"] do
+      {:ok, run["manifest"]}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
   def start_run(request, stream) do
     case remote_job_owner(request.job_id) do
       nil ->
@@ -194,14 +247,15 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
 
     supported =
       Enum.any?(report["nodes"] || [], fn node ->
-        node["name"] == owner and get_in(node, ["admission", "capability"]) == "exclusive_run_v1"
+        node["name"] == owner and
+          get_in(node, ["admission", "capability"]) == "resource_admission_v2"
       end)
 
     unless supported do
       raise GRPC.RPCError,
         status: GRPC.Status.failed_precondition(),
         message:
-          "The selected PC does not advertise exclusive_run_v1. Update its runtime before starting protected work."
+          "The selected PC does not advertise resource_admission_v2. Update its runtime before starting protected work."
     end
   end
 
@@ -211,12 +265,17 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
       |> Support.maybe_put_opt(:run_id, Support.blank_to_nil(request.run_id))
       |> Keyword.put(:inputs, Support.decode_json_map(request.inputs_json))
       |> Keyword.put(:replace_existing_run, request.replace_existing_run)
+      |> Keyword.put(
+        :admission_policy,
+        if(request.admission_policy == "", do: "start_now", else: request.admission_policy)
+      )
 
     result =
       MirrorNeuron.Runtime.RunStartRequest.run(
         request.job_id,
         request.idempotency_key,
-        {request.run_id, request.inputs_json, request.replace_existing_run},
+        {request.run_id, request.inputs_json, request.replace_existing_run,
+         request.admission_policy},
         fn run_id, identity ->
           MirrorNeuron.start_run_result(
             request.job_id,
@@ -320,7 +379,12 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
               "configuration_overrides" => overrides,
               "expected_attempt" => request.expected_attempt,
               "checkpoint_revision" => request.checkpoint_revision,
-              "idempotency_key" => request.idempotency_key
+              "idempotency_key" => request.idempotency_key,
+              "admission_policy" =>
+                if(request.admission_policy == "",
+                  do: "start_now",
+                  else: request.admission_policy
+                )
             })
           )
         else

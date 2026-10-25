@@ -1225,13 +1225,16 @@ defmodule MirrorNeuron.Runner.DockerWorker do
   end
 
   defp extra_env(config) do
-    case Map.get(config, "environment") do
-      env when is_map(env) ->
-        Enum.into(env, %{}, fn {key, value} -> {to_string(key), to_string(value)} end)
+    env =
+      case Map.get(config, "environment") do
+        env when is_map(env) ->
+          Enum.into(env, %{}, fn {key, value} -> {to_string(key), to_string(value)} end)
 
-      _ ->
-        %{}
-    end
+        _ ->
+          %{}
+      end
+
+    MirrorNeuron.Runtime.RunResourceEnvironment.for_container(config, env)
   end
 
   defp truthy?(value) when value in [true, 1], do: true

@@ -40,11 +40,16 @@ defmodule MirrorNeuron.Runtime.StableJob do
   def create(input, opts \\ []) do
     with {:ok, bundle} <- JobBundle.load(input),
          job_id <- Keyword.get(opts, :job_id) || stable_job_id(bundle.manifest.graph_id),
-         :ok <- JobData.validate_id(job_id),
-         {:ok, false} <- RedisStore.job_definition_exists?(job_id),
+         :ok <- JobData.validate_id(job_id) do
+      with_start_gate(job_id, fn -> create_loaded(bundle, job_id, opts) end)
+    end
+  end
+
+  defp create_loaded(bundle, job_id, opts) do
+    with {:ok, false} <- RedisStore.job_definition_exists?(job_id),
          {:ok, storage} <- storage_declarations(bundle, Keyword.get(opts, :storage, %{})),
          {:ok, seed_paths} <- seed_paths(bundle, storage),
-         {:ok, data_dir} <- JobData.initialize(job_id, seed_paths) do
+         {:ok, data_dir} <- initialize_data(job_id, seed_paths, opts) do
       now = Runtime.timestamp()
 
       definition = %{
@@ -60,7 +65,8 @@ defmodule MirrorNeuron.Runtime.StableJob do
         "schedule_ids" => [],
         "storage" => storage,
         "owner_node" => to_string(Keyword.get(opts, :owner_node, NodeAdapter.self())),
-        "status" => "active",
+        "status" =>
+          if(Keyword.has_key?(opts, :relocation), do: "relocation_staged", else: "active"),
         "revision" => 1,
         "data_generation" => 1,
         "data_dir" => data_dir,
@@ -69,10 +75,29 @@ defmodule MirrorNeuron.Runtime.StableJob do
         "updated_at" => now
       }
 
-      persist_and_reconcile(job_id, definition)
+      definition =
+        if Keyword.has_key?(opts, :relocation),
+          do: Map.put(definition, "relocation", Keyword.fetch!(opts, :relocation)),
+          else: definition
+
+      case RedisStore.create_job_definition(job_id, definition) do
+        {:ok, saved} = result ->
+          _ = JobResponse.definition_changed(saved)
+          result
+
+        error ->
+          error
+      end
     else
       {:ok, true} -> {:error, :job_already_exists}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp initialize_data(job_id, seed_paths, opts) do
+    case Keyword.get(opts, :restored_data_dir) do
+      nil -> JobData.initialize(job_id, seed_paths)
+      staging -> JobData.install_restore(job_id, staging, Keyword.fetch!(opts, :restore_identity))
     end
   end
 
@@ -84,8 +109,12 @@ defmodule MirrorNeuron.Runtime.StableJob do
 
       definitions =
         if include_archived,
-          do: definitions,
-          else: Enum.reject(definitions, &(&1["status"] == "archived"))
+          do: Enum.reject(definitions, &(&1["status"] in ["relocated", "relocation_staged"])),
+          else:
+            Enum.reject(
+              definitions,
+              &(&1["status"] in ["archived", "relocated", "relocation_staged"])
+            )
 
       {:ok, definitions}
     end
@@ -110,6 +139,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
   def update(job_id, attrs, opts) when is_map(attrs) do
     with_start_gate(job_id, fn ->
       with {:ok, definition} <- get(job_id),
+           :ok <- ensure_mutable(definition),
            :ok <- ensure_revision(definition, Keyword.get(opts, :expected_revision)),
            {:ok, normalized_attrs} <- normalize_update(definition, stringify(attrs)),
            {:ok, updated} <-
@@ -186,6 +216,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
   def archive(job_id, opts \\ []) do
     with_start_gate(job_id, fn ->
       with {:ok, definition} <- get(job_id),
+           :ok <- ensure_mutable(definition),
            :ok <- ensure_revision(definition, Keyword.get(opts, :expected_revision)) do
         if definition["status"] == "archived" do
           {:ok, definition}
@@ -214,7 +245,9 @@ defmodule MirrorNeuron.Runtime.StableJob do
 
   def start_run_result(job_id, opts \\ []) do
     with_start_gate(job_id, fn ->
-      with {:ok, definition} <- get(job_id) do
+      with {:ok, definition} <- get(job_id),
+           :ok <- ensure_active(definition),
+           :ok <- ensure_owner_node(definition) do
         do_start_run_result(definition, opts)
       end
     end)
@@ -237,7 +270,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
   def list_runs(job_id) do
     with {:ok, definition} <- get(job_id) do
       definition
-      |> Map.get("run_ids", [])
+      |> then(&((&1["historical_run_ids"] || []) ++ (&1["run_ids"] || [])))
       |> Enum.reduce_while({:ok, []}, fn run_id, {:ok, runs} ->
         case RedisStore.fetch_job(run_id) do
           {:ok, run} ->
@@ -275,6 +308,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
   def reset_data(job_id) do
     with_start_gate(job_id, fn ->
       with {:ok, definition} <- get(job_id),
+           :ok <- ensure_mutable(definition),
            :ok <- ensure_no_active_runs(definition),
            :ok <- JobResponse.stop(definition),
            {:ok, bundle} <- load_bundle(definition),
@@ -302,6 +336,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
     if Keyword.get(opts, :confirmed, false) do
       with_start_gate(job_id, fn ->
         with {:ok, definition} <- get(job_id),
+             :ok <- ensure_mutable(definition),
              :ok <- ensure_revision(definition, Keyword.get(opts, :expected_revision)),
              :ok <-
                delete_step(job_id, :response_service, JobResponse.stop(definition, force: true)),
@@ -476,7 +511,16 @@ defmodule MirrorNeuron.Runtime.StableJob do
              run_id: run_id,
              job_data_dir: data_dir,
              job_data_access: access,
-             data_generation: definition["data_generation"]
+             data_generation: definition["data_generation"],
+             admission_policy:
+               Keyword.get(
+                 opts,
+                 :admission_policy,
+                 if(Keyword.has_key?(opts, :schedule_metadata),
+                   do: "enqueue_if_busy",
+                   else: "start_now"
+                 )
+               )
            ) do
       finish_started_run(result, attached_definition, run_id, replacement)
     end
@@ -891,6 +935,12 @@ defmodule MirrorNeuron.Runtime.StableJob do
   defp ensure_active(%{"status" => "active"}), do: :ok
   defp ensure_active(_definition), do: {:error, :job_not_active}
 
+  defp ensure_mutable(%{"status" => status})
+       when status in ["relocating", "relocated", "relocation_staged"],
+       do: {:error, :job_relocation_in_progress}
+
+  defp ensure_mutable(_), do: :ok
+
   # Mutable file-backed data is node-affine. Transfer/backup may move ownership
   # explicitly later; a scheduler must not silently execute it elsewhere.
   defp ensure_owner_node(%{"owner_node" => owner}) do
@@ -1229,7 +1279,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
 
   defp delete_historical_runs(definition) do
     definition
-    |> Map.get("run_ids", [])
+    |> then(&((&1["historical_run_ids"] || []) ++ (&1["run_ids"] || [])))
     |> Enum.uniq()
     |> Enum.reduce_while(:ok, fn run_id, :ok ->
       case delete_historical_run(run_id) do

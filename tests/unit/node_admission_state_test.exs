@@ -2,6 +2,9 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionStateTest do
   use ExUnit.Case, async: true
   alias MirrorNeuron.Runtime.NodeAdmissionState, as: Admission
 
+  defp holder(state),
+    do: state["reservations"] |> Map.values() |> Enum.sort_by(& &1["generation"]) |> List.first()
+
   defp entry(id), do: %{"run_id" => id, "job_name" => id, "job_id" => "job-" <> id}
 
   defp submit(state, id) do
@@ -18,10 +21,10 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionStateTest do
     assert second["blocked_by"]["run_id"] == "a"
     {a, _} = submit(a, "c")
     {other, _} = submit(Admission.new(), "other-pc")
-    assert other["holder"]["run_id"] == "other-pc"
+    assert holder(other)["run_id"] == "other-pc"
     {:ok, a, _} = Admission.transition(a, "release", %{"run_id" => "a", "generation" => 1})
     {a, d} = submit(a, "d")
-    assert a["holder"]["run_id"] == "b"
+    assert holder(a)["run_id"] == "b"
     assert d["position"] == 2
   end
 
@@ -67,10 +70,11 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionStateTest do
     {state, queued} = submit(state, "a")
     assert queued["state"] == "queued"
     assert queued["blocked_by"]["job_name"] == "resource preparation or inference"
-    assert state["holder"] == nil
+    assert state["reservations"]["request_interactive"]
+    refute state["reservations"]["a"]
     {:ok, state, _} = Admission.transition(state, "request_release", %{"token" => "interactive"})
     {:ok, state, _} = Admission.transition(state, "promote", %{})
-    assert state["holder"]["run_id"] == "a"
+    assert holder(state)["run_id"] == "a"
   end
 
   test "receipt replay is idempotent, cancellation never cancels the holder" do
@@ -119,7 +123,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionStateTest do
 
     assert receipt["not_before"] == "2099-10-20T12:00:00Z"
     {state, _} = submit(state, "ready")
-    assert state["holder"]["run_id"] == "ready"
+    assert holder(state)["run_id"] == "ready"
     {again, _} = submit(state, "later")
     assert again == state
     {:ok, state, _} = Admission.transition(state, "cancel", %{"run_id" => "later"})
@@ -134,10 +138,10 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionStateTest do
     assert receipt["state"] == "queued"
     {:ok, state, _} = Admission.transition(state, "release_legacy", %{"run_id" => "paused"})
     {:ok, state, _} = Admission.transition(state, "promote", %{})
-    assert state["holder"] == nil
+    assert holder(state) == nil
     {:ok, state, _} = Admission.transition(state, "release_legacy", %{"run_id" => "distributed"})
     {:ok, state, _} = Admission.transition(state, "promote", %{})
-    assert state["holder"]["run_id"] == "new"
+    assert holder(state)["run_id"] == "new"
   end
 
   test "new arrivals cannot bypass an overdue scheduled start after a missed tick" do
@@ -150,7 +154,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionStateTest do
       })
 
     {state, arriving} = submit(state, "new")
-    assert state["holder"]["run_id"] == "due"
+    assert holder(state)["run_id"] == "due"
     assert arriving["state"] == "queued"
     assert arriving["position"] == 1
   end

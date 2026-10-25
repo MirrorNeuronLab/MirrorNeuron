@@ -55,7 +55,8 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
   defp prepared_sandbox(job_id, image, config) do
     case prepared_container_name(config) do
       name when is_binary(name) and name != "" ->
-        with {:ok, state} <-
+        with :ok <- bind_allocation(job_id, name, config),
+             {:ok, state} <-
                docker_cmd(["inspect", "--format", "{{.State.Status}}", name], config),
              :ok <- ensure_running(String.trim(state), name, config) do
           {:ok,
@@ -71,6 +72,22 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
          "docker_worker sandbox for job #{job_id} is not prepared; prepare DockerWorker resources with mn-python-sdk/API/CLI and provide docker_worker_container_name or MN_DOCKER_WORKER_CONTAINER_NAME"}
     end
   end
+
+  defp bind_allocation(run_id, name, %{"resource_allocation" => %{"mode" => "shared"}} = config) do
+    with {:ok, %{"status" => "bound"}} <-
+           MirrorNeuron.ModelServices.native_resource_command(%{
+             "operation" => "bind_run_worker",
+             "run_id" => run_id,
+             "generation" => config["node_admission_generation"],
+             "container_name" => name
+           }) do
+      :ok
+    else
+      _ -> {:error, "Couldn't bind the worker to its reserved resources."}
+    end
+  end
+
+  defp bind_allocation(_run_id, _name, _config), do: :ok
 
   defp ensure_running("running", _name, _config), do: :ok
 
