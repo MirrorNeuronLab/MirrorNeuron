@@ -958,6 +958,15 @@ Checkpoint artifact helpers have a 60-second execution bound. Within one inspect
 
 ## Resource admission per PC
 
+The detailed `GetRun` projection includes `placement` with the exact owner node,
+friendly node label when available, and a sanitized current `reservation`.
+Its state is `reserved`, `queued`, `unreserved`, or `unavailable`. Held claims
+include allocation mode, CPU cores, RAM/disk MB, GPU count and reserved GPU MB;
+unknown amounts remain null. Paused and terminal-cleanup claims remain reserved
+until the owner releases them. Legacy or unavailable accounting cannot claim
+zero resources. The projection excludes device/model identities, volume paths,
+request tokens and cleanup capabilities. List projections do not read claims.
+
 The owner Core admits compatible runs against declared CPU, RAM, disk and GPU
 budgets. Missing profiles preserve whole-PC exclusivity; shared profiles must
 cover their workers and peak model use. GPU constraints select compatible devices,

@@ -325,7 +325,7 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
   def get_run(request, stream) do
     case MirrorNeuron.inspect_job(request.run_id) do
       {:ok, run} ->
-        response(JobProjection.run(run, request.run_id))
+        response(JobProjection.run_detail(run, request.run_id))
 
       _error ->
         if MirrorNeuron.Grpc.Auth.federation_hop(stream) > 0 do

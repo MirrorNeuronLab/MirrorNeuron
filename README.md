@@ -669,6 +669,15 @@ Resource node reports include `cpu_load_average_1m` from the native hardware
 snapshot. Missing samples are null. This is one-minute CPU load, distinct from
 CPU utilization and reserved capacity.
 
+Run detail (`GetRun`) includes `placement.owner_node`, `placement.node_label`,
+and `placement.reservation`. The reservation reports `state` (`reserved`,
+`queued`, `unreserved`, or `unavailable`), allocation `mode`, and numeric
+`cpu_cores`, `memory_mb`, `disk_mb`, `gpu_count`, and `gpu_memory_mb` when known.
+These quantities come from the owner's current admission claim, including
+paused runs and terminal cleanup; they are not measured utilization. Private
+device, model, volume, and cleanup metadata are excluded. Collection projections
+remain compact and do not perform a reservation read for every listed run.
+
 A run reserves its declared CPU, RAM, disk and compatible GPU capacity. Compatible
 shared runs can use the same PC; a definition without a resource profile retains
 whole-PC exclusivity. Manual starts check availability first and require an

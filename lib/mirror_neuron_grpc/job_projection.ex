@@ -62,6 +62,12 @@ defmodule MirrorNeuron.Grpc.JobProjection do
     |> compact_reference("manifest_ref")
   end
 
+  def run_detail(record, run_id) when is_map(record) do
+    record
+    |> run(run_id)
+    |> Map.put("placement", MirrorNeuron.Grpc.RunPlacement.read(record, run_id))
+  end
+
   defp put_admission(projected, %{"status" => "queued"}, run_id) do
     case MirrorNeuron.Runtime.NodeAdmission.receipt(run_id) do
       {:ok, admission} -> Map.put(projected, "admission", admission)
