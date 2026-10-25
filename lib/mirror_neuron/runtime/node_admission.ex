@@ -274,7 +274,9 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
   end
 
   def check(manifest, run_id \\ nil) do
-    with {:ok, state} <- snapshot(), {:ok, request} <- ResourceAllocation.request(manifest) do
+    with {:ok, manifest} <- MirrorNeuron.Manifest.load(manifest),
+         {:ok, state} <- snapshot(),
+         {:ok, request} <- ResourceAllocation.request(manifest) do
       retained =
         is_binary(run_id) and Map.has_key?(state["reservations"], run_id) and
           match?({:ok, %{"status" => "paused"}}, store().fetch_job(run_id))

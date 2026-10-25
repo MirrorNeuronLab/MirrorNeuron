@@ -250,4 +250,26 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
     Process.put(:admission_node, :other@test)
     assert {:ok, %{"reservations" => %{"c" => %{"run_id" => "c"}}}} = NodeAdmission.snapshot()
   end
+
+  test "admission accepts a stored wire manifest without treating string keys as struct fields" do
+    manifest = %{
+      "apiVersion" => "mn.workflow/v1",
+      "kind" => "Workflow",
+      "manifest_version" => "1.0",
+      "graph_id" => "stored-admission",
+      "entrypoints" => ["worker"],
+      "requirements" => %{
+        "gpu" => %{"enforcement" => "hard", "min_count" => 1, "min_memory_mb" => 49152}
+      },
+      "flow" => %{
+        "nodes" => [
+          %{"node_id" => "worker", "agent_type" => "router", "role" => "root", "config" => %{}}
+        ],
+        "edges" => []
+      }
+    }
+
+    assert {:ok, %{"status" => "not_runnable"}} = NodeAdmission.check(manifest)
+    assert {:error, _} = NodeAdmission.check(%{"invalid" => "stored manifest"})
+  end
 end
