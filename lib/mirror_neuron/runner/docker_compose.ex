@@ -2,6 +2,7 @@ defmodule MirrorNeuron.Runner.DockerCompose do
   @moduledoc false
 
   alias MirrorNeuron.ModelServices
+  alias MirrorNeuron.Runner.ServiceLifecycle
 
   alias Mirrorneuron.Cluster.V1.{
     CleanupDockerComposeRequest,
@@ -17,12 +18,14 @@ defmodule MirrorNeuron.Runner.DockerCompose do
   def run(payload, config, opts \\ [])
 
   def run(_payload, config, opts) when is_map(config) do
+    lifecycle = ServiceLifecycle.new(config, opts) |> ServiceLifecycle.publish("starting", "")
+
     with {:ok, project} <- prepare_project(config, opts),
          :ok <- emit(opts, "docker_compose_ready", %{"project_name" => project["project_name"]}) do
       cleanup_marker = {__MODULE__, :cleanup_complete, make_ref()}
 
       try do
-        run_result = await_project(project, opts)
+        {run_result, lifecycle} = await_project(project, opts, lifecycle)
         cleanup_result = cleanup_project(project)
         Process.put(cleanup_marker, true)
 
@@ -31,6 +34,7 @@ defmodule MirrorNeuron.Runner.DockerCompose do
             result
 
           {{:ok, _result}, {:error, reason}} ->
+            ServiceLifecycle.publish(lifecycle, "failed", "native_compose_cleanup_failed")
             {:error, reason}
 
           {{:error, run_reason}, {:error, cleanup_reason}} ->
@@ -41,6 +45,10 @@ defmodule MirrorNeuron.Runner.DockerCompose do
           _ = cleanup_project(project)
         end
       end
+    else
+      {:error, _reason} = error ->
+        ServiceLifecycle.publish(lifecycle, "failed", "native_compose_prepare_failed")
+        error
     end
   end
 
@@ -92,16 +100,19 @@ defmodule MirrorNeuron.Runner.DockerCompose do
     end
   end
 
-  defp await_project(project, opts) do
+  defp await_project(project, opts, lifecycle) do
     case project_status(project) do
       {:ok, %{"ready" => true}} ->
+        lifecycle = ServiceLifecycle.publish(lifecycle, "serving", "")
+
         emit(opts, "docker_compose_health", %{
           "project_name" => project["project_name"],
           "status" => "healthy"
         })
 
-        Process.sleep(@poll_ms)
-        await_project(project, opts)
+        sleep = Keyword.get(opts, :sleep, &Process.sleep/1)
+        sleep.(@poll_ms)
+        await_project(project, opts, lifecycle)
 
       {:ok, status} ->
         emit(opts, "docker_compose_health", %{
@@ -110,7 +121,8 @@ defmodule MirrorNeuron.Runner.DockerCompose do
           "details" => status
         })
 
-        {:error, "DockerCompose project is not healthy"}
+        lifecycle = ServiceLifecycle.publish(lifecycle, "failed", "native_compose_unhealthy")
+        {{:error, "DockerCompose project is not healthy"}, lifecycle}
 
       {:error, reason} ->
         emit(opts, "docker_compose_health", %{
@@ -119,7 +131,8 @@ defmodule MirrorNeuron.Runner.DockerCompose do
           "details" => to_string(reason)
         })
 
-        {:error, reason}
+        lifecycle = ServiceLifecycle.publish(lifecycle, "failed", "native_compose_status_failed")
+        {{:error, reason}, lifecycle}
     end
   end
 

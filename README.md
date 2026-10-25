@@ -341,6 +341,14 @@ for deployment and replay boundaries.
 | [Membrane](https://github.com/MirrorNeuronLab/Membrane) | Authoritative Markdown runtime memory and CPU DuckDB context retrieval through the SDK. |
 | [mn-system-tests](https://github.com/MirrorNeuronLab/mn-system-tests) | Cross-component integration and system validation. |
 
+Native Docker Compose service attempts report typed startup observations through
+the existing worker-activity bridge. Serving requires a successful native project
+health check and never completes a workflow step. The SDK binds manual-stop
+projects to startup/service/shutdown phases during definition preparation; deploy
+the matching SDK and Core together and prepare idle definitions again. Pause,
+cancel and failure invalidate readiness, while exact project cleanup retains its
+existing ownership contract.
+
 Membrane keeps complete runtime text and durable receipts as Markdown, with
 one disposable DuckDB index per job. It does not schedule tools or change the workflow DAG.
 The development Compose template also publishes authenticated Membrane gRPC

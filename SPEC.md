@@ -294,6 +294,18 @@ node's SDK through prepare, status, and cleanup gRPC calls; the native service
 runs Docker only with the returned project record. It must never reuse the
 MirrorNeuron runtime Compose file or DockerWorker's generated worker project.
 
+Native Compose attempts publish `mn.service.lifecycle.v1` through the existing
+durable worker-activity callback: starting before preparation, serving only after
+native project status reports ready, and failed on preparation, status or health
+failure. Receipts carry the stable Job, execution, physical workflow run, logical
+step, deployed worker and attempt identities with a fresh generation and
+increasing sequence. Runtime workflow headers override definition-time values.
+Repeated healthy polls do not republish serving. Pause/cancel/failure events
+invalidate readiness; resume requires a new attempt. Exact project cleanup and
+workflow-ledger completion remain independent of observed serving. The matching
+SDK adds native phase metadata during definition preparation; deploy both and
+prepare idle definitions again.
+
 ## Delivery Contract
 
 Messages have explicit identity, sender/recipient information, payload,
