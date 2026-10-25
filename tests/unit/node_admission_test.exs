@@ -14,7 +14,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
     use Agent
 
     def start_link(_),
-      do: Agent.start_link(fn -> %{states: %{}, schedules: %{}} end, name: __MODULE__)
+      do: Agent.start_link(fn -> %{states: %{}, schedules: %{}, jobs: []} end, name: __MODULE__)
 
     def fetch_node_admission(node),
       do: {:ok, Agent.get(__MODULE__, &Map.get(&1.states, node, NodeAdmissionState.new()))}
@@ -30,8 +30,15 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
     end
 
     def fetch_resource_limits, do: {:ok, %{}}
-    def list_jobs, do: {:ok, []}
-    def fetch_job(_), do: {:error, :not_found}
+    def list_jobs, do: {:ok, Agent.get(__MODULE__, & &1.jobs)}
+    def put_jobs(jobs), do: Agent.update(__MODULE__, &Map.put(&1, :jobs, jobs))
+
+    def fetch_job(id) do
+      case Agent.get(__MODULE__, &Enum.find(&1.jobs, fn job -> job["job_id"] == id end)) do
+        nil -> {:error, :not_found}
+        job -> {:ok, job}
+      end
+    end
 
     def coordination_store_status,
       do: {:ok, %{"identity" => "test-store", "healthy" => true, "writable_primary" => true}}
@@ -249,6 +256,33 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
 
     Process.put(:admission_node, :other@test)
     assert {:ok, %{"reservations" => %{"c" => %{"run_id" => "c"}}}} = NodeAdmission.snapshot()
+  end
+
+  test "a remote run's authoritative owner overrides historical placements on this PC" do
+    remote = %{
+      "job_id" => "remote-run",
+      "status" => "running",
+      "admission" => %{"owner_node" => "other@test"},
+      "scheduler" => %{"placements" => [%{"node" => "spark@test"}]}
+    }
+
+    Store.put_jobs([remote])
+    assert {:ok, %{"state" => "preparing"}} = NodeAdmission.submit(job("local"))
+    {:ok, state} = NodeAdmission.snapshot()
+    assert state["legacy"] == []
+    assert Map.keys(state["reservations"]) == ["local"]
+
+    # A true legacy distributed execution still reserves every participating PC.
+    assert :ok = NodeAdmission.retire("local")
+    Store.put_jobs([Map.delete(remote, "admission")])
+    assert {:ok, %{"state" => "queued"}} = NodeAdmission.submit(job("next"))
+
+    # An already-imported phantom is repaired from the authoritative owner too.
+    Store.put_jobs([remote])
+    NodeAdmission.reconcile()
+    {:ok, recovered} = NodeAdmission.snapshot()
+    assert recovered["legacy"] == []
+    assert Map.keys(recovered["reservations"]) == ["next"]
   end
 
   test "admission accepts a stored wire manifest without treating string keys as struct fields" do

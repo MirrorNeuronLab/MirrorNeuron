@@ -3,7 +3,7 @@ defmodule MirrorNeuron.Runtime.SubmissionReadinessIntegrationTest do
 
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
-  alias MirrorNeuron.Runtime.{EventBus, NodeAdmission}
+  alias MirrorNeuron.Runtime.EventBus
 
   defmodule Runner do
     def run(payload, _config, opts) do
@@ -54,13 +54,20 @@ defmodule MirrorNeuron.Runtime.SubmissionReadinessIntegrationTest do
       "MN_BUNDLE_CACHE_DIR" => Path.join(root, "bundles"),
       "MN_JOB_DATA_ROOT" => Path.join(root, "jobs"),
       "MN_SHARED_STORAGE_READY_TIMEOUT_SECONDS" => "1800",
-      "MN_RESOURCE_ADMISSION_ENABLED" => "false",
       "MN_NODE_HARDWARE_JSON" =>
-        Jason.encode!(%{"native_sdk_grpc" => %{"capabilities" => ["exclusive_run_v1"]}})
+        Jason.encode!(%{"native_sdk_grpc" => %{"capabilities" => ["resource_admission_v2"]}})
     }
 
     previous = Map.new(variables, fn {key, _} -> {key, System.get_env(key)} end)
     System.put_env(variables)
+
+    MirrorNeuron.Cluster.Hardware.update_snapshot(%{
+      native_sdk_grpc: %{capabilities: ["resource_admission_v2"]},
+      cpu: %{logical_processors: 4},
+      memory: %{total_mb: 8192, available_mb: 8192},
+      disk: %{total_mb: 16384, available_mb: 16384}
+    })
+
     :persistent_term.put({Runner, :test}, self())
     {:ok, coordination_store} = RedisStore.coordination_store_status()
 
@@ -85,6 +92,7 @@ defmodule MirrorNeuron.Runtime.SubmissionReadinessIntegrationTest do
       end)
 
       :persistent_term.erase({Runner, :test})
+      MirrorNeuron.Cluster.Hardware.clear_snapshot()
       File.rm_rf!(root)
     end)
 
@@ -176,30 +184,47 @@ defmodule MirrorNeuron.Runtime.SubmissionReadinessIntegrationTest do
     refute_receive {:input_executed, ^run_id, _}
   end
 
-  test "a queued launch uses the same wait after the preceding run is cancelled", ctx do
-    assert {:ok, first, _} = start(ctx)
-    assert_receive {:mirror_neuron_event, %{type: :submission_storage_waiting}}, 5_000
-    old_pid = coordinator(first)
-    old_token = :sys.get_state(old_pid).submission_storage.timer_token
+  for restart <- [false, true] do
+    @tag restart_admission: restart
+    test "a queued launch starts automatically after cleanup (restart=#{restart})", ctx do
+      assert {:ok, first, _} = start(ctx)
+      assert_receive {:mirror_neuron_event, %{type: :submission_storage_waiting}}, 5_000
+      old_pid = coordinator(first)
+      old_token = :sys.get_state(old_pid).submission_storage.timer_token
 
-    next = %{ctx | id: ctx.id <> "-next"}
-    assert {:ok, second, nil} = start(next)
-    assert {:ok, %{"status" => "queued"}} = RedisStore.fetch_job(second)
-    assert {:ok, "cancelled"} = Runtime.cancel_job(first)
-    NodeAdmission.reconcile()
+      next = %{ctx | id: ctx.id <> "-next"}
+      assert {:ok, second, nil} = start(next, admission_policy: "enqueue_if_busy")
+      assert {:ok, %{"status" => "queued"}} = RedisStore.fetch_job(second)
 
-    assert_receive {:mirror_neuron_event, %{type: :submission_storage_waiting, job_id: ^second}},
-                   5_000
+      if ctx.restart_admission do
+        :ok =
+          Supervisor.terminate_child(MirrorNeuron.Supervisor, MirrorNeuron.Runtime.NodeAdmission)
 
-    assert_pending(coordinator(second), second)
-    stage_inputs(ctx)
-    send(old_pid, {:submission_storage_check, old_token})
+        assert {:ok, _} =
+                 Supervisor.restart_child(
+                   MirrorNeuron.Supervisor,
+                   MirrorNeuron.Runtime.NodeAdmission
+                 )
+      end
 
-    assert_receive {:input_executed, ^second, _}, 5_000
-    assert_receive {:mirror_neuron_event, %{type: :job_completed, job_id: ^second}}, 5_000
-    assert {:ok, %{"status" => "cancelled"}} = RedisStore.fetch_job(first)
-    refute_receive {:input_executed, ^first, _}
-    refute_receive {:input_executed, ^second, _}
+      assert {:ok, "cancelled"} = Runtime.cancel_job(first)
+
+      # The running admission service must dispatch automatically after cleanup;
+      # an explicit reconcile call here would hide a broken wake/timer path.
+      assert_receive {:mirror_neuron_event,
+                      %{type: :submission_storage_waiting, job_id: ^second}},
+                     5_000
+
+      assert_pending(coordinator(second), second)
+      stage_inputs(ctx)
+      send(old_pid, {:submission_storage_check, old_token})
+
+      assert_receive {:input_executed, ^second, _}, 5_000
+      assert_receive {:mirror_neuron_event, %{type: :job_completed, job_id: ^second}}, 5_000
+      assert {:ok, %{"status" => "cancelled"}} = RedisStore.fetch_job(first)
+      refute_receive {:input_executed, ^first, _}
+      refute_receive {:input_executed, ^second, _}
+    end
   end
 
   test "files arriving before a missing or partial inventory also wait and continue automatically",
@@ -259,13 +284,13 @@ defmodule MirrorNeuron.Runtime.SubmissionReadinessIntegrationTest do
     refute_receive {:input_executed, ^run_id, _}
   end
 
-  defp start(ctx) do
+  defp start(ctx, options \\ []) do
     bundle = Path.join(ctx.root, ctx.id <> "-bundle")
     File.mkdir_p!(Path.join(bundle, "payloads"))
     File.write!(Path.join(bundle, "manifest.json"), Jason.encode!(ctx.manifest))
     {:ok, definition} = MirrorNeuron.create_job(bundle, job_id: "job-" <> ctx.id)
     EventBus.subscribe(ctx.id)
-    MirrorNeuron.start_run(definition["job_id"], run_id: ctx.id)
+    MirrorNeuron.start_run(definition["job_id"], Keyword.merge([run_id: ctx.id], options))
   end
 
   defp stage_inputs(ctx) do

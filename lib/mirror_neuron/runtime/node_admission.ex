@@ -723,10 +723,23 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
 
   defp cleanup_legacy(id) do
     case store().fetch_job(id) do
-      {:ok, %{"status" => status} = job} when status in @terminal ->
-        with :ok <- JobCleanup.cleanup_sandboxes(id, job, []),
-             {:ok, _} <- mutate("release_legacy", %{"run_id" => id}),
-             do: :ok
+      {:ok, job} ->
+        owner = admission_owner(job)
+
+        cond do
+          is_binary(owner) and owner != node_name() ->
+            # This legacy entry was derived from historical placements. The
+            # authoritative single-PC owner proves it is not a local claim.
+            mutate("release_legacy", %{"run_id" => id})
+
+          job["status"] in @terminal ->
+            with :ok <- JobCleanup.cleanup_sandboxes(id, job, []),
+                 {:ok, _} <- mutate("release_legacy", %{"run_id" => id}),
+                 do: :ok
+
+          true ->
+            :ok
+        end
 
       _ ->
         :ok
@@ -758,9 +771,22 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
   end
 
   defp local_run?(job) do
-    get_in(job, ["admission", "owner_node"]) == node_name() or
-      get_in(job, ["manifest", "metadata", "node_admission", "owner_node"]) == node_name() or
-      Enum.any?(get_in(job, ["scheduler", "placements"]) || [], &(&1["node"] == node_name()))
+    owner = admission_owner(job)
+
+    if is_binary(owner) and owner != "",
+      do: owner == node_name(),
+      else:
+        Enum.any?(get_in(job, ["scheduler", "placements"]) || [], &(&1["node"] == node_name()))
+  end
+
+  defp admission_owner(job) do
+    Enum.find(
+      [
+        get_in(job, ["admission", "owner_node"]),
+        get_in(job, ["manifest", "metadata", "node_admission", "owner_node"])
+      ],
+      &(is_binary(&1) and &1 != "")
+    )
   end
 
   defp persist_queue_schedule(job) do

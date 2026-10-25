@@ -1008,6 +1008,12 @@ after a terminal run has stopped commands/containers, drained native inference
 leases and released run-owned GPU residency. A missing process, timeout, owner
 partition or stale advertisement cannot release it. Pre-existing distributed
 runs remain protected on their participating nodes through confirmed cleanup.
+An authoritative admission owner overrides historical scheduler placements when
+reconstructing local claims. Only ownerless legacy executions reserve every
+participating PC. Native gateway-process attestations can prove that a request
+owner exited; live or unverifiable requests continue to block release. Automatic
+queue dispatch after verified cleanup is tested across admission-service restart
+without a client reconciliation call.
 Explicit checkpoint retries reacquire capacity on the same PC or explicitly queue.
 Queued retries preserve their checkpoint selection and idempotency receipt;
 dispatch verifies the checkpoint and original inputs again before a new attempt.

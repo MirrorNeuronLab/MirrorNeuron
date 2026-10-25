@@ -63,6 +63,21 @@ missing, a timeout elapsed, or a PC went offline. A never-dispatched claim can b
 retired under its fenced start gate. Lost native release replies have durable
 completion receipts; unknown requests remain reserved until completion is proven.
 
+Recorded admission ownership takes precedence over historical scheduler
+placements. A run owned by Spark does not reserve this PC because an old
+placement mentions it. Ownerless legacy distributed runs still reserve all
+participating PCs until verified cleanup.
+Reconciliation removes an already-imported historical phantom only when the
+persisted admission record proves another PC owns that execution; it does not
+remove committed local reservations or infer ownership from availability.
+
+Managed gateway requests have durable native process-ownership proof. A verified
+gateway exit or replacement lets normal request cleanup finish; a live gateway or
+unavailable Docker state keeps the reservation. Cleanup reconciliation wakes the
+durable queue automatically. Restarting admission reloads that queue and resumes
+dispatch without a client retry. Integration tests cover automatic dispatch both
+with and without an admission restart, input replication and cancellation races.
+
 Reclamation frees CPU, RAM/GPU budgets, port/folder locks and request leases.
 Installed model files, reusable images, reports and durable Job data are retained;
 free-disk telemetry continues to charge their physical storage.

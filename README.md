@@ -689,6 +689,9 @@ advertise `resource_admission_v2`. See [Run resource allocation](docs/resource-a
 Federation refreshes carry each PC's reservations and queue into node/resource
 reports. Existing prepared Jobs keep their owner until an explicit idle Job move
 transfers the definition and data; refreshing capacity does not move them.
+Admission ownership overrides historical execution placements, so a remotely
+owned run cannot create a phantom local reservation. Verified cleanup resumes
+queued work automatically, including after the admission service restarts.
 Keyed starts retain Redis-backed request identities and receipts across Core
 restart, including reconciliation after an interrupted receipt write. Queue
 schedule revisions advance on mutation so stale cancel/reschedule controls fail.
