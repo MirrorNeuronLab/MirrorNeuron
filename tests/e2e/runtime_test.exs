@@ -627,9 +627,12 @@ defmodule MirrorNeuron.RuntimeTest do
     original_hardware = System.get_env("MN_NODE_HARDWARE_JSON")
     hardware = Jason.decode!(original_hardware || "{}")
     # These tests inject runners and native cleanup, including the owner's
-    # exclusive-run protocol. Keep the real admission queue enabled.
-    hardware = Map.put(hardware, "native_sdk_grpc", %{"capabilities" => ["exclusive_run_v1"]})
+    # resource-admission protocol. Keep the real admission queue enabled.
+    hardware =
+      Map.put(hardware, "native_sdk_grpc", %{"capabilities" => ["resource_admission_v2"]})
+
     System.put_env("MN_NODE_HARDWARE_JSON", Jason.encode!(hardware))
+    MirrorNeuron.Cluster.Hardware.update_snapshot(hardware)
     namespace = "runtime_test_#{System.unique_integer([:positive])}"
 
     Application.put_env(:mirror_neuron, :job_health_check_interval_ms, 100)
@@ -644,6 +647,7 @@ defmodule MirrorNeuron.RuntimeTest do
       restore_application_env(:redis_namespace, original_namespace)
       restore_system_env("MN_REDIS_NAMESPACE", original_system_namespace)
       restore_system_env("MN_NODE_HARDWARE_JSON", original_hardware)
+      MirrorNeuron.Cluster.Hardware.clear_snapshot()
 
       if original_health == nil do
         Application.delete_env(:mirror_neuron, :job_health_check_interval_ms)
@@ -1070,9 +1074,10 @@ defmodule MirrorNeuron.RuntimeTest do
       fake_node["hardware"]
       |> Map.put("runtime_drivers", fake_node["runtime_drivers"])
       |> Map.put("host_paths", fake_node["host_paths"])
-      |> Map.put("native_sdk_grpc", %{"capabilities" => ["exclusive_run_v1"]})
+      |> Map.put("native_sdk_grpc", %{"capabilities" => ["resource_admission_v2"]})
 
     System.put_env("MN_NODE_HARDWARE_JSON", Jason.encode!(hardware))
+    MirrorNeuron.Cluster.Hardware.update_snapshot(hardware)
 
     assert {:ok, job_id, job} = run_manifest(manifest, await: true, timeout: 2_000)
 

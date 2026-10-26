@@ -4,7 +4,7 @@ defmodule TestFetchJob do
     # native owner; it does not start worker or model processes.
     hardware = MirrorNeuron.Cluster.Hardware.info()
     MirrorNeuron.Cluster.Hardware.update_snapshot(
-      Map.put(hardware, :native_sdk_grpc, %{capabilities: ["exclusive_run_v1"]})
+      Map.put(hardware, :native_sdk_grpc, %{capabilities: ["resource_admission_v2"]})
     )
     # Create the job exactly as it would be created
     job_id = "test-job-1"

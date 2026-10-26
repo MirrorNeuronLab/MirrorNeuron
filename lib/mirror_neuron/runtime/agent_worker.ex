@@ -92,6 +92,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
           delivery_consumer: Delivery.consumer_id(job_id, node.node_id),
           delivery_group_ready?: false,
           next_delivery_reclaim_at_ms: 0,
+          delivery_retries: %{},
           delivery_timer_ref: nil,
           delivery_token: nil,
           reclaim_deliveries?: reclaim_deliveries?,
@@ -225,7 +226,13 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
 
   defp delivery_reclaim_due?(state) do
     state.reclaim_deliveries? or
-      System.monotonic_time(:millisecond) >= state.next_delivery_reclaim_at_ms
+      System.monotonic_time(:millisecond) >= next_delivery_reclaim_at(state)
+  end
+
+  defp next_delivery_reclaim_at(state) do
+    Enum.reduce(state.delivery_retries, state.next_delivery_reclaim_at_ms, fn {_id, at}, next ->
+      min(at, next)
+    end)
   end
 
   defp mark_delivery_poll_succeeded(state, reclaim?) do
@@ -246,10 +253,11 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
 
   defp process_delivery(%{discard_reason: reason} = delivery, state) do
     _result = Delivery.dead_letter(state.job_id, state.node.node_id, delivery, reason)
-    state
+    forget_delivery_retry(state, delivery)
   end
 
   defp process_delivery(delivery, state) do
+    state = forget_delivery_retry(state, delivery)
     message = put_in(delivery.message, ["envelope", "attempt"], delivery.attempt)
     delivery = %{delivery | message: message}
 
@@ -289,15 +297,19 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
               report_delivery_retry(delivery, {:ack_failed, reason}, state)
           end
 
-        schedule_delivery_reclaim(next_state, retry_result)
+        schedule_delivery_reclaim(next_state, retry_result, delivery)
 
       {:defer, reason, next_state} ->
-        schedule_delivery_reclaim(next_state, report_delivery_retry(delivery, reason, state))
+        schedule_delivery_reclaim(
+          next_state,
+          report_delivery_retry(delivery, reason, state),
+          delivery
+        )
 
       {:error, reason, next_state} ->
         retry_result = report_delivery_retry(delivery, reason, state)
         send(state.coordinator, {:agent_failed, state.node.node_id, reason})
-        schedule_delivery_reclaim(next_state, retry_result)
+        schedule_delivery_reclaim(next_state, retry_result, delivery)
     end
   end
 
@@ -329,16 +341,25 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     result
   end
 
-  defp schedule_delivery_reclaim(state, {:ok, delay_ms})
+  defp schedule_delivery_reclaim(state, {:ok, delay_ms}, delivery)
        when is_integer(delay_ms) and delay_ms >= 0 do
     %{
       state
       | reclaim_deliveries?: false,
-        next_delivery_reclaim_at_ms: System.monotonic_time(:millisecond) + delay_ms
+        delivery_retries:
+          Map.put(
+            state.delivery_retries,
+            delivery.stream_id,
+            System.monotonic_time(:millisecond) + delay_ms
+          )
     }
   end
 
-  defp schedule_delivery_reclaim(state, _retry_result), do: state
+  defp schedule_delivery_reclaim(state, _retry_result, _delivery), do: state
+
+  defp forget_delivery_retry(state, delivery) do
+    %{state | delivery_retries: Map.delete(state.delivery_retries, delivery.stream_id)}
+  end
 
   defp retry_delay({:ok, delay_ms}) when is_integer(delay_ms), do: delay_ms
   defp retry_delay(_result), do: nil

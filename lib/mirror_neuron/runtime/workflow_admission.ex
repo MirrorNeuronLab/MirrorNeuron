@@ -68,12 +68,25 @@ defmodule MirrorNeuron.Runtime.WorkflowAdmission do
           {:ok, WorkflowLedger.decorate_message(ledger, agent_id, message, headers)}
 
         is_map(attempt) ->
-          {:error, :missing_workflow_attempt_context}
+          if redundant_upstream_trigger?(ledger, step, agent_id, message),
+            do: :skip,
+            else: {:error, :missing_workflow_attempt_context}
 
         true ->
           {:defer, :workflow_dependencies_pending}
       end
 
     {result, ledger, events}
+  end
+
+  defp redundant_upstream_trigger?(ledger, step, agent_id, message) do
+    source = Message.headers(message)["mn.workflow.source_step_id"]
+
+    # A single-delivery step can receive one trigger from each completed parent.
+    # The ledger already marks later triggers ignored; do not turn that decision
+    # into a handler failure or lend them the first delivery's attempt.
+    List.first(step["agent_ids"] || []) == agent_id and is_binary(source) and
+      get_in(ledger, ["messages", Message.id(message), "status"]) == "ignored" and
+      Enum.any?(ledger["edges"], &(&1["from"] == source and &1["to"] == step["id"]))
   end
 end

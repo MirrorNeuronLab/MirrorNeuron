@@ -1934,7 +1934,13 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
         "label" => to_string(Map.get(raw, "label") || step_id),
         "run" => run_id,
         "agent_ids" => agent_ids,
-        "input_agent_id" => if(node && Map.get(node, :agent_type) == "step_source", do: agent_id),
+        "input_agent_id" =>
+          if(
+            node &&
+              (Map.get(node, :agent_type) == "step_source" or Map.get(node, :type) == "stream" or
+                 Map.get(node_config, "workflow_complete_step", true) == false),
+            do: agent_id
+          ),
         "required" => Map.get(control, "required", true) != false,
         "failure_policy" => to_string(Map.get(control, "failure_policy") || "fail_workflow"),
         "trigger_rule" => trigger_rule,

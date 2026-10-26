@@ -31,6 +31,8 @@ defmodule MirrorNeuron.Runtime.RunRetryIntegrationTest do
   end
 
   setup do
+    MirrorNeuron.Cluster.Hardware.update_snapshot(MirrorNeuron.Cluster.Hardware.info())
+    on_exit(fn -> MirrorNeuron.Cluster.Hardware.clear_snapshot() end)
     :persistent_term.put({RetryRunner, :test}, self())
     id = "checkpoint-test-#{System.unique_integer([:positive])}"
 
@@ -432,6 +434,7 @@ defmodule MirrorNeuron.Runtime.RunRetryIntegrationTest do
       "expected_attempt" => 1,
       "checkpoint_revision" => checkpoint["revision"],
       "idempotency_key" => "retry-wait",
+      "admission_policy" => "enqueue_if_busy",
       "configuration_overrides" => %{}
     }
 

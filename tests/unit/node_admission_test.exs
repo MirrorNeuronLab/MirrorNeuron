@@ -63,6 +63,12 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
   end
 
   setup do
+    # These tests drive reconciliation explicitly against an injected store.
+    # Suspend the application timer so it cannot reclaim their deliberately
+    # unpersisted submissions in the middle of a transition assertion.
+    admission = Process.whereis(NodeAdmission)
+    if admission, do: :sys.suspend(admission)
+    on_exit(fn -> if admission && Process.alive?(admission), do: :sys.resume(admission) end)
     start_supervised!(Store)
     MirrorNeuron.Cluster.Hardware.update_snapshot(%{})
     on_exit(fn -> MirrorNeuron.Cluster.Hardware.clear_snapshot() end)
@@ -114,7 +120,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
     refute NodeAdmission.authorized?(epoch)
   end
 
-  test "protected starts require the native owner's exclusive-run capability" do
+  test "protected starts require the native owner's resource-admission capability" do
     alias MirrorNeuron.Cluster.Hardware
     on_exit(fn -> Hardware.clear_snapshot() end)
     Hardware.update_snapshot(%{capabilities: ["resource_admission_v2"]})

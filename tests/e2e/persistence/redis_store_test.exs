@@ -2093,19 +2093,24 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
   end
 
   test "recovery evals can be listed by active status" do
+    # Listing is independent of retention. Keep terminal fixtures current so
+    # the application retention worker cannot legitimately expire them.
+    now = DateTime.utc_now()
+    pending_created = now |> DateTime.add(-1, :second) |> DateTime.to_iso8601()
+    complete_created = DateTime.to_iso8601(now)
     pending_id = "pending-eval-#{System.unique_integer([:positive])}"
     complete_id = "complete-eval-#{System.unique_integer([:positive])}"
 
     assert {:ok, _eval} =
              RedisStore.persist_recovery_eval(pending_id, %{
                "status" => "pending",
-               "created_at" => "2026-01-01T00:00:00Z"
+               "created_at" => pending_created
              })
 
     assert {:ok, _eval} =
              RedisStore.persist_recovery_eval(complete_id, %{
                "status" => "complete",
-               "created_at" => "2026-01-02T00:00:00Z"
+               "created_at" => complete_created
              })
 
     assert {:ok, pending_evals} = RedisStore.list_recovery_evals(["pending", "blocked"])
@@ -2117,7 +2122,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert {:ok, _eval} =
              RedisStore.update_recovery_eval(pending_id, %{
                "status" => "complete",
-               "completed_at" => "2026-01-03T00:00:00Z"
+               "completed_at" => Runtime.timestamp()
              })
 
     assert {:ok, []} = RedisStore.list_recovery_evals(["pending", "blocked"])

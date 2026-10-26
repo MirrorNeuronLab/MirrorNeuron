@@ -84,6 +84,39 @@ defmodule MirrorNeuron.Runtime.WorkflowAdmissionTest do
              StepSource.handle_message(replay, state, %{})
   end
 
+  test "a direct stream or collector admits distinct deliveries only at its declared entry" do
+    for {kind, config} <- [{"generic", %{"workflow_complete_step" => false}}, {"stream", %{}}] do
+      definition = %Manifest{
+        flow: %{
+          "steps" => [
+            %{"id" => "consume", "run" => "consumer", "agent_ids" => ["consumer", "internal"]}
+          ],
+          "graph" => %{"edges" => []}
+        }
+      }
+
+      nodes = [
+        %{node_id: "consumer", agent_type: "executor", type: kind, config: config},
+        %{node_id: "internal", agent_type: "executor", config: %{}}
+      ]
+
+      {ledger, []} = WorkflowLedger.new(definition, nodes) |> WorkflowLedger.job_running()
+      first = Message.new("job", "producer", "consumer", "item", %{"index" => 1})
+      second = Message.new("job", "producer", "consumer", "item", %{"index" => 2})
+      {{:ok, admitted_first}, ledger, [_]} = WorkflowAdmission.admit(ledger, "consumer", first)
+      ledger = Jason.decode!(Jason.encode!(ledger))
+      {{:ok, admitted_second}, ledger, []} = WorkflowAdmission.admit(ledger, "consumer", second)
+      assert Message.id(admitted_first) != Message.id(admitted_second)
+      assert Message.headers(admitted_first) == Message.headers(admitted_second)
+      assert ledger["steps"]["consume"]["attempt_count"] == 1
+      assert ledger["messages"][Message.id(second)]["status"] == "running"
+      foreign = Message.new("job", "producer", "internal", "item", %{})
+
+      assert {{:error, :missing_workflow_attempt_context}, _, _} =
+               WorkflowAdmission.admit(ledger, "internal", foreign)
+    end
+  end
+
   test "child planner admission uses its instance rather than the absent template step" do
     definition = %Manifest{
       flow: %{
@@ -148,6 +181,43 @@ defmodule MirrorNeuron.Runtime.WorkflowAdmissionTest do
     assert Message.from(final_message) == "workflow_ledger"
     [parent] = Message.body(final_message)["parents"]
     assert parent["output"]["outputs"]["result"] == %{"answer" => "Final child result"}
+  end
+
+  test "a single-delivery fan-in ignores later declared upstream triggers without borrowing context" do
+    definition = %Manifest{
+      flow: %{
+        "steps" => Enum.map(~w(left right publish), &%{"id" => &1, "run" => &1}),
+        "graph" => %{"edges" => Enum.map(~w(left right), &%{"from" => &1, "to" => "publish"})}
+      }
+    }
+
+    nodes = Enum.map(~w(left right publish), &%{node_id: &1, config: %{}})
+    {ledger, []} = WorkflowLedger.new(definition, nodes) |> WorkflowLedger.job_running()
+    ledger = Enum.reduce(~w(left right), ledger, &complete(&2, &1))
+
+    left =
+      Message.new("job", "left", "publish", "done", %{},
+        headers: %{"mn.workflow.source_step_id" => "left"}
+      )
+
+    right =
+      Message.new("job", "right", "publish", "done", %{},
+        headers: %{"mn.workflow.source_step_id" => "right"}
+      )
+
+    {{:ok, _}, ledger, [_]} = WorkflowAdmission.admit(ledger, "publish", left)
+    attempt = ledger["steps"]["publish"]["current_attempt"]
+    {:skip, ledger, [_]} = WorkflowAdmission.admit(ledger, "publish", right)
+    assert ledger["messages"][Message.id(right)]["status"] == "ignored"
+    assert ledger["steps"]["publish"]["current_attempt"] == attempt
+
+    foreign =
+      Message.new("job", "external", "publish", "done", %{},
+        headers: %{"mn.workflow.source_step_id" => "external"}
+      )
+
+    assert {{:error, :missing_workflow_attempt_context}, _, _} =
+             WorkflowAdmission.admit(ledger, "publish", foreign)
   end
 
   defp boundary(step_id) do

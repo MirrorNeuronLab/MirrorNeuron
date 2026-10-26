@@ -22,11 +22,17 @@ defmodule MirrorNeuron.WorkflowInvocationTest do
     namespace = "workflow_invocation_#{System.unique_integer([:positive])}"
     System.put_env("MN_REDIS_NAMESPACE", namespace)
     hardware = Jason.decode!(original_hardware || "{}")
-    hardware = Map.put(hardware, "native_sdk_grpc", %{"capabilities" => ["exclusive_run_v1"]})
+
+    hardware =
+      Map.put(hardware, "native_sdk_grpc", %{"capabilities" => ["resource_admission_v2"]})
+
     System.put_env("MN_NODE_HARDWARE_JSON", Jason.encode!(hardware))
+    MirrorNeuron.Cluster.Hardware.update_snapshot(hardware)
     assert {:ok, _} = MirrorNeuron.Cluster.NodeState.advertise_self()
 
     on_exit(fn ->
+      MirrorNeuron.Cluster.Hardware.clear_snapshot()
+
       if original_hardware,
         do: System.put_env("MN_NODE_HARDWARE_JSON", original_hardware),
         else: System.delete_env("MN_NODE_HARDWARE_JSON")
@@ -268,6 +274,48 @@ defmodule MirrorNeuron.WorkflowInvocationTest do
 
     assert get_in(job, ["result", "output", "last_message", "outputs", "result"]) ==
              %{"answer" => "Evidence reviewed"}
+  end
+
+  test "all deferred boundary deliveries retry without waiting for another lease" do
+    System.put_env("MN_MESSAGE_ACK_TIMEOUT_MS", "30000")
+    ids = ~w(one two three four five)
+    upstreams = Enum.map(ids, &compiled_step(&1, [], %{"value" => &1}))
+    [slow | rest] = Enum.reverse(upstreams)
+
+    slow =
+      update_in(slow.nodes, fn nodes ->
+        Enum.map(nodes, fn
+          %{"agent_type" => "router"} = node ->
+            %{
+              node
+              | "agent_type" => "executor",
+                "config" => %{
+                  "runner_module" => MirrorNeuron.Runner.HostLocal,
+                  "workflow_complete_step" => false,
+                  "output_message_type" => "five_worked",
+                  "command" => [
+                    "/bin/sh",
+                    "-c",
+                    ~S(sleep 1; printf '{"outputs":{"value":"five"},"artifacts":[],"metrics":{},"status":"completed","runtime_step_mode":"manifest_handler"}\n')
+                  ]
+                }
+            }
+
+          node ->
+            node
+        end)
+      end)
+
+    fields =
+      Map.new(ids, &{&1, %{"$ref" => "upstream", "step_id" => &1, "path" => ["result", "value"]}})
+
+    publish = compiled_step("publish", ids, fields)
+    job = run_compiled(Enum.reverse([slow | rest]) ++ [publish], ids)
+
+    assert get_in(job, ["result", "output", "last_message", "outputs", "result"]) ==
+             Map.new(ids, &{&1, &1})
+
+    assert get_in(job, ["workflow_state", "steps", "publish", "attempt_count"]) == 1
   end
 
   defp compiled_step(id, upstreams, fields) do
