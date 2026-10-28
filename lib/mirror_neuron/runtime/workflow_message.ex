@@ -41,6 +41,24 @@ defmodule MirrorNeuron.Runtime.WorkflowMessage do
     end
   end
 
+  def coordinator_report_id(state, incoming, kind, delivery_key) do
+    # A pending delivery can be readmitted into a new logical attempt. Its
+    # reports contain that attempt's headers, so they need a separate receipt
+    # from the prior attempt while transport replay keeps the same identity.
+    [
+      state.job_id,
+      state.node.node_id,
+      Message.id(incoming),
+      kind,
+      to_string(delivery_key),
+      Message.headers(incoming)["mn.workflow.attempt_id"],
+      state.runtime_context[:lease_epoch]
+    ]
+    |> Jason.encode!()
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.url_encode64(padding: false)
+  end
+
   defp headers_for_target(headers, state, incoming, to_node) do
     agent_steps = Map.get(state.runtime_context, :workflow_agent_steps, %{})
     source_step = Message.headers(incoming)["mn.workflow.step_id"]

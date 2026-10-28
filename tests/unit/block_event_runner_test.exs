@@ -2,6 +2,7 @@ defmodule MirrorNeuron.BlockEventRunnerTest do
   use ExUnit.Case, async: false
   alias MirrorNeuron.Runner.OpenShell
   alias MirrorNeuron.Builtins.BlockEventResult
+  alias MirrorNeuron.Runtime.{WorkflowAdmission, WorkflowLedger}
 
   @tag :tmp_dir
   test "compiled event blocks keep state across replacement OpenShell sandboxes", %{tmp_dir: root} do
@@ -102,10 +103,24 @@ defmodule MirrorNeuron.BlockEventRunnerTest do
         })
       )
 
-    message =
-      MirrorNeuron.Message.new("event-job", "source", "monitor", "tick", %{},
-        headers: %{"mn.workflow.run_id" => "actual-run", "mn.workflow.step_id" => "monitor-phase"}
-      )
+    node = %{node_id: "monitor", agent_type: "executor", config: config}
+
+    manifest = %MirrorNeuron.Manifest{
+      type: "service",
+      flow: %{"steps" => [%{"id" => "monitor-phase", "run" => "monitor"}]}
+    }
+
+    ledger =
+      WorkflowLedger.new(manifest, [node], %{"workflow_state" => %{"run_id" => "actual-run"}})
+
+    worker = %{
+      node: node,
+      coordinator: self(),
+      runtime_context: %{workflow_agent_steps: WorkflowLedger.agent_to_step(ledger)}
+    }
+
+    message = MirrorNeuron.Message.new("event-job", "source", "monitor", "tick", %{})
+    assert {:ok, ^message} = WorkflowAdmission.prepare(message, worker)
 
     opts = [
       job_id: "event-job",
@@ -141,10 +156,16 @@ defmodule MirrorNeuron.BlockEventRunnerTest do
     assert File.read!(report) == "# Scene 1\n"
     assert File.read!(calls) == "1"
 
-    next_message =
-      MirrorNeuron.Message.new("event-job", "source", "monitor", "tick", %{},
-        headers: %{"mn.workflow.run_id" => "actual-run", "mn.workflow.step_id" => "monitor-phase"}
-      )
+    assert {^ledger, [], []} =
+             WorkflowLedger.on_agent_event(
+               ledger,
+               "monitor",
+               :workflow_step_attempt_completed,
+               %{"outputs" => %{"count" => 1}}
+             )
+
+    next_message = MirrorNeuron.Message.new("event-job", "source", "monitor", "tick", %{})
+    assert {:ok, ^next_message} = WorkflowAdmission.prepare(next_message, worker)
 
     next_opts =
       opts

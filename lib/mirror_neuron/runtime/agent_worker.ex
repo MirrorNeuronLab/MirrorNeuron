@@ -854,7 +854,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   end
 
   defp enqueue_coordinator_report(state, incoming, kind, fields, delivery_key) do
-    report_id = coordinator_report_id(state, incoming, kind, delivery_key)
+    report_id = WorkflowMessage.coordinator_report_id(state, incoming, kind, delivery_key)
 
     body =
       fields
@@ -871,13 +871,6 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
       {:error, reason} ->
         {:error, reason}
     end
-  end
-
-  defp coordinator_report_id(state, incoming, kind, delivery_key) do
-    [state.job_id, state.node.node_id, Message.id(incoming), kind, to_string(delivery_key)]
-    |> Enum.join(":")
-    |> then(&:crypto.hash(:sha256, &1))
-    |> Base.url_encode64(padding: false)
   end
 
   defp inject_runtime_paths(node, runtime_context) do

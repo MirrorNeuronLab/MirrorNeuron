@@ -431,6 +431,13 @@ Generated step sources collect multiple upstream deliveries under one attempt.
 Child-workflow workers keep the child instance's attempt across source, worker,
 join and sink boundaries; the template identity does not replace the instance.
 
+Coordinator progress and completion reports use a separate receipt for each
+workflow attempt and runtime lease epoch. A pending source delivery readmitted
+after a failed attempt can report its new context without colliding with the
+previous acknowledged report. Replaying that same attempt stays idempotent,
+and changed report bodies still fail validation. Deploy the updated Core on
+each execution owner; a desktop-only update cannot change this runtime behavior.
+
 HostLocal auxiliary services receive `MN_WORKFLOW_RUN_ID` from the owning
 runtime even when their initial message has no workflow headers. Runtime
 workflow fields override definition-time environment values, matching the
@@ -468,6 +475,16 @@ refreshes endpoint advertisements without restarting healthy Core processes.
 Direct distributed-Erlang deployments retain their existing naming policy.
 
 ### OpenShell artifact handoff v1
+
+A static service whose workflow phases each bind one native event executor is
+supervised as a live event graph. These phases do not enter the finite DAG
+ledger: completing one scene must not suppress the next delivery. Core retains
+the physical output-run identity across callbacks and pause/resume. Durable
+delivery, event-state transitions, publication replay and per-callback runner
+limits still apply. Batch jobs, mixed services, dynamic DAGs and child workflows
+retain finite-step admission. Updating Core does not recover events an older
+runtime already acknowledged without execution; a stalled service needs an
+explicit new run after the update, preserving its previous evidence.
 
 Native SDK event blocks use `mn.block_events/v1`. Core advertises the supported
 protocol to runners, validates the declared port/observation contract and applies

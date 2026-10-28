@@ -157,6 +157,16 @@ upstream edges are acknowledged as redundant while its owning attempt runs.
 They neither execute another handler nor fail the run. Unrelated deliveries
 remain rejected by the message-specific fence.
 
+Static services whose declared phases each bind exactly one native
+`mn.block_events/v1` executor use event delivery rather than finite DAG admission.
+Core does not gate subsequent callbacks on an earlier callback's logical
+completion. Their physical output-run identity remains stable across callbacks
+and pause/resume; delivery ACK/retry, event-state fencing, publication replay and
+explicit per-callback runner limits remain authoritative. Mixed services, batch
+jobs, dynamic DAGs and child workflows retain ledger admission. This does not
+replay an event already acknowledged and skipped by an older Core; recovery of
+that stalled service requires an explicitly new run with the updated runtime.
+
 Routing within one logical step retains its attempt, deadlines, graph identity
 and step idempotency key. Crossing a logical-step boundary clears that context
 for the destination's ledger admission. Runner `MN_WORKFLOW_IDEMPOTENCY_KEY`
@@ -321,6 +331,13 @@ attempt/lease state, and bounded lifetime. Delivery enforces configured queue
 limits, backpressure, claim/lease, ACK, retry, deduplication, and dead-letter
 behavior. A message is not considered successfully handled until the owning
 delivery/lifecycle boundary records that outcome.
+
+Durable coordinator reports bind their identity to the source message, reporting
+agent, report kind/action, workflow attempt and runtime lease epoch. Readmitting
+the same source delivery into a new workflow attempt creates a new report receipt;
+transport replay within that attempt reuses its receipt. Conflicting report bodies
+within one attempt remain rejected. Deploy matching Core on execution owners;
+changing desktop code does not update running Core containers.
 
 Retries preserve identity and must not cause duplicate logical completion or
 unbounded side effects. Expired, exhausted, invalid, or permanently failed

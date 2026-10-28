@@ -125,6 +125,47 @@ defmodule MirrorNeuron.Runtime.WorkflowMessageTest do
     assert Message.headers(outgoing) == %{"mn.attempt_epoch" => 3}
   end
 
+  test "coordinator reports keep replay identity and isolate workflow and lease attempts" do
+    state = state("intake__worker")
+    first = incoming()
+
+    report =
+      WorkflowMessage.coordinator_report_id(state, first, "workflow_message_received", "received")
+
+    replay = first |> put_in(["envelope", "attempt"], 2) |> Jason.encode!() |> Jason.decode!()
+
+    assert WorkflowMessage.coordinator_report_id(
+             state,
+             replay,
+             "workflow_message_received",
+             "received"
+           ) == report
+
+    next_attempt = put_in(first, ["headers", "mn.workflow.attempt_id"], "intake:attempt:2")
+
+    refute WorkflowMessage.coordinator_report_id(
+             state,
+             next_attempt,
+             "workflow_message_received",
+             "received"
+           ) == report
+
+    refute WorkflowMessage.coordinator_report_id(
+             put_in(state.runtime_context.lease_epoch, 4),
+             first,
+             "workflow_message_received",
+             "received"
+           ) == report
+
+    for {kind, key} <- [
+          {"workflow_message_acked", "acked"},
+          {"agent_event", 0},
+          {"agent_event", 1}
+        ] do
+      refute WorkflowMessage.coordinator_report_id(state, first, kind, key) == report
+    end
+  end
+
   @tag :tmp_dir
   test "HostLocal receives the same scoped key as the Docker/OpenShell environment", %{
     tmp_dir: tmp_dir

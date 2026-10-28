@@ -9,6 +9,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   alias MirrorNeuron.Runtime.ErrorEnvelope
   alias MirrorNeuron.Runtime.WorkflowTrigger
   alias MirrorNeuron.Runtime.WorkflowActivity
+  alias MirrorNeuron.Runtime.ServiceEventWorkflow
 
   @schema_version 3
   @default_timeout_seconds 300
@@ -21,30 +22,37 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
     definitions = step_definitions(manifest, runtime_nodes)
     templates = template_definitions(manifest, runtime_nodes)
 
-    if definitions == [] do
-      disabled_state()
-    else
-      base = %{
-        "schema_version" => @schema_version,
-        "enabled" => true,
-        "job_id" => job_id || existing_job_id(existing_job),
-        "run_id" => existing_run_id(existing_job),
-        "created_at" => Runtime.timestamp(),
-        "updated_at" => Runtime.timestamp(),
-        "status" => "pending",
-        "step_order" => Enum.map(definitions, & &1["id"]),
-        "agent_to_step" => build_agent_to_step(definitions ++ templates),
-        "edges" => graph_edges(manifest),
-        "steps" => Map.new(definitions, &{&1["id"], initial_step(&1)}),
-        "messages" => %{}
-      }
+    cond do
+      definitions == [] ->
+        disabled_state()
 
-      flow = if is_map(manifest.flow), do: manifest.flow, else: %{}
+      ServiceEventWorkflow.event_only?(manifest, runtime_nodes, definitions) ->
+        # Callback phases are a presentation of a live event graph, not finite
+        # DAG steps. Preserve the physical output identity for every lane.
+        Map.put(disabled_state(), "run_id", existing_run_id(existing_job))
 
-      base
-      |> DynamicWorkflow.initialize(flow, Map.new(templates, &{&1["id"], initial_step(&1)}))
-      |> ChildWorkflow.initialize(flow, Map.new(templates, &{&1["id"], initial_step(&1)}))
-      |> merge_existing(existing_job)
+      true ->
+        base = %{
+          "schema_version" => @schema_version,
+          "enabled" => true,
+          "job_id" => job_id || existing_job_id(existing_job),
+          "run_id" => existing_run_id(existing_job),
+          "created_at" => Runtime.timestamp(),
+          "updated_at" => Runtime.timestamp(),
+          "status" => "pending",
+          "step_order" => Enum.map(definitions, & &1["id"]),
+          "agent_to_step" => build_agent_to_step(definitions ++ templates),
+          "edges" => graph_edges(manifest),
+          "steps" => Map.new(definitions, &{&1["id"], initial_step(&1)}),
+          "messages" => %{}
+        }
+
+        flow = if is_map(manifest.flow), do: manifest.flow, else: %{}
+
+        base
+        |> DynamicWorkflow.initialize(flow, Map.new(templates, &{&1["id"], initial_step(&1)}))
+        |> ChildWorkflow.initialize(flow, Map.new(templates, &{&1["id"], initial_step(&1)}))
+        |> merge_existing(existing_job)
     end
   end
 
