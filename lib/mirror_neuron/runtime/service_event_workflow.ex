@@ -12,7 +12,7 @@ defmodule MirrorNeuron.Runtime.ServiceEventWorkflow do
       |> MapSet.new(& &1.node_id)
 
     Map.get(flow, "mode", "static_dag") == "static_dag" and
-      Map.get(flow, "dynamic", %{}) == %{} and
+      Map.get(flow, "dynamic", %{}) in [%{}, %{"enabled" => false}] and
       Map.get(flow, "child_workflows", %{}) == %{} and
       Enum.all?(definitions, fn
         %{"agent_ids" => [agent_id]} -> MapSet.member?(callbacks, agent_id)

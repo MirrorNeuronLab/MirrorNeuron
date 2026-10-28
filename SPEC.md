@@ -160,7 +160,9 @@ remain rejected by the message-specific fence.
 Static services whose declared phases each bind exactly one native
 `mn.block_events/v1` executor use event delivery rather than finite DAG admission.
 Core does not gate subsequent callbacks on an earlier callback's logical
-completion. Their physical output-run identity remains stable across callbacks
+completion. The compiler's explicit `dynamic: {enabled: false}` form is
+static for this classification, just like an omitted dynamic configuration.
+Their physical output-run identity remains stable across callbacks
 and pause/resume; delivery ACK/retry, event-state fencing, publication replay and
 explicit per-callback runner limits remain authoritative. Mixed services, batch
 jobs, dynamic DAGs and child workflows retain ledger admission. This does not

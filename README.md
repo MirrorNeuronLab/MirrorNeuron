@@ -477,7 +477,9 @@ Direct distributed-Erlang deployments retain their existing naming policy.
 ### OpenShell artifact handoff v1
 
 A static service whose workflow phases each bind one native event executor is
-supervised as a live event graph. These phases do not enter the finite DAG
+supervised as a live event graph. Both omitted dynamic configuration and the
+compiler's explicit `dynamic: {enabled: false}` form are static. These phases do
+not enter the finite DAG
 ledger: completing one scene must not suppress the next delivery. Core retains
 the physical output-run identity across callbacks and pause/resume. Durable
 delivery, event-state transitions, publication replay and per-callback runner

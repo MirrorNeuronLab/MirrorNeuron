@@ -41,6 +41,18 @@ defmodule MirrorNeuron.Runtime.ServiceEventWorkflowTest do
     end
   end
 
+  test "absent dynamic configuration also retains event delivery" do
+    {manifest, nodes} = event_service()
+    flow = Map.delete(manifest.flow, "dynamic")
+    refute WorkflowLedger.enabled?(WorkflowLedger.new(%{manifest | flow: flow}, nodes))
+  end
+
+  test "disabled dynamic configuration cannot hide template declarations" do
+    {manifest, nodes} = event_service()
+    flow = Map.put(manifest.flow, "dynamic", %{"enabled" => false, "templates" => %{}})
+    assert WorkflowLedger.enabled?(WorkflowLedger.new(%{manifest | flow: flow}, nodes))
+  end
+
   test "event service pause and resume retain the physical output identity" do
     {manifest, nodes} = event_service()
     ledger = WorkflowLedger.new(manifest, nodes)
@@ -105,6 +117,7 @@ defmodule MirrorNeuron.Runtime.ServiceEventWorkflowTest do
       type: "service",
       flow: %{
         "steps" => steps,
+        "dynamic" => %{"enabled" => false},
         "graph" => %{
           "edges" => [
             %{"from" => "sample", "to" => "understand"},
