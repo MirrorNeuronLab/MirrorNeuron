@@ -59,7 +59,7 @@ defmodule MirrorNeuron.Runtime.LiveInput do
     do: {:error, {:invalid_live_input, "input #{input_id} is not declared"}}
 
   @doc false
-  def pressure_targets(contract, agent_id, message, downstream) do
+  def pressure_targets(contract, agent_id, message, downstream) when is_map(message) do
     headers = Map.get(message, "headers", %{})
     input_id = if is_map(headers), do: headers["mn.live_input_id"]
     declaration = contract |> map_value("live_inputs") |> map_value(input_id)
@@ -81,6 +81,8 @@ defmodule MirrorNeuron.Runtime.LiveInput do
     # downstream model. Ordinary input keeps transitive backpressure admission.
     if control?, do: [agent_id], else: [agent_id | downstream]
   end
+
+  def pressure_targets(_contract, agent_id, _message, downstream), do: [agent_id | downstream]
 
   @doc false
   def validate_payload(payload, schema) when is_map(payload) and is_map(schema) do

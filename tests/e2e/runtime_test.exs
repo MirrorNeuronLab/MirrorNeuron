@@ -3167,6 +3167,9 @@ defmodule MirrorNeuron.RuntimeTest do
     payload = %{"instruction" => "Check helmet use"}
     assert {:error, {:retry_later, _}} = MirrorNeuron.send_message(job_id, "ingress", payload)
 
+    assert {:error, {:retry_later, _}} =
+             MirrorNeuron.send_message(job_id, "ingress", "frame input")
+
     assert {:ok, %{"status" => "accepted"}} =
              MirrorNeuron.Runtime.LiveInput.send(job_id, "focus", payload, "focus-1")
 

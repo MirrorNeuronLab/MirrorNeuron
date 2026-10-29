@@ -96,6 +96,10 @@ defmodule MirrorNeuron.Runtime.LiveInputTest do
     end
 
     assert LiveInput.pressure_targets(contract, "other", command, ["gpu"]) == ["other", "gpu"]
+
+    for body <- ["ordinary input", [1, 2], nil, 42] do
+      assert LiveInput.pressure_targets(contract, "ingress", body, ["gpu"]) == ["ingress", "gpu"]
+    end
   end
 
   defp run_with_declaration(declaration) do
