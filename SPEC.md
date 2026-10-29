@@ -334,6 +334,14 @@ limits, backpressure, claim/lease, ACK, retry, deduplication, and dead-letter
 behavior. A message is not considered successfully handled until the owning
 delivery/lifecycle boundary records that outcome.
 
+Manifest-declared live-input commands retain entrypoint queue admission while
+remaining independent of downstream model backpressure. Core verifies the input
+ID, entrypoint, message class/type and payload schema against the active run's
+immutable contract before applying this rule. Ordinary external messages still
+check all downstream queues. This lets prompt and supervision controls remain
+available while analysis or retrieval is busy; it does not grant model capacity
+or bypass authentication, message limits, delivery or lifecycle checks.
+
 Durable coordinator reports bind their identity to the source message, reporting
 agent, report kind/action, workflow attempt and runtime lease epoch. Readmitting
 the same source delivery into a new workflow attempt creates a new report receipt;

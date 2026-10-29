@@ -18,6 +18,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     ErrorEnvelope,
     EventBus,
     LifecyclePolicy,
+    LiveInput,
     Naming,
     WorkflowLedger
   }
@@ -497,7 +498,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     envelope = build_external_message(state, agent_id, message)
     state = refresh_pressure(state)
 
-    case external_input_pressure(state, agent_id) do
+    case external_input_pressure(state, agent_id, message) do
       {:retry_later, details} ->
         EventBus.publish(state.job_id, %{
           type: :external_input_rejected,
@@ -1810,8 +1811,14 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     end
   end
 
-  defp external_input_pressure(state, agent_id) do
-    impacted_agents = [agent_id | Map.get(state.downstream_by_node, agent_id, [])]
+  defp external_input_pressure(state, agent_id, message) do
+    impacted_agents =
+      LiveInput.pressure_targets(
+        state.manifest.contract,
+        agent_id,
+        message,
+        Map.get(state.downstream_by_node, agent_id, [])
+      )
 
     state.pressure
     |> Map.take(impacted_agents)

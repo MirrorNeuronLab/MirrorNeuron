@@ -59,6 +59,30 @@ defmodule MirrorNeuron.Runtime.LiveInput do
     do: {:error, {:invalid_live_input, "input #{input_id} is not declared"}}
 
   @doc false
+  def pressure_targets(contract, agent_id, message, downstream) do
+    headers = Map.get(message, "headers", %{})
+    input_id = if is_map(headers), do: headers["mn.live_input_id"]
+    declaration = contract |> map_value("live_inputs") |> map_value(input_id)
+
+    control? =
+      with "command" <- message["class"],
+           true <- is_binary(input_id),
+           %{} <- declaration,
+           ^agent_id <- declaration["entrypoint"],
+           type when is_binary(type) <- declaration["message_type"],
+           ^type <- message["type"],
+           {:ok, _payload} <- validate_payload(message["payload"], declaration["schema"] || %{}) do
+        true
+      else
+        _ -> false
+      end
+
+    # A validated operator command needs entrypoint capacity, not an idle
+    # downstream model. Ordinary input keeps transitive backpressure admission.
+    if control?, do: [agent_id], else: [agent_id | downstream]
+  end
+
+  @doc false
   def validate_payload(payload, schema) when is_map(payload) and is_map(schema) do
     validate_value(payload, schema, "$")
   end

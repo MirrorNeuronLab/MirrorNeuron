@@ -73,6 +73,31 @@ defmodule MirrorNeuron.Runtime.LiveInputTest do
     assert reason =~ "too long"
   end
 
+  test "declared controls ignore busy downstream models but retain entrypoint admission" do
+    contract = run_with_declaration(@declaration)["manifest"]["contract"]
+
+    command = %{
+      "class" => "command",
+      "type" => "cctv_operator_steer",
+      "headers" => %{"mn.live_input_id" => "steer_monitoring"},
+      "payload" => %{"instruction" => "Watch helmet use"}
+    }
+
+    assert LiveInput.pressure_targets(contract, "ingress", command, ["gpu", "rag"]) == ["ingress"]
+
+    for invalid <- [
+          put_in(command, ["class"], "event"),
+          put_in(command, ["type"], "other"),
+          put_in(command, ["headers", "mn.live_input_id"], "unknown"),
+          put_in(command, ["payload", "analyze_now"], "invalid")
+        ] do
+      assert LiveInput.pressure_targets(contract, "ingress", invalid, ["gpu", "rag"]) ==
+               ["ingress", "gpu", "rag"]
+    end
+
+    assert LiveInput.pressure_targets(contract, "other", command, ["gpu"]) == ["other", "gpu"]
+  end
+
   defp run_with_declaration(declaration) do
     %{
       "status" => "running",

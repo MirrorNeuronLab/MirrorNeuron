@@ -157,6 +157,14 @@ ordinary reads, and connection setup keep the usual 15-second deadline. The
 SDK allows 130 seconds for the corresponding definition submission, including
 the owner's reply, and does not retry creation automatically.
 
+Manifest-declared live-input commands retain entrypoint queue admission while
+remaining independent of downstream model backpressure. Core verifies the input
+ID, entrypoint, message class/type and payload schema against the active run's
+immutable contract before applying this rule. Ordinary external messages still
+check all downstream queues. This lets prompt and supervision controls remain
+available while analysis or retrieval is busy; it does not grant model capacity
+or bypass authentication, message limits, delivery or lifecycle checks.
+
 Native SDK unary calls release their gRPC connections after each command,
 including failures. If retirement of a previous definition's native resources
 fails after a replacement commits, the replacement response retains its saved

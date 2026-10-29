@@ -131,6 +131,38 @@ defmodule MirrorNeuron.RuntimeTest do
     end
   end
 
+  defmodule BlockedAnalysisRunner do
+    def run(_payload, _config, _opts) do
+      owner = :global.whereis_name({__MODULE__, :test_owner})
+      send(owner, {:analysis_blocked, self()})
+
+      receive do
+        :release_analysis -> :ok
+      after
+        10_000 -> :ok
+      end
+
+      {:ok, %{"exit_code" => 0, "stdout" => "{}", "stderr" => "", "logs" => ""}}
+    end
+  end
+
+  defmodule PromptControlRunner do
+    def run(_payload, _config, _opts) do
+      {:ok,
+       %{
+         "exit_code" => 0,
+         "stdout" =>
+           Jason.encode!(%{
+             "events" => [
+               %{"type" => "prompt_control_applied", "payload" => %{"applied" => true}}
+             ]
+           }),
+         "stderr" => "",
+         "logs" => ""
+       }}
+    end
+  end
+
   defmodule CrashOnceCounter do
     use Agent
 
@@ -3052,6 +3084,102 @@ defmodule MirrorNeuron.RuntimeTest do
 
     assert {:ok, "cancelled"} = MirrorNeuron.cancel(job_id)
     RedisStore.delete_job(job_id)
+  end
+
+  test "declared prompt controls are delivered while downstream analysis is blocked" do
+    name = {BlockedAnalysisRunner, :test_owner}
+    assert :yes = :global.register_name(name, self())
+    on_exit(fn -> :global.unregister_name(name) end)
+
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "prompt_control_backpressure",
+      "type" => "service",
+      "entrypoints" => ["ingress", "gpu"],
+      "initial_inputs" => %{"ingress" => [], "gpu" => [%{"frame" => 1}]},
+      "contract" => %{
+        "live_inputs" => %{
+          "focus" => %{
+            "entrypoint" => "ingress",
+            "message_type" => "goal_update",
+            "schema" => %{
+              "type" => "object",
+              "required" => ["instruction"],
+              "additionalProperties" => false,
+              "properties" => %{"instruction" => %{"type" => "string", "maxLength" => 500}}
+            }
+          }
+        }
+      },
+      "nodes" => [
+        %{
+          "node_id" => "ingress",
+          "agent_type" => "router",
+          "role" => "root_coordinator",
+          "config" => %{"emit_type" => "goal_update"}
+        },
+        %{
+          "node_id" => "gpu",
+          "agent_type" => "executor",
+          "type" => "stream",
+          "config" => %{
+            "runner_module" => BlockedAnalysisRunner,
+            "output_message_type" => nil,
+            "backpressure" => %{
+              "max_queue_depth" => 4,
+              "high_watermark" => 1,
+              "low_watermark" => 0
+            }
+          }
+        },
+        %{
+          "node_id" => "prompt",
+          "agent_type" => "executor",
+          "type" => "stream",
+          "config" => %{"runner_module" => PromptControlRunner, "output_message_type" => nil}
+        }
+      ],
+      "edges" => [
+        %{"from_node" => "ingress", "to_node" => "gpu", "message_type" => "frame"},
+        %{"from_node" => "ingress", "to_node" => "prompt", "message_type" => "goal_update"}
+      ],
+      "policies" => %{"recovery_mode" => "local_restart"}
+    }
+
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
+
+    on_exit(fn ->
+      MirrorNeuron.cancel(job_id)
+      RedisStore.delete_job(job_id)
+    end)
+
+    assert_receive {:analysis_blocked, blocked}, 2_000
+    assert {:ok, "delivered"} = MirrorNeuron.send_message(job_id, "gpu", %{"frame" => 2})
+
+    wait_until(
+      fn ->
+        {:ok, pressure} = MirrorNeuron.pressure(job_id)
+        get_in(pressure, ["agents", "gpu", "backpressure"]) == true
+      end,
+      2_000
+    )
+
+    payload = %{"instruction" => "Check helmet use"}
+    assert {:error, {:retry_later, _}} = MirrorNeuron.send_message(job_id, "ingress", payload)
+
+    assert {:ok, %{"status" => "accepted"}} =
+             MirrorNeuron.Runtime.LiveInput.send(job_id, "focus", payload, "focus-1")
+
+    wait_until(
+      fn ->
+        {:ok, events} = MirrorNeuron.events(job_id)
+        Enum.any?(events, &(&1["type"] == "prompt_control_applied"))
+      end,
+      2_000
+    )
+
+    assert Process.alive?(blocked)
+    send(blocked, :release_analysis)
   end
 
   test "reports executor pool capacity in cluster inspection" do
