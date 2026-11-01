@@ -3154,6 +3154,17 @@ defmodule MirrorNeuron.RuntimeTest do
     end)
 
     assert_receive {:analysis_blocked, blocked}, 2_000
+    # The runner signals before bootstrap control messages have drained. Wait
+    # for idle ingress so the next data message, rather than bootstrap traffic,
+    # is what establishes the pressure asserted below.
+    wait_until(
+      fn ->
+        {:ok, pressure} = MirrorNeuron.pressure(job_id)
+        get_in(pressure, ["agents", "gpu", "backpressure"]) == false
+      end,
+      2_000
+    )
+
     assert {:ok, "delivered"} = MirrorNeuron.send_message(job_id, "gpu", %{"frame" => 2})
 
     wait_until(

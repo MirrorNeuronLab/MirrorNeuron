@@ -7,6 +7,7 @@ defmodule MirrorNeuron.Runtime.InteractionDeadlines do
     Process.send_after(self(), :expire, 250)
     {:ok, nil}
   end
+
   @impl true
   def handle_info(:expire, state) do
     MirrorNeuron.Persistence.InteractionStore.expire_due()

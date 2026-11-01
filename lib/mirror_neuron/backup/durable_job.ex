@@ -15,7 +15,8 @@ defmodule MirrorNeuron.Backup.DurableJob do
       with {:ok, definition} <- StableJob.get(job_id),
            {:ok, runs} <- StableJob.list_runs(job_id),
            :ok <- quiescent(runs),
-           {:ok, bundle} <- Archive.load(get_in(definition, ["bundle_ref", "bundle_fingerprint"])),
+           {:ok, bundle} <-
+             Archive.load(get_in(definition, ["bundle_ref", "bundle_fingerprint"])),
            {:ok, data_dir} <- JobData.path(job_id) do
         with_temp(fn temp ->
           history =

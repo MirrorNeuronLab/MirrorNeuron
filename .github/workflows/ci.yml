@@ -1,10 +1,12 @@
 name: CI
 
 on:
+  pull_request:
+  workflow_dispatch:
   push:
+    branches: [main]
     tags:
       - "v[0-9]*.[0-9]*.[0-9]*"
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,50 +15,65 @@ jobs:
   ci:
     name: Test and build
     runs-on: ubuntu-24.04
-    services:
-      redis:
-        image: redis:7
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
+    defaults:
+      run:
+        working-directory: mirror-neuron-set/MirrorNeuron
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
+        with:
+          path: mirror-neuron-set/MirrorNeuron
+          fetch-depth: 0
+          token: ${{ secrets.MN_GITHUB_TOKEN || secrets.GH_TOKEN || github.token }}
+      - uses: actions/checkout@v4
+        with:
+          repository: MirrorNeuronLab/mn-python-sdk
+          path: mirror-neuron-set/mn-python-sdk
+          fetch-depth: 0
+          token: ${{ secrets.MN_GITHUB_TOKEN || secrets.GH_TOKEN || github.token }}
+      - uses: actions/checkout@v4
+        with:
+          repository: MirrorNeuronLab/mn-system-tests
+          path: mirror-neuron-set/mn-system-tests
+          fetch-depth: 0
+          token: ${{ secrets.MN_GITHUB_TOKEN || secrets.GH_TOKEN || github.token }}
+      - uses: actions/checkout@v4
+        with:
+          repository: MirrorNeuronLab/mn-agents
+          path: mirror-neuron-set/mn-agents
+          fetch-depth: 0
+          token: ${{ secrets.MN_GITHUB_TOKEN || secrets.GH_TOKEN || github.token }}
+      - uses: actions/checkout@v4
+        with:
+          repository: MirrorNeuronLab/mn-skills
+          path: mirror-neuron-set/mn-skills
+          fetch-depth: 0
+          token: ${{ secrets.MN_GITHUB_TOKEN || secrets.GH_TOKEN || github.token }}
+      - uses: actions/checkout@v4
+        with:
+          repository: MirrorNeuronLab/mn-blueprints
+          path: mn-blueprints
+          fetch-depth: 0
+          token: ${{ secrets.MN_GITHUB_TOKEN || secrets.GH_TOKEN || github.token }}
+      - uses: actions/checkout@v4
+        with:
+          repository: MirrorNeuronLab/otterdesk-blueprints
+          path: otterdesk-blueprints
+          fetch-depth: 0
+          token: ${{ secrets.MN_GITHUB_TOKEN || secrets.GH_TOKEN || github.token }}
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
-      - name: Set up Elixir
-        uses: erlef/setup-beam@v1
-        with:
-          elixir-version: "1.16"
-          otp-version: "26"
-
-      - name: Install dependencies
-        run: mix deps.get
-
+      - name: Install the isolated Core test harness
+        run: python -m pip install -e ../mn-system-tests
+      # The harness pins production Elixir/OTP, installs SDK dependencies and
+      # owns its Redis/state. No host Elixir, Docker socket mount or job data.
       - name: Check formatting
-        continue-on-error: true
-        run: mix format --check-formatted
-
+        run: python -m mn_system_tests.elixir --source . format --check-formatted
       - name: Run tests
-        env:
-          MN_GRPC_PORT: "55051"
-          MN_API_PORT: "54000"
-          MN_REDIS_URL: "redis://localhost:6379/0"
-        run: mix test
-
+        run: python -m mn_system_tests.elixir --source . test
       - name: Compile with warnings as errors
-        continue-on-error: true
-        run: mix compile --warnings-as-errors
-
+        run: python -m mn_system_tests.elixir --source . compile --force --warnings-as-errors
       - name: Check shell scripts
         shell: bash
         run: |

@@ -7,6 +7,9 @@ defmodule MirrorNeuron.Runtime.EventBus do
     Registry.register(MirrorNeuron.Runtime.EventRegistry, job_id, [])
   end
 
+  @doc false
+  def dispatch_persisted(job_id, event), do: dispatch(job_id, event)
+
   def publish(job_id, event) do
     persisted = MirrorNeuron.Runtime.EventEnvelope.normalize(event, job_id)
 

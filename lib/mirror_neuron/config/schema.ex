@@ -69,9 +69,7 @@ defmodule MirrorNeuron.Config.Schema do
         default: 10_000
       ),
       spec("MN_JOB_CALL_TIMEOUT_MS", :job_call_timeout_ms, :integer, default: 15_000),
-      spec("MN_CANCEL_JOB_CALL_TIMEOUT_MS", :cancel_job_call_timeout_ms, :integer,
-        default: 5_000
-      ),
+      spec("MN_CANCEL_JOB_CALL_TIMEOUT_MS", :cancel_job_call_timeout_ms, :integer, default: 5_000),
       spec("MN_MESSAGE_DEFAULT_TTL_SECONDS", :message_default_ttl_seconds, :integer,
         default: 86_400
       ),

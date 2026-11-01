@@ -623,7 +623,8 @@ defmodule MirrorNeuron.ModelServices do
 
   defp native_sdk_json_command(attrs, timeout, client_env, default_client, label) do
     with {:ok, target} <- native_sdk_grpc_target(),
-         {:ok, response} <- native_sdk_request(target, attrs, timeout, client_env, default_client),
+         {:ok, response} <-
+           native_sdk_request(target, attrs, timeout, client_env, default_client),
          {:ok, result} when is_map(result) <- Jason.decode(response.resource_json) do
       {:ok, result}
     else

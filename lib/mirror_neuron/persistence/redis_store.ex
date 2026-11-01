@@ -587,7 +587,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   def persist_job(job_id, job_map) when is_map(job_map) do
     with :ok <- validate_identifier("job_id", job_id),
          {:ok, job_map} <- with_run_clock(job_id, job_map) do
-      encoded = Jason.encode!(job_map)
+      encoded = Jason.encode!(Map.delete(job_map, :terminal_event))
       encoded_summary = Jason.encode!(job_summary(job_id, job_map))
       encoded_guard = Jason.encode!(job_guard(job_id, job_map))
 
@@ -604,46 +604,53 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   def persist_job(_job_id, _job_map), do: {:error, "job must be an object"}
 
+  @doc false
+  def persist_terminal_transition(job_id, job_map, event) do
+    event_id = Map.get(event, :event_id) || Map.fetch!(event, "event_id")
+    job_map = job_map |> Map.delete("pending_finalization") |> Map.delete(:pending_finalization)
+    job_map = job_map |> Map.put(:finalization_id, event_id) |> Map.put(:terminal_event, event)
+    persist_job(job_id, job_map)
+  end
+
   # Check the guard and publish the new record in one Redis operation. A
   # previous attempt cannot pass a check and then overwrite a newer epoch.
   defp persist_fenced_job(job_id, encoded, summary, guard, job_map) do
-    script = """
-    local prior = redis.call('GET', KEYS[3])
-    if prior then
-      prior = cjson.decode(prior)
-      local incoming = tonumber(ARGV[5])
-      local epoch = tonumber(prior.lease_epoch)
-      if tonumber(prior.cancellation_fence_epoch) then return -2 end
-      if epoch and (incoming < epoch) then return -1 end
-    end
-    if ARGV[1] ~= '' then redis.call('SET', KEYS[1], ARGV[1]) end
-    redis.call('SET', KEYS[2], ARGV[2])
-    redis.call('SET', KEYS[3], ARGV[3])
-    return redis.call('SADD', KEYS[4], ARGV[4])
-    """
-
     epoch = lease_epoch(job_map)
+    event = Map.get(job_map, :terminal_event)
+    event = if event, do: Jason.encode!(event), else: ""
+    event_id = field(job_map, "finalization_id", "")
 
-    case command([
-           "EVAL",
-           script,
-           "4",
-           key("job", job_id),
-           key("job", job_id, "summary"),
-           key("job", job_id, "guard"),
-           key(@jobs_set),
-           encoded,
-           summary,
-           guard,
-           job_id,
-           to_string(epoch || -1)
-         ]) do
+    case MirrorNeuron.Persistence.FencedJobStore.write(
+           &command/1,
+           [
+             key("job", job_id),
+             key("job", job_id, "summary"),
+             key("job", job_id, "guard"),
+             key(@jobs_set),
+             key("job", job_id, "events")
+           ],
+           [
+             encoded,
+             summary,
+             guard,
+             job_id,
+             to_string(epoch || -1),
+             event,
+             event_id,
+             to_string(event_max_count()),
+             to_string(event_ttl_seconds()),
+             channel("events", job_id)
+           ]
+         ) do
       {:ok, -1} ->
         {:error, {:stale_lease_epoch, epoch, existing_job_guard(job_id)["lease_epoch"]}}
 
       {:ok, -2} ->
         {:error,
          {:cancellation_fenced, epoch, existing_job_guard(job_id)["cancellation_fence_epoch"]}}
+
+      {:ok, -3} ->
+        {:error, :conflicting_finalization}
 
       {:ok, result} ->
         {:ok, ["OK", "OK", "OK", result]}
@@ -958,6 +965,9 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
+  def persist_job_definition(_job_id, _definition),
+    do: {:error, "job definition must be an object"}
+
   @doc false
   def create_job_definition(job_id, definition) when is_map(definition) do
     with :ok <- validate_identifier("job_id", job_id),
@@ -1008,9 +1018,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       end
     end
   end
-
-  def persist_job_definition(_job_id, _definition),
-    do: {:error, "job definition must be an object"}
 
   def fetch_job_definition(job_id) do
     with :ok <- validate_identifier("job_id", job_id) do
@@ -2837,6 +2844,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       "attempt" => field(job, "attempt", 0),
       "lease_epoch" => lease_epoch(job),
       "cancellation_fence_epoch" => parse_integer(field(job, "cancellation_fence_epoch")),
+      "finalization_id" => field(job, "finalization_id"),
       "updated_at" => field(job, "updated_at")
     }
   end

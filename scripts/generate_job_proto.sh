@@ -12,6 +12,7 @@ elixir -e 'Code.append_paths(Path.wildcard("$PWD/_build/dev/lib/*/ebin")); Appli
 EOF
 chmod +x "$plugin"
 protoc -I proto --plugin="protoc-gen-elixir=$plugin" --elixir_out=plugins=grpc:lib/mirror_neuron_grpc proto/job.proto
+mix format lib/mirror_neuron_grpc/job.pb.ex
 cp proto/job.proto "$sdk_dir/mn_sdk/proto/job.proto"
 uv run --no-project --with grpcio-tools==1.82.1 python -m grpc_tools.protoc \
   -I proto --python_out="$sdk_dir/mn_sdk/proto" --grpc_python_out="$sdk_dir/mn_sdk/proto" proto/job.proto

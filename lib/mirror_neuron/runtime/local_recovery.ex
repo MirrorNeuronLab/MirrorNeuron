@@ -177,6 +177,28 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
   defp clear_scan_timer(state),
     do: %{state | scan_timer_ref: nil, scan_token: nil}
 
+  defp recover_job_map(%{"job_id" => job_id, "pending_finalization" => intent} = job, _opts)
+       when is_map(intent) do
+    if job_runner_alive?(job_id) or active_lease?(job_id) do
+      {:ok, %{job_id: job_id, action: :skipped, reason: "finalization owner is live"}}
+    else
+      with {:ok, terminal} <- MirrorNeuron.Runtime.Finalization.recover(job) do
+        deregister_job_services(job_id)
+        MirrorNeuron.Runtime.cleanup_job_sandboxes(job_id)
+
+        MirrorNeuron.Artifacts.SharedStorage.publish_run_completion(
+          terminal["manifest"],
+          terminal["workflow_run_id"] || job_id,
+          terminal["status"],
+          terminal["lease_epoch"] || 0
+        )
+
+        EventBus.dispatch_persisted(job_id, intent["event"])
+        {:ok, %{job_id: job_id, action: :skipped, reason: "terminal finalization recovered"}}
+      end
+    end
+  end
+
   defp recover_job_map(%{"job_id" => job_id, "status" => status} = job, opts) do
     cond do
       job["recovery_mode"] == "checkpoint_retry" and recoverable_job_status?(job) and

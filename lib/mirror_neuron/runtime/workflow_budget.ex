@@ -39,7 +39,9 @@ defmodule MirrorNeuron.Runtime.WorkflowBudget do
         if Enum.all?(declarations, fn {name, value} ->
              valid_name?(name) and is_map(value) and Map.keys(value) == ["limit"] and
                is_integer(value["limit"]) and value["limit"] in 0..100_000
-           end), do: :ok, else: {:error, "invalid workflow budget declaration"}
+           end),
+           do: :ok,
+           else: {:error, "invalid workflow budget declaration"}
 
       _ ->
         {:error, "invalid workflow budget declarations"}

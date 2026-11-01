@@ -82,11 +82,26 @@ defmodule MirrorNeuron.Runtime.WorkflowBudgetTest do
     assert is_binary(workflow_run_id)
     refute workflow_run_id == execution_id
 
+    # Horde acknowledges the CRDT write before its registry ETS projection.
+    # Observe that projection before asserting the registered owner identity.
+    lookup = fn ->
+      Horde.Registry.lookup(
+        MirrorNeuron.DistributedRegistry,
+        {:workflow_budget, job_id, workflow_run_id}
+      )
+    end
+
     assert [{owner, nil}] =
-             Horde.Registry.lookup(
-               MirrorNeuron.DistributedRegistry,
-               {:workflow_budget, job_id, workflow_run_id}
-             )
+             Enum.reduce_while(1..100, [], fn _, _ ->
+               case lookup.() do
+                 [] ->
+                   Process.sleep(10)
+                   {:cont, []}
+
+                 owners ->
+                   {:halt, owners}
+               end
+             end)
 
     assert owner == self()
 

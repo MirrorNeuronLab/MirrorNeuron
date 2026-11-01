@@ -92,6 +92,61 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     {:ok, namespace: namespace}
   end
 
+  test "terminal intent recovers without replaying work or duplicating its event" do
+    job_id = "finalization-#{System.unique_integer([:positive])}"
+    pending = %{"job_id" => job_id, "status" => "running", "attempt" => 1, "lease_epoch" => 3}
+    terminal = Map.put(pending, "status", "completed")
+    assert {:ok, _} = RedisStore.persist_job(job_id, pending)
+
+    assert {:error, :interrupted} =
+             MirrorNeuron.Runtime.Finalization.commit(
+               job_id,
+               pending,
+               terminal,
+               %{type: :job_completed},
+               finish: fn _, _, _ -> {:error, :interrupted} end
+             )
+
+    assert {:ok, stored} = RedisStore.fetch_job(job_id)
+    assert stored["status"] == "running"
+    assert is_map(stored["pending_finalization"])
+    assert {:ok, %{reason: "terminal finalization recovered"}} =
+             MirrorNeuron.Runtime.LocalRecovery.recover_job(job_id)
+
+    assert Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:job_runner, job_id}) == []
+    assert {:ok, _} = MirrorNeuron.Runtime.Finalization.recover(stored)
+    assert {:ok, completed} = RedisStore.fetch_job(job_id)
+    assert completed["status"] == "completed"
+    refute Map.has_key?(completed, "pending_finalization")
+    assert {:ok, [event]} = RedisStore.read_events(job_id)
+    assert event["type"] == "job_completed"
+    assert event["event_id"] == completed["finalization_id"]
+    RedisStore.delete_job(job_id)
+  end
+
+  test "pending finalization cannot overwrite a newer execution epoch" do
+    job_id = "finalization-fence-#{System.unique_integer([:positive])}"
+    pending = %{"job_id" => job_id, "status" => "running", "attempt" => 1, "lease_epoch" => 3}
+
+    assert {:error, :interrupted} =
+             MirrorNeuron.Runtime.Finalization.commit(
+               job_id,
+               pending,
+               Map.put(pending, "status", "completed"),
+               %{type: :job_completed},
+               finish: fn _, _, _ -> {:error, :interrupted} end
+             )
+
+    assert {:ok, intent} = RedisStore.fetch_job(job_id)
+    assert {:ok, _} = RedisStore.persist_job(job_id, Map.put(pending, "lease_epoch", 4))
+
+    assert {:error, {:stale_lease_epoch, 3, 4}} =
+             MirrorNeuron.Runtime.Finalization.recover(intent)
+
+    assert {:ok, []} = RedisStore.read_events(job_id)
+    RedisStore.delete_job(job_id)
+  end
+
   test "append_event trims old events using configured retention" do
     Application.put_env(:mirror_neuron, :event_max_count, 3)
     job_id = "event-retention-#{System.unique_integer([:positive])}"

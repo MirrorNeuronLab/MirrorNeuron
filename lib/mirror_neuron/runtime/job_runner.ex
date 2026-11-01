@@ -490,7 +490,7 @@ defmodule MirrorNeuron.Runtime.JobRunner do
   defp release_job_lease(job_id, node_name, lease) do
     case RedisStore.release_fenced_lease("job:#{job_id}", node_name, lease["epoch"]) do
       :ok ->
-        :ok
+        MirrorNeuron.Runtime.NodeAdmission.wake()
 
       {:error, :not_owner} ->
         :ok
@@ -503,6 +503,9 @@ defmodule MirrorNeuron.Runtime.JobRunner do
 
   defp classify_coordinator_exit(state, reason) do
     case RedisStore.fetch_job(state.job_id) do
+      {:ok, %{"pending_finalization" => intent}} when is_map(intent) ->
+        :recover_later
+
       {:ok, %{"status" => status}} when status in @terminal_statuses ->
         :terminal
 

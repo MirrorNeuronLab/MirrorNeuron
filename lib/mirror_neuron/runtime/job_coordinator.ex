@@ -3109,7 +3109,27 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
     next_state = %{next_state | attempt_history: history}
 
-    persist_job(next_state)
+    event =
+      event_fields
+      |> Map.drop([:output, :result, :workflow_state, "output", "result", "workflow_state"])
+      |> maybe_put_event_ref(:payload_ref, result_ref)
+      |> maybe_put_event_ref(:result_ref, result_ref)
+      |> maybe_put_event_ref(:workflow_state_ref, workflow_state_ref)
+      |> Map.put(:type, event_type)
+      |> Map.put(:timestamp, Runtime.timestamp())
+
+    event =
+      case MirrorNeuron.Runtime.Finalization.commit(
+             state.job_id,
+             job_snapshot(state),
+             job_snapshot(next_state),
+             event,
+             notify: fn _, _ -> :ok end
+           ) do
+        {:ok, committed} -> committed[:terminal_event]
+        {:error, reason} -> exit({:shutdown, {:finalization_persistence_failed, reason}})
+      end
+
     run_id = WorkflowLedger.run_id(finished_workflow) || state.job_id
 
     case SharedStorage.publish_run_completion(
@@ -3126,17 +3146,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     end
 
     cleanup_sandboxes(next_state)
+    EventBus.dispatch_persisted(state.job_id, event)
 
-    event =
-      event_fields
-      |> Map.drop([:output, :result, :workflow_state, "output", "result", "workflow_state"])
-      |> maybe_put_event_ref(:payload_ref, result_ref)
-      |> maybe_put_event_ref(:result_ref, result_ref)
-      |> maybe_put_event_ref(:workflow_state_ref, workflow_state_ref)
-      |> Map.put(:type, event_type)
-      |> Map.put(:timestamp, Runtime.timestamp())
-
-    EventBus.publish(state.job_id, event)
     next_state
   end
 
