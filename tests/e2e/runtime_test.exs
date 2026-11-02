@@ -359,6 +359,8 @@ defmodule MirrorNeuron.RuntimeTest do
       |> :persistent_term.get()
       |> :atomics.add_get(1, 1)
     end
+
+    def current, do: :atomics.get(:persistent_term.get(@key), 1)
   end
 
   defmodule PauseResumeRunner do
@@ -1560,7 +1562,7 @@ defmodule MirrorNeuron.RuntimeTest do
     cleanup_runtime_job(job_id)
   end
 
-  test "resume restarts an interrupted workflow agent and immediately reclaims its delivery" do
+  test "resume rejects an unconfirmed invocation without executing its effect again" do
     PauseResumeInvocationCounter.reset()
 
     manifest = %{
@@ -1614,19 +1616,22 @@ defmodule MirrorNeuron.RuntimeTest do
     assert {:ok, job_id} = run_manifest(manifest, await: false)
     cleanup_job_on_exit(job_id)
     wait_until(fn -> running_status?(job_id) end)
-    wait_until(fn -> event_count(job_id, "agent_message_received") >= 1 end, 2_000)
+    wait_until(fn -> PauseResumeInvocationCounter.current() == 1 end, 2_000)
 
     assert {:ok, "paused"} = MirrorNeuron.pause(job_id)
     wait_until(fn -> agent_unregistered?(job_id, "worker") end, 2_000)
 
     assert {:ok, "resumed"} = MirrorNeuron.resume(job_id)
     assert {:ok, job} = MirrorNeuron.wait_for_job(job_id, 3_000)
-    assert job["status"] == "completed"
-    assert get_in(job, ["result", "output", "last_message", "resumed"]) == true
+    # Delivery v2 cannot infer whether an interrupted handler committed an
+    # external effect, even when the old runner declares safe_to_retry.
+    assert job["status"] == "failed", inspect(job)
+    assert inspect(job) =~ "invocation_outcome_unconfirmed"
+    assert PauseResumeInvocationCounter.current() == 1
 
     assert {:ok, events} = MirrorNeuron.events(job_id)
     assert_event_before(events, "job_paused", "job_resumed")
-    assert_event_before(events, "job_resumed", "job_completed")
+    assert_event_before(events, "job_resumed", "job_failed")
 
     RedisStore.delete_job(job_id)
   end
@@ -3127,7 +3132,7 @@ defmodule MirrorNeuron.RuntimeTest do
             "output_message_type" => nil,
             "backpressure" => %{
               "max_queue_depth" => 4,
-              "high_watermark" => 1,
+              "high_watermark" => 2,
               "low_watermark" => 0
             }
           }
@@ -3154,9 +3159,8 @@ defmodule MirrorNeuron.RuntimeTest do
     end)
 
     assert_receive {:analysis_blocked, blocked}, 2_000
-    # The runner signals before bootstrap control messages have drained. Wait
-    # for idle ingress so the next data message, rather than bootstrap traffic,
-    # is what establishes the pressure asserted below.
+    # Delivery v2 includes the leased invocation in durable depth. One active
+    # frame stays below the watermark; the second frame establishes pressure.
     wait_until(
       fn ->
         {:ok, pressure} = MirrorNeuron.pressure(job_id)
