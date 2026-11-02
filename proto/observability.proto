@@ -11,6 +11,8 @@ message StreamEventsRequest {
   int32 heartbeat_interval_ms = 3;
   int32 limit = 4;
   uint32 version = 5;
+  string channel = 6; // empty/all retains legacy activity; errors/responses are protected journals
+  int64 after_sequence = 7;
 }
 
 message EventResponse {

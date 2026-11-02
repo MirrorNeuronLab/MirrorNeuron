@@ -22,6 +22,7 @@ defmodule MirrorNeuron.Grpc.JobServer do
         cancel_run: :CancelRun,
         delete_run: :DeleteRun,
         send_run_input: :SendRunInput,
+        get_run_input_status: :GetRunInputStatus,
         create_job_schedule: :CreateJobSchedule,
         list_schedules: :ListSchedules,
         get_schedule: :GetSchedule,

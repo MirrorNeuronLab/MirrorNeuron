@@ -70,7 +70,7 @@ defmodule MirrorNeuron.Builtins.Executor do
       {:error, {:retry_later, details}} ->
         report_event(context, :executor_lease_rejected, details)
 
-        {:error, details, %{state | runs: state.runs + 1, last_error: inspect(details)}}
+        {:defer, details, state}
 
       {:error, reason} ->
         {:error, %{"error" => reason},
@@ -314,27 +314,59 @@ defmodule MirrorNeuron.Builtins.Executor do
            )
          end) do
       {:ok, result} ->
-        case attach_structured_result(result, runner_config) do
+        case await_structured_result(result, runner_config, context) do
           {:ok, result} ->
+            if attempt > 1,
+              do:
+                MirrorNeuron.Runtime.Signals.resolve(
+                  context.job_id,
+                  context.node.node_id,
+                  Message.id(message)
+                )
+
             {:ok, result, attempt}
 
           {:error, reason} ->
+            report_invocation_error(context, message, reason, :observed)
+
             if retryable?(reason) and attempt < max_attempts(config) do
+              report_invocation_error(context, message, reason, :retrying)
               Process.sleep(backoff_ms(config, attempt))
-              run_with_retry(payload, state, context, message, attempt + 1)
+
+              run_with_retry(
+                payload,
+                %{state | last_error: reason},
+                context,
+                message,
+                attempt + 1
+              )
             else
               {:error, reason, attempt}
             end
         end
 
       {:error, reason} ->
+        report_invocation_error(context, message, reason, :observed)
+
         if retryable?(reason) and attempt < max_attempts(config) do
+          report_invocation_error(context, message, reason, :retrying)
           Process.sleep(backoff_ms(config, attempt))
-          run_with_retry(payload, state, context, message, attempt + 1)
+          run_with_retry(payload, %{state | last_error: reason}, context, message, attempt + 1)
         else
           {:error, reason, attempt}
         end
     end
+  end
+
+  defp report_invocation_error(context, message, reason, status) do
+    MirrorNeuron.Runtime.Signals.error(
+      context.job_id,
+      context.node.node_id,
+      Message.id(message),
+      reason,
+      status,
+      step_id: get_in(context, [:workflow, "step_id"])
+    )
   end
 
   defp step_instance(context, %{"block_event" => _}, message),
@@ -683,6 +715,21 @@ defmodule MirrorNeuron.Builtins.Executor do
 
       _ ->
         false
+    end
+  end
+
+  defp await_structured_result(result, config, context, waiting? \\ false) do
+    case attach_structured_result(result, config) do
+      {:error, %{"code" => "artifact_not_ready"}} ->
+        unless waiting?, do: report_event(context, :executor_artifact_waiting, %{})
+        # The runner already finished. Wait for replication without invoking it
+        # again or consuming execution retries. Independent cancellation and
+        # delivery lease renewal remain active while this handler waits.
+        Process.sleep(250)
+        await_structured_result(result, config, context, true)
+
+      outcome ->
+        outcome
     end
   end
 

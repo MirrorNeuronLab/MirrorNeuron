@@ -25,7 +25,18 @@ defmodule MirrorNeuron.Grpc.Handlers.Observability do
     if is_function(local_stream, 2) do
       local_stream.(request, stream)
     else
-      do_stream_local_events(request, stream)
+      case Map.get(request, :channel, "") do
+        channel when channel in ["errors", "responses"] ->
+          MirrorNeuron.Grpc.Handlers.SignalStream.stream(request, stream)
+
+        channel when channel in ["", "all"] ->
+          do_stream_local_events(request, stream)
+
+        _ ->
+          raise GRPC.RPCError,
+            status: GRPC.Status.invalid_argument(),
+            message: "invalid event channel"
+      end
     end
   end
 
@@ -70,9 +81,30 @@ defmodule MirrorNeuron.Grpc.Handlers.Observability do
     relay = Keyword.get(dependencies, :relay, &FederationClient.stream_events/3)
     send_reply = Keyword.get(dependencies, :send_reply, &GRPC.Server.send_reply/2)
 
-    :ok = relay.(owner, request, fn response -> send_reply.(stream, response) end)
+    :ok =
+      relay.(owner, request, fn response ->
+        validate_protected_event!(request, response)
+        send_reply.(stream, response)
+      end)
+
     stream
   end
+
+  defp validate_protected_event!(%{channel: channel}, response)
+       when channel in ["errors", "responses"] do
+    with {:ok, %{"channel" => ^channel, "sequence" => sequence}} <-
+           Jason.decode(response.event_json),
+         true <- is_integer(sequence) and sequence >= 0 do
+      :ok
+    else
+      _ ->
+        raise GRPC.RPCError,
+          status: GRPC.Status.failed_precondition(),
+          message: "protected_signal_contract_unsupported"
+    end
+  end
+
+  defp validate_protected_event!(_, _), do: :ok
 
   defp remote_event_owner(resource_id) do
     FederatedJobRouting.run_owner(resource_id) || FederatedJobRouting.job_owner(resource_id)

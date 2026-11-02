@@ -19,7 +19,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   @default_bundle_archive_ttl_seconds 7 * 24 * 60 * 60
   @default_blob_ref_ttl_seconds 7 * 24 * 60 * 60
   @default_recovery_eval_ttl_seconds 24 * 60 * 60
-  @delivery_consumer_group "mirror_neuron_agents"
   @runtime_status_event_max_count 10_000
 
   def fetch_run_start_request(identity) do
@@ -126,329 +125,40 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
-  @doc false
-  def enqueue_delivery(job_id, agent_id, message, opts) do
-    message_id = MirrorNeuron.Message.id(message)
-    encoded = Jason.encode!(message)
-    digest = delivery_identity_digest(message)
-    now_ms = Keyword.fetch!(opts, :now_ms)
-    deadline_ms = Keyword.fetch!(opts, :deadline_ms)
-    pending_ttl_seconds = Keyword.fetch!(opts, :pending_ttl_seconds)
-    stream_ttl_seconds = Keyword.fetch!(opts, :stream_ttl_seconds)
-    max_pending_agent = Keyword.fetch!(opts, :max_pending_agent)
-    max_pending_job = Keyword.fetch!(opts, :max_pending_job)
+  defdelegate enqueue_delivery(job_id, agent_id, message, opts),
+    to: MirrorNeuron.Persistence.DeliveryStore
 
-    receipt_key = delivery_receipt_key(job_id, agent_id, message_id)
-    stream_key = delivery_stream_key(job_id, agent_id)
-    agent_count_key = delivery_agent_count_key(job_id, agent_id)
-    job_count_key = delivery_job_count_key(job_id)
-    index_key = delivery_index_key(job_id)
+  defdelegate read_deliveries(job_id, agent_id, consumer, opts),
+    to: MirrorNeuron.Persistence.DeliveryStore
 
-    script = """
-    if redis.call("exists", KEYS[1]) == 1 then
-      local existing_digest = redis.call("hget", KEYS[1], "digest")
-      local status = redis.call("hget", KEYS[1], "status") or "unknown"
-      local stream_id = redis.call("hget", KEYS[1], "stream_id") or ""
-      if existing_digest ~= ARGV[2] then
-        return {"conflict", status, stream_id}
-      end
-      return {"duplicate", status, stream_id}
-    end
+  defdelegate ack_delivery(job_id, agent_id, consumer, stream_id, message_id, ack_ttl_seconds),
+    to: MirrorNeuron.Persistence.DeliveryStore
 
-    local agent_count = tonumber(redis.call("get", KEYS[3]) or "0")
-    local job_count = tonumber(redis.call("get", KEYS[4]) or "0")
-    if agent_count >= tonumber(ARGV[8]) then
-      return {"agent_full", tostring(agent_count), ""}
-    end
-    if job_count >= tonumber(ARGV[9]) then
-      return {"job_full", tostring(job_count), ""}
-    end
+  defdelegate dead_letter_delivery(job_id, agent_id, stream_id, message_id, reason, ttl_seconds),
+    to: MirrorNeuron.Persistence.DeliveryStore
 
-    local stream_id = redis.call(
-      "xadd", KEYS[2], "*", "message_id", ARGV[1], "payload", ARGV[3]
-    )
-    redis.call(
-      "hset", KEYS[1],
-      "message_id", ARGV[1],
-      "digest", ARGV[2],
-      "status", "queued",
-      "stream_id", stream_id,
-      "attempts", "0",
-      "deadline_ms", ARGV[5],
-      "enqueued_at_ms", ARGV[4]
-    )
-    redis.call("expire", KEYS[1], ARGV[6])
-    redis.call("expire", KEYS[2], ARGV[7])
-    redis.call("incr", KEYS[3])
-    redis.call("expire", KEYS[3], ARGV[7])
-    redis.call("incr", KEYS[4])
-    redis.call("expire", KEYS[4], ARGV[7])
-    redis.call("sadd", KEYS[5], KEYS[1], KEYS[2], KEYS[3], KEYS[4])
-    redis.call("expire", KEYS[5], ARGV[7])
-    return {"queued", "queued", stream_id}
-    """
+  defdelegate renew_delivery(job_id, agent_id, consumer, stream_id),
+    to: MirrorNeuron.Persistence.DeliveryStore
 
-    args = [
-      "EVAL",
-      script,
-      "5",
-      receipt_key,
-      stream_key,
-      agent_count_key,
-      job_count_key,
-      index_key,
-      message_id,
-      digest,
-      encoded,
-      to_string(now_ms),
-      to_string(deadline_ms),
-      to_string(pending_ttl_seconds),
-      to_string(stream_ttl_seconds),
-      to_string(max_pending_agent),
-      to_string(max_pending_job)
-    ]
+  defdelegate retry_delivery(job_id, agent_id, consumer, stream_id, delay_ms, lease_ms),
+    to: MirrorNeuron.Persistence.DeliveryStore
 
-    case command(args) do
-      {:ok, ["queued", _status, stream_id]} ->
-        with :ok <- wait_for_replicas(),
-             do: {:ok, %{status: :queued, stream_id: stream_id, message_id: message_id}}
+  defdelegate fetch_delivery_receipt(job_id, agent_id, message_id),
+    to: MirrorNeuron.Persistence.DeliveryStore
 
-      {:ok, ["duplicate", status, stream_id]} ->
-        {:ok,
-         %{
-           status: :duplicate,
-           delivery_status: status,
-           stream_id: stream_id,
-           message_id: message_id
-         }}
+  defdelegate delivery_pending_count(job_id, agent_id), to: MirrorNeuron.Persistence.DeliveryStore
 
-      {:ok, ["conflict", status, _stream_id]} ->
-        {:error, {:message_id_conflict, message_id, status}}
-
-      {:ok, ["agent_full", count, _stream_id]} ->
-        {:error, {:delivery_backpressure, :agent, parse_redis_integer(count)}}
-
-      {:ok, ["job_full", count, _stream_id]} ->
-        {:error, {:delivery_backpressure, :job, parse_redis_integer(count)}}
-
-      {:error, reason} ->
-        {:error, format_reason(reason)}
-
-      other ->
-        {:error, {:unexpected_delivery_enqueue_result, other}}
-    end
-  end
-
-  defp delivery_identity_digest(message) do
-    message
-    |> update_in(["envelope"], fn
-      envelope when is_map(envelope) -> Map.drop(envelope, ["attempt", "timestamp"])
-      envelope -> envelope
-    end)
-    |> Jason.encode!()
-    |> then(&:crypto.hash(:sha256, &1))
-    |> Base.encode16(case: :lower)
-  end
+  defdelegate expire_job_deliveries(job_id, ttl_seconds),
+    to: MirrorNeuron.Persistence.DeliveryStore
 
   @doc false
-  def read_deliveries(job_id, agent_id, consumer, opts) do
-    stream_key = delivery_stream_key(job_id, agent_id)
-    lease_ms = Keyword.fetch!(opts, :lease_ms)
-    max_attempts = Keyword.fetch!(opts, :max_attempts)
-    now_ms = Keyword.fetch!(opts, :now_ms)
-    count = Keyword.get(opts, :count, 1)
-
-    with :ok <-
-           maybe_ensure_delivery_group(
-             stream_key,
-             Keyword.fetch!(opts, :stream_ttl_seconds),
-             Keyword.get(opts, :ensure_group, true)
-           ),
-         {:ok, claimed} <-
-           maybe_claim_stale_deliveries(
-             stream_key,
-             consumer,
-             lease_ms,
-             count,
-             Keyword.get(opts, :claim_stale, true)
-           ),
-         {:ok, entries} <- read_new_deliveries(stream_key, consumer, count - length(claimed)) do
-      (claimed ++ entries)
-      |> Enum.reduce_while({:ok, []}, fn entry, {:ok, acc} ->
-        case prepare_delivery(job_id, agent_id, consumer, entry, now_ms, max_attempts) do
-          {:ok, delivery} -> {:cont, {:ok, [delivery | acc]}}
-          {:discard, discard} -> {:cont, {:ok, [discard | acc]}}
-          {:error, reason} -> {:halt, {:error, reason}}
-        end
-      end)
-      |> case do
-        {:ok, deliveries} -> {:ok, Enum.reverse(deliveries)}
-        error -> error
-      end
-    end
-  end
-
+  def storage_command(args), do: command(args)
   @doc false
-  def ack_delivery(job_id, agent_id, consumer, stream_id, message_id, ack_ttl_seconds) do
-    receipt_key = delivery_receipt_key(job_id, agent_id, message_id)
-    stream_key = delivery_stream_key(job_id, agent_id)
-
-    script = """
-    local status = redis.call("hget", KEYS[1], "status")
-    if status ~= "acked" and status ~= "dead_letter" then
-      redis.call("hset", KEYS[1], "status", "acked", "consumer", ARGV[1])
-      local agent_count = tonumber(redis.call("get", KEYS[3]) or "0")
-      local job_count = tonumber(redis.call("get", KEYS[4]) or "0")
-      if agent_count > 0 then redis.call("decr", KEYS[3]) end
-      if job_count > 0 then redis.call("decr", KEYS[4]) end
-    end
-    if redis.call("exists", KEYS[1]) == 1 then redis.call("expire", KEYS[1], ARGV[2]) end
-    redis.call("srem", KEYS[5], KEYS[1])
-    redis.call("xack", KEYS[2], ARGV[3], ARGV[4])
-    redis.call("xdel", KEYS[2], ARGV[4])
-    return 1
-    """
-
-    args = [
-      "EVAL",
-      script,
-      "5",
-      receipt_key,
-      stream_key,
-      delivery_agent_count_key(job_id, agent_id),
-      delivery_job_count_key(job_id),
-      delivery_index_key(job_id),
-      consumer,
-      to_string(ack_ttl_seconds),
-      @delivery_consumer_group,
-      stream_id
-    ]
-
-    case command(args) do
-      {:ok, 1} -> wait_for_replicas()
-      {:error, reason} -> {:error, format_reason(reason)}
-      other -> {:error, {:unexpected_delivery_ack_result, other}}
-    end
-  end
-
+  def storage_pipeline(commands), do: pipeline(commands)
   @doc false
-  def dead_letter_delivery(job_id, agent_id, stream_id, message_id, reason, ttl_seconds) do
-    receipt_key = delivery_receipt_key(job_id, agent_id, message_id)
-    stream_key = delivery_stream_key(job_id, agent_id)
-
-    script = """
-    local status = redis.call("hget", KEYS[1], "status")
-    if status ~= "acked" and status ~= "dead_letter" then
-      local agent_count = tonumber(redis.call("get", KEYS[3]) or "0")
-      local job_count = tonumber(redis.call("get", KEYS[4]) or "0")
-      if agent_count > 0 then redis.call("decr", KEYS[3]) end
-      if job_count > 0 then redis.call("decr", KEYS[4]) end
-    end
-    if redis.call("exists", KEYS[1]) == 1 then
-      redis.call("hset", KEYS[1], "status", "dead_letter", "reason", ARGV[1])
-      redis.call("expire", KEYS[1], ARGV[2])
-    end
-    redis.call("srem", KEYS[5], KEYS[1])
-    redis.call("xack", KEYS[2], ARGV[3], ARGV[4])
-    redis.call("xdel", KEYS[2], ARGV[4])
-    return 1
-    """
-
-    args = [
-      "EVAL",
-      script,
-      "5",
-      receipt_key,
-      stream_key,
-      delivery_agent_count_key(job_id, agent_id),
-      delivery_job_count_key(job_id),
-      delivery_index_key(job_id),
-      to_string(reason),
-      to_string(ttl_seconds),
-      @delivery_consumer_group,
-      stream_id
-    ]
-
-    case command(args) do
-      {:ok, 1} -> wait_for_replicas()
-      {:error, command_reason} -> {:error, format_reason(command_reason)}
-      other -> {:error, {:unexpected_delivery_dead_letter_result, other}}
-    end
-  end
-
+  def storage_barrier, do: wait_for_replicas()
   @doc false
-  def renew_delivery(job_id, agent_id, consumer, stream_id) do
-    case command([
-           "XCLAIM",
-           delivery_stream_key(job_id, agent_id),
-           @delivery_consumer_group,
-           consumer,
-           "0",
-           stream_id,
-           "IDLE",
-           "0",
-           "JUSTID"
-         ]) do
-      {:ok, [^stream_id]} -> :ok
-      {:ok, []} -> {:error, :delivery_not_pending}
-      {:error, reason} -> {:error, format_reason(reason)}
-      other -> {:error, {:unexpected_delivery_renew_result, other}}
-    end
-  end
-
-  @doc false
-  def retry_delivery(job_id, agent_id, consumer, stream_id, delay_ms, lease_ms) do
-    idle_ms = max(lease_ms - delay_ms, 0)
-    stream_key = delivery_stream_key(job_id, agent_id)
-
-    case command([
-           "XCLAIM",
-           stream_key,
-           @delivery_consumer_group,
-           consumer,
-           "0",
-           stream_id,
-           "IDLE",
-           to_string(idle_ms),
-           "JUSTID"
-         ]) do
-      {:ok, [^stream_id]} -> :ok
-      {:ok, []} -> {:error, :delivery_not_pending}
-      {:error, reason} -> {:error, format_reason(reason)}
-      other -> {:error, {:unexpected_delivery_retry_result, other}}
-    end
-  end
-
-  @doc false
-  def fetch_delivery_receipt(job_id, agent_id, message_id) do
-    case command(["HGETALL", delivery_receipt_key(job_id, agent_id, message_id)]) do
-      {:ok, []} -> {:error, :not_found}
-      {:ok, values} -> {:ok, values |> pairs_to_map() |> parse_delivery_receipt()}
-      {:error, reason} -> {:error, format_reason(reason)}
-    end
-  end
-
-  @doc false
-  def delivery_pending_count(job_id, agent_id) do
-    case command(["GET", delivery_agent_count_key(job_id, agent_id)]) do
-      {:ok, nil} -> {:ok, 0}
-      {:ok, count} -> {:ok, parse_redis_integer(count)}
-      {:error, reason} -> {:error, format_reason(reason)}
-    end
-  end
-
-  @doc false
-  def expire_job_deliveries(job_id, ttl_seconds) do
-    index_key = delivery_index_key(job_id)
-
-    with {:ok, keys} <- command(["SMEMBERS", index_key]),
-         commands <- Enum.map([index_key | keys], &["EXPIRE", &1, to_string(ttl_seconds)]),
-         {:ok, _results} <- pipeline(commands) do
-      :ok
-    else
-      {:error, reason} -> {:error, format_reason(reason)}
-    end
-  end
+  def storage_key(parts), do: Enum.join([namespace() | parts], ":")
 
   @doc false
   def persist_run_checkpoint(job_id, checkpoint, epoch) do
@@ -540,16 +250,26 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   def clear_job_attempt_state(job_id) do
     with {:ok, agent_ids} <- command(["SMEMBERS", key("job", job_id, "agents")]),
          {:ok, delivery_keys} <- command(["SMEMBERS", delivery_index_key(job_id)]),
+         attempt_keys <-
+           Enum.reject(
+             delivery_keys,
+             &MirrorNeuron.Persistence.DeliveryStore.protected_retention_key?(job_id, &1)
+           ),
          {:ok, delivery_receipts} <- scan_keys(key("job", job_id, "delivery", "*", "*")),
          keys <-
-           [key("job", job_id, "agents"), delivery_index_key(job_id)] ++
+           [key("job", job_id, "agents")] ++
              Enum.flat_map(agent_ids, fn agent_id ->
                [
                  key("job", job_id, "agent", agent_id),
                  key("job", job_id, "agent_summary", agent_id)
                ]
-             end) ++ delivery_keys ++ delivery_receipts,
-         {:ok, results} <- transaction([["DEL" | Enum.uniq(keys)]]),
+             end) ++ attempt_keys ++ delivery_receipts,
+         cleanup_index <-
+           if(attempt_keys == [],
+             do: [],
+             else: [["SREM", delivery_index_key(job_id) | attempt_keys]]
+           ),
+         {:ok, results} <- transaction([["DEL" | Enum.uniq(keys)]] ++ cleanup_index),
          :ok <- expect_no_redis_errors(results),
          :ok <- wait_for_replicas() do
       :ok
@@ -4751,190 +4471,12 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
-  defp ensure_delivery_group(stream_key, stream_ttl_seconds) do
-    case command([
-           "XGROUP",
-           "CREATE",
-           stream_key,
-           @delivery_consumer_group,
-           "0",
-           "MKSTREAM"
-         ]) do
-      {:ok, "OK"} ->
-        case command(["EXPIRE", stream_key, to_string(stream_ttl_seconds)]) do
-          {:ok, _result} -> :ok
-          {:error, reason} -> {:error, format_reason(reason)}
-        end
-
-      {:error, %Redix.Error{message: message}} when is_binary(message) ->
-        if String.contains?(message, "BUSYGROUP"), do: :ok, else: {:error, message}
-
-      {:error, reason} ->
-        {:error, format_reason(reason)}
-
-      other ->
-        {:error, {:unexpected_delivery_group_result, other}}
-    end
-  end
-
-  defp maybe_ensure_delivery_group(stream_key, stream_ttl_seconds, true),
-    do: ensure_delivery_group(stream_key, stream_ttl_seconds)
-
-  defp maybe_ensure_delivery_group(_stream_key, _stream_ttl_seconds, false), do: :ok
-
-  defp claim_stale_deliveries(stream_key, consumer, lease_ms, count) when count > 0 do
-    case command([
-           "XAUTOCLAIM",
-           stream_key,
-           @delivery_consumer_group,
-           consumer,
-           to_string(lease_ms),
-           "0-0",
-           "COUNT",
-           to_string(count)
-         ]) do
-      {:ok, [_next_start, entries | _deleted]} -> {:ok, parse_delivery_entries(entries)}
-      {:error, reason} -> {:error, format_reason(reason)}
-      other -> {:error, {:unexpected_delivery_claim_result, other}}
-    end
-  end
-
-  defp claim_stale_deliveries(_stream_key, _consumer, _lease_ms, _count), do: {:ok, []}
-
-  defp maybe_claim_stale_deliveries(stream_key, consumer, lease_ms, count, true),
-    do: claim_stale_deliveries(stream_key, consumer, lease_ms, count)
-
-  defp maybe_claim_stale_deliveries(_stream_key, _consumer, _lease_ms, _count, false),
-    do: {:ok, []}
-
-  defp read_new_deliveries(stream_key, consumer, count) when count > 0 do
-    case command([
-           "XREADGROUP",
-           "GROUP",
-           @delivery_consumer_group,
-           consumer,
-           "COUNT",
-           to_string(count),
-           "STREAMS",
-           stream_key,
-           ">"
-         ]) do
-      {:ok, nil} -> {:ok, []}
-      {:ok, [[^stream_key, entries]]} -> {:ok, parse_delivery_entries(entries)}
-      {:error, reason} -> {:error, format_reason(reason)}
-      other -> {:error, {:unexpected_delivery_read_result, other}}
-    end
-  end
-
-  defp read_new_deliveries(_stream_key, _consumer, _count), do: {:ok, []}
-
-  defp parse_delivery_entries(entries) when is_list(entries) do
-    Enum.map(entries, fn [stream_id, fields] ->
-      fields = pairs_to_map(fields)
-
-      %{
-        stream_id: stream_id,
-        message_id: fields["message_id"],
-        payload: fields["payload"]
-      }
-    end)
-  end
-
   defp pairs_to_map(values) when is_list(values) do
     values
     |> Enum.chunk_every(2)
     |> Map.new(fn [key, value] -> {key, value} end)
   end
 
-  defp prepare_delivery(job_id, agent_id, consumer, entry, now_ms, max_attempts) do
-    receipt_key = delivery_receipt_key(job_id, agent_id, entry.message_id)
-
-    script = """
-    if redis.call("exists", KEYS[1]) == 0 then
-      return {"missing", "0"}
-    end
-    local status = redis.call("hget", KEYS[1], "status") or "unknown"
-    if status == "acked" or status == "dead_letter" then
-      return {status, redis.call("hget", KEYS[1], "attempts") or "0"}
-    end
-    local deadline_ms = tonumber(redis.call("hget", KEYS[1], "deadline_ms") or "0")
-    if deadline_ms > 0 and tonumber(ARGV[1]) > deadline_ms then
-      return {"expired", redis.call("hget", KEYS[1], "attempts") or "0"}
-    end
-    local attempts = redis.call("hincrby", KEYS[1], "attempts", 1)
-    if attempts > tonumber(ARGV[2]) then
-      return {"attempts_exhausted", tostring(attempts)}
-    end
-    redis.call("hset", KEYS[1], "status", "processing", "consumer", ARGV[3])
-    return {"deliver", tostring(attempts)}
-    """
-
-    case command([
-           "EVAL",
-           script,
-           "1",
-           receipt_key,
-           to_string(now_ms),
-           to_string(max_attempts),
-           consumer
-         ]) do
-      {:ok, ["deliver", attempts]} ->
-        case Jason.decode(entry.payload) do
-          {:ok, message} ->
-            {:ok,
-             Map.merge(entry, %{
-               message: message,
-               attempt: parse_redis_integer(attempts)
-             })}
-
-          {:error, reason} ->
-            {:discard, Map.merge(entry, %{discard_reason: {:invalid_payload, reason}})}
-        end
-
-      {:ok, [reason, attempts]}
-      when reason in ["missing", "acked", "dead_letter", "expired", "attempts_exhausted"] ->
-        {:discard,
-         Map.merge(entry, %{
-           discard_reason: String.to_atom(reason),
-           attempt: parse_redis_integer(attempts)
-         })}
-
-      {:error, reason} ->
-        {:error, format_reason(reason)}
-
-      other ->
-        {:error, {:unexpected_delivery_prepare_result, other}}
-    end
-  end
-
-  defp parse_delivery_receipt(receipt) do
-    receipt
-    |> Map.update("attempts", 0, &parse_redis_integer/1)
-    |> Map.update("deadline_ms", 0, &parse_redis_integer/1)
-    |> Map.update("enqueued_at_ms", 0, &parse_redis_integer/1)
-  end
-
-  defp parse_redis_integer(value) when is_integer(value), do: value
-
-  defp parse_redis_integer(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {integer, ""} -> integer
-      _ -> 0
-    end
-  end
-
-  defp parse_redis_integer(_value), do: 0
-
-  defp delivery_stream_key(job_id, agent_id),
-    do: key("job", job_id, "agent", agent_id, "deliveries")
-
-  defp delivery_receipt_key(job_id, agent_id, message_id),
-    do: key("job", job_id, "delivery", agent_id, message_id)
-
-  defp delivery_agent_count_key(job_id, agent_id),
-    do: key("job", job_id, "delivery_count", agent_id)
-
-  defp delivery_job_count_key(job_id), do: key("job", job_id, "delivery_count")
   defp delivery_index_key(job_id), do: key("job", job_id, "delivery_keys")
 
   defp coordination_store_identity(identity_key, "master") do

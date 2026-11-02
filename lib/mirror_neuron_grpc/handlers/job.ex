@@ -428,6 +428,26 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
     end
   end
 
+  def get_run_input_status(request, stream) do
+    case remote_run_owner(request.run_id) do
+      nil ->
+        with :ok <-
+               MirrorNeuron.Runtime.LiveInput.validate_identity(
+                 request.run_id,
+                 request.command_id
+               ),
+             {:ok, receipt} <-
+               MirrorNeuron.Runtime.CommandReceipts.get(request.run_id, request.command_id) do
+          response(receipt)
+        else
+          error -> respond(error)
+        end
+
+      owner ->
+        forward_call(owner, :get_run_input_status, request, stream)
+    end
+  end
+
   def send_run_input(request, stream) do
     case remote_run_owner(request.run_id) do
       nil -> send_local_run_input(request)

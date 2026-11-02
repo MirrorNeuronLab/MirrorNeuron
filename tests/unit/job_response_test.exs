@@ -221,6 +221,93 @@ defmodule MirrorNeuron.Runtime.JobResponseTest do
     assert :ok = JobResponse.stop(definition)
   end
 
+  test "status reads remain responsive while native preparation is blocked" do
+    parent = self()
+    job_id = "job-response-snapshot-#{System.unique_integer([:positive])}"
+    definition = response_definition(job_id)
+
+    Application.put_env(:mirror_neuron, :native_sdk_grpc_job_response_client, fn _target,
+                                                                                 request,
+                                                                                 _timeout ->
+      attrs = Jason.decode!(request.resource_json)
+
+      if attrs["operation"] == "start" do
+        send(parent, {:preparing, self()})
+
+        receive do
+          :continue -> :ok
+        after
+          2000 -> flunk("warmup was not released")
+        end
+      end
+
+      {:ok,
+       %Mirrorneuron.Cluster.V1.SetResourceResponse{
+         resource_json: ~s({"state":"ready"}),
+         version: 1
+       }}
+    end)
+
+    :ok = JobResponse.ensure_started(definition)
+    assert_receive {:preparing, task}, 1000
+    status = Task.async(fn -> JobResponse.status_local(job_id) end)
+    assert %{"state" => "starting"} = Task.await(status, 100)
+    send(task, :continue)
+    assert %{state: "ready"} = await_state(job_id, "ready")
+    assert :ok = JobResponse.stop(definition)
+  end
+
+  test "long replies use short native start/read calls under one request identity" do
+    parent = self()
+
+    Application.put_env(:mirror_neuron, :native_sdk_grpc_job_response_client, fn _target,
+                                                                                 request,
+                                                                                 timeout ->
+      attrs = Jason.decode!(request.resource_json)
+      send(parent, {:reply_request, attrs, timeout})
+
+      response =
+        if get_in(attrs, ["context", "_mn_response_work", "action"]) == "read",
+          do: %{
+            "schema_version" => "mn.mcp.job_reply_operation.v1",
+            "status" => "completed",
+            "response" => %{"text" => "original answer"}
+          },
+          else: %{
+            "schema_version" => "mn.mcp.job_reply_operation.v1",
+            "status" => "running",
+            "request_id" => attrs["request_id"]
+          }
+
+      {:ok,
+       %Mirrorneuron.Cluster.V1.SetResourceResponse{
+         resource_json: Jason.encode!(response),
+         version: 1
+       }}
+    end)
+
+    assert {:ok, %{"text" => "original answer", "request_id" => "request"}} =
+             MirrorNeuron.Runtime.DurableReply.query(
+               %{
+                 "kind" => "job_response",
+                 "operation" => "query",
+                 "job_id" => "job",
+                 "question" => "question",
+                 "request_id" => "request",
+                 "context" => %{}
+               },
+               1000
+             )
+
+    assert_receive {:reply_request, %{"durable" => true, "request_id" => "request"}, 5000}
+
+    assert_receive {:reply_request,
+                    %{
+                      "context" => %{"_mn_response_work" => %{"action" => "read"}},
+                      "request_id" => "request"
+                    }, 5000}
+  end
+
   defp response_definition(job_id) do
     %{
       "job_id" => job_id,

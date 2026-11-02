@@ -101,6 +101,32 @@ defmodule MirrorNeuron.Grpc.Handlers.Support do
   def maybe_put_opt(opts, _key, ""), do: opts
   def maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
 
+  def raise_runtime_error!({:retry_later, details}) when is_map(details) do
+    raise GRPC.RPCError,
+      status: GRPC.Status.resource_exhausted(),
+      message: "MN_OVERLOAD:" <> Jason.encode!(details)
+  end
+
+  def raise_runtime_error!({:delivery_backpressure, scope, _depth}) do
+    raise_runtime_error!(
+      {:retry_later, %{"accepted" => false, "scope" => to_string(scope), "retry_after_ms" => 250}}
+    )
+  end
+
+  def raise_runtime_error!({:backpressure, _details}) do
+    raise_runtime_error!(
+      {:retry_later, %{"accepted" => false, "scope" => "data", "retry_after_ms" => 250}}
+    )
+  end
+
+  def raise_runtime_error!({:command_acceptance_unconfirmed, id, _reason}) do
+    raise GRPC.RPCError,
+      status: GRPC.Status.unavailable(),
+      message:
+        "MN_UNCONFIRMED:" <>
+          Jason.encode!(%{"command_id" => id, "accepted" => nil, "scope" => "commands"})
+  end
+
   def raise_runtime_error!(reason) do
     raise GRPC.RPCError,
       status: runtime_error_status(reason),
@@ -179,7 +205,6 @@ defmodule MirrorNeuron.Grpc.Handlers.Support do
 
   defp runtime_error_status(:invalid_admission_policy), do: GRPC.Status.invalid_argument()
   defp runtime_error_status(:invalid_resource_allocation), do: GRPC.Status.invalid_argument()
-  defp runtime_error_status({:backpressure, _details}), do: GRPC.Status.resource_exhausted()
   defp runtime_error_status({:retry_later, _details}), do: GRPC.Status.resource_exhausted()
   defp runtime_error_status({:invalid_live_input, _reason}), do: GRPC.Status.invalid_argument()
   defp runtime_error_status({:inactive_run, _status}), do: GRPC.Status.failed_precondition()

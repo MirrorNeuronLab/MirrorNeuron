@@ -55,4 +55,58 @@ defmodule MirrorNeuron.Grpc.Handlers.ObservabilityTest do
       )
     end
   end
+
+  test "federation preserves protected channel, cursor and event identity" do
+    request = %StreamEventsRequest{
+      job_id: "run-remote",
+      channel: "errors",
+      after_sequence: 17,
+      follow: true,
+      version: 1
+    }
+
+    event = %EventResponse{
+      event_json:
+        ~s({"channel":"errors","sequence":18,"event_id":"original","type":"runtime.error_observed"}),
+      version: 1
+    }
+
+    stream = %{metadata: %{}}
+    parent = self()
+
+    assert Observability.stream_events(request, stream,
+             owner_lookup: fn _ -> "remote" end,
+             relay: fn "remote", ^request, emit ->
+               emit.(event)
+               :ok
+             end,
+             send_reply: fn ^stream, response ->
+               send(parent, response)
+               :ok
+             end
+           ) == stream
+
+    assert_receive ^event
+  end
+
+  test "federation rejects owners that silently ignore protected channel selection" do
+    request = %StreamEventsRequest{
+      job_id: "run-remote",
+      channel: "errors",
+      after_sequence: 17,
+      follow: false,
+      version: 1
+    }
+
+    assert_raise GRPC.RPCError, ~r/protected_signal_contract_unsupported/, fn ->
+      Observability.stream_events(request, %{metadata: %{}},
+        owner_lookup: fn _ -> "old-owner" end,
+        relay: fn _, _, emit ->
+          emit.(%EventResponse{event_json: ~s({"type":"job_started"})})
+          :ok
+        end,
+        send_reply: fn _, _ -> flunk("cannot present an unsupported stream as protected") end
+      )
+    end
+  end
 end

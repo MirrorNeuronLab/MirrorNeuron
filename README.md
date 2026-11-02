@@ -756,3 +756,15 @@ Resource-aware admission, queueing, reclamation and idle Job transfers are descr
 
 Regenerate the Job wire bindings in Core and the sibling SDK with
 `bash scripts/generate_job_proto.sh ../mn-python-sdk` (requires protoc and uv).
+
+
+## Runtime delivery flows
+
+New runs persist `delivery_version: 2`; a run without that field keeps contract
+v1 until drained. Upgrade Core, native SDK (including the job-response component),
+API, and monitor together. Distributed agent startup rejects workers that cannot
+serve the recorded version. Federation forwards channel, cursor, receipt identity,
+and overload information; an owner that ignores protected channels is rejected.
+Do not downgrade an owner while v2 runs or their retry checkpoints remain active.
+
+See [SPEC.md](SPEC.md) for queue guarantees, correlation, replay, and compatibility details.

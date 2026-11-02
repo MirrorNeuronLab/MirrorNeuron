@@ -19,7 +19,7 @@ defmodule MirrorNeuron.Grpc.JobProjection do
     graph_id job_name status type job_type workflow_id attempt attempt_id
     data_generation job_data_access owner_node submitted_at started_at updated_at
     completed_at cancelled_at result_ref workflow_state_ref manifest_ref running_time
-    admission
+    admission delivery_version
   )
 
   def summary(definition) when is_map(definition) do
@@ -53,6 +53,11 @@ defmodule MirrorNeuron.Grpc.JobProjection do
     record
     |> Map.take(@run_fields)
     |> Map.put("record_source", "runtime")
+    |> Map.put("observation", %{
+      "revision" => projection_revision(record),
+      "observed_at" => MirrorNeuron.Runtime.timestamp(),
+      "updated_at" => record["updated_at"]
+    })
     |> Map.put("retry", retry_summary(record))
     |> Map.put("job_id", stable_job_id)
     |> Map.put("run_id", resolved_run_id)
@@ -67,6 +72,10 @@ defmodule MirrorNeuron.Grpc.JobProjection do
     |> run(run_id)
     |> Map.put("placement", MirrorNeuron.Grpc.RunPlacement.read(record, run_id))
   end
+
+  defp projection_revision(record),
+    do:
+      record |> Jason.encode!() |> then(&:crypto.hash(:sha256, &1)) |> Base.encode16(case: :lower)
 
   defp put_admission(projected, %{"status" => "queued"}, run_id) do
     case MirrorNeuron.Runtime.NodeAdmission.receipt(run_id) do

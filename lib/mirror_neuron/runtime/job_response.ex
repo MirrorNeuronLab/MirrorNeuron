@@ -249,17 +249,61 @@ defmodule MirrorNeuron.Runtime.JobResponse do
        stopped_at: nil,
        safe_error_code: nil,
        retry_ms: 1_000,
+       warm_task: nil,
        warm_timer: nil
      }}
   end
 
   @impl true
+  def handle_info(:warm, %{warm_task: task} = state) when not is_nil(task), do: {:noreply, state}
+
   def handle_info(:warm, state) do
     if state.warm_timer, do: Process.cancel_timer(state.warm_timer)
-    state = %{state | warm_timer: nil}
+    parent = self()
+    revision = state.revision
     started = System.monotonic_time(:millisecond)
+    token = make_ref()
 
-    case ModelServices.job_response_command(start_payload(state.definition), @warm_timeout) do
+    {pid, ref} =
+      spawn_monitor(fn ->
+        result =
+          ModelServices.job_response_command(start_payload(state.definition), @warm_timeout)
+
+        send(parent, {:warm_result, token, revision, result, started})
+      end)
+
+    {:noreply, %{state | warm_timer: nil, warm_task: {pid, ref, token}}}
+  end
+
+  def handle_info(
+        {:warm_result, token, revision, result, started},
+        %{warm_task: {_pid, ref, token}} = state
+      ) do
+    Process.demonitor(ref, [:flush])
+    state = %{state | warm_task: nil}
+
+    if revision == state.revision do
+      apply_warm_result(result, started, state)
+    else
+      send(self(), :warm)
+      {:noreply, state}
+    end
+  end
+
+  def handle_info(
+        {:DOWN, ref, :process, _pid, reason},
+        %{warm_task: {_task, ref, _token}} = state
+      ) do
+    apply_warm_result({:error, reason}, System.monotonic_time(:millisecond), %{
+      state
+      | warm_task: nil
+    })
+  end
+
+  def handle_info(_message, state), do: {:noreply, state}
+
+  defp apply_warm_result(result, started, state) do
+    case result do
       {:ok, result} ->
         service_state = normalize_state(result["state"], "ready")
         now = Runtime.timestamp()
@@ -275,7 +319,11 @@ defmodule MirrorNeuron.Runtime.JobResponse do
             retry_ms: if(service_state == "degraded", do: state.retry_ms, else: 1_000)
         }
 
-        {:noreply, if(service_state == "degraded", do: schedule_warm_retry(next), else: next)}
+        {:noreply,
+         if(service_state in ["starting", "degraded", "failed"],
+           do: schedule_warm_retry(next),
+           else: next
+         )}
 
       {:error, reason} ->
         code = safe_error_code(reason)
@@ -290,9 +338,6 @@ defmodule MirrorNeuron.Runtime.JobResponse do
          })}
     end
   end
-
-  @impl true
-  def handle_info(_message, state), do: {:noreply, state}
 
   defp schedule_warm_retry(%{warm_timer: nil} = state) do
     %{
@@ -346,10 +391,20 @@ defmodule MirrorNeuron.Runtime.JobResponse do
   end
 
   defp perform_query(pid, definition, attrs) do
+    attrs =
+      if attrs["request_id"] in [nil, ""],
+        do:
+          Map.put(
+            attrs,
+            "request_id",
+            Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
+          ),
+        else: attrs
+
     started = System.monotonic_time(:millisecond)
 
     result =
-      ModelServices.job_response_command(
+      MirrorNeuron.Runtime.DurableReply.query(
         %{
           "kind" => "job_response",
           "operation" => "query",
@@ -374,19 +429,33 @@ defmodule MirrorNeuron.Runtime.JobResponse do
       {:error, reason} ->
         code = safe_error_code(reason)
 
-        if code == "request_conflict" do
-          log_event(definition["job_id"], "failure", "ready", latency, code)
-          {:error, :request_conflict}
-        else
-          log_event(definition["job_id"], "fallback", "degraded", latency, code)
-          GenServer.cast(pid, {:query_result, "degraded", code})
-          {:ok, fallback(attrs, definition, "degraded", code)}
+        cond do
+          code == "saturated" ->
+            {:error,
+             {:retry_later,
+              %{
+                "accepted" => false,
+                "scope" => "responses",
+                "request_id" => attrs["request_id"],
+                "retry_after_ms" => 250
+              }}}
+
+          code == "request_conflict" ->
+            log_event(definition["job_id"], "failure", "ready", latency, code)
+            {:error, :request_conflict}
+
+          true ->
+            log_event(definition["job_id"], "fallback", "degraded", latency, code)
+            GenServer.cast(pid, {:query_result, "degraded", code})
+            {:ok, fallback(attrs, definition, "degraded", code)}
         end
     end
   end
 
   @impl true
   def terminate(_reason, state) do
+    if state.warm_task, do: Process.exit(elem(state.warm_task, 0), :kill)
+
     _ =
       ModelServices.job_response_command(
         %{
@@ -405,6 +474,7 @@ defmodule MirrorNeuron.Runtime.JobResponse do
     %{
       "kind" => "job_response",
       "operation" => "start",
+      "async" => true,
       "job_id" => definition["job_id"],
       "blueprint_id" => definition["blueprint_id"],
       "job_data_dir" => definition["data_dir"],
@@ -655,7 +725,7 @@ defmodule MirrorNeuron.Runtime.JobResponse do
       String.contains?(text, "unavailable") ->
         "native_unavailable"
 
-      String.contains?(text, "saturat") ->
+      String.contains?(text, ["saturat", "mn_overload", "resource_exhausted"]) ->
         "saturated"
 
       String.contains?(text, "deadline") or String.contains?(text, "timeout") ->

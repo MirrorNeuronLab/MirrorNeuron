@@ -652,8 +652,8 @@ defmodule MirrorNeuron.Runtime do
     wait_until_terminal(job_id, timeout, System.monotonic_time(:millisecond))
   end
 
-  def deliver(job_id, agent_id, message, _opts \\ []) do
-    case Delivery.enqueue(job_id, agent_id, message) do
+  def deliver(job_id, agent_id, message, opts \\ []) do
+    case Delivery.enqueue(job_id, agent_id, message, opts) do
       {:ok, receipt} ->
         wake_delivery_consumer(job_id, agent_id)
 
@@ -1244,6 +1244,7 @@ defmodule MirrorNeuron.Runtime do
         "run_id" => Keyword.get(opts, :run_id, job_id),
         "stable_job_id" => Keyword.get(opts, :stable_job_id),
         "attempt_id" => "#{Keyword.get(opts, :run_id, job_id)}:1",
+        "delivery_version" => 2,
         "job_data_dir" => Keyword.get(opts, :job_data_dir),
         "job_data_access" => Keyword.get(opts, :job_data_access),
         "data_generation" => Keyword.get(opts, :data_generation),

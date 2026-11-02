@@ -15,6 +15,9 @@ defmodule MirrorNeuron.Builtins.Module do
       {:ok, next_delegate_state, actions} ->
         {:ok, %{state | delegate_state: next_delegate_state}, actions}
 
+      {:defer, reason, next_delegate_state} ->
+        {:defer, reason, %{state | delegate_state: next_delegate_state}}
+
       {:error, reason, next_delegate_state} ->
         {:error, reason, %{state | delegate_state: next_delegate_state}}
     end

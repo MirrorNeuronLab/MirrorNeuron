@@ -11,6 +11,8 @@ defmodule Mirrorneuron.Observability.V1.StreamEventsRequest do
   field(:heartbeat_interval_ms, 3, type: :int32, json_name: "heartbeatIntervalMs")
   field(:limit, 4, type: :int32)
   field(:version, 5, type: :uint32)
+  field(:channel, 6, type: :string)
+  field(:after_sequence, 7, type: :int64, json_name: "afterSequence")
 end
 
 defmodule Mirrorneuron.Observability.V1.EventResponse do

@@ -6,6 +6,7 @@ defmodule MirrorNeuron.Runtime.Delivery do
   alias MirrorNeuron.Message
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime.EventBus
+  alias MirrorNeuron.Runtime.DeliveryChannels
 
   @default_ttl_seconds 86_400
   @default_max_ttl_seconds 604_800
@@ -17,6 +18,7 @@ defmodule MirrorNeuron.Runtime.Delivery do
   @default_lease_renew_ms 10_000
   @default_max_attempts 10
   @default_poll_ms 1_000
+  @max_message_bytes 1_048_576
   @retry_base_ms 500
   @retry_max_ms 30_000
   @coordinator_agent_id "__mirror_neuron_job_coordinator__"
@@ -34,7 +36,7 @@ defmodule MirrorNeuron.Runtime.Delivery do
                                       "workflow_controller_checkpoint"
                                     ])
 
-  def enqueue(job_id, agent_id, message) do
+  def enqueue(job_id, agent_id, message, options \\ []) do
     normalized = normalize_message(job_id, agent_id, message)
     attempt_epoch = normalized |> Message.headers() |> Map.get("mn.attempt_epoch")
     ttl_ms = get_in(normalized, ["envelope", "ttl_ms"])
@@ -49,20 +51,78 @@ defmodule MirrorNeuron.Runtime.Delivery do
       max_pending_job: max_pending_per_job()
     ]
 
-    with :ok <- RedisStore.validate_job_attempt_epoch(job_id, attempt_epoch) do
-      RedisStore.enqueue_delivery(job_id, agent_id, normalized, opts)
+    with :ok <- RedisStore.validate_job_attempt_epoch(job_id, attempt_epoch),
+         {:ok, version} <- DeliveryChannels.version(job_id) do
+      lane = DeliveryChannels.lane(agent_id, options)
+
+      with :ok <- validate_message_bound(normalized, version),
+           {:ok, limit} <- admission_limit(job_id, agent_id, version, lane, options) do
+        RedisStore.enqueue_delivery(
+          job_id,
+          DeliveryChannels.bucket(agent_id, lane, version),
+          normalized,
+          opts
+          |> Keyword.put(:max_pending_agent, limit)
+          |> Keyword.put(
+            :command_receipt_key,
+            command_receipt_key(job_id, normalized, lane, version)
+          )
+        )
+      end
     end
   rescue
     error in ArgumentError -> {:error, Exception.message(error)}
   end
 
+  defp validate_message_bound(message, 2) do
+    if byte_size(Jason.encode!(message)) <= @max_message_bytes,
+      do: :ok,
+      else:
+        {:error,
+         {:message_payload_too_large, %{max_bytes: @max_message_bytes, use_artifacts: true}}}
+  end
+
+  defp validate_message_bound(_, _), do: :ok
+
+  defp command_receipt_key(run_id, message, :command, 2) do
+    case Message.headers(message)["mn.command_id"] do
+      id when is_binary(id) -> MirrorNeuron.Runtime.CommandReceipts.storage_key(run_id, id)
+      _ -> ""
+    end
+  end
+
+  defp command_receipt_key(_, _, _, _), do: ""
+
+  defp admission_limit(job_id, agent_id, 2, lane, options) when lane != :control do
+    with {:ok, limit} <- DeliveryChannels.limit(job_id, agent_id, options),
+         do: {:ok, min(max_pending_per_agent(), limit)}
+  end
+
+  defp admission_limit(_, _, _, _, _), do: {:ok, max_pending_per_agent()}
+
   def recover(job_id, agent_id, message) do
     message_id = Message.id(message)
 
-    case RedisStore.fetch_delivery_receipt(job_id, agent_id, message_id) do
-      {:ok, _receipt} -> :ok
-      {:error, :not_found} -> enqueue(job_id, agent_id, message) |> accepted()
-      {:error, reason} -> {:error, reason}
+    with {:ok, version} <- DeliveryChannels.version(job_id) do
+      lanes = if version == 2, do: [:data, :command, :control], else: [:data]
+
+      result =
+        Enum.reduce_while(lanes, {:error, :not_found}, fn lane, _ ->
+          case RedisStore.fetch_delivery_receipt(
+                 job_id,
+                 DeliveryChannels.bucket(agent_id, lane, version),
+                 message_id
+               ) do
+            {:error, :not_found} = missing -> {:cont, missing}
+            found -> {:halt, found}
+          end
+        end)
+
+      case result do
+        {:ok, _receipt} -> :ok
+        {:error, :not_found} -> enqueue(job_id, agent_id, message) |> accepted()
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 
@@ -102,21 +162,72 @@ defmodule MirrorNeuron.Runtime.Delivery do
   end
 
   def read(job_id, agent_id, consumer, opts \\ []) do
-    RedisStore.read_deliveries(job_id, agent_id, consumer,
-      lease_ms: if(Keyword.get(opts, :reclaim, false), do: 0, else: lease_ms()),
-      claim_stale: Keyword.get(opts, :claim_stale, true),
-      ensure_group: Keyword.get(opts, :ensure_group, true),
-      max_attempts: max_attempts(),
-      now_ms: System.system_time(:millisecond),
-      count: Keyword.get(opts, :count, 1),
-      stream_ttl_seconds: stream_ttl_seconds()
-    )
+    with {:ok, version} <- DeliveryChannels.version(job_id) do
+      lanes =
+        if version == 2,
+          do: DeliveryChannels.read_order(agent_id, Keyword.get(opts, :command_streak, 0)),
+          else: [:data]
+
+      Enum.reduce_while(lanes, {:ok, []}, fn lane, _ ->
+        bucket = DeliveryChannels.bucket(agent_id, lane, version)
+
+        result =
+          RedisStore.read_deliveries(job_id, bucket, consumer,
+            lease_ms: if(Keyword.get(opts, :reclaim, false), do: 0, else: lease_ms()),
+            claim_stale: Keyword.get(opts, :claim_stale, true),
+            ensure_group: version == 2 or Keyword.get(opts, :ensure_group, true),
+            strict_fifo: version == 2,
+            max_attempts: max_attempts(),
+            now_ms: System.system_time(:millisecond),
+            count: Keyword.get(opts, :count, 1),
+            stream_ttl_seconds: stream_ttl_seconds()
+          )
+
+        case result do
+          {:ok, []} ->
+            {:cont, {:ok, []}}
+
+          {:ok, deliveries} ->
+            {:halt,
+             {:ok,
+              Enum.map(
+                deliveries,
+                &Map.merge(&1, %{storage_agent_id: bucket, lane: lane, version: version})
+              )}}
+
+          error ->
+            {:halt, error}
+        end
+      end)
+    end
+  end
+
+  def defer(job_id, agent_id, consumer, delivery) do
+    bucket = Map.get(delivery, :storage_agent_id, agent_id)
+
+    with :ok <-
+           MirrorNeuron.Persistence.DeliveryStore.defer_delivery(
+             job_id,
+             bucket,
+             consumer,
+             delivery
+           ),
+         :ok <-
+           RedisStore.retry_delivery(
+             job_id,
+             bucket,
+             consumer,
+             delivery.stream_id,
+             250,
+             lease_ms()
+           ),
+         do: {:ok, 250}
   end
 
   def ack(job_id, agent_id, consumer, delivery) do
     RedisStore.ack_delivery(
       job_id,
-      agent_id,
+      Map.get(delivery, :storage_agent_id, agent_id),
       consumer,
       delivery.stream_id,
       delivery.message_id,
@@ -125,6 +236,9 @@ defmodule MirrorNeuron.Runtime.Delivery do
   end
 
   def dead_letter(job_id, agent_id, delivery, reason) do
+    MirrorNeuron.Runtime.Signals.resolve(job_id, agent_id, delivery.message_id, :terminal)
+    MirrorNeuron.Runtime.Signals.error(job_id, agent_id, delivery.message_id, reason, :terminal)
+
     EventBus.publish(job_id, %{
       type: :dead_letter,
       agent_id: agent_id,
@@ -139,7 +253,7 @@ defmodule MirrorNeuron.Runtime.Delivery do
 
     RedisStore.dead_letter_delivery(
       job_id,
-      agent_id,
+      Map.get(delivery, :storage_agent_id, agent_id),
       delivery.stream_id,
       delivery.message_id,
       reason,
@@ -152,7 +266,7 @@ defmodule MirrorNeuron.Runtime.Delivery do
 
     case RedisStore.retry_delivery(
            job_id,
-           agent_id,
+           Map.get(delivery, :storage_agent_id, agent_id),
            consumer,
            delivery.stream_id,
            delay_ms,
@@ -186,8 +300,8 @@ defmodule MirrorNeuron.Runtime.Delivery do
     {pid, token}
   end
 
-  def stop_lease_renewer({pid, token}) when is_pid(pid) do
-    send(pid, {:stop, token})
+  def stop_lease_renewer({pid, token}, outcome \\ :stop) when is_pid(pid) do
+    send(pid, {outcome, token})
     :ok
   end
 
@@ -348,9 +462,16 @@ defmodule MirrorNeuron.Runtime.Delivery do
          agent_id,
          consumer,
          stream_id,
-         interval_ms
+         interval_ms,
+         failed? \\ false
        ) do
     receive do
+      {:recovered, ^token} ->
+        if failed?,
+          do: MirrorNeuron.Runtime.Signals.resolve(job_id, signal_agent(agent_id), stream_id)
+
+        :ok
+
       {:stop, ^token} ->
         :ok
 
@@ -358,13 +479,26 @@ defmodule MirrorNeuron.Runtime.Delivery do
         :ok
     after
       interval_ms ->
-        case RedisStore.renew_delivery(job_id, agent_id, consumer, stream_id) do
-          :ok ->
-            :ok
+        failed? =
+          case RedisStore.renew_delivery(job_id, agent_id, consumer, stream_id) do
+            :ok ->
+              if failed?,
+                do:
+                  MirrorNeuron.Runtime.Signals.resolve(job_id, signal_agent(agent_id), stream_id)
 
-          {:error, reason} ->
-            Logger.warning("failed to renew message delivery lease: #{inspect(reason)}")
-        end
+              false
+
+            {:error, reason} ->
+              MirrorNeuron.Runtime.Signals.error(
+                job_id,
+                signal_agent(agent_id),
+                stream_id,
+                {:delivery_lease_failed, reason}
+              )
+
+              Logger.warning("failed to renew message delivery lease: #{inspect(reason)}")
+              true
+          end
 
         renew_loop(
           owner,
@@ -374,8 +508,15 @@ defmodule MirrorNeuron.Runtime.Delivery do
           agent_id,
           consumer,
           stream_id,
-          interval_ms
+          interval_ms,
+          failed?
         )
     end
   end
+
+  defp signal_agent(agent_id),
+    do:
+      agent_id
+      |> String.replace_prefix("__mn_command__/", "")
+      |> String.replace_prefix("__mn_control__/", "")
 end

@@ -81,9 +81,14 @@ defmodule MirrorNeuron.Application do
   def common_child_specs(topologies) when is_list(topologies) do
     [
       {Registry, keys: :duplicate, name: MirrorNeuron.Runtime.EventRegistry},
+      {Registry, keys: :duplicate, name: MirrorNeuron.Runtime.SignalRegistry},
+      {Registry, keys: :unique, name: MirrorNeuron.Runtime.ErrorMonitor.Registry},
+      MirrorNeuron.Runtime.ErrorMonitor,
+      {Task.Supervisor, name: MirrorNeuron.Runtime.SignalTaskSupervisor, max_children: 256},
       {Cluster.Supervisor, [topologies, [name: MirrorNeuron.ClusterSupervisor]]},
       MirrorNeuron.Runtime.Idempotency,
       MirrorNeuron.Redis,
+      MirrorNeuron.Persistence.ProtectedRedis,
       MirrorNeuron.Persistence.Retention,
       MirrorNeuron.Runtime.InteractionDeadlines,
       {MirrorNeuron.Cluster.FederationChannels, name: MirrorNeuron.Cluster.FederationChannels},

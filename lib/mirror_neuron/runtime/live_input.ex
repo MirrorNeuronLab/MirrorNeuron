@@ -15,25 +15,85 @@ defmodule MirrorNeuron.Runtime.LiveInput do
 
   def max_payload_bytes, do: @max_payload_bytes
 
+  def validate_identity(run_id, command_id) do
+    with :ok <- validate_identifier(run_id, "run_id"), do: validate_idempotency_key(command_id)
+  end
+
   def send(run_id, input_id, payload, idempotency_key) do
     with :ok <- validate_identifier(run_id, "run_id"),
          :ok <- validate_input_id(input_id),
          :ok <- validate_idempotency_key(idempotency_key),
          {:ok, run} <- RedisStore.fetch_job(run_id),
-         :ok <- ensure_active(run),
          {:ok, declaration} <- resolve_contract(run, input_id),
-         schema <- Map.get(declaration, "schema", %{}),
-         {:ok, normalized_payload} <- validate_payload(payload, schema),
-         message <- build_message(input_id, declaration, normalized_payload, idempotency_key),
-         {:ok, _status} <-
-           MirrorNeuron.send_message(run_id, declaration["entrypoint"], message) do
-      {:ok,
-       %{
-         "run_id" => run_id,
-         "input_id" => input_id,
-         "command_id" => idempotency_key,
-         "status" => "accepted"
-       }}
+         {:ok, normalized} <- validate_payload(payload, declaration["schema"] || %{}),
+         {:ok, _receipt} <-
+           MirrorNeuron.Runtime.CommandReceipts.prepare(
+             run_id,
+             idempotency_key,
+             input_id,
+             normalized,
+             declaration
+           ),
+         {:ok, receipt} <- MirrorNeuron.Runtime.CommandReceipts.get(run_id, idempotency_key) do
+      if receipt["accepted"] do
+        accepted(run_id, input_id, idempotency_key)
+      else
+        with :ok <- ensure_active(run),
+             {:ok, _status} <-
+               MirrorNeuron.send_message(
+                 run_id,
+                 declaration["entrypoint"],
+                 build_message(input_id, declaration, normalized, idempotency_key)
+               ),
+             {:ok, _event} <-
+               MirrorNeuron.Runtime.CommandReceipts.update(run_id, idempotency_key, "accepted") do
+          accepted(run_id, input_id, idempotency_key)
+        else
+          {:error, {kind, _} = reason} when kind in [:backpressure, :retry_later] ->
+            reject(run_id, idempotency_key, reason)
+
+          {:error, {:delivery_backpressure, _, _} = reason} ->
+            reject(run_id, idempotency_key, reason)
+
+          {:error, {:inactive_run, _}} = error ->
+            error
+
+          {:error, reason} ->
+            {:error, {:command_acceptance_unconfirmed, idempotency_key, reason}}
+        end
+      end
+    end
+  end
+
+  defp accepted(run_id, input_id, id) do
+    {:ok,
+     %{
+       "run_id" => run_id,
+       "input_id" => input_id,
+       "command_id" => id,
+       "status" => "accepted",
+       "accepted" => true
+     }}
+  end
+
+  defp reject(run_id, id, _reason) do
+    # A concurrent submission of this identity may already have committed.
+    with {:ok, _} <- MirrorNeuron.Runtime.CommandReceipts.update(run_id, id, "not_accepted"),
+         {:ok, receipt} <- MirrorNeuron.Runtime.CommandReceipts.get(run_id, id) do
+      if receipt["accepted"] do
+        accepted(run_id, receipt["input_id"], id)
+      else
+        {:error,
+         {:retry_later,
+          %{
+            "accepted" => false,
+            "command_id" => id,
+            "scope" => "commands",
+            "retry_after_ms" => 250
+          }}}
+      end
+    else
+      {:error, reason} -> {:error, {:command_acceptance_unconfirmed, id, reason}}
     end
   end
 
@@ -46,7 +106,8 @@ defmodule MirrorNeuron.Runtime.LiveInput do
          entrypoint when is_binary(entrypoint) <- declaration["entrypoint"],
          true <- entrypoint in declared_entrypoints(manifest),
          message_type when is_binary(message_type) <- declaration["message_type"],
-         true <- declared_route?(manifest, entrypoint, message_type) do
+         true <- declared_route?(manifest, entrypoint, message_type),
+         true <- valid_completion_boundary?(manifest, declaration) do
       {:ok, declaration}
     else
       nil -> {:error, {:invalid_live_input, "input #{input_id} is not declared"}}
@@ -58,24 +119,19 @@ defmodule MirrorNeuron.Runtime.LiveInput do
   def resolve_contract(_run, input_id),
     do: {:error, {:invalid_live_input, "input #{input_id} is not declared"}}
 
+  defp valid_completion_boundary?(_manifest, %{"completion_agent" => nil}), do: true
+
+  defp valid_completion_boundary?(manifest, declaration) do
+    case declaration["completion_agent"] do
+      nil -> true
+      id when is_binary(id) -> Enum.any?(manifest["nodes"] || [], &(&1["node_id"] == id))
+      _ -> false
+    end
+  end
+
   @doc false
   def pressure_targets(contract, agent_id, message, downstream) when is_map(message) do
-    headers = Map.get(message, "headers", %{})
-    input_id = if is_map(headers), do: headers["mn.live_input_id"]
-    declaration = contract |> map_value("live_inputs") |> map_value(input_id)
-
-    control? =
-      with "command" <- message["class"],
-           true <- is_binary(input_id),
-           %{} <- declaration,
-           ^agent_id <- declaration["entrypoint"],
-           type when is_binary(type) <- declaration["message_type"],
-           ^type <- message["type"],
-           {:ok, _payload} <- validate_payload(message["payload"], declaration["schema"] || %{}) do
-        true
-      else
-        _ -> false
-      end
+    control? = command?(contract, agent_id, message)
 
     # A validated operator command needs entrypoint capacity, not an idle
     # downstream model. Ordinary input keeps transitive backpressure admission.
@@ -83,6 +139,26 @@ defmodule MirrorNeuron.Runtime.LiveInput do
   end
 
   def pressure_targets(_contract, agent_id, _message, downstream), do: [agent_id | downstream]
+
+  def command?(contract, agent_id, message) when is_map(message) do
+    headers = Map.get(message, "headers", %{})
+    input_id = if is_map(headers), do: headers["mn.live_input_id"]
+    declaration = contract |> map_value("live_inputs") |> map_value(input_id)
+
+    with "command" <- message["class"],
+         true <- is_binary(input_id),
+         %{} <- declaration,
+         ^agent_id <- declaration["entrypoint"],
+         type when is_binary(type) <- declaration["message_type"],
+         ^type <- message["type"],
+         {:ok, _payload} <- validate_payload(message["payload"], declaration["schema"] || %{}) do
+      true
+    else
+      _ -> false
+    end
+  end
+
+  def command?(_, _, _), do: false
 
   @doc false
   def validate_payload(payload, schema) when is_map(payload) and is_map(schema) do
@@ -143,6 +219,7 @@ defmodule MirrorNeuron.Runtime.LiveInput do
       "payload" => payload,
       "headers" => %{
         "mn.live_input_id" => input_id,
+        "mn.command_id" => idempotency_key,
         "mn.idempotency_key" => idempotency_key
       }
     }

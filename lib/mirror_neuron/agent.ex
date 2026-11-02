@@ -2,8 +2,10 @@ defmodule MirrorNeuron.Agent do
   @moduledoc """
   Agent behavior used by Core workers.
 
-  Runtime loss starts a clean job attempt from the manifest and its declared
-  inputs. Agent process state is not a recovery contract.
+  Version 2 delivery checkpoints serializable state and completed outputs within
+  the recorded attempt fence. Runtime loss across an incompatible fence requires
+  ledger-directed recovery. Dependency/capacity waits return `{:defer, reason, state}`
+  and do not consume execution retries.
   """
   @type action ::
           {:emit, String.t(), map()}
@@ -17,7 +19,7 @@ defmodule MirrorNeuron.Agent do
 
   @callback init(node :: map()) :: {:ok, map()} | {:error, term()}
   @callback handle_message(message :: map(), state :: map(), context :: map()) ::
-              {:ok, map(), [action()]} | {:error, term(), map()}
+              {:ok, map(), [action()]} | {:error, term(), map()} | {:defer, term(), map()}
   @callback inspect_state(state :: map()) :: term()
 
   @optional_callbacks inspect_state: 1

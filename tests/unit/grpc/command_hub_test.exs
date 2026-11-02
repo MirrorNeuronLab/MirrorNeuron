@@ -20,6 +20,7 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
     ScheduleRequest,
     RetryRunRequest,
     SendRunInputRequest,
+    GetRunInputStatusRequest,
     StartRunRequest,
     UpdateJobRequest
   }
@@ -47,6 +48,7 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
     {:CancelRun, :cancel_run, RunRequest},
     {:DeleteRun, :delete_run, DeleteRunRequest},
     {:SendRunInput, :send_run_input, SendRunInputRequest},
+    {:GetRunInputStatus, :get_run_input_status, GetRunInputStatusRequest},
     {:CreateJobSchedule, :create_job_schedule, CreateJobScheduleRequest},
     {:ListSchedules, :list_schedules, ScheduleRequest},
     {:GetSchedule, :get_schedule, ScheduleRequest},
@@ -85,6 +87,7 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
           :cancel_run,
           :delete_run,
           :send_run_input,
+          :get_run_input_status,
           :create_job_schedule,
           :list_schedules,
           :get_schedule,

@@ -1110,3 +1110,90 @@ It remains a presentation contract: serving does not complete ledger steps.
 ## Resource admission and ownership transfer
 
 [Run resource allocation](docs/resource-allocation.md) defines the executable policy and lifecycle contract. Admission reserves before execution persistence; uncertain cleanup cannot fund another start. Transfers require a frozen source, verified inactive destination and ownership commit before activation.
+
+
+## Delivery contract v2
+
+New runs persist `delivery_version: 2`; a run without that field keeps contract
+v1 until drained. Upgrade Core, native SDK (including the job-response component),
+API, and monitor together. Distributed agent startup rejects workers that cannot
+serve the recorded version. Federation forwards channel, cursor, receipt identity,
+and overload information; an owner that ignores protected channels is rejected.
+Do not downgrade an owner while v2 runs or their retry checkpoints remain active.
+
+Data has an atomic Redis admission limit per agent (`config.backpressure`, or
+`config.max_queue_depth`, default 100). Queued, leased, and deferred deliveries
+all count until ACK/dead-letter; mailbox depth is reported separately. Configured
+watermark hysteresis remains in force. V2 messages are bounded to 1 MiB; larger
+payloads must use artifact references. Validated manifest live-input commands use
+a distinct bounded lane with reserved capacity and bypass downstream pressure.
+Control reports have their own bounded lane and job quota. A message's `class`,
+`priority`, or inherited command header never selects a protected lane. At each
+handler boundary the worker takes at most four commands before waiting data;
+each lane preserves FIFO, including a deferred head. Ordinary commands do not
+interrupt a handler. Pause/cancel keep their independent lifecycle paths.
+
+A handler may return `{:defer, reason, state}` for a dependency/capacity wait.
+Deferral preserves the execution retry budget. Completed v2 invocations journal
+state and output actions before attempting downstream delivery. Replay resumes
+those actions under the original message/attempt/epoch fences and restores the
+latest agent checkpoint, so older output retries cannot roll state backward.
+Checkpoints over 1 MiB use staged artifacts (up to 64 MiB encoded); local state
+must be serializable and cannot contain live PIDs, references, or functions.
+An executing journal whose result was never confirmed requires reconciliation;
+it does not authorize another effect. This does not make arbitrary external
+effects transactional with Redis; existing effect fences remain required.
+If a completed runner is waiting for a structured result artifact, it retries
+artifact resolution without invoking the runner again or spending execution retries.
+
+`SendRunInput` still acknowledges acceptance. `GetRunInputStatus(run_id,
+command_id)` reads the original correlated receipt, including revision and
+observation time. A declaration may name `completion_agent`; only that node's
+completed invocation can publish `completed` and its result. A router ACK alone
+never implies application. Without a completion owner the receipt remains an
+acceptance receipt. Results over 16 KiB are artifact references. Reusing a command
+ID for a different payload is a conflict; retrying an accepted ID does not submit
+its effect again. Queue admission and the v2 receipt's acceptance are committed
+atomically. Unconfirmed acceptance is `null`, never an invented rejection or
+success. Cancellation or interruption settles outstanding receipts without
+claiming a completed result. Receipt and signal history survive execution retry
+cleanup and retain their original identities.
+
+`StreamEvents` adds `channel: errors|responses` and nonnegative `after_sequence`.
+Empty/`all` retains the legacy activity stream. Protected streams use independent
+Redis connections, durable sequence positions, and coalesced wakeups rather than
+unbounded subscriber mailboxes. Error incidents preserve first occurrence, count,
+latest state, and recovery/terminal resolution. First runner failures are emitted
+before backoff/fallback; worker exits are independently supervised. Observation
+never changes the workflow ledger's lifecycle decision. Capacity waits are not
+execution failures. Error and response journals are bounded (5,000 and 10,000
+records, respectively), with seven-day retention while retained. A stale/future
+cursor raises `signal_replay_gap`; cursor zero requests the retained current
+incident/response projection. Infrastructure failures are unavailable/unconfirmed,
+not successful durable delivery. The legacy bulk stream is not a protected path.
+
+Run projections include an `observation` revision, observation time and persisted
+update time. Reads do not call a running worker. Responder preparation runs outside
+the status GenServer; native preparation is bounded and asynchronous. Normal long
+response queries use durable reply operations and short native start/read RPCs.
+An unfinished query returns its accepted operation identity for subsequent reads.
+Admission keeps four active and sixteen waiting queries; reservation, timeout,
+cancellation, and shutdown account for each slot exactly once. Saturation returns
+`MN_OVERLOAD` metadata (acceptance, identity, scope and retry delay), never fallback
+answer text or a responder rewarm.
+Direct, streamed, and durable queries share this admission pool. A new durable
+reply operation reserves its slot before returning acceptance.
+
+The healthy local target is detection-to-connected-observer p95 <=250 ms and
+p99 <=1 second under saturated data. Detection latency is a separate measurement.
+Run the following against a disposable Redis instance to exercise
+atomic saturation, fairness, deferrals, restart, receipts, replay and the protected
+observer benchmark:
+
+```bash
+MN_FLOW_REDIS_URL=redis://127.0.0.1:<isolated-port> mix test --no-start \
+  tests/unit/runtime_flows_test.exs
+```
+
+End-to-end API/browser and real federated latency must also be
+measured in the deployment environment.

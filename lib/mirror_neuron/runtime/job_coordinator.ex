@@ -46,6 +46,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
     state = %{
       job_id: job_id,
+      delivery_version: Map.get(existing_job || %{}, "delivery_version", 1),
       clock_session: unique_id(),
       manifest: manifest,
       bundle: bundle,
@@ -496,6 +497,13 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   @impl true
   def handle_call({:send_message, agent_id, message}, _from, state) do
     envelope = build_external_message(state, agent_id, message)
+
+    envelope =
+      if LiveInput.command?(state.manifest.contract, agent_id, message),
+        do: envelope,
+        else:
+          update_in(envelope, ["headers"], &Map.drop(&1, ["mn.command_id", "mn.live_input_id"]))
+
     state = refresh_pressure(state)
 
     case external_input_pressure(state, agent_id, message) do
@@ -514,7 +522,11 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
                state.job_id,
                agent_id,
                envelope,
-               node_backpressure_opts(state, agent_id)
+               Keyword.put(
+                 node_backpressure_opts(state, agent_id),
+                 :command_admitted,
+                 LiveInput.command?(state.manifest.contract, agent_id, message)
+               )
              ) do
           :ok -> {:reply, {:ok, "delivered"}, state}
           {:error, {:backpressure, details}} -> {:reply, {:error, {:retry_later, details}}, state}
@@ -1804,8 +1816,15 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp agent_pressure_snapshot(state, agent_id) do
     with {:ok, pid} <- lookup_registered_agent(state.job_id, agent_id),
          node when is_map(node) <- Map.get(state.nodes_by_id, agent_id) do
-      queue_depth = Backpressure.process_queue_depth(pid)
-      Backpressure.snapshot(agent_id, node, queue_depth, [], Map.get(state.pressure, agent_id))
+      case MirrorNeuron.Runtime.DeliveryChannels.depth(state.job_id, agent_id) do
+        {:ok, depth} ->
+          Backpressure.snapshot(agent_id, node, depth, [], Map.get(state.pressure, agent_id))
+          |> Map.put("mailbox_depth", Backpressure.process_queue_depth(pid))
+
+        {:error, _} ->
+          Backpressure.snapshot(agent_id, node, Backpressure.config(node).max_queue_depth)
+          |> Map.put("unavailable", true)
+      end
     else
       _ -> nil
     end
@@ -1820,7 +1839,25 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         Map.get(state.downstream_by_node, agent_id, [])
       )
 
-    state.pressure
+    pressure =
+      if LiveInput.command?(state.manifest.contract, agent_id, message) do
+        node = Map.fetch!(state.nodes_by_id, agent_id)
+
+        case MirrorNeuron.Runtime.DeliveryChannels.depth(state.job_id, agent_id, :command) do
+          {:ok, depth} ->
+            %{agent_id => Backpressure.snapshot(agent_id, node, depth)}
+
+          _ ->
+            %{
+              agent_id =>
+                Backpressure.snapshot(agent_id, node, Backpressure.config(node).max_queue_depth)
+            }
+        end
+      else
+        state.pressure
+      end
+
+    pressure
     |> Map.take(impacted_agents)
     |> Enum.find(fn {_id, snapshot} -> Backpressure.pressured?(snapshot) end)
     |> case do
@@ -2138,6 +2175,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
          Map.get(state.inbound_edges_by_node, agent_id, []), self(), agent_runtime_context(state),
          recovery_snapshot}
       )
+      |> Map.put(:mirror_neuron_delivery_version, state.delivery_version)
       |> Map.put(:mirror_neuron_execution_profile, execution_profile)
       |> Map.put(
         :mirror_neuron_target_node,
@@ -2174,18 +2212,36 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         start_agent_here(spec)
 
       Node.connect(target_node) ->
-        case :rpc.call(
-               target_node,
-               DynamicSupervisor,
-               :start_child,
-               [MirrorNeuron.Runtime.LocalAgentSupervisor, spec],
-               30_000
-             ) do
-          {:ok, _pid} = ok -> ok
-          {:error, {:already_started, _pid}} = already_started -> already_started
-          {:error, reason} -> {:error, reason}
-          {:badrpc, reason} -> {:error, reason}
-          other -> {:error, other}
+        version = Map.get(spec, :mirror_neuron_delivery_version, 1)
+
+        supported =
+          if version == 1,
+            do: [1],
+            else:
+              :rpc.call(
+                target_node,
+                MirrorNeuron.Runtime.DeliveryChannels,
+                :supported_versions,
+                [],
+                5_000
+              )
+
+        if is_list(supported) and version in supported do
+          case :rpc.call(
+                 target_node,
+                 DynamicSupervisor,
+                 :start_child,
+                 [MirrorNeuron.Runtime.LocalAgentSupervisor, spec],
+                 30_000
+               ) do
+            {:ok, _pid} = ok -> ok
+            {:error, {:already_started, _pid}} = already_started -> already_started
+            {:error, reason} -> {:error, reason}
+            {:badrpc, reason} -> {:error, reason}
+            other -> {:error, other}
+          end
+        else
+          {:error, {:unsupported_delivery_version, version, target_node}}
         end
 
       true ->
@@ -2391,7 +2447,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     renewer =
       Delivery.start_lease_renewer(
         state.job_id,
-        Delivery.coordinator_agent_id(),
+        Map.get(delivery, :storage_agent_id, Delivery.coordinator_agent_id()),
         state.coordinator_delivery_consumer,
         delivery.stream_id
       )
@@ -3015,6 +3071,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp safe_terminate_agent_child(pid) do
+    MirrorNeuron.Runtime.ErrorMonitor.expect_exit(pid)
+
     if node(pid) == Node.self() do
       DynamicSupervisor.terminate_child(MirrorNeuron.Runtime.LocalAgentSupervisor, pid)
     else
@@ -3069,6 +3127,16 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp finalize_current_job(state, status, result, event_type, event_fields) do
+    if status == "failed",
+      do:
+        MirrorNeuron.Runtime.Signals.error(
+          state.job_id,
+          "workflow",
+          "run",
+          failure_error(state, result, event_fields),
+          :terminal
+        )
+
     state = state |> cancel_policy_timers() |> cancel_recovery_tasks()
     terminate_agent_workers(state)
     ServiceRegistry.deregister_job(state.job_id)
@@ -3147,6 +3215,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
     cleanup_sandboxes(next_state)
     EventBus.dispatch_persisted(state.job_id, event)
+    MirrorNeuron.Runtime.CommandReceipts.settle_run_async(state.job_id)
+    MirrorNeuron.Runtime.Signals.finish_run_async(state.job_id, status)
 
     next_state
   end
@@ -3364,28 +3434,37 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp build_external_message(state, agent_id, message) do
-    if envelope_message?(message) do
-      Message.normalize!(
-        message,
-        job_id: state.job_id,
-        from: "external",
-        to: agent_id,
-        type: "command",
+    if LiveInput.command?(state.manifest.contract, agent_id, message) do
+      Message.new(state.job_id, "external", agent_id, message["type"], message["payload"],
         class: "command",
-        correlation_id: unique_id()
+        message_id: message["message_id"],
+        correlation_id: message["message_id"],
+        headers: message["headers"]
       )
     else
-      {type, body} = external_message_body(message)
+      if envelope_message?(message) do
+        Message.normalize!(
+          message,
+          job_id: state.job_id,
+          from: "external",
+          to: agent_id,
+          type: "command",
+          class: "command",
+          correlation_id: unique_id()
+        )
+      else
+        {type, body} = external_message_body(message)
 
-      Message.new(
-        state.job_id,
-        "external",
-        agent_id,
-        type,
-        body,
-        class: "command",
-        correlation_id: unique_id()
-      )
+        Message.new(
+          state.job_id,
+          "external",
+          agent_id,
+          type,
+          body,
+          class: "command",
+          correlation_id: unique_id()
+        )
+      end
     end
     |> put_attempt_epoch(state)
   end
@@ -3430,6 +3509,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
     %{
       job_id: state.job_id,
+      delivery_version: Map.get(state, :delivery_version, 1),
       run_id: Keyword.get(state.opts, :run_id, state.job_id),
       workflow_run_id: WorkflowLedger.run_id(state.workflow_state),
       stable_job_id: Keyword.get(state.opts, :stable_job_id),
@@ -3598,6 +3678,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   defp publish_workflow_events(_state, []), do: :ok
 
   defp publish_workflow_events(state, events) when is_list(events) do
+    Enum.each(events, &MirrorNeuron.Runtime.Signals.workflow(state.job_id, &1))
+
     if Enum.any?(events, fn event ->
          to_string(event[:type] || event["type"]) in ~w(workflow_step_completed workflow_step_partial workflow_step_attempt_started workflow_message_queued workflow_step_triggered workflow_child_started workflow_child_plan_committed workflow_child_round_completed workflow_graph_patch_applied workflow_controller_checkpointed)
        end),
@@ -3724,6 +3806,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       submitted_at: state.submitted_at,
       runtime_env: runtime_environment(state),
       manifest_version: state.manifest.manifest_version,
+      delivery_version: Map.get(state, :delivery_version, 1),
       lease_epoch: lease && lease["epoch"],
       lease_owner: lease && lease["owner_id"],
       workflow_run_id: WorkflowLedger.run_id(state.workflow_state),
