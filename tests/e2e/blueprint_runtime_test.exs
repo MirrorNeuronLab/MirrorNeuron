@@ -129,6 +129,67 @@ defmodule MirrorNeuron.BlueprintRuntimeTest do
     assert claims == %{}
   end
 
+  test "pausing or retiming a scanned occurrence under its state lease wins before launch", %{
+    id: prefix
+  } do
+    alias MirrorNeuron.Persistence.RedisStore
+    alias MirrorNeuron.Runtime.ScheduleOccurrence
+
+    due = DateTime.utc_now() |> DateTime.add(1, :day) |> DateTime.truncate(:second)
+
+    for change <- [:pause, :retime] do
+      job = prepare(prefix <> Atom.to_string(change), 1)
+
+      {:ok, schedule} =
+        MirrorNeuron.create_job_schedule(job, %{
+          "kind" => "delayed",
+          "run_at" => DateTime.to_iso8601(due)
+        })
+
+      id = schedule["schedule_id"]
+      state_lock = "schedule:#{id}:state"
+      {:ok, lock} = RedisStore.acquire_fenced_lease(state_lock, "editor", 30_000)
+      task = Task.async(fn -> ScheduleDispatcher.process_due_schedules(due) end)
+      instance = %{"reason" => "delayed", "scheduled_for" => DateTime.to_iso8601(due)}
+      occurrence = ScheduleOccurrence.token(schedule, instance)
+
+      try do
+        await_lease("schedule:#{id}:#{occurrence}", System.monotonic_time(:millisecond) + 5_000)
+        future = DateTime.to_iso8601(DateTime.add(due, 1, :day))
+
+        edited =
+          case change do
+            :pause -> Map.merge(schedule, %{"status" => "paused", "enabled" => false})
+            :retime -> Map.merge(schedule, %{"run_at" => future, "next_run_at" => future})
+          end
+
+        {:ok, _} =
+          RedisStore.persist_schedule_fenced(id, edited, state_lock, "editor", lock["epoch"])
+      after
+        :ok = RedisStore.release_fenced_lease(state_lock, "editor", lock["epoch"])
+      end
+
+      assert {:ok, %{dispatched: 0, failed: 0}} = Task.await(task)
+      assert {:ok, []} = MirrorNeuron.list_runs(job)
+      assert {:ok, %{"dispatches" => []}} = MirrorNeuron.get_schedule(id)
+      assert %{dispatched: 1} = MirrorNeuron.dispatch_schedule(id)
+    end
+  end
+
+  defp await_lease(name, deadline) do
+    case MirrorNeuron.Persistence.RedisStore.get_lease(name) do
+      {:ok, nil} ->
+        assert System.monotonic_time(:millisecond) < deadline,
+               "dispatcher never acquired occurrence lease"
+
+        Process.sleep(5)
+        await_lease(name, deadline)
+
+      {:ok, _} ->
+        :ok
+    end
+  end
+
   test "a due batch occurrence queues once and can be cancelled without touching the holder",
        %{id: prefix} do
     holder = prepare(prefix <> "holder", 4)

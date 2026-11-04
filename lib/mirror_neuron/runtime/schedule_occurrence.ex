@@ -3,6 +3,20 @@ defmodule MirrorNeuron.Runtime.ScheduleOccurrence do
 
   alias MirrorNeuron.Persistence.RedisStore
 
+  def token(schedule, instance) do
+    :crypto.hash(
+      :sha256,
+      Jason.encode!(%{
+        schedule_id: schedule["schedule_id"],
+        scheduled_for:
+          if(get_in(instance, ["event", "event_id"]), do: nil, else: instance["scheduled_for"]),
+        reason: instance["reason"],
+        event_id: get_in(instance, ["event", "event_id"])
+      })
+    )
+    |> Base.url_encode64(padding: false)
+  end
+
   # Reservations outlive both leases and run retention. Only the caller that
   # durably creates the reservation may start work. An ambiguous interrupted
   # start is reconciled by identity, never by submitting another execution.

@@ -142,7 +142,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
 
   def dispatch_schedule(schedule_id, payload \\ %{}, opts \\ []) do
     with {:ok, schedule} <- RedisStore.fetch_schedule(schedule_id) do
-      dispatch_with_lease(schedule, %{
+      dispatch_with_lease(schedule, :manual, %{
         "scheduled_for" => Runtime.timestamp(),
         "reason" => Keyword.get(opts, :reason, "manual"),
         "payload" => stringify(payload || %{})
@@ -243,7 +243,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
       true ->
         schedule
         |> SchedulePolicy.due_instances(now)
-        |> Enum.map(&dispatch_with_lease(schedule, &1))
+        |> Enum.map(&dispatch_with_lease(schedule, {:due, now}, &1))
         |> reduce_results()
         |> advance_schedule(schedule, now)
     end
@@ -253,7 +253,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     if overlap_blocked?(schedule) and not service_schedule?(schedule) do
       mark_blocked(schedule, "overlap")
     else
-      dispatch_with_lease(schedule, %{
+      dispatch_with_lease(schedule, {:event, event}, %{
         "scheduled_for" => event["created_at"],
         "reason" => "event",
         "event" => event
@@ -272,7 +272,11 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
             schedule
             |> SchedulePolicy.due_instances(now)
             |> Enum.map(
-              &dispatch_with_lease(Map.put(schedule, "resource_availability", availability), &1)
+              &dispatch_with_lease(
+                Map.put(schedule, "resource_availability", availability),
+                {:due, now},
+                &1
+              )
             )
             |> reduce_results()
 
@@ -286,16 +290,18 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     end
   end
 
-  defp dispatch_with_lease(schedule, instance) do
+  defp dispatch_with_lease(schedule, trigger, instance) do
     if schedule_owner?(schedule) do
-      do_dispatch_with_lease(schedule, instance)
+      do_dispatch_with_lease(schedule, trigger, instance)
     else
       %{checked: 1, dispatched: 0, skipped: 1, failed: 0, missed: 0, blocked: 0}
     end
   end
 
-  defp do_dispatch_with_lease(schedule, instance) do
-    lease_name = "schedule:#{schedule["schedule_id"]}:#{dispatch_token(schedule, instance)}"
+  defp do_dispatch_with_lease(schedule, trigger, instance) do
+    lease_name =
+      "schedule:#{schedule["schedule_id"]}:#{ScheduleOccurrence.token(schedule, instance)}"
+
     owner = "#{Node.self()}:#{System.unique_integer([:positive])}"
 
     case RedisStore.acquire_fenced_lease(lease_name, owner, @lease_ttl_ms) do
@@ -304,7 +310,11 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
           case with_schedule_state_lock(schedule["schedule_id"], fn lock ->
                  with {:ok, current_schedule} <-
                         RedisStore.fetch_schedule(schedule["schedule_id"]) do
-                   dispatch_child(current_schedule, instance, lease, lock)
+                   if eligible?(current_schedule, trigger, instance) do
+                     dispatch_child(current_schedule, instance, lease, lock)
+                   else
+                     %{checked: 1, dispatched: 0, skipped: 1, failed: 0, missed: 0, blocked: 0}
+                   end
                  end
                end) do
             {:error, reason} ->
@@ -327,6 +337,21 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     end
   end
 
+  defp eligible?(current, :manual, _instance), do: schedule_owner?(current)
+
+  defp eligible?(current, trigger, instance) do
+    schedule_owner?(current) and (service_schedule?(current) or not overlap_blocked?(current)) and
+      case trigger do
+        {:event, event} ->
+          SchedulePolicy.event_matches?(current, event)
+
+        {:due, now} ->
+          not SchedulePolicy.missed?(current, now) and
+            instance in SchedulePolicy.due_instances(current, now) and
+            (current["kind"] != "resource_wait" or match?({:ok, _}, resource_wait_ready?(current)))
+      end
+  end
+
   defp schedule_owner?(%{"owner_node" => owner}) when is_binary(owner) and owner != "" do
     owner == to_string(MirrorNeuron.Cluster.NodeAdapter.self())
   end
@@ -337,7 +362,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     dispatch_id =
       if service_schedule?(schedule),
         do: generate_dispatch_id(),
-        else: dispatch_token(schedule, instance)
+        else: ScheduleOccurrence.token(schedule, instance)
 
     metadata = schedule_dispatch_metadata(schedule, instance, dispatch_id, lease)
 
@@ -601,7 +626,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     if occurrence_consumed and schedule["kind"] == "periodic" do
       next_run_at = SchedulePolicy.next_run_at(schedule, DateTime.add(now, 60, :second))
 
-      case mutate_schedule(schedule["schedule_id"], &Map.put(&1, "next_run_at", next_run_at)) do
+      case mutate_observed_schedule(schedule, &Map.put(&1, "next_run_at", next_run_at)) do
         {:ok, _saved} ->
           result
 
@@ -619,7 +644,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
 
     log_schedule_update_failure(
       schedule["schedule_id"],
-      mutate_schedule(schedule["schedule_id"], fn current ->
+      mutate_observed_schedule(schedule, fn current ->
         current
         |> Map.put("next_run_at", next_run_at)
         |> Map.put("last_missed_at", DateTime.to_iso8601(now))
@@ -633,7 +658,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
   defp mark_blocked(schedule, reason) do
     log_schedule_update_failure(
       schedule["schedule_id"],
-      mutate_schedule(schedule["schedule_id"], fn current ->
+      mutate_observed_schedule(schedule, fn current ->
         current
         |> Map.put("last_blocked_reason", reason)
         |> Map.put("updated_at", Runtime.timestamp())
@@ -651,7 +676,7 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
 
     log_schedule_update_failure(
       schedule["schedule_id"],
-      mutate_schedule(schedule["schedule_id"], fn current ->
+      mutate_observed_schedule(schedule, fn current ->
         current
         |> Map.put("next_run_at", next_run_at)
         |> Map.put("last_blocked_reason", reason || "resources unavailable")
@@ -852,7 +877,8 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
     |> Enum.any?(fn job_id ->
       case RedisStore.fetch_job(job_id) do
         {:ok, %{"status" => status}} -> status not in @terminal_statuses
-        _ -> false
+        {:error, reason} -> reason != :not_found and reason != "job #{job_id} was not found"
+        _ -> true
       end
     end)
   end
@@ -920,6 +946,20 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
 
   defp reason_to_string(reason) when is_binary(reason), do: reason
   defp reason_to_string(reason), do: inspect(reason)
+
+  defp mutate_observed_schedule(observed, update) do
+    fields = ~w(enabled status owner_node kind next_run_at crons run_at trigger missed_policy)
+
+    with_schedule_state_lock(observed["schedule_id"], fn lock ->
+      with {:ok, current} <- RedisStore.fetch_schedule(observed["schedule_id"]) do
+        if schedule_owner?(current) and Map.take(current, fields) == Map.take(observed, fields) do
+          mutate_schedule_with_lock(current["schedule_id"], lock, update)
+        else
+          {:ok, current}
+        end
+      end
+    end)
+  end
 
   defp mutate_schedule(schedule_id, update) do
     with_schedule_state_lock(schedule_id, fn lock ->
@@ -1103,20 +1143,6 @@ defmodule MirrorNeuron.Runtime.ScheduleDispatcher do
 
   defp empty_result do
     %{checked: 0, dispatched: 0, skipped: 0, failed: 0, missed: 0, blocked: 0, windows_closed: 0}
-  end
-
-  defp dispatch_token(schedule, instance) do
-    :crypto.hash(
-      :sha256,
-      Jason.encode!(%{
-        schedule_id: schedule["schedule_id"],
-        scheduled_for:
-          if(get_in(instance, ["event", "event_id"]), do: nil, else: instance["scheduled_for"]),
-        reason: instance["reason"],
-        event_id: get_in(instance, ["event", "event_id"])
-      })
-    )
-    |> Base.url_encode64(padding: false)
   end
 
   defp generate_schedule_id do
