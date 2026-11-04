@@ -31,7 +31,8 @@ defmodule MirrorNeuron.Resource do
 
   def set(attrs) when is_map(attrs) do
     with {:ok, updates} <- normalize_limits(attrs),
-         next_limits <- Map.merge(limits(), updates),
+         {:ok, current} <- admission_limits(),
+         next_limits <- Map.merge(current, updates),
          {:ok, persisted} <- store().persist_resource_limits(next_limits) do
       wake_blocked_recovery_evals()
       {:ok, Map.put(list(), "limits", persisted) |> put_usable_totals()}
@@ -41,13 +42,26 @@ defmodule MirrorNeuron.Resource do
   def set(_attrs), do: {:error, "resource limits must be an object"}
 
   def limits do
+    case admission_limits() do
+      {:ok, limits} -> limits
+      _ -> default_limits()
+    end
+  end
+
+  def admission_limits do
     case store().fetch_resource_limits() do
+      {:error, :not_found} ->
+        {:ok, default_limits()}
+
       {:ok, stored} when is_map(stored) ->
-        default_limits()
-        |> Map.merge(valid_limit_values(stored))
+        values = valid_limit_values(stored)
+
+        if map_size(values) == map_size(stored),
+          do: {:ok, Map.merge(default_limits(), values)},
+          else: {:error, :node_admission_unavailable}
 
       _ ->
-        default_limits()
+        {:error, :node_admission_unavailable}
     end
   end
 
@@ -171,7 +185,7 @@ defmodule MirrorNeuron.Resource do
     if to_string(name) == MirrorNeuron.Runtime.NodeAdmission.node_name() do
       case MirrorNeuron.Runtime.NodeAdmission.snapshot() do
         {:ok, state} ->
-          Map.take(state, ["reservations", "queue", "generation", "legacy"])
+          MirrorNeuron.Runtime.NodeAdmissionState.report(state)
           |> Map.put("capability", "resource_admission_v2")
 
         _ ->

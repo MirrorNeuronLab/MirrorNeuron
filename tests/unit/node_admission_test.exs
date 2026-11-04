@@ -26,7 +26,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
 
     def stop_before_next_compare(parent), do: Process.put({__MODULE__, :compare_barrier}, parent)
 
-    def compare_node_admission(node, expected, next) do
+    def compare_node_admission(node, expected, next, witness) do
       if parent = Process.delete({__MODULE__, :compare_barrier}) do
         send(parent, {:before_compare, self(), expected})
 
@@ -40,13 +40,50 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
       Agent.get_and_update(__MODULE__, fn data ->
         current = Map.get(data.states, node, NodeAdmissionState.new())
 
-        if current["version"] == expected,
-          do: {:ok, put_in(data, [:states, node], next)},
-          else: {{:error, :admission_conflict}, data}
+        cond do
+          current["version"] != expected ->
+            {{:error, :admission_conflict}, data}
+
+          witness && not Enum.member?(data.jobs, elem(witness, 1)) ->
+            {{:error, :admission_run_changed}, data}
+
+          true ->
+            {:ok, put_in(data, [:states, node], next)}
+        end
       end)
     end
 
-    def fetch_resource_limits, do: {:ok, %{}}
+    def fetch_resource_limits, do: Agent.get(__MODULE__, &Map.get(&1, :limits, {:ok, %{}}))
+    def set_policy(result), do: Agent.update(__MODULE__, &Map.put(&1, :limits, result))
+
+    def fetch_admission_job(id) do
+      with {:ok, job} <- fetch_job(id), do: {:ok, job, {id, job}}
+    end
+
+    def list_schedules, do: {:ok, Agent.get(__MODULE__, &Map.values(&1.schedules))}
+
+    def write_queue_schedule(node, version, {id, job}, expected, attrs) do
+      Agent.get_and_update(__MODULE__, fn data ->
+        key = "queue_" <> id
+        state = Map.get(data.states, node, NodeAdmissionState.new())
+
+        cond do
+          (job == "missing" and Enum.any?(data.jobs, &(&1["job_id"] == id))) or
+              (job != "missing" and job not in data.jobs) ->
+            {{:error, :admission_run_changed}, data}
+
+          state["version"] != version or data.schedules[key] != expected ->
+            {{:error, :admission_conflict}, data}
+
+          attrs ->
+            {{:ok, attrs}, put_in(data, [:schedules, key], attrs)}
+
+          true ->
+            {{:ok, nil}, %{data | schedules: Map.delete(data.schedules, key)}}
+        end
+      end)
+    end
+
     def list_jobs, do: {:ok, Agent.get(__MODULE__, & &1.jobs)}
     def put_jobs(jobs), do: Agent.update(__MODULE__, &Map.put(&1, :jobs, jobs))
 
@@ -303,6 +340,93 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
     assert {:error, :node_requests_active} = NodeAdmission.retire("first")
     assert {:ok, %{"state" => "queued", "queue_id" => ^queue_id}} = submit.(waiter)
     assert {:ok, ^state} = NodeAdmission.snapshot()
+  end
+
+  test "a stale discovery cannot reconstruct a cancelled or reassigned Run ahead of a new arrival" do
+    {:ok, _} = NodeAdmission.submit(job("holder"))
+
+    queued =
+      job("first")
+      |> Map.merge(%{"status" => "queued", "admission" => %{"owner_node" => "spark@test"}})
+
+    parent = self()
+
+    for {id, changed} <- [
+          {"arrival-1", %{queued | "status" => "cancelled"}},
+          {"arrival-2", put_in(queued, ["admission", "owner_node"], "other@test")}
+        ] do
+      Store.put_jobs([queued])
+
+      caller =
+        Task.async(fn ->
+          Store.stop_before_next_compare(parent)
+          NodeAdmission.submit(job(id))
+        end)
+
+      assert_receive {:before_compare, pid, _version}, 5_000
+      Store.put_jobs([changed])
+      send(pid, :commit)
+      assert {:ok, %{"state" => "queued"}} = Task.await(caller)
+      {:ok, state} = NodeAdmission.snapshot()
+      refute Enum.any?(state["queue"], &(&1["run_id"] == "first"))
+      assert state["queue"] |> List.last() |> Map.fetch!("run_id") == id
+      assert {:error, :not_found} = Store.fetch_schedule("queue_first")
+    end
+  end
+
+  test "recovery charges an active legacy Run before restoring older waiting work" do
+    owned = fn id, status, at ->
+      job(id)
+      |> Map.merge(%{
+        "status" => status,
+        "submitted_at" => at,
+        "admission" => %{"owner_node" => "spark@test"}
+      })
+    end
+
+    Store.put_jobs([
+      owned.("older", "queued", "2026-01-01"),
+      owned.("active", "paused", "2026-02-01")
+    ])
+
+    assert {:ok, %{"position" => 2}} = NodeAdmission.submit(job("arrival"))
+
+    assert {:ok, %{"legacy" => ["active"], "reservations" => %{}, "queue" => queue}} =
+             NodeAdmission.snapshot()
+
+    assert Enum.map(queue, & &1["run_id"]) == ["older", "arrival"]
+  end
+
+  test "absent resource policy defaults, outages deny new work and cleanup remains live" do
+    MirrorNeuron.Cluster.Hardware.update_snapshot(%{
+      cpu: %{logical_processors: 4},
+      memory: %{total_mb: 4096, available_mb: 4096},
+      disk: %{total_mb: 8192, available_mb: 8192}
+    })
+
+    submit = fn id ->
+      profile = %{"mode" => "shared", "cpu_cores" => 2, "memory_mb" => 128}
+
+      NodeAdmission.submit(
+        Map.put(job(id), "manifest", %{"policies" => %{"resource_allocation" => profile}})
+      )
+    end
+
+    Store.set_policy({:ok, %{"cpu" => 25}})
+    assert {:error, {:resource_requirement_unmet, _}} = submit.("over-limit")
+    Store.set_policy({:error, :not_found})
+    assert {:ok, %{"state" => "preparing"}} = submit.("held")
+    {:ok, before} = NodeAdmission.snapshot()
+
+    for outage <- [{:error, :unavailable}, {:ok, %{"cpu" => "broken"}}] do
+      Store.set_policy(outage)
+      assert {:error, :node_admission_unavailable} = submit.("refused")
+      assert {:ok, ^before} = NodeAdmission.snapshot()
+    end
+
+    assert :ok = NodeAdmission.retire("held")
+    Store.set_policy({:ok, %{"cpu" => 50}})
+    assert {:ok, %{"state" => "preparing"}} = submit.("after-recovery")
   end
 
   test "A and B on Spark, C on another PC, and B becomes the sole holder after A drains" do

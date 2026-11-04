@@ -72,11 +72,70 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionStateTest do
     {state, queued} = submit(state, "a")
     assert queued["state"] == "queued"
     assert queued["blocked_by"]["job_name"] == "resource preparation or inference"
-    assert state["reservations"]["request_interactive"]
+    assert holder(state)["claim_kind"] == "native_request"
     refute state["reservations"]["a"]
     {:ok, state, _} = Admission.transition(state, "request_release", %{"token" => "interactive"})
     {:ok, state, _} = Admission.transition(state, "promote", %{})
     assert holder(state)["run_id"] == "a"
+  end
+
+  test "unknown tokens cannot release real Runs and scoped replay returns its original allocation" do
+    token = String.duplicate("a", 32)
+    id = "request_" <> token
+    {state, receipt} = submit(Admission.new(), id)
+    assert {:ok, ^state, _} = Admission.transition(state, "request_release", %{"token" => token})
+
+    assert {:error, :node_reserved} =
+             Admission.transition(state, "request_acquire", %{"token" => token, "run_id" => ""})
+
+    attrs = %{"token" => token, "run_id" => id, "generation" => receipt["generation"]}
+    assert {:ok, acquired, response} = Admission.transition(state, "request_acquire", attrs)
+    assert response["allocation"] == receipt["allocation"]
+    assert {:ok, ^acquired, ^response} = Admission.transition(acquired, "request_acquire", attrs)
+
+    for changed <- [%{"generation" => 0}, %{"run_id" => "different"}] do
+      assert {:error, :stale_node_reservation} =
+               Admission.transition(acquired, "request_acquire", Map.merge(attrs, changed))
+    end
+
+    assert {:ok, ^state, _} =
+             Admission.transition(acquired, "request_release", %{"token" => token})
+  end
+
+  test "a persisted native claim migrates only with proof and never exposes the bearer token" do
+    token = String.duplicate("f", 32)
+    attrs = %{"token" => token, "run_id" => ""}
+    {:ok, new, reply} = Admission.transition(Admission.new(), "request_acquire", attrs)
+    [private] = Map.keys(new["reservations"])
+    old = "request_" <> token
+    legacy = new["reservations"][private] |> Map.put("run_id", old) |> Map.delete("claim_kind")
+    encoded = %{new | "reservations" => %{old => legacy}} |> Jason.encode!() |> Jason.decode!()
+    assert {:ok, migrated, ^reply} = Admission.transition(encoded, "request_acquire", attrs)
+    assert Admission.allocations(migrated) == [reply["allocation"]]
+    refute Jason.encode!(Admission.report(migrated)) =~ token
+    assert {:ok, released, _} = Admission.transition(migrated, "request_release", attrs)
+    assert released["reservations"] == %{}
+
+    # An orphan still charges capacity but an unknown release cannot free it,
+    # and a matching public Run cannot inherit its allocation.
+    orphan = Map.put(encoded, "requests", %{})
+    assert {:ok, charged, _} = Admission.transition(orphan, "request_release", attrs)
+    assert Admission.allocations(charged) == [reply["allocation"]]
+    refute Jason.encode!(Admission.report(charged)) =~ token
+
+    assert {:error, :stale_node_reservation} =
+             Admission.transition(charged, "request_acquire", attrs)
+
+    {_queued, %{"state" => "queued"}} = submit(charged, old)
+
+    # Old code could attach an unscoped token to the reservation of a real Run.
+    ambiguous = put_in(encoded, ["reservations", old, "job_id"], "real-job")
+
+    assert {:error, :stale_node_reservation} =
+             Admission.transition(ambiguous, "request_acquire", attrs)
+
+    assert {:ok, safe, _} = Admission.transition(ambiguous, "request_release", attrs)
+    assert safe["reservations"][old] == ambiguous["reservations"][old]
   end
 
   test "receipt replay is idempotent, cancellation never cancels the holder" do

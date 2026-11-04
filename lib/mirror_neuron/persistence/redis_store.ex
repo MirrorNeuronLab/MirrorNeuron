@@ -48,26 +48,89 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     end
   end
 
-  def compare_node_admission(node_name, version, next) do
+  # The exact bytes are a private CAS witness. Never re-encode the decoded
+  # record: older writers need not serialize fields in the same order.
+  def fetch_admission_job(id) do
+    case command(["GET", key("job", id)]) do
+      {:ok, nil} ->
+        {:error, :not_found}
+
+      {:ok, bytes} ->
+        with {:ok, job} <- Jason.decode(bytes), do: {:ok, job, {id, bytes}}
+
+      error ->
+        error
+    end
+  end
+
+  def compare_node_admission(node, version, next, witness \\ nil) do
+    admission_write(node, version, witness, nil, [
+      ["SET", key("node-admission", node), Jason.encode!(next)]
+    ])
+  end
+
+  def write_queue_schedule(node, version, {run_id, _} = witness, existing, attrs) do
+    id = "queue_" <> run_id
+    schedule = if attrs, do: prepare_schedule(id, Map.merge(existing || %{}, attrs))
+
+    commands =
+      if schedule, do: schedule_commands(id, schedule), else: delete_schedule_commands(id)
+
+    with :ok <- admission_write(node, version, witness, {id, existing}, commands),
+         do: {:ok, schedule}
+  end
+
+  defp admission_write(node, version, witness, projection, commands) do
     script = """
     local prior = redis.call('GET', KEYS[1])
-    local version = 0
-    if prior then version = cjson.decode(prior)['version'] end
-    if version ~= tonumber(ARGV[1]) then return 0 end
-    redis.call('SET', KEYS[1], ARGV[2])
+    if (prior and cjson.decode(prior)['version'] or 0) ~= tonumber(ARGV[1]) then return 0 end
+    if ARGV[2] ~= '' then
+      local job = redis.call('GET', KEYS[2])
+      if ARGV[2] == 'missing' and job then return -1 end
+      if ARGV[2] ~= 'missing' and job ~= ARGV[2] then return -1 end
+    end
+    if ARGV[3] ~= '' then
+      local saved = redis.call('GET', KEYS[3])
+      if ARGV[3] == 'missing' then
+        if saved then return 0 end
+      else
+        if not saved then return 0 end
+        local record = cjson.decode(saved)
+        if (record['revision'] or 0) ~= tonumber(ARGV[3]) or record['target_run_id'] ~= ARGV[5]
+          or record['owner_node'] ~= ARGV[6] then return 0 end
+      end
+    end
+    for _, cmd in ipairs(cjson.decode(ARGV[4])) do redis.call(unpack(cmd)) end
     return 1
     """
+
+    {id, bytes} = witness || {"", ""}
+    {schedule_id, expected} = projection || {"", nil}
+
+    revision =
+      cond do
+        projection == nil -> ""
+        expected == nil -> "missing"
+        true -> to_string(expected["revision"] || 0)
+      end
 
     case command([
            "EVAL",
            script,
-           "1",
-           key("node-admission", node_name),
+           "3",
+           key("node-admission", node),
+           key("job", id),
+           key("schedule", schedule_id),
            to_string(version),
-           Jason.encode!(next)
+           bytes,
+           revision,
+           Jason.encode!(commands),
+           id,
+           node
          ]) do
       {:ok, 1} -> wait_for_replicas()
       {:ok, 0} -> {:error, :admission_conflict}
+      {:ok, -1} -> {:error, :admission_run_changed}
       {:error, reason} -> {:error, format_reason(reason)}
     end
   end
@@ -900,16 +963,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   def persist_schedule(schedule_id, schedule_map) do
     schedule = prepare_schedule(schedule_id, schedule_map)
-    revision = runtime_status_revision(schedule)
-
-    commands =
-      [
-        ["SET", key("schedule", schedule_id), Jason.encode!(schedule)],
-        ["SADD", key(@schedules_set), schedule_id],
-        ["ZREM", key(@schedule_due_zset), schedule_id]
-      ] ++
-        schedule_due_commands(schedule) ++
-        [cluster_runtime_status_event_command("schedules", schedule_id, "upsert", revision)]
+    commands = schedule_commands(schedule_id, schedule)
 
     with {:ok, results} <- transaction(commands),
          :ok <- expect_first_result(results, fn value -> value == "OK" end),
@@ -920,6 +974,18 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       {:error, reason} -> {:error, format_reason(reason)}
       other -> {:error, format_reason(other)}
     end
+  end
+
+  defp schedule_commands(schedule_id, schedule) do
+    revision = runtime_status_revision(schedule)
+
+    [
+      ["SET", key("schedule", schedule_id), Jason.encode!(schedule)],
+      ["SADD", key(@schedules_set), schedule_id],
+      ["ZREM", key(@schedule_due_zset), schedule_id]
+    ] ++
+      schedule_due_commands(schedule) ++
+      [cluster_runtime_status_event_command("schedules", schedule_id, "upsert", revision)]
   end
 
   def persist_schedule_fenced(schedule_id, schedule_map, lease_name, owner_id, epoch) do
@@ -1016,20 +1082,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   end
 
   def delete_schedule(schedule_id) do
-    revision = runtime_status_revision(%{"deleted" => schedule_id, "at" => timestamp()})
-
-    with {:ok, results} <-
-           transaction([
-             ["DEL", key("schedule", schedule_id), key("schedule-occurrences", schedule_id)],
-             ["SREM", key(@schedules_set), schedule_id],
-             ["ZREM", key(@schedule_due_zset), schedule_id],
-             cluster_runtime_status_event_command(
-               "schedules",
-               schedule_id,
-               "delete",
-               revision
-             )
-           ]),
+    with {:ok, results} <- transaction(delete_schedule_commands(schedule_id)),
          :ok <- expect_no_redis_errors(results),
          :ok <- delete_schedule_lease_metadata(schedule_id),
          :ok <- wait_for_replicas() do
@@ -1038,6 +1091,22 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       {:error, reason} -> {:error, format_reason(reason)}
       other -> {:error, format_reason(other)}
     end
+  end
+
+  defp delete_schedule_commands(schedule_id) do
+    revision = runtime_status_revision(%{"deleted" => schedule_id, "at" => timestamp()})
+
+    [
+      ["DEL", key("schedule", schedule_id), key("schedule-occurrences", schedule_id)],
+      ["SREM", key(@schedules_set), schedule_id],
+      ["ZREM", key(@schedule_due_zset), schedule_id],
+      cluster_runtime_status_event_command(
+        "schedules",
+        schedule_id,
+        "delete",
+        revision
+      )
+    ]
   end
 
   def delete_schedule_fenced(schedule_id, lease_name, owner_id, epoch) do
@@ -2456,7 +2525,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   def fetch_resource_limits do
     case command(["GET", key("resource", "limits")]) do
-      {:ok, nil} -> {:error, "resource limits were not found"}
+      {:ok, nil} -> {:error, :not_found}
       {:ok, encoded} -> Jason.decode(encoded)
       {:error, reason} -> {:error, format_reason(reason)}
     end

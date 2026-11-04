@@ -608,6 +608,50 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
   end
 
   @tag :blueprint_runtime
+  test "queue repair and projection writes compare both ledger version and durable Run bytes" do
+    owner = "repair-owner@test"
+    id = "repair-witness"
+
+    {:ok, _} =
+      RedisStore.persist_job(id, %{
+        "job_id" => id,
+        "status" => "queued",
+        "admission" => %{"owner_node" => owner}
+      })
+
+    {:ok, _, first} = RedisStore.fetch_admission_job(id)
+    {:ok, state} = RedisStore.fetch_node_admission(owner)
+    revision = state["version"]
+    next = Map.put(state, "version", revision + 1)
+    attrs = %{"kind" => "resource_wait", "target_run_id" => id, "owner_node" => owner}
+    assert {:ok, projected} = RedisStore.write_queue_schedule(owner, revision, first, nil, attrs)
+    {:ok, _} = RedisStore.persist_terminal_job(id, %{"status" => "cancelled"})
+
+    assert {:error, :admission_run_changed} =
+             RedisStore.compare_node_admission(owner, revision, next, first)
+
+    for change <- [nil, Map.put(attrs, "not_before", "2099-01-01T00:00:00Z")] do
+      assert {:error, :admission_run_changed} =
+               RedisStore.write_queue_schedule(owner, revision, first, projected, change)
+    end
+
+    assert {:ok, ^projected} = RedisStore.fetch_schedule("queue_" <> id)
+    {:ok, _, current} = RedisStore.fetch_admission_job(id)
+    :ok = RedisStore.compare_node_admission(owner, revision, next, current)
+
+    assert {:error, :admission_conflict} =
+             RedisStore.write_queue_schedule(owner, revision, current, projected, nil)
+
+    assert {:ok, nil} =
+             RedisStore.write_queue_schedule(owner, revision + 1, current, projected, nil)
+
+    assert {:error, :admission_run_changed} =
+             RedisStore.write_queue_schedule(owner, revision + 1, {id, "missing"}, nil, attrs)
+
+    assert {:error, _} = RedisStore.fetch_schedule("queue_" <> id)
+  end
+
+  @tag :blueprint_runtime
   test "scheduler admission reads durable reservations omitted from monitoring summaries" do
     alias MirrorNeuron.{Config, Manifest, Scheduler}
 

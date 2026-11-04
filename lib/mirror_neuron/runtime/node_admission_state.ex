@@ -1,6 +1,6 @@
 defmodule MirrorNeuron.Runtime.NodeAdmissionState do
   @moduledoc "Durable, fenced resource reservations and bounded-backfill transitions."
-  alias MirrorNeuron.Runtime.ResourceAllocation
+  alias MirrorNeuron.Runtime.{NativeRequestClaim, ResourceAllocation}
 
   def new do
     %{
@@ -16,7 +16,8 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionState do
   end
 
   # Existing whole-PC claims remain exclusive until their original cleanup.
-  def upgrade(%{"schema_version" => 2} = state), do: normalize_empty_lists(state)
+  def upgrade(%{"schema_version" => 2} = state),
+    do: state |> normalize_empty_lists() |> NativeRequestClaim.upgrade()
 
   def upgrade(state) do
     reservations =
@@ -37,6 +38,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionState do
     |> Map.merge(Map.take(state, ~w(version generation queue deferred requests legacy)))
     |> Map.put("reservations", reservations)
     |> normalize_empty_lists()
+    |> NativeRequestClaim.upgrade()
   end
 
   defp normalize_empty_lists(state) do
@@ -59,6 +61,10 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionState do
       )
 
     cond do
+      NativeRequestClaim.native?(state["reservations"][id]) and
+          not NativeRequestClaim.native?(entry) ->
+        {:error, :node_reserved}
+
       Map.has_key?(state["reservations"], id) or
           Enum.any?(state["queue"] ++ state["deferred"], &(&1["run_id"] == id)) ->
         {:ok, state, receipt(state, id)}
@@ -152,7 +158,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionState do
       held == nil ->
         {:error, :stale_node_reservation}
 
-      held["generation"] != generation ->
+      NativeRequestClaim.native?(held) or held["generation"] != generation ->
         {:error, :stale_node_reservation}
 
       active_requests?(state, id) ->
@@ -187,53 +193,58 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionState do
   end
 
   defp apply_transition(state, "request_acquire", %{"run_id" => id, "token" => token} = attrs) do
+    existing = Map.fetch(state["requests"], token)
     held = state["reservations"][id]
 
     cond do
-      Map.has_key?(state["requests"], token) ->
-        if state["requests"][token] == id,
-          do: {:ok, state, %{"status" => "acquired", "token" => token}},
-          else: {:error, :stale_node_reservation}
+      existing != :error and existing != {:ok, id} ->
+        {:error, :stale_node_reservation}
 
-      map_size(state["requests"]) >= 4096 ->
+      existing == :error and map_size(state["requests"]) >= 4096 ->
         {:error, :node_requests_full}
 
-      held != nil and held["generation"] != attrs["generation"] ->
+      id == "" ->
+        acquire_native(state, token, attrs, existing)
+
+      NativeRequestClaim.native?(held) or
+          (held != nil and held["generation"] != attrs["generation"]) ->
         {:error, :stale_node_reservation}
 
       held != nil or id in state["legacy"] ->
         {:ok, put_in(state, ["requests", token], id),
-         %{"status" => "acquired", "token" => token, "allocation" => (held || %{})["allocation"]}}
-
-      id == "" ->
-        entry = %{
-          "run_id" => "request_" <> token,
-          "request" => attrs["request"] || exclusive(),
-          "capacity" => capacity(attrs)
-        }
-
-        case apply_transition(state, "submit_now", entry) do
-          {:ok, next, _} ->
-            {:ok, put_in(next, ["requests", token], ""),
-             %{"status" => "acquired", "token" => token}}
-
-          _ ->
-            {:error, :node_reserved}
-        end
+         acquired(token, (held || %{})["allocation"])}
 
       true ->
         {:error, :node_reserved}
     end
   end
 
-  defp apply_transition(state, "request_release", %{"token" => token}) do
-    next = %{
-      state
-      | "requests" => Map.delete(state["requests"], token),
-        "reservations" => Map.delete(state["reservations"], "request_" <> token)
-    }
+  defp apply_transition(state, "request_release", %{"token" => token} = attrs) do
+    native_id = NativeRequestClaim.id(token)
 
-    {:ok, next, %{"status" => "released"}}
+    case Map.fetch(state["requests"], token) do
+      :error ->
+        {:ok, state, %{"status" => "released"}}
+
+      {:ok, owner} ->
+        cond do
+          attrs["run_id"] not in [nil, "", owner] ->
+            {:error, :stale_node_reservation}
+
+          true ->
+            reservations =
+              if owner == "" and NativeRequestClaim.native?(state["reservations"][native_id]),
+                do: Map.delete(state["reservations"], native_id),
+                else: state["reservations"]
+
+            {:ok,
+             %{
+               state
+               | "requests" => Map.delete(state["requests"], token),
+                 "reservations" => reservations
+             }, %{"status" => "released"}}
+        end
+    end
   end
 
   defp apply_transition(state, "import", %{"runs" => runs}) do
@@ -249,6 +260,42 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionState do
     do: {:ok, %{state | "legacy" => List.delete(state["legacy"], id)}, %{}}
 
   defp apply_transition(_state, _operation, _attrs), do: {:error, :invalid_node_admission_command}
+
+  defp acquire_native(state, token, attrs, {:ok, ""}) do
+    held = state["reservations"][NativeRequestClaim.id(token)]
+
+    if NativeRequestClaim.native?(held) and
+         (attrs["generation"] == nil or attrs["generation"] == held["generation"]),
+       do: {:ok, state, acquired(token, held["allocation"])},
+       else: {:error, :stale_node_reservation}
+  end
+
+  defp acquire_native(state, token, attrs, :error) do
+    entry = NativeRequestClaim.entry(token, attrs["request"] || exclusive(), capacity(attrs))
+
+    with nil <- state["reservations"][entry["run_id"]],
+         {:ok, next, %{"allocation" => allocation}} <-
+           apply_transition(state, "submit_now", entry) do
+      {:ok, put_in(next, ["requests", token], ""), acquired(token, allocation)}
+    else
+      %{} -> {:error, :stale_node_reservation}
+      _ -> {:error, :node_reserved}
+    end
+  end
+
+  defp acquired(token, allocation),
+    do: %{"status" => "acquired", "token" => token, "allocation" => allocation}
+
+  def report(state) do
+    state = upgrade(state)
+
+    reservations =
+      Map.new(state["reservations"], fn {id, entry} ->
+        NativeRequestClaim.report_entry(id, entry)
+      end)
+
+    Map.take(state, ~w(queue generation legacy)) |> Map.put("reservations", reservations)
+  end
 
   def receipt(state, id) do
     state = upgrade(state)
@@ -289,7 +336,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionState do
             "not_before" => entry["not_before"],
             "blockers" => entry["blockers"] || [],
             "blocked_by" =>
-              if(String.starts_with?(blocker["run_id"] || "", "request_"),
+              if(NativeRequestClaim.native?(blocker),
                 do: %{"job_name" => "resource preparation or inference"},
                 else: Map.drop(blocker, ["request", "allocation"])
               )
@@ -300,8 +347,10 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionState do
     end
   end
 
-  def allocations(state),
-    do: Enum.map(Map.values(upgrade(state)["reservations"]), & &1["allocation"])
+  def allocations(state), do: reservation_allocations(upgrade(state))
+
+  defp reservation_allocations(state),
+    do: Enum.map(Map.values(state["reservations"]), & &1["allocation"])
 
   defp promote(state, capacity) do
     now = DateTime.utc_now()
@@ -325,7 +374,8 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionState do
         request = entry["request"] || exclusive()
 
         allocations =
-          allocations(acc) ++ protected_allocations(waiting, capacity) ++ legacy_allocations(acc)
+          reservation_allocations(acc) ++
+            protected_allocations(waiting, capacity) ++ legacy_allocations(acc)
 
         case ResourceAllocation.allocate(request, capacity, allocations) do
           {:ok, allocation} ->
@@ -370,7 +420,8 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionState do
   defp legacy_allocations(state) do
     unowned =
       Enum.any?(state["requests"], fn {token, run} ->
-        run == "" and not Map.has_key?(state["reservations"], "request_" <> token)
+        run == "" and
+          not NativeRequestClaim.native?(state["reservations"][NativeRequestClaim.id(token)])
       end)
 
     if state["legacy"] != [] or unowned, do: [%{"mode" => "exclusive_node"}], else: []

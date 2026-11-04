@@ -245,7 +245,7 @@ defmodule MirrorNeuron.Cluster.NodeState do
   defp admission_advertisement do
     case MirrorNeuron.Runtime.NodeAdmission.snapshot() do
       {:ok, state} ->
-        Map.take(state, ["reservations", "queue", "generation", "legacy"])
+        MirrorNeuron.Runtime.NodeAdmissionState.report(state)
         |> Map.put("capability", "resource_admission_v2")
 
       _ ->

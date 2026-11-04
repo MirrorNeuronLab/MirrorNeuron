@@ -197,7 +197,7 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
   defp admission_node_info do
     case MirrorNeuron.Runtime.NodeAdmission.snapshot() do
       {:ok, state} ->
-        Map.take(state, ["reservations", "queue", "generation", "legacy"])
+        MirrorNeuron.Runtime.NodeAdmissionState.report(state)
         |> Map.put("capability", "resource_admission_v2")
 
       _ ->

@@ -12,7 +12,7 @@ defmodule MirrorNeuron.ResourceTest do
     def persist_resource_limits(limits),
       do: Agent.get_and_update(__MODULE__, &persist(&1, limits))
 
-    defp fetch(nil), do: {:error, "not found"}
+    defp fetch(nil), do: {:error, :not_found}
     defp fetch(limits), do: {:ok, limits}
 
     defp persist(_current, limits), do: {{:ok, limits}, limits}

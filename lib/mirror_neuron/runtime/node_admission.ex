@@ -4,23 +4,55 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
   require Logger
 
   alias MirrorNeuron.Cluster.{Hardware, NodeAdapter}
-  alias MirrorNeuron.Persistence.RedisStore
-  alias MirrorNeuron.Runtime.{JobCleanup, NodeAdmissionState, ResourceAllocation}
+
+  alias MirrorNeuron.Runtime.{
+    AdmissionLedger,
+    JobCleanup,
+    NativeRequestClaim,
+    NodeAdmissionState,
+    QueueReconciliation,
+    ResourceAllocation
+  }
+
+  import AdmissionLedger, only: [entry: 1, mutate: 2, store: 0]
   @terminal ~w(completed failed cancelled)
-  @active ~w(pending validated scheduled running paused pausing resuming cancelling)
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
   def init(_opts) do
     send(self(), :tick)
-    {:ok, %{timer: nil}}
+    {:ok, %{timer: nil, failure: nil}}
   end
 
   def handle_info(:tick, state) do
     if state.timer, do: Process.cancel_timer(state.timer)
-    reconcile()
+
+    result =
+      try do
+        reconcile()
+      rescue
+        _ -> {:error, :unexpected}
+      catch
+        :exit, _ -> {:error, :unavailable}
+      end
+
+    failure =
+      case result do
+        :ok -> nil
+        {:error, category} when is_atom(category) -> category
+        _ -> :unavailable
+      end
+
+    if failure != state.failure do
+      if failure do
+        Logger.warning("node admission reconcile owner=#{node_name()} category=#{failure}")
+      else
+        Logger.info("node admission reconcile owner=#{node_name()} recovered")
+      end
+    end
+
     timer = Process.send_after(self(), :tick, 5_000)
-    {:noreply, %{state | timer: timer}}
+    {:noreply, %{state | timer: timer, failure: failure}}
   end
 
   def handle_cast(:wake, state) do
@@ -62,16 +94,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
 
   def authorized?(_), do: false
 
-  def snapshot(node \\ node_name()) do
-    if store() != RedisStore or Process.whereis(MirrorNeuron.Redis.Connection) do
-      case store().fetch_node_admission(node) do
-        {:ok, state} -> {:ok, NodeAdmissionState.upgrade(state)}
-        error -> error
-      end
-    else
-      {:error, :node_admission_unavailable}
-    end
-  end
+  defdelegate snapshot(node \\ node_name()), to: AdmissionLedger
 
   def pin(manifest, generation \\ nil, allocation \\ nil) do
     owner = node_name()
@@ -137,7 +160,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
       MirrorNeuron.Runtime.StableJob.with_start_gate(gate_id(job["job_id"]), fn ->
         with :ok <- JobCleanup.cleanup_sandboxes(job["job_id"], job, []),
              :ok <- retire(job["job_id"]),
-             :ok <- import_existing(),
+             :ok <- QueueReconciliation.import_existing(),
              {:ok, request_entry} <-
                entry(Map.put(job, "manifest", MirrorNeuron.Manifest.to_map(manifest))),
              policy when policy in ["start_now", "enqueue_if_busy"] <-
@@ -177,7 +200,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
                      "retry_receipts" => receipts,
                      "admission" => Map.put(receipt, "authority_epoch", authority_epoch())
                    }),
-                 {:ok, _} <- persist_queue_schedule(saved) do
+                 {:ok, _} <- QueueReconciliation.sync_schedule(saved["job_id"]) do
               wake()
               {:queued, queued}
             end
@@ -234,6 +257,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
       with true <- config["node_admission_owner"] == node_name(),
            {:ok, state} <- snapshot(),
            true <- Map.has_key?(state["reservations"], run_id) or run_id in state["legacy"],
+           false <- NativeRequestClaim.native?(state["reservations"][run_id]),
            true <-
              not Map.has_key?(config, "node_admission_generation") or
                config["node_admission_generation"] ==
@@ -250,7 +274,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
   def submit(job), do: reserve(job, "enqueue_if_busy")
 
   def reserve(job, policy) when policy in ["start_now", "enqueue_if_busy"] do
-    with :ok <- import_existing(),
+    with :ok <- QueueReconciliation.import_existing(),
          {:ok, entry} <- entry(job),
          {:ok, receipt} <-
            mutate(if(policy == "start_now", do: "submit_now", else: "submit"), entry) do
@@ -260,22 +284,10 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
 
   def reserve(_job, _policy), do: {:error, :invalid_admission_policy}
 
-  defp entry(job) do
-    with {:ok, request} <- ResourceAllocation.request(job["manifest"] || %{}) do
-      {:ok,
-       %{
-         "run_id" => job["job_id"],
-         "job_id" => job["stable_job_id"],
-         "job_name" => job["job_name"],
-         "enqueued_at" => job["submitted_at"],
-         "request" => request
-       }}
-    end
-  end
-
   def check(manifest, run_id \\ nil) do
     with {:ok, manifest} <- MirrorNeuron.Manifest.load(manifest),
          {:ok, state} <- snapshot(),
+         {:ok, capacity} <- AdmissionLedger.capacity(),
          {:ok, request} <- ResourceAllocation.request(manifest) do
       retained =
         is_binary(run_id) and Map.has_key?(state["reservations"], run_id) and
@@ -285,8 +297,6 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
         if run_id,
           do: %{state | "reservations" => Map.delete(state["reservations"], run_id)},
           else: state
-
-      capacity = ResourceAllocation.capacity(Hardware.info(), MirrorNeuron.Resource.limits())
 
       allocations =
         NodeAdmissionState.allocations(state) ++
@@ -423,7 +433,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
            {:ok, %{"status" => "queued"}} <- store().fetch_job(run_id),
            {:ok, _} <- store().persist_terminal_job(run_id, %{"status" => "cancelled"}),
            {:ok, _} <- mutate("cancel", %{"run_id" => run_id, "before_start" => true}) do
-        _ = store().delete_schedule("queue_" <> run_id)
+        _ = QueueReconciliation.sync_schedule(run_id)
         wake()
         :ok
       else
@@ -444,7 +454,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
                  "run_id" => run_id,
                  "not_before" => DateTime.to_iso8601(datetime)
                }),
-             {:ok, schedule} <- persist_queue_schedule(job) do
+             {:ok, schedule} <- QueueReconciliation.sync_schedule(job["job_id"]) do
           wake()
           {:ok, schedule}
         else
@@ -471,6 +481,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
       when is_binary(id) do
     with {:ok, state} <- snapshot(),
          %{} = held <- state["reservations"][id],
+         false <- NativeRequestClaim.native?(held),
          true <- held["generation"] == attrs["generation"] do
       {:ok, Map.take(held, ~w(run_id job_id generation allocation))}
     else
@@ -510,10 +521,11 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
   def cancel_uncommitted(run_id),
     do: mutate("cancel", %{"run_id" => run_id, "before_start" => true})
 
-  defp commit_dispatch(run_id) do
+  defp commit_dispatch(run_id, generation, witness) do
     with {:ok, state} <- snapshot(),
-         %{} = held <- state["reservations"][run_id] do
-      mutate("commit", Map.take(held, ~w(run_id generation)))
+         %{} = held <- state["reservations"][run_id],
+         true <- generation == nil or held["generation"] == generation do
+      AdmissionLedger.mutate("commit", Map.take(held, ~w(run_id generation)), witness)
     else
       _ -> {:error, :stale_node_reservation}
     end
@@ -524,103 +536,44 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
          do: {:ok, decorate(NodeAdmissionState.receipt(state, run_id))}
   end
 
-  def reconcile do
-    with :ok <- import_existing(), {:ok, state} <- snapshot() do
-      Enum.each(state["queue"] ++ Map.get(state, "deferred", []), fn entry ->
-        case store().fetch_job(entry["run_id"]) do
-          {:ok, job} -> persist_queue_schedule(job)
-          _ -> :ok
-        end
-      end)
-
-      Enum.each(state["legacy"], &cleanup_legacy/1)
-
-      Enum.each(state["requests"], fn {token, run} ->
-        if run == "" do
-          case MirrorNeuron.ModelServices.native_resource_command(%{
-                 "operation" => "reconcile_request_lease",
-                 "token" => token
-               }) do
-            {:ok, %{"status" => "drained"}} -> mutate("request_release", %{"token" => token})
-            _ -> :ok
-          end
-        end
-      end)
-
-      Enum.each(Map.values(state["reservations"]), fn reservation ->
-        unless String.starts_with?(reservation["run_id"], "request_"),
-          do: reconcile_holder(reservation)
-      end)
-
-      with {:ok, reservations} <- mutate("promote", %{}) do
-        Enum.each(reservations, &dispatch/1)
-      end
-    end
-
-    :ok
-  rescue
-    _ -> Logger.warning("node admission reconciliation failed; reservations retained")
-  catch
-    _, _ -> Logger.warning("node admission reconciliation unavailable; reservations retained")
-  end
+  def reconcile, do: QueueReconciliation.reconcile()
 
   def dispatch(holder) do
-    case store().fetch_job(holder["run_id"]) do
-      {:ok, %{"status" => "queued"} = job} ->
-        # The node claim and this execution's fenced gate prevent concurrent
-        # ticks, schedule dispatch and restart recovery from launching twice.
-        MirrorNeuron.Runtime.StableJob.with_start_gate(gate_id(job["job_id"]), fn ->
-          case store().fetch_job(job["job_id"]) do
-            {:ok, %{"status" => "queued"} = current} ->
-              result =
-                case with(
-                       :ok <- validate_queued_start(current),
-                       {:ok, _} <- commit_dispatch(current["job_id"]),
-                       do: :ok
-                     ) do
-                  :ok ->
-                    if is_map(current["queued_retry"]),
-                      do: MirrorNeuron.Runtime.RunRetry.dispatch_queued(current),
-                      else: MirrorNeuron.Runtime.start_admitted_job(current)
+    id = holder["run_id"]
 
-                  error ->
-                    error
-                end
-
-              case result do
-                {:ok, _, _} ->
-                  :ok
-
-                {:error, {:admission_wait, _}} ->
-                  :ok
-
-                {:error, _reason} ->
-                  _ =
-                    store().persist_terminal_job(job["job_id"], %{
-                      "status" => "failed",
-                      "result" => %{"reason" => "Queued start requires review."}
-                    })
+    MirrorNeuron.Runtime.StableJob.with_start_gate(gate_id(id), fn ->
+      with {:ok, job, witness} <- store().fetch_admission_job(id) do
+        if job["status"] == "queued" and QueueReconciliation.local_run?(job) do
+          with {:ok, _} <- commit_dispatch(id, holder["generation"], witness) do
+            result =
+              with :ok <- validate_queued_start(job) do
+                if is_map(job["queued_retry"]),
+                  do: MirrorNeuron.Runtime.RunRetry.dispatch_queued(job),
+                  else: MirrorNeuron.Runtime.start_admitted_job(job)
               end
 
-              unless match?({:error, {:admission_wait, _}}, result),
-                do: store().delete_schedule("queue_" <> job["job_id"])
-
-              result
-
-            {:ok, _} ->
-              {:ok, job["job_id"], nil}
-
-            error ->
-              error
+            finish_dispatch(id, result)
           end
-        end)
+        else
+          {:ok, id, nil}
+        end
+      end
+    end)
+  end
 
-      {:ok, job} ->
-        {:ok, job["job_id"], nil}
+  defp finish_dispatch(_id, {:error, {:admission_wait, _}} = waiting), do: waiting
 
-      error ->
-        error
+  defp finish_dispatch(id, result) do
+    if match?({:error, _}, result) do
+      _ =
+        store().persist_terminal_job(id, %{
+          "status" => "failed",
+          "result" => %{"reason" => "Queued start requires review."}
+        })
     end
+
+    _ = QueueReconciliation.sync_schedule(id)
+    result
   end
 
   defp validate_queued_start(job) do
@@ -657,232 +610,4 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
         end
     end
   end
-
-  defp reconcile_holder(holder) do
-    MirrorNeuron.Runtime.StableJob.with_start_gate(gate_id(holder["run_id"]), fn ->
-      missing = "job #{holder["run_id"]} was not found"
-
-      case store().fetch_job(holder["run_id"]) do
-        {:ok, %{"status" => status} = job} when status in @terminal ->
-          unless recovering?(job) do
-            case JobCleanup.cleanup_sandboxes(holder["run_id"], job, []) do
-              :ok -> release_stopped_holder(holder)
-              _ -> mutate("cleanup_pending", Map.take(holder, ["run_id", "generation"]))
-            end
-          end
-
-        {:error, reason} when reason == :not_found or reason == missing ->
-          claim = Map.take(holder, ["run_id", "generation"])
-
-          cond do
-            holder["committed"] == false ->
-              mutate("release", claim)
-
-            cleared_cancellation_acknowledged?(holder["run_id"]) ->
-              # Cancellation can finish after the operator deletes the public
-              # run. The durable acknowledgment proves this node stopped its
-              # workers. Active native request leases must also finish.
-              release_stopped_holder(holder)
-
-            true ->
-              mutate("cleanup_pending", claim)
-          end
-
-        _ ->
-          :ok
-      end
-    end)
-  end
-
-  defp release_stopped_holder(holder) do
-    claim = Map.take(holder, ["run_id", "generation"])
-
-    with :ok <- drain_terminal_requests(holder), {:ok, _} <- mutate("release", claim) do
-      wake()
-    else
-      _ -> mutate("cleanup_pending", claim)
-    end
-  end
-
-  defp cleared_cancellation_acknowledged?(run_id) do
-    case store().fetch_cancellation(run_id) do
-      {:ok,
-       %{
-         "status" => "acknowledged",
-         "public_cleared_at" => cleared,
-         "fence_epoch" => epoch,
-         "acknowledged_nodes" => nodes
-       }}
-      when is_binary(cleared) and is_integer(epoch) and epoch > 0 and is_list(nodes) ->
-        node_name() in nodes
-
-      _ ->
-        false
-    end
-  end
-
-  # Workers have stopped and model unload/reference cleanup succeeded before this
-  # proof is requested. A live native reader still prevents release. Lost tokens
-  # after a native restart can be retired only at this terminal cleanup boundary.
-  defp drain_terminal_requests(holder) do
-    with {:ok, state} <- snapshot() do
-      tokens = for {token, run} <- state["requests"], run == holder["run_id"], do: token
-
-      if tokens == [] do
-        :ok
-      else
-        with {:ok, %{"status" => "drained"}} <-
-               MirrorNeuron.ModelServices.native_resource_command(%{
-                 "operation" => "drain_terminal_requests",
-                 "run_id" => holder["run_id"],
-                 "tokens" => tokens
-               }) do
-          Enum.reduce_while(tokens, :ok, fn token, :ok ->
-            case mutate("request_release", %{"token" => token}) do
-              {:ok, _} -> {:cont, :ok}
-              error -> {:halt, error}
-            end
-          end)
-        end
-      end
-    end
-  end
-
-  defp recovering?(job) do
-    job["status"] == "failed" and
-      (job["recovery_hint"] == "runner_interruption" or
-         (get_in(job, ["result", "agent_id"]) == "job_runner" and
-            get_in(job, ["result", "error"]) == "job coordinator exited before terminal state"))
-  end
-
-  defp cleanup_legacy(id) do
-    case store().fetch_job(id) do
-      {:ok, job} ->
-        owner = admission_owner(job)
-
-        cond do
-          is_binary(owner) and owner != node_name() ->
-            # This legacy entry was derived from historical placements. The
-            # authoritative single-PC owner proves it is not a local claim.
-            mutate("release_legacy", %{"run_id" => id})
-
-          job["status"] in @terminal ->
-            with :ok <- JobCleanup.cleanup_sandboxes(id, job, []),
-                 {:ok, _} <- mutate("release_legacy", %{"run_id" => id}),
-                 do: :ok
-
-          true ->
-            :ok
-        end
-
-      _ ->
-        :ok
-    end
-  end
-
-  defp import_existing do
-    with {:ok, jobs} <- store().list_jobs() do
-      runs = for job <- jobs, job["status"] in @active, local_run?(job), do: job["job_id"]
-
-      case mutate("import", %{"runs" => runs}) do
-        {:ok, _} ->
-          # A crash after persisting the request but before queue CAS must not
-          # strand an accepted idempotency identity across owner restart.
-          jobs
-          |> Enum.filter(&(&1["status"] == "queued" and local_run?(&1)))
-          |> Enum.sort_by(& &1["submitted_at"])
-          |> Enum.reduce_while(:ok, fn job, :ok ->
-            case with({:ok, queued_entry} <- entry(job), do: mutate("submit", queued_entry)) do
-              {:ok, _} -> {:cont, :ok}
-              error -> {:halt, error}
-            end
-          end)
-
-        error ->
-          error
-      end
-    end
-  end
-
-  defp local_run?(job) do
-    owner = admission_owner(job)
-
-    if is_binary(owner) and owner != "",
-      do: owner == node_name(),
-      else:
-        Enum.any?(get_in(job, ["scheduler", "placements"]) || [], &(&1["node"] == node_name()))
-  end
-
-  defp admission_owner(job) do
-    Enum.find(
-      [
-        get_in(job, ["admission", "owner_node"]),
-        get_in(job, ["manifest", "metadata", "node_admission", "owner_node"])
-      ],
-      &(is_binary(&1) and &1 != "")
-    )
-  end
-
-  defp persist_queue_schedule(job) do
-    id = "queue_" <> job["job_id"]
-
-    with {:ok, state} <- snapshot() do
-      receipt = NodeAdmissionState.receipt(state, job["job_id"])
-
-      schedule = %{
-        "kind" => "resource_wait",
-        "enabled" => true,
-        "status" => "active",
-        "target_run_id" => job["job_id"],
-        "job_id" => job["stable_job_id"],
-        "owner_node" => node_name(),
-        "name" => job["job_name"],
-        "not_before" => receipt["not_before"],
-        "next_run_at" =>
-          receipt["not_before"] || job["submitted_at"] || MirrorNeuron.Runtime.timestamp(),
-        "retry_interval_ms" => 5_000
-      }
-
-      case store().fetch_schedule(id) do
-        {:ok, existing} ->
-          if existing["not_before"] == schedule["not_before"],
-            do: {:ok, existing},
-            else: store().persist_schedule(id, Map.merge(existing, schedule))
-
-        _ ->
-          store().persist_schedule(id, schedule)
-      end
-    end
-  end
-
-  defp mutate(operation, attrs, attempts \\ 50)
-  defp mutate(_operation, _attrs, 0), do: {:error, :node_admission_busy}
-
-  defp mutate(operation, attrs, attempts) do
-    attrs =
-      Map.put(
-        attrs,
-        "capacity",
-        ResourceAllocation.capacity(Hardware.info(), MirrorNeuron.Resource.limits())
-      )
-
-    with {:ok, state} <- snapshot(),
-         {:ok, next, result} <- NodeAdmissionState.transition(state, operation, attrs) do
-      if next == state do
-        {:ok, result}
-      else
-        case store().compare_node_admission(
-               node_name(),
-               state["version"],
-               Map.put(next, "version", state["version"] + 1)
-             ) do
-          :ok -> {:ok, result}
-          {:error, :admission_conflict} -> mutate(operation, attrs, attempts - 1)
-          error -> error
-        end
-      end
-    end
-  end
-
-  defp store, do: Application.get_env(:mirror_neuron, :node_admission_store, RedisStore)
 end
