@@ -110,6 +110,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert {:ok, stored} = RedisStore.fetch_job(job_id)
     assert stored["status"] == "running"
     assert is_map(stored["pending_finalization"])
+
     assert {:ok, %{reason: "terminal finalization recovered"}} =
              MirrorNeuron.Runtime.LocalRecovery.recover_job(job_id)
 
@@ -514,6 +515,69 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert byte_size(encoded_guard) < div(full_bytes, 100)
 
     RedisStore.delete_job(job_id)
+  end
+
+  test "idle delivery polling and admission use the fenced guard for large definitions", %{
+    namespace: namespace
+  } do
+    alias MirrorNeuron.Runtime.DeliveryChannels
+    id = "delivery-projection"
+
+    assert {:ok, _} =
+             RedisStore.persist_job(id, %{
+               "delivery_version" => 2,
+               "manifest" => %{
+                 "flow" => %{
+                   "nodes" => [
+                     %{
+                       "node_id" => "source",
+                       "config" => %{"backpressure" => %{"max_queue_depth" => 7}}
+                     }
+                   ]
+                 }
+               },
+               "runtime_topology" => %{
+                 "nodes" => [%{"node_id" => "replica", "source_node_id" => "source"}]
+               }
+             })
+
+    assert {:ok, _} = RedisStore.persist_job_projection(id, %{"status" => "running"})
+
+    assert {:ok, encoded} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "GET",
+               redis_key(namespace, ["job", id, "guard"])
+             ])
+
+    guard = Jason.decode!(encoded)
+    # An older guard lacks the projection. Until the next write the full Job
+    # remains authoritative, including for pre-upgrade v2 Runs.
+    assert {:ok, "OK"} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SET",
+               redis_key(namespace, ["job", id, "guard"]),
+               Jason.encode!(Map.delete(guard, "delivery"))
+             ])
+
+    assert {:ok, 2} = DeliveryChannels.version(id)
+    assert {:ok, 7} = DeliveryChannels.limit(id, "replica", [])
+
+    assert {:ok, "OK"} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "SET",
+               redis_key(namespace, ["job", id, "guard"]),
+               encoded
+             ])
+
+    assert {:ok, 1} =
+             Redix.command(MirrorNeuron.Redis.Connection, [
+               "DEL",
+               redis_key(namespace, ["job", id])
+             ])
+
+    assert {:ok, 0} = DeliveryChannels.depth(id, "replica")
+    assert {:ok, 2} = DeliveryChannels.version(id)
+    assert {:ok, 3} = DeliveryChannels.limit(id, "replica", max_queue_depth: 3)
   end
 
   test "scheduler admission reads durable reservations omitted from monitoring summaries" do
@@ -1925,16 +1989,10 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert Enum.all?(failures, &(&1.node == to_string(remote_node)))
 
     assert Enum.map(failures, & &1.resource) ==
-             ["HostLocal", "OpenShell", "DockerWorker", "prepared workers", "model residency"]
+             ["runner commands", "prepared workers", "model residency"]
 
-    assert_receive {:cleanup_rpc, ^remote_node, MirrorNeuron.Runner.HostLocal, :terminate_job,
-                    [^job_id], 15_000}
-
-    assert_receive {:cleanup_rpc, ^remote_node, MirrorNeuron.Sandbox.OpenShellJobSandbox,
-                    :cleanup_job_local, [^job_id], 15_000}
-
-    assert_receive {:cleanup_rpc, ^remote_node, MirrorNeuron.Sandbox.DockerJobSandbox,
-                    :cleanup_job_local, [^job_id], 15_000}
+    assert_receive {:cleanup_rpc, ^remote_node, MirrorNeuron.Runner, :stop_commands,
+                    [^job_id, :all], 15_000}
 
     assert {:ok, deferred} =
              RedisStore.sweep_retention(

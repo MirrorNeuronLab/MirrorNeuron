@@ -8,7 +8,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   alias MirrorNeuron.Artifacts.{SharedStorage, StagedArtifact, SubmissionReadiness}
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.{JobBundle, ServiceRegistry, ServiceSpec}
-  alias MirrorNeuron.Runner.DockerCompose
+  alias MirrorNeuron.Runner
   alias MirrorNeuron.Scheduler
 
   alias MirrorNeuron.Runtime.{
@@ -53,6 +53,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       opts: opts,
       status: status,
       result: nil,
+      pause_cleanup_task: nil,
+      pause_cleanup_status: nil,
       result_ref: nil,
       workflow_state_ref: nil,
       submitted_at: submitted_at,
@@ -128,6 +130,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         waiting?: false
       }
     }
+
+    state = cache_definition(state)
 
     case MirrorNeuron.Runtime.WorkflowBudget.register_owner(
            Keyword.get(opts, :stable_job_id) || job_id,
@@ -391,28 +395,6 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     state = state |> cancel_policy_timers() |> cancel_recovery_tasks()
     EventBus.publish(state.job_id, %{type: :job_pausing, timestamp: Runtime.timestamp()})
     {workflow_state, workflow_events} = WorkflowLedger.pause(state.workflow_state)
-    broadcast_agent_control(state, :pause)
-
-    if WorkflowLedger.enabled?(state.workflow_state) or job_type(state) == "service" do
-      active_agent_ids =
-        if job_type(state) == "service" do
-          state.agent_ids
-        else
-          WorkflowLedger.active_agent_ids(state.workflow_state)
-        end
-
-      terminate_agent_workers(state, active_agent_ids)
-
-      case wait_for_agents_stopped(state, 5_000, active_agent_ids) do
-        :ok ->
-          :ok
-
-        {:error, reason} ->
-          Logger.warning(
-            "job #{state.job_id} paused before every active workflow agent stopped: #{inspect(reason)}"
-          )
-      end
-    end
 
     next_state =
       state
@@ -420,35 +402,47 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       |> cancel_coordinator_delivery_timer()
       |> cancel_health_check_timer()
 
-    # Compose `down` can take longer than the RPC caller's default deadline.
-    # Persist and cancel health/recovery timers first so they cannot revive a
-    # service while its project-owned resources are being stopped.
-    persist_job(next_state)
+    next_state = %{next_state | pause_cleanup_status: "pending"}
 
-    if job_type(next_state) == "service" do
-      cleanup_sandboxes(next_state)
-      ServiceRegistry.deregister_job(next_state.job_id)
-    end
+    case RedisStore.persist_job(state.job_id, job_snapshot(next_state)) do
+      {:ok, _job} ->
+        broadcast_agent_control(state, :pause)
 
-    EventBus.publish(state.job_id, %{type: :job_paused, timestamp: Runtime.timestamp()})
-    publish_workflow_events(next_state, workflow_events)
+        if job_type(next_state) == "service",
+          do: ServiceRegistry.deregister_job(next_state.job_id)
 
-    case stop_paused_commands(next_state) do
-      :ok -> {:reply, {:ok, "paused"}, next_state}
-      {:error, reason} -> {:reply, {:error, {:pause_cleanup_failed, reason}}, next_state}
+        publish_workflow_events(next_state, workflow_events)
+        pause_cleanup(next_state)
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, schedule_runtime_timers(state)}
     end
   end
 
+  def handle_call(:pause, _from, %{status: "paused", pause_cleanup_task: %Task{}} = state),
+    do: {:reply, {:ok, "pause_pending"}, state}
+
+  def handle_call(:pause, _from, %{status: "paused", pause_cleanup_status: "complete"} = state),
+    do: {:reply, {:ok, "paused"}, state}
+
   def handle_call(:pause, _from, %{status: "paused"} = state) do
-    case stop_paused_commands(state) do
-      :ok -> {:reply, {:ok, "paused"}, state}
-      {:error, reason} -> {:reply, {:error, {:pause_cleanup_failed, reason}}, state}
+    next = %{state | pause_cleanup_status: "pending"}
+
+    case RedisStore.persist_job(next.job_id, job_snapshot(next)) do
+      {:ok, _job} -> pause_cleanup(next)
+      {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
   def handle_call(:pause, _from, state), do: {:reply, {:error, "job is not running"}, state}
 
   @impl true
+  def handle_call(:resume, _from, %{status: "paused", pause_cleanup_task: %Task{}} = state),
+    do: {:reply, {:error, :pause_cleanup_pending}, state}
+
+  def handle_call(:resume, _from, %{status: "paused", pause_cleanup_status: "failed"} = state),
+    do: {:reply, {:error, :retry_pause_cleanup}, state}
+
   def handle_call(:resume, _from, %{status: "paused"} = state) do
     case restore_paused_workflow_agents(state) do
       {:ok, resumable_state} ->
@@ -458,6 +452,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         running_state = %{
           resumable_state
           | status: "running",
+            pause_cleanup_status: nil,
             workflow_state: workflow_state
         }
 
@@ -794,6 +789,10 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     {:noreply, next_state}
   end
 
+  # Exit notifications from stopped agents cannot restart a paused service.
+  def handle_info({signal, _agent, _result}, %{status: "paused"} = state)
+      when signal in [:agent_failed, :agent_completed_run], do: {:noreply, state}
+
   def handle_info({:agent_completed_run, agent_id, result}, state) do
     cond do
       workflow_agent?(state, agent_id) ->
@@ -897,6 +896,20 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     {:noreply, start_reschedule_task(next_state, affected_agent_ids, reason)}
   end
 
+  def handle_info({ref, result}, %{pause_cleanup_task: %Task{ref: ref}} = state) do
+    Process.demonitor(ref, [:flush])
+    {_receipt, next} = finish_pause_cleanup(state, result)
+    {:noreply, next}
+  end
+
+  def handle_info(
+        {:DOWN, ref, :process, _pid, reason},
+        %{pause_cleanup_task: %Task{ref: ref}} = state
+      ) do
+    {_receipt, next} = finish_pause_cleanup(state, {:error, reason})
+    {:noreply, next}
+  end
+
   def handle_info({ref, result}, %{recovery_tasks: tasks} = state)
       when is_map_key(tasks, ref) do
     Process.demonitor(ref, [:flush])
@@ -932,6 +945,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   @impl true
   def terminate(_reason, state) do
+    if task = Map.get(state, :pause_cleanup_task), do: Task.shutdown(task, :brutal_kill)
+
     state
     |> cancel_health_check_timer()
     |> cancel_coordinator_delivery_timer()
@@ -2018,6 +2033,67 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     do_wait_for_agents_ready(state, started_at, timeout_ms)
   end
 
+  # Keep this coordinator responsive while a service adapter shuts its project
+  # down. Fast stops retain the synchronous receipt. A slower stop acknowledges
+  # the persisted pause and emits job_paused only after physical confirmation.
+  defp pause_cleanup(state) do
+    result =
+      if job_type(state) == "service" do
+        task = start_owned_recovery_task(fn -> stop_for_pause(state, state.agent_ids) end)
+
+        case Task.yield(task, 250) do
+          {:ok, result} -> result
+          {:exit, reason} -> {:error, reason}
+          nil -> {:pending, task}
+        end
+      else
+        stop_for_pause(state, WorkflowLedger.active_agent_ids(state.workflow_state))
+      end
+
+    case result do
+      {:pending, task} ->
+        next = %{state | pause_cleanup_task: task, pause_cleanup_status: "pending"}
+        {:reply, {:ok, "pause_pending"}, next}
+
+      result ->
+        {receipt, next} = finish_pause_cleanup(state, result)
+        {:reply, receipt, next}
+    end
+  end
+
+  defp stop_for_pause(state, agent_ids) do
+    terminate_agent_workers(state, agent_ids)
+
+    stopped = wait_for_agents_stopped(state, 5_000, agent_ids)
+    cleanup = stop_paused_commands(state)
+    with :ok <- stopped, do: cleanup
+  end
+
+  defp finish_pause_cleanup(state, result) do
+    {status, event, receipt} =
+      case result do
+        :ok ->
+          {"complete", :job_paused, {:ok, "paused"}}
+
+        {:error, reason} ->
+          {"failed", :job_pause_cleanup_failed, {:error, {:pause_cleanup_failed, reason}}}
+
+        reason ->
+          {"failed", :job_pause_cleanup_failed, {:error, {:pause_cleanup_failed, reason}}}
+      end
+
+    next = %{state | pause_cleanup_task: nil, pause_cleanup_status: status}
+
+    case RedisStore.persist_job(next.job_id, job_snapshot(next)) do
+      {:ok, _job} ->
+        EventBus.publish(state.job_id, %{type: event, timestamp: Runtime.timestamp()})
+        {receipt, next}
+
+      {:error, reason} ->
+        {{:error, reason}, %{next | pause_cleanup_status: "failed"}}
+    end
+  end
+
   defp restore_paused_workflow_agents(state) do
     agent_ids =
       cond do
@@ -2031,7 +2107,11 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
           []
       end
 
-    with :ok <- stop_paused_commands(state) do
+    # A fresh coordinator still reconciles the physical stop after recovery.
+    cleanup =
+      if state.pause_cleanup_status == "complete", do: :ok, else: stop_paused_commands(state)
+
+    with :ok <- cleanup do
       restore_paused_agents(state, agent_ids)
     else
       {:error, reason} -> {:error, {:pause_cleanup_failed, reason}, state}
@@ -2039,19 +2119,28 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   end
 
   defp stop_paused_commands(state) do
-    agent_ids =
-      if job_type(state) == "service",
-        do: state.agent_ids,
-        else: WorkflowLedger.active_agent_ids(state.workflow_state)
-
-    if agent_ids == [] do
-      :ok
+    if job_type(state) == "service" do
+      with :ok <- Runner.stop_prepared(Enum.map(state.runtime_nodes, & &1.config), :pause),
+           do: Runtime.cleanup_job_sandboxes(state.job_id)
     else
-      MirrorNeuron.Runtime.JobCleanup.stop_agent_commands(
-        state.job_id,
-        %{scheduler: scheduler_plan(state)},
-        agent_ids
-      )
+      case WorkflowLedger.active_agent_ids(state.workflow_state) do
+        [] ->
+          :ok
+
+        agent_ids ->
+          configs =
+            state.nodes_by_id
+            |> Map.take(agent_ids)
+            |> Enum.map(fn {_id, node} -> node.config end)
+
+          with :ok <- Runner.stop_prepared(configs, :pause) do
+            MirrorNeuron.Runtime.JobCleanup.stop_agent_commands(
+              state.job_id,
+              %{scheduler: scheduler_plan(state)},
+              agent_ids
+            )
+          end
+      end
     end
   end
 
@@ -2059,7 +2148,11 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     case recover_agents(
            state,
            agent_ids,
-           %{"paused" => true, "reclaim_deliveries" => true}
+           %{
+             "paused" => true,
+             "reclaim_deliveries" => true,
+             "service_resume_token" => Base.encode16(:crypto.strong_rand_bytes(16))
+           }
          ) do
       {:ok, recovered_state} ->
         case register_resumed_job_services(recovered_state) do
@@ -2172,8 +2265,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     spec =
       AgentWorker.child_spec(
         {state.job_id, node, Map.get(state.outbound_edges_by_node, agent_id, []),
-         Map.get(state.inbound_edges_by_node, agent_id, []), self(), agent_runtime_context(state),
-         recovery_snapshot}
+         Map.get(state.inbound_edges_by_node, agent_id, []), self(),
+         agent_runtime_context(state, node), recovery_snapshot}
       )
       |> Map.put(:mirror_neuron_delivery_version, state.delivery_version)
       |> Map.put(:mirror_neuron_execution_profile, execution_profile)
@@ -2731,6 +2824,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         deployment_context: stringify_map(deployment_context)
     }
     |> put_scheduler_plan(scheduler_plan)
+    |> cache_definition()
   end
 
   defp put_runtime_scheduler_plan(state, scheduler_plan) do
@@ -3201,7 +3295,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     run_id = WorkflowLedger.run_id(finished_workflow) || state.job_id
 
     case SharedStorage.publish_run_completion(
-           MirrorNeuron.Manifest.to_map(state.manifest),
+           state.definition.manifest,
            run_id,
            status,
            get_in(Keyword.get(state.opts, :job_lease, %{}), ["epoch"]) || 0
@@ -3213,7 +3307,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         Logger.warning("failed to publish shared run completion: #{inspect(reason)}")
     end
 
-    cleanup_sandboxes(next_state)
+    _ = Runtime.cleanup_job_sandboxes(next_state.job_id)
     EventBus.dispatch_persisted(state.job_id, event)
     MirrorNeuron.Runtime.CommandReceipts.settle_run_async(state.job_id)
     MirrorNeuron.Runtime.Signals.finish_run_async(state.job_id, status)
@@ -3521,6 +3615,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       job_name: state.manifest.job_name,
       required_context_engine: Map.get(state.manifest, :required_context_engine, false),
       status: state.status,
+      pause_cleanup_status: if(state.status == "paused", do: state.pause_cleanup_status),
       admission: Keyword.get(state.opts, :admission),
       clock_session: state.clock_session,
       attempt: state.attempt,
@@ -3563,7 +3658,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       workflow_state_ref: state.workflow_state_ref,
       topology: MirrorNeuron.Manifest.topology(state.manifest),
       runtime_topology: runtime_topology(state),
-      manifest: MirrorNeuron.Manifest.to_map(state.manifest),
+      manifest: state.definition.manifest,
       manifest_ref: manifest_ref(state)
     }
     |> maybe_put_lease(lease)
@@ -3648,7 +3743,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         workflow_state_ref: state.workflow_state_ref,
         topology: MirrorNeuron.Manifest.topology(state.manifest),
         runtime_topology: runtime_topology(state),
-        manifest: MirrorNeuron.Manifest.to_map(state.manifest),
+        manifest: state.definition.manifest,
         manifest_ref: manifest_ref(state),
         recovery: recovery,
         recovery_status: "paused_for_review",
@@ -3701,10 +3796,20 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   defp persist_retry_checkpoint(state) do
     if WorkflowLedger.enabled?(state.workflow_state) do
-      job = state |> job_snapshot() |> Jason.encode!() |> Jason.decode!()
+      job = %{
+        "job_id" => state.job_id,
+        "run_id" => Keyword.get(state.opts, :run_id, state.job_id),
+        "stable_job_id" => Keyword.get(state.opts, :stable_job_id),
+        "attempt" => state.attempt,
+        "data_generation" => Keyword.get(state.opts, :data_generation),
+        "retry_request" => Keyword.get(state.opts, :checkpoint_retry, %{})[:request],
+        "clock_session" => state.clock_session,
+        "status" => state.status,
+        "updated_at" => Runtime.timestamp()
+      }
 
       job =
-        case RedisStore.fetch_job(state.job_id) do
+        case RedisStore.fetch_job_summary(state.job_id) do
           {:ok, record} ->
             Map.put(job, "running_time", MirrorNeuron.Runtime.RunClock.advance(record, job))
 
@@ -3719,7 +3824,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         MirrorNeuron.Runtime.RunRetry.checkpoint(
           job,
           ledger,
-          artifacts
+          artifacts,
+          state.definition.checkpoint_identity
         )
 
       epoch = get_in(Keyword.get(state.opts, :job_lease, %{}), ["epoch"])
@@ -3732,32 +3838,6 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
           Logger.warning("could not persist run retry checkpoint", job_id: state.job_id)
       end
     end
-  end
-
-  defp cleanup_sandboxes(state) do
-    cleanup_prepared_compose_projects(state)
-    _ = Runtime.cleanup_job_sandboxes(state.job_id)
-    :ok
-  end
-
-  defp cleanup_prepared_compose_projects(state) do
-    state.nodes_by_id
-    |> Map.values()
-    |> Enum.each(fn
-      %{config: config} when is_map(config) ->
-        case DockerCompose.cleanup_prepared_project(config) do
-          :ok ->
-            :ok
-
-          {:error, reason} ->
-            Logger.warning(
-              "failed to clean prepared DockerCompose project while stopping service #{state.job_id}: #{inspect(reason)}"
-            )
-        end
-
-      _node ->
-        :ok
-    end)
   end
 
   defp recovery_fields_from(job) when is_map(job) do
@@ -3775,50 +3855,49 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   defp recovery_fields_from(_job), do: %{}
 
-  defp agent_runtime_context(state) do
+  # The immutable definition stays with its coordinator. A child spec is copied
+  # into the distributed supervisor and agent heaps for every node in the DAG.
+  defp cache_definition(state) do
+    manifest = MirrorNeuron.Manifest.to_map(state.manifest)
+
+    Map.put(state, :definition, %{
+      manifest: manifest,
+      artifact_refs: MirrorNeuron.Artifacts.BlobRef.collect(manifest),
+      checkpoint_identity:
+        MirrorNeuron.Runtime.RunRetry.definition_identity(
+          manifest,
+          state.manifest.initial_inputs || %{}
+        ),
+      bundle_paths: runtime_bundle_paths(state)
+    })
+  end
+
+  defp agent_runtime_context(state, node) do
     lease = Keyword.get(state.opts, :job_lease)
-    bundle_paths = runtime_bundle_paths(state)
+    paths = state.definition.bundle_paths
+    targets = Map.get(state.outbound_edges_by_node, node.node_id, []) |> Enum.map(& &1.to_node)
+    neighbors = Enum.uniq([node.node_id | targets])
 
     %{
       attempt: state.attempt,
-      attempt_started_at: state.attempt_started_at,
-      bundle_root: bundle_paths.bundle_root,
-      manifest_path: bundle_paths.manifest_path,
-      payloads_path: bundle_paths.payloads_path,
-      artifact_refs:
-        MirrorNeuron.Artifacts.BlobRef.collect(MirrorNeuron.Manifest.to_map(state.manifest)),
+      bundle_root: paths.bundle_root,
+      manifest_path: paths.manifest_path,
+      payloads_path: paths.payloads_path,
+      artifact_refs: state.definition.artifact_refs,
       manifest_ref: manifest_ref(state),
-      manifest: MirrorNeuron.Manifest.to_map(state.manifest),
-      graph_id: state.manifest.graph_id,
-      job_name: state.manifest.job_name,
-      required_context_engine: Map.get(state.manifest, :required_context_engine, false),
-      entrypoints: state.runtime_entrypoints,
-      placement_policy: Map.get(state.manifest.policies, "placement_policy", "local"),
-      job_type: scheduler_plan(state)["job_type"],
-      scheduler: scheduler_plan(state),
-      requested_recovery_policy: requested_recovery_policy(state),
-      recovery_policy: effective_recovery_policy(state),
-      reliability: reliability_map(state),
-      restart_policy: job_restart_policy(state),
-      reschedule_policy: job_reschedule_policy(state),
-      policy_state: state.policy_state,
-      deployment: deployment_job_fields(state),
-      submitted_at: state.submitted_at,
+      allocation: Scheduler.allocation(scheduler_plan(state), node.node_id),
       runtime_env: runtime_environment(state),
-      manifest_version: state.manifest.manifest_version,
-      delivery_version: Map.get(state, :delivery_version, 1),
+      delivery_version: state.delivery_version,
       lease_epoch: lease && lease["epoch"],
       lease_owner: lease && lease["owner_id"],
       workflow_run_id: WorkflowLedger.run_id(state.workflow_state),
-      workflow_agent_steps: WorkflowLedger.agent_to_step(state.workflow_state),
+      workflow_agent_steps:
+        Map.take(WorkflowLedger.agent_to_step(state.workflow_state), neighbors),
       backpressure_by_agent:
-        Map.new(state.runtime_nodes, fn node ->
-          {node.node_id, Backpressure.config(node) |> Map.to_list()}
+        Map.new(targets, fn id ->
+          {id, state.nodes_by_id |> Map.fetch!(id) |> Backpressure.config() |> Map.to_list()}
         end),
-      execution_profiles:
-        Map.new(state.runtime_nodes, fn node ->
-          {node.node_id, Profile.profile_name(node.config)}
-        end)
+      execution_profiles: %{node.node_id => Profile.profile_name(node.config)}
     }
   end
 
@@ -3870,7 +3949,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
       Runtime.bundle_ref(state.manifest, state.bundle)
   end
 
-  defp runtime_bundle_root(state), do: runtime_bundle_paths(state).bundle_root
+  defp runtime_bundle_root(state), do: state.definition.bundle_paths.bundle_root
 
   defp runtime_bundle_paths(state) do
     case bundle_cache_path(manifest_ref(state)) do

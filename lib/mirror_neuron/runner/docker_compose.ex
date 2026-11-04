@@ -1,4 +1,5 @@
 defmodule MirrorNeuron.Runner.DockerCompose do
+  @behaviour MirrorNeuron.Runner
   @moduledoc false
 
   alias MirrorNeuron.ModelServices
@@ -12,9 +13,26 @@ defmodule MirrorNeuron.Runner.DockerCompose do
 
   @poll_ms 5_000
 
+  @impl true
+  def stop_commands(_job_id, _agents), do: :ok
+
+  @impl true
+  def resumable_after_stop?(config), do: match?({:ok, _}, project_record(config))
+
+  @impl true
+  def prepared_key(config, _transition) do
+    record = MirrorNeuron.SafeAccess.map_get(config, "mn_docker_compose")
+
+    if is_map(record),
+      do:
+        {MirrorNeuron.SafeAccess.map_get(record, "node"),
+         MirrorNeuron.SafeAccess.map_get(record, "project_name")}
+  end
+
   # Docker Compose is created by the selected node's native SDK service, never
   # by Core's own runtime compose. The runner owns only its one project record
   # and keeps the service attempt alive while that project is healthy.
+  @impl true
   def run(payload, config, opts \\ [])
 
   def run(_payload, config, opts) when is_map(config) do
@@ -55,14 +73,17 @@ defmodule MirrorNeuron.Runner.DockerCompose do
   def run(_payload, _config, _opts), do: {:error, "DockerCompose config must be an object"}
 
   @doc false
-  def cleanup_prepared_project(config) when is_map(config) do
+  @impl true
+  def stop_prepared(config) when is_map(config) do
     with {:ok, project} <- project_record(config),
          {:ok, _response} <- cleanup_project(project) do
       :ok
     end
   end
 
-  def cleanup_prepared_project(_config), do: :ok
+  def stop_prepared(_config), do: :ok
+
+  def cleanup_prepared_project(config), do: stop_prepared(config)
 
   defp prepare_project(config, opts) do
     with {:ok, record} <- project_record(config) do

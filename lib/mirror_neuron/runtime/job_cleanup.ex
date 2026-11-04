@@ -4,69 +4,51 @@ defmodule MirrorNeuron.Runtime.JobCleanup do
   require Logger
 
   alias MirrorNeuron.Cluster.NodeAdapter
-  alias MirrorNeuron.Runner.HostLocal
+  alias MirrorNeuron.Runner
   alias MirrorNeuron.Runtime.RunnerResources
   alias MirrorNeuron.SafeAccess
-  alias MirrorNeuron.Sandbox.{DockerJobSandbox, OpenShellJobSandbox}
 
   @cleanup_timeout_ms 15_000
 
-  @runtime_resources [
-    {HostLocal, :terminate_job, "HostLocal"},
-    {OpenShellJobSandbox, :cleanup_job_local, "OpenShell"},
-    {DockerJobSandbox, :cleanup_job_local, "DockerWorker"}
-  ]
-
-  @sandbox_resources [
-    {HostLocal, :terminate_job, "HostLocal"},
-    {OpenShellJobSandbox, :cleanup_job_local, "OpenShell"},
-    {DockerJobSandbox, :cleanup_job_local, "DockerWorker"}
-  ]
-
   def cleanup_runtime_resources(job_id, job, agents) when is_list(agents) do
-    cleanup(job_id, job, agents, runtime_resources(job))
+    cleanup(job_id, job, agents, [
+      {Runner, :stop_commands, "runner commands", [job_id, :all]},
+      {RunnerResources, :cleanup_native_resources, "native SDK resources", [job_id]}
+    ])
   end
 
   def stop_agent_commands(job_id, job, agent_ids) do
-    cleanup(
-      job_id,
-      job,
-      [],
-      [
-        {HostLocal, :terminate_agents, "HostLocal"},
-        {MirrorNeuron.Runner.DockerCommand, :terminate_agents, "DockerWorker"}
-      ],
-      [agent_ids]
-    )
+    cleanup(job_id, job, [], [{Runner, :stop_commands, "runner commands", [job_id, agent_ids]}])
   end
 
   def cleanup_sandboxes(job_id, job, agents) when is_list(agents) do
+    commands = {Runner, :stop_commands, "runner commands", [job_id, :all]}
+
     resources =
       if detail(job, "status") in ["completed", "failed", "cancelled", "deleted"] do
-        @sandbox_resources ++
-          [
-            {RunnerResources, :stop_run_workers, "prepared workers"},
-            {RunnerResources, :release_run_models, "model residency"}
-          ]
+        model_args =
+          if is_binary(detail(job, "attempt_id")),
+            do: [job_id, detail(job, "attempt_id")],
+            else: [job_id]
+
+        [
+          commands,
+          {RunnerResources, :stop_run_workers, "prepared workers", [job_id]},
+          {RunnerResources, :release_run_models, "model residency", model_args}
+        ]
       else
-        @sandbox_resources
+        [commands]
       end
 
     cleanup(job_id, job, agents, resources)
   end
 
-  defp cleanup(job_id, job, agents, resources, extra_args \\ []) do
+  defp cleanup(job_id, job, agents, resources) do
     failures =
       job
       |> cleanup_nodes(agents)
       |> Enum.flat_map(fn node ->
-        Enum.flat_map(resources, fn {module, function, label} ->
-          args =
-            if module == RunnerResources and function == :release_run_models and
-                 is_binary(detail(job, "attempt_id")),
-               do: [job_id, detail(job, "attempt_id")],
-               else: [job_id | extra_args]
-
+        Enum.flat_map(resources, fn {module, function, label, args} ->
           case safe_cleanup_on_node(node, module, function, args) do
             :ok ->
               []
@@ -82,13 +64,6 @@ defmodule MirrorNeuron.Runtime.JobCleanup do
       end)
 
     if failures == [], do: :ok, else: {:error, failures}
-  end
-
-  defp runtime_resources(job) do
-    _ = job
-
-    @runtime_resources ++
-      [{RunnerResources, :cleanup_native_resources, "native SDK resources"}]
   end
 
   defp cleanup_nodes(job, agents) do

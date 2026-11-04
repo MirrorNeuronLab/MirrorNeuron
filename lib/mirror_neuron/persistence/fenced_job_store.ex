@@ -4,9 +4,17 @@ defmodule MirrorNeuron.Persistence.FencedJobStore do
   # Keep the fence, job projection and optional terminal event in one Redis
   # transaction. A lost command response may safely replay this exact identity.
   @script ~S"""
+  local guard = ARGV[3]
   local prior = redis.call('GET', KEYS[3])
   if prior then
     prior = cjson.decode(prior)
+    if ARGV[1] == '' and prior.delivery then
+      local projection = cjson.decode(guard)
+      if not projection.delivery then
+        projection.delivery = prior.delivery
+        guard = cjson.encode(projection)
+      end
+    end
     local incoming = tonumber(ARGV[5])
     local epoch = tonumber(prior.lease_epoch)
     if tonumber(prior.cancellation_fence_epoch) then return -2 end
@@ -18,7 +26,7 @@ defmodule MirrorNeuron.Persistence.FencedJobStore do
   end
   if ARGV[1] ~= '' then redis.call('SET', KEYS[1], ARGV[1]) end
   redis.call('SET', KEYS[2], ARGV[2])
-  redis.call('SET', KEYS[3], ARGV[3])
+  redis.call('SET', KEYS[3], guard)
   local added = redis.call('SADD', KEYS[4], ARGV[4])
   if ARGV[6] ~= '' then
     redis.call('RPUSH', KEYS[5], ARGV[6])

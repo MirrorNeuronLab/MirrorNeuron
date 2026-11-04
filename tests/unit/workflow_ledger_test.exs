@@ -37,6 +37,17 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     assert failed["reason"] == error["desc"]
   end
 
+  test "explicit runner bindings and compiled scalar targets select the same executor" do
+    original = manifest()
+
+    for run <- ["step_a", %{"agent" => "step_a", "binding" => "worker"}] do
+      step = %{"id" => "logical_step", "run" => run}
+      ledger = WorkflowLedger.new(%{original | flow: %{"steps" => [step]}}, runtime_nodes())
+      assert get_in(ledger, ["steps", "logical_step", "agent_ids"]) == ["step_a"]
+      assert get_in(ledger, ["steps", "logical_step", "run"]) == "step_a"
+    end
+  end
+
   test "admission returns the ledger attempt to the handler and replay reuses it" do
     {ledger, []} = WorkflowLedger.new(manifest(), runtime_nodes()) |> WorkflowLedger.job_running()
     message = Message.new("job-1", "runtime", "step_a", "init", %{})
@@ -100,6 +111,8 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     assert get_in(state, ["steps", "step_a", "current_attempt", "attempt_id"]) ==
              "step_a:attempt:1"
 
+    first_delivery = get_in(state, ["steps", "step_a", "last_message"])
+
     {state, events, actions} = WorkflowLedger.reconcile(state, "2026-06-02T16:00:02.000Z")
 
     assert Enum.any?(events, &(&1.type == :workflow_step_attempt_timed_out))
@@ -111,6 +124,10 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
       WorkflowLedger.reconcile(state, "2026-06-02T16:00:04.000Z")
 
     refute Message.id(retry_message) == Message.id(decorated)
+
+    assert MirrorNeuron.Runtime.WorkflowMessage.invocation_key(first_delivery) ==
+             MirrorNeuron.Runtime.WorkflowMessage.invocation_key(retry_message)
+
     assert retry_message["headers"]["mn.workflow.attempt_id"] == "step_a:attempt:2"
     assert retry_message["headers"]["mn.workflow.attempt"] == 2
 
@@ -144,6 +161,47 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     assert {:fail_job, "step_a", _reason} = List.last(actions)
     assert get_in(state, ["steps", "step_a", "status"]) == "failed"
     assert get_in(state, ["steps", "step_a", "terminal_error", "schema_version"]) == "mn.error.v1"
+  end
+
+  test "a late specialist cannot open a retry or run under the next entrypoint's attempt" do
+    now = "2026-06-02T16:00:00.000Z"
+    {ledger, []} = WorkflowLedger.new(manifest(), runtime_nodes()) |> WorkflowLedger.job_running()
+    start = Message.new("job-1", "runtime", "step_a", "start", %{})
+    {ledger, [_]} = WorkflowLedger.on_message_received(ledger, "step_a", start, now)
+    first = ledger["steps"]["step_a"]["last_message"]
+
+    late =
+      Message.new("job-1", "specialist", "join", "result", %{}, headers: Message.headers(first))
+
+    {ledger, _, _} = WorkflowLedger.reconcile(ledger, "2026-06-02T16:00:03.000Z")
+    assert ledger["steps"]["step_a"]["status"] == "retry_wait"
+
+    assert {:skip, _, _} = WorkflowAdmission.admit(ledger, "join", late)
+    {waiting, [ignored]} = WorkflowLedger.on_message_received(ledger, "join", late, now)
+    assert ignored.type == :workflow_step_duplicate_message_ignored
+    assert waiting["steps"]["step_a"]["current_attempt"] == nil
+
+    {queued, _, [{:redeliver, "step_a", "step_a", retry}]} =
+      WorkflowLedger.reconcile(waiting, "2026-06-02T16:00:04.000Z")
+
+    for state <- [
+          queued,
+          update_in(queued, ["steps", "step_a"], &Map.delete(&1, "retry_delivery_id"))
+        ] do
+      assert {:skip, _, _} = WorkflowAdmission.admit(state, "join", late)
+      {state, [_]} = WorkflowLedger.on_message_received(state, "join", late, now)
+      assert state["steps"]["step_a"]["status"] == "queued"
+      assert {:skip, _, _} = WorkflowAdmission.admit(state, "step_a", start)
+      assert {:skip, _, _} = WorkflowAdmission.admit(state, "join", retry)
+      assert {{:ok, retry}, active, [started]} = WorkflowAdmission.admit(state, "step_a", retry)
+      assert started.attempt == 2
+      assert {:skip, _, _} = WorkflowAdmission.admit(active, "join", late)
+
+      current =
+        Message.new("job-1", "specialist", "join", "result", %{}, headers: Message.headers(retry))
+
+      assert {{:ok, ^current}, ^active, []} = WorkflowAdmission.admit(active, "join", current)
+    end
   end
 
   test "marks an enqueue failure terminal instead of leaving the workflow queued" do

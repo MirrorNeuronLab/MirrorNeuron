@@ -104,7 +104,7 @@ defmodule MirrorNeuron.Artifacts.SharedStorage do
          {:ok, submission} <- safe_submission_path(storage),
          run_dir = Path.join([submission, "outputs", "runs", run_id]),
          true <- File.dir?(run_dir),
-         {:ok, run_files} <- run_output_files(run_dir),
+         {:ok, run_files} <- run_output_files(run_dir, [".handoff"]),
          user_dir = Path.join([submission, "outputs", "user"]),
          {:ok, user_files} <-
            if(File.dir?(user_dir), do: run_output_files(user_dir), else: {:ok, []}),
@@ -164,7 +164,7 @@ defmodule MirrorNeuron.Artifacts.SharedStorage do
     end
   end
 
-  defp run_output_files(run_dir) do
+  defp run_output_files(run_dir, exclude \\ []) do
     case File.ls(run_dir) do
       {:ok, entries} ->
         entries
@@ -173,8 +173,7 @@ defmodule MirrorNeuron.Artifacts.SharedStorage do
           path = Path.join(run_dir, entry)
 
           cond do
-            (Path.basename(run_dir) == ".handoff" and entry in ["transactions", "staging"]) or
-                (Path.basename(run_dir) == "commits" and String.starts_with?(entry, ".publish-")) ->
+            entry in exclude ->
               {:cont, {:ok, files}}
 
             String.starts_with?(entry, ".mn_completion") ->

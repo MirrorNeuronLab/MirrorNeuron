@@ -217,6 +217,46 @@ defmodule MirrorNeuron.WorkflowInvocationTest do
     }
   end
 
+  @tag :tmp_dir
+  test "a retried logical step can recover evidence committed before a worker failed", %{
+    tmp_dir: dir
+  } do
+    step = compiled_step("evidence", [], %{})
+    receipt = Path.join(Path.expand(dir), "owner")
+    worker = worker_config("evidence_worked")
+
+    command = ~S"""
+    set -eu
+    if [ "$MN_WORKFLOW_ATTEMPT" = 1 ]; then
+      printf '%s' "$MN_WORKFLOW_IDEMPOTENCY_KEY" > "$TEST_EFFECT_RECEIPT"
+      exit 1
+    fi
+    test "$(cat "$TEST_EFFECT_RECEIPT")" = "$MN_WORKFLOW_IDEMPOTENCY_KEY"
+    printf '{"outputs":{"recovered":true},"artifacts":[],"metrics":{},"status":"completed","runtime_step_mode":"manifest_handler"}\n'
+    """
+
+    worker = %{worker | "command" => ["/bin/sh", "-c", command]}
+    worker = Map.put(worker, "environment", %{"TEST_EFFECT_RECEIPT" => receipt})
+
+    step =
+      put_in(step.step["control"], %{"retry" => %{"max_attempts" => 2, "backoff_seconds" => 0}})
+
+    step =
+      update_in(step.nodes, fn nodes ->
+        Enum.map(nodes, fn
+          %{"agent_type" => "router"} = node ->
+            %{node | "agent_type" => "executor", "config" => worker}
+
+          node ->
+            node
+        end)
+      end)
+
+    job = run_compiled([step], ["evidence"])
+    assert get_in(job, ["workflow_state", "steps", "evidence", "attempt_count"]) == 2
+    assert get_in(job, ["result", "output", "last_message", "outputs", "result", "recovered"])
+  end
+
   test "generated source collects both upstream boundaries before publishing" do
     left = compiled_step("left", [], %{"value" => "left result"})
     right = compiled_step("right", [], %{"value" => "right result"})

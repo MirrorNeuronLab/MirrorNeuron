@@ -8,6 +8,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   alias MirrorNeuron.Runtime.ChildWorkflow
   alias MirrorNeuron.Runtime.ErrorEnvelope
   alias MirrorNeuron.Runtime.WorkflowTrigger
+  alias MirrorNeuron.Runtime.WorkflowMessage
   alias MirrorNeuron.Runtime.WorkflowActivity
   alias MirrorNeuron.Runtime.ServiceEventWorkflow
 
@@ -298,6 +299,8 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
     with true <- enabled?(state),
          step_id when is_binary(step_id) <- step_id_for_message(state, agent_id, message),
          step when is_map(step) <- get_step(state, step_id) do
+      fence = delivery_fence(step, agent_id, message)
+
       cond do
         step_terminal?(step) ->
           ignore_duplicate_step_message(
@@ -307,6 +310,18 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
             now,
             "workflow step already terminal"
           )
+
+        fence == :stale ->
+          ignore_duplicate_step_message(
+            state,
+            step,
+            message,
+            now,
+            "delivery outside the current attempt"
+          )
+
+        fence == :sealed ->
+          {put_message_status(state, message, step_id, "running", now), []}
 
         not dependencies_satisfied?(state, step) ->
           block_step_for_dependencies(state, step, message, now)
@@ -350,6 +365,12 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
       cond do
         ChildWorkflow.child?(step) and Map.get(state, "status") not in ["pending", "running"] ->
           {state, [], []}
+
+        normalized_event_type == "workflow_step_started" and
+            (step["status"] == "retry_wait" or
+               (step["status"] == "queued" and (step["attempt_count"] || 0) > 0) or
+               stale_attempt_output?(step, payload)) ->
+          ignore_stale_step_output(state, step, payload, now)
 
         step_terminal?(step) ->
           ignore_terminal_step_event(state, step, normalized_event_type, payload, now)
@@ -430,12 +451,12 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
         end
 
       "workflow_step_failed" ->
-        fail_current_attempt(
-          state,
-          step,
-          stringify(payload["reason"] || payload["error"] || "step failed"),
-          now
-        )
+        if stale_attempt_output?(step, payload) do
+          ignore_stale_step_output(state, step, payload, now) |> without_actions()
+        else
+          reason = payload["error"] || payload["reason"] || "step failed"
+          fail_current_attempt(state, step, reason, now)
+        end
 
       "workflow_step_attempt_completed" ->
         complete_step_if_ready(state, step, payload, now) |> without_actions()
@@ -1185,6 +1206,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
         "last_event_at" => now,
         "attempt_count" => metadata.attempt_number,
         "current_attempt" => attempt,
+        "retry_delivery_id" => nil,
         "deadline_at" => metadata.deadline_at,
         "heartbeat_deadline_at" => metadata.heartbeat_deadline_at,
         "retry_at" => nil,
@@ -1568,9 +1590,8 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
         attempt_number = Map.get(step, "attempt_count", 0) + 1
 
         retry_message =
-          put_in(
+          WorkflowMessage.retry_delivery(
             message,
-            ["envelope", "message_id"],
             workflow_attempt_message_id(state, step, message, attempt_number)
           )
 
@@ -1584,6 +1605,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
             "status" => "queued",
             "retry_at" => nil,
             "last_event_at" => now,
+            "retry_delivery_id" => safe_message_id(decorated),
             "last_message" => decorated
           })
 
@@ -1856,7 +1878,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
     if step_id == "" do
       nil
     else
-      run_id = to_string(Map.get(raw, "run") || step_id)
+      run_id = MirrorNeuron.Manifest.workflow_step_run_id(raw)
       configured_agent_id = to_string(Map.get(raw, "agent_id") || "")
 
       node =
@@ -2133,6 +2155,33 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
 
       _ ->
         step_id_from_payload(state, agent_id, payload)
+    end
+  end
+
+  @doc false
+  def delivery_fence(step, agent_id, message) do
+    headers = Message.headers(message)
+    attempt = step["current_attempt"]
+
+    cond do
+      step["status"] == "retry_wait" ->
+        :stale
+
+      is_map(attempt) and
+          (headers["mn.workflow.attempt_id"] || headers["mn.workflow.idempotency_key"]) != nil ->
+        if stale_attempt_output?(step, headers), do: :stale, else: :sealed
+
+      step["status"] == "queued" and (step["attempt_count"] || 0) > 0 ->
+        # Only the ledger's saved entrypoint can open the next attempt. Older
+        # queued snapshots store its identity inside the saved message.
+        expected = step["retry_delivery_id"] || safe_message_id(step_last_message(step))
+
+        if agent_id == primary_agent_id(step) and safe_message_id(message) == expected,
+          do: :admit,
+          else: :stale
+
+      true ->
+        :admit
     end
   end
 

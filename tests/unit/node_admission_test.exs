@@ -14,7 +14,10 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
     use Agent
 
     def start_link(_),
-      do: Agent.start_link(fn -> %{states: %{}, schedules: %{}, jobs: []} end, name: __MODULE__)
+      do:
+        Agent.start_link(fn -> %{states: %{}, schedules: %{}, jobs: [], cancellations: %{}} end,
+          name: __MODULE__
+        )
 
     def fetch_node_admission(node),
       do: {:ok, Agent.get(__MODULE__, &Map.get(&1.states, node, NodeAdmissionState.new()))}
@@ -32,6 +35,23 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
     def fetch_resource_limits, do: {:ok, %{}}
     def list_jobs, do: {:ok, Agent.get(__MODULE__, & &1.jobs)}
     def put_jobs(jobs), do: Agent.update(__MODULE__, &Map.put(&1, :jobs, jobs))
+
+    def fetch_cancellation(id) do
+      case Agent.get(__MODULE__, &Map.get(&1.cancellations, id)) do
+        nil -> {:error, :not_found}
+        record -> {:ok, record}
+      end
+    end
+
+    def put_cancellation(id, record),
+      do: Agent.update(__MODULE__, &put_in(&1, [:cancellations, id], record))
+
+    def commit_reservation(node, id),
+      do:
+        Agent.update(
+          __MODULE__,
+          &put_in(&1, [:states, node, "reservations", id, "committed"], true)
+        )
 
     def fetch_job(id) do
       case Agent.get(__MODULE__, &Enum.find(&1.jobs, fn job -> job["job_id"] == id end)) do
@@ -289,6 +309,37 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
     {:ok, recovered} = NodeAdmission.snapshot()
     assert recovered["legacy"] == []
     assert Map.keys(recovered["reservations"]) == ["next"]
+  end
+
+  test "a retired run releases its committed reservation only with local cancellation proof" do
+    run = "retired-service"
+    assert {:ok, %{"state" => "preparing"}} = NodeAdmission.submit(job(run))
+    Store.commit_reservation("spark@test", run)
+
+    receipt = %{
+      "status" => "acknowledged",
+      "public_cleared_at" => "2026-11-04T14:00:00Z",
+      "fence_epoch" => 2,
+      "acknowledged_nodes" => ["spark@test"]
+    }
+
+    for unconfirmed <- [
+          nil,
+          Map.put(receipt, "status", "pending"),
+          Map.delete(receipt, "public_cleared_at"),
+          Map.put(receipt, "acknowledged_nodes", ["other@test"])
+        ] do
+      Store.put_cancellation(run, unconfirmed)
+      NodeAdmission.reconcile()
+      assert {:ok, state} = NodeAdmission.snapshot()
+      assert state["reservations"][run]["cleanup_state"] == "pending"
+    end
+
+    Store.put_cancellation(run, receipt)
+    NodeAdmission.reconcile()
+    assert {:ok, state} = NodeAdmission.snapshot()
+    refute Map.has_key?(state["reservations"], run)
+    assert {:ok, %{"state" => "preparing"}} = NodeAdmission.submit(job("next"))
   end
 
   test "admission accepts a stored wire manifest without treating string keys as struct fields" do

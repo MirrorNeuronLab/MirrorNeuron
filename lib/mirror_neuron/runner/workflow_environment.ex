@@ -32,18 +32,5 @@ defmodule MirrorNeuron.Runner.WorkflowEnvironment do
     |> Map.new(fn {key, value} -> {key, to_string(value)} end)
   end
 
-  def invocation_key(message) when is_map(message) do
-    case Message.headers(message)["mn.workflow.idempotency_key"] do
-      key when is_binary(key) and key != "" ->
-        [key, Message.to(message), Message.id(message)]
-        |> :erlang.term_to_binary()
-        |> then(&:crypto.hash(:sha256, &1))
-        |> Base.url_encode64(padding: false)
-
-      _ ->
-        nil
-    end
-  end
-
-  def invocation_key(_message), do: nil
+  defdelegate invocation_key(message), to: MirrorNeuron.Runtime.WorkflowMessage
 end

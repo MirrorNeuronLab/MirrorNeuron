@@ -665,26 +665,60 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
       case store().fetch_job(holder["run_id"]) do
         {:ok, %{"status" => status} = job} when status in @terminal ->
           unless recovering?(job) do
-            with :ok <- JobCleanup.cleanup_sandboxes(holder["run_id"], job, []),
-                 :ok <- drain_terminal_requests(holder),
-                 {:ok, _} <- mutate("release", Map.take(holder, ["run_id", "generation"])) do
-              wake()
-            else
+            case JobCleanup.cleanup_sandboxes(holder["run_id"], job, []) do
+              :ok -> release_stopped_holder(holder)
               _ -> mutate("cleanup_pending", Map.take(holder, ["run_id", "generation"]))
             end
           end
 
         {:error, reason} when reason == :not_found or reason == missing ->
-          # No worker dispatch precedes the durable execution record. The start
-          # gate proves that an interrupted uncommitted claim is safe to retire.
-          if holder["committed"] == false,
-            do: mutate("release", Map.take(holder, ["run_id", "generation"])),
-            else: mutate("cleanup_pending", Map.take(holder, ["run_id", "generation"]))
+          claim = Map.take(holder, ["run_id", "generation"])
+
+          cond do
+            holder["committed"] == false ->
+              mutate("release", claim)
+
+            cleared_cancellation_acknowledged?(holder["run_id"]) ->
+              # Cancellation can finish after the operator deletes the public
+              # run. The durable acknowledgment proves this node stopped its
+              # workers. Active native request leases must also finish.
+              release_stopped_holder(holder)
+
+            true ->
+              mutate("cleanup_pending", claim)
+          end
 
         _ ->
           :ok
       end
     end)
+  end
+
+  defp release_stopped_holder(holder) do
+    claim = Map.take(holder, ["run_id", "generation"])
+
+    with :ok <- drain_terminal_requests(holder), {:ok, _} <- mutate("release", claim) do
+      wake()
+    else
+      _ -> mutate("cleanup_pending", claim)
+    end
+  end
+
+  defp cleared_cancellation_acknowledged?(run_id) do
+    case store().fetch_cancellation(run_id) do
+      {:ok,
+       %{
+         "status" => "acknowledged",
+         "public_cleared_at" => cleared,
+         "fence_epoch" => epoch,
+         "acknowledged_nodes" => nodes
+       }}
+      when is_binary(cleared) and is_integer(epoch) and epoch > 0 and is_list(nodes) ->
+        node_name() in nodes
+
+      _ ->
+        false
+    end
   end
 
   # Workers have stopped and model unload/reference cleanup succeeded before this

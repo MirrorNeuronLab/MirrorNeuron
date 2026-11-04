@@ -8,7 +8,6 @@ defmodule MirrorNeuron do
   alias MirrorNeuron.Persistence.{CancellationStore, RedisStore}
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.CancellationReconciler
-  alias MirrorNeuron.Runtime.RunnerResources
 
   @cluster_job_control_timeout_ms 8_000
 
@@ -402,28 +401,18 @@ defmodule MirrorNeuron do
         with {:ok, target_nodes} <- cancellation_target_nodes(job_id, job),
              {:ok, _request_state, cancellation} <-
                CancellationStore.request(job_id, target_nodes) do
-          case RunnerResources.cleanup_prepared_compose_projects(job) do
-            :ok ->
-              local_node = to_string(Node.self())
+          local_node = to_string(Node.self())
 
-              if local_node in Map.get(cancellation, "target_nodes", []) and
-                   local_node not in Map.get(cancellation, "acknowledged_nodes", []) do
-                _ = CancellationReconciler.reconcile_now(job_id)
-              else
-                CancellationReconciler.kick()
-              end
+          if local_node in Map.get(cancellation, "target_nodes", []) and
+               local_node not in Map.get(cancellation, "acknowledged_nodes", []) do
+            CancellationReconciler.request_local(job_id)
+          else
+            CancellationReconciler.kick()
+          end
 
-              case RedisStore.fetch_job(job_id) do
-                {:ok, %{"status" => "cancelled"}} -> {:ok, "cancelled"}
-                _ -> {:ok, "cancellation_pending"}
-              end
-
-            {:error, reason} ->
-              Logger.warning(
-                "deferred cancellation acknowledgement for #{job_id}; owned DockerCompose cleanup failed: #{inspect(reason)}"
-              )
-
-              {:ok, "cancellation_pending"}
+          case RedisStore.fetch_job(job_id) do
+            {:ok, %{"status" => "cancelled"}} -> {:ok, "cancelled"}
+            _ -> {:ok, "cancellation_pending"}
           end
         end
 

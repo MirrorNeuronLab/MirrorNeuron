@@ -1,5 +1,7 @@
 <h1 align="center">MirrorNeuron 🧠</h1>
 
+Runner execution and cleanup share the adapter contract described in [Runner adapters and worker state](SPEC.md#runner-adapters-and-worker-state).
+
 ## Activity-supervised workflows
 
 `workflow.execution.supervision: "activity"` uses live SDK progress and process

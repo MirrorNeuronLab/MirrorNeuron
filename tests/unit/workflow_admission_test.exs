@@ -5,6 +5,34 @@ defmodule MirrorNeuron.Runtime.WorkflowAdmissionTest do
   alias MirrorNeuron.Builtins.StepSource
   alias MirrorNeuron.Runtime.{WorkflowAdmission, WorkflowLedger}
 
+  test "a late coordinator reply defers the same delivery and preserves real owner errors" do
+    message = Message.new("run", "producer", "consumer", "work", %{})
+
+    owner =
+      spawn(fn ->
+        receive do
+          {:"$gen_call", first, request} ->
+            receive do
+              {:"$gen_call", retry, ^request} ->
+                GenServer.reply(first, {:ok, message})
+                GenServer.reply(retry, {:ok, message})
+            end
+        end
+      end)
+
+    on_exit(fn -> Process.exit(owner, :kill) end)
+
+    state = %{
+      node: %{node_id: "consumer"},
+      coordinator: owner,
+      runtime_context: %{workflow_agent_steps: %{"consumer" => "step"}}
+    }
+
+    assert {:defer, :workflow_admission_pending} = WorkflowAdmission.prepare(message, state)
+    assert {:ok, ^message} = WorkflowAdmission.prepare(message, state)
+    assert {:error, {:workflow_admission_failed, _}} = WorkflowAdmission.prepare(message, state)
+  end
+
   test "a generated source collects every upstream delivery in one ledger attempt" do
     definition = %Manifest{
       flow: %{

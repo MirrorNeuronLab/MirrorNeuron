@@ -394,13 +394,18 @@ defmodule MirrorNeuron.Persistence.DeliveryStore do
     command(["HGET", delivery_receipt_key(job_id, agent_id, message_id), "outbox"])
   end
 
-  def begin_invocation(job_id, agent_id, message_id, consumer) do
+  def begin_invocation(job_id, agent_id, message_id, consumer, service_resume_token \\ nil) do
     script =
       @ownership_check <>
         """
         if not owns_receipt(KEYS[1], KEYS[2], ARGV[2], ARGV[1]) then return 'owner_changed' end
         local phase = redis.call('hget', KEYS[1], 'invocation')
-        if phase then return phase end
+        -- A supervisor may restart a confirmed-stopped, owned service once.
+        -- Reclaiming the delivery or restarting its consumer cannot mint another grant.
+        local resume = ARGV[3]
+        if phase and (phase ~= 'executing' or resume == '' or
+             redis.call('hexists', KEYS[1], 'resume:' .. resume) == 1) then return phase end
+        if resume ~= '' then redis.call('hset', KEYS[1], 'resume:' .. resume, '1') end
         redis.call('hset', KEYS[1], 'invocation', 'executing')
         return 'started'
         """
@@ -413,7 +418,8 @@ defmodule MirrorNeuron.Persistence.DeliveryStore do
              delivery_receipt_key(job_id, agent_id, message_id),
              delivery_stream_key(job_id, agent_id),
              consumer,
-             @delivery_consumer_group
+             @delivery_consumer_group,
+             service_resume_token || ""
            ]),
          :ok <- wait_for_replicas(agent_id),
          do: {:ok, phase}

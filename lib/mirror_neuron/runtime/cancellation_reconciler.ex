@@ -6,11 +6,10 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
   require Logger
 
   alias MirrorNeuron.Persistence.{CancellationStore, RedisStore}
-  alias MirrorNeuron.Runner.HostLocal
+  alias MirrorNeuron.Runner
   alias MirrorNeuron.Runtime.RunnerResources
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.EventBus
-  alias MirrorNeuron.Sandbox.{DockerJobSandbox, OpenShellJobSandbox}
   alias MirrorNeuron.ServiceRegistry
 
   @scan_interval_ms 2_000
@@ -27,6 +26,16 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
     end
   end
 
+  # The cancellation intent is already durable. Let the node's reconciler
+  # finish a long native teardown even after the caller receives its receipt.
+  def request_local(job_id) do
+    timeout = max(1, min(1_000, div(Runtime.cancel_job_call_timeout_ms(), 2)))
+    GenServer.call(__MODULE__, {:reconcile, job_id}, timeout)
+  catch
+    :exit, {:timeout, _call} -> :pending
+    :exit, {:noproc, _call} -> :pending
+  end
+
   def reconcile_now(job_id) when is_binary(job_id) do
     reconcile_cancellation(job_id, to_string(Node.self()))
   end
@@ -35,6 +44,19 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
   def init(_opts) do
     Process.send_after(self(), :scan, 250)
     {:ok, :ok}
+  end
+
+  @impl true
+  def handle_call({:reconcile, job_id}, _from, state) do
+    node_name = to_string(Node.self())
+
+    with {:ok, request} <- CancellationStore.fetch(job_id),
+         true <-
+           node_name in request["target_nodes"] and node_name not in request["acknowledged_nodes"] do
+      reconcile_cancellation(job_id, node_name)
+    end
+
+    {:reply, :ok, state}
   end
 
   @impl true
@@ -75,11 +97,9 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
       with {:ok, native_cleanup} <-
              RunnerResources.cleanup_native_resources_with_result(job_id),
            :ok <- cleanup_legacy_native_resources(job_id, native_cleanup),
-           :ok <- HostLocal.terminate_job(job_id),
+           :ok <- Runner.stop_commands(job_id, :all),
            :ok <- stop_local_job(job_id),
            :ok <- ServiceRegistry.deregister_job(job_id),
-           :ok <- OpenShellJobSandbox.cleanup_job_local(job_id),
-           :ok <- DockerJobSandbox.cleanup_job_local(job_id),
            :ok <- memory_fence do
         case CancellationStore.acknowledge(job_id, local_node) do
           {:ok, :completed, _cancellation} ->
@@ -141,7 +161,7 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
     if native_cleanup_count(native_cleanup) > 0 do
       :ok
     else
-      with :ok <- cleanup_prepared_compose_projects(job_id),
+      with :ok <- retire_prepared_services(job_id),
            :ok <- cleanup_docker_worker(job_id) do
         :ok
       end
@@ -161,10 +181,10 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
   # after Core has restarted.  The prepared Compose record lives in the
   # persisted manifest/topology, so use it rather than relying on a live
   # runner process.  DockerCompose only ever tears down that exact project.
-  defp cleanup_prepared_compose_projects(job_id) do
+  defp retire_prepared_services(job_id) do
     case RedisStore.fetch_job(job_id) do
       {:ok, job} when is_map(job) ->
-        RunnerResources.cleanup_prepared_compose_projects(job)
+        RunnerResources.retire_prepared_services(job)
 
       _ ->
         :ok

@@ -76,7 +76,8 @@ defmodule MirrorNeuron.Runtime.InvocationOutbox do
            state.job_id,
            bucket,
            Message.id(message),
-           state.delivery_consumer
+           state.delivery_consumer,
+           if(bucket == state.node.node_id, do: Map.get(state, :service_resume_token))
          ) do
       {:ok, "started"} ->
         case handler.() do

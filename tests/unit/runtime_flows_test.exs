@@ -286,6 +286,24 @@ defmodule MirrorNeuron.Runtime.FlowsTest do
              InvocationOutbox.run(msg, state, fn -> flunk("replayed uncertain effect") end)
   end
 
+  test "a stopped service grant can be consumed only once by the delivery owner", %{run: run} do
+    Delivery.enqueue(run, "worker", message(run, "service"))
+    Delivery.read(run, "worker", "owner")
+
+    begin = fn consumer, token ->
+      DeliveryStore.begin_invocation(run, "worker", "service", consumer, token)
+    end
+
+    assert {:ok, "started"} = begin.("owner", nil)
+    assert {:ok, "executing"} = begin.("owner", nil)
+    assert {:ok, "owner_changed"} = begin.("another-consumer", "first")
+    assert {:ok, "started"} = begin.("owner", "first")
+    assert {:ok, "executing"} = begin.("owner", "first")
+    assert {:ok, "started"} = begin.("owner", "second")
+    assert {:ok, "executing"} = begin.("owner", "first")
+    assert {:ok, "executing"} = begin.("owner", nil)
+  end
+
   test "only the declared completion owner can finish a correlated receipt", %{run: run} do
     assert {:ok, _} =
              CommandReceipts.prepare(run, "cmd", "input", %{}, %{"completion_agent" => "worker"})

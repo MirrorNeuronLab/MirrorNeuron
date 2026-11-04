@@ -24,4 +24,50 @@ defmodule MirrorNeuron.RunnerNamespaceTest do
              "runner_module" => "MirrorNeuron.Runner.DockerCompose"
            }) == "docker_compose"
   end
+
+  test "runner names resolve without interning arbitrary manifest strings" do
+    name = "MirrorNeuron.Runner.Unknown#{System.unique_integer([:positive])}"
+
+    assert {:error, "Unknown runner module"} =
+             MirrorNeuron.Runner.run(%{}, %{"runner_module" => name}, job_id: "test")
+
+    assert_raise ArgumentError, fn -> String.to_existing_atom("Elixir." <> name) end
+  end
+
+  test "stored OpenShell wire names dispatch to the same fenced adapter" do
+    for name <- [
+          "MirrorNeuron.Runner.OpenShell",
+          "MirrorNeuron.Sandbox.OpenShell",
+          "Elixir.MirrorNeuron.Sandbox.OpenShell"
+        ] do
+      config = %{
+        "runner_module" => name,
+        "environment" => %{"MN_WORKFLOW_STEP_HANDLER" => "mn_sdk.integrations.block_worker"}
+      }
+
+      assert {:error, "OpenShell block workers require artifact_handoff v1"} =
+               MirrorNeuron.Runner.run(%{}, config, job_id: "stored")
+    end
+  end
+
+  test "a non-Compose runner never takes ownership of a Compose record" do
+    for name <- ["HostLocal", "DockerWorker", "OpenShell"] do
+      config = %{
+        "runner_module" => "MirrorNeuron.Runner." <> name,
+        "mn_docker_compose" => %{"project_name" => "another-project"}
+      }
+
+      assert :ok = MirrorNeuron.Runner.stop_prepared([config], :pause)
+      refute MirrorNeuron.Runner.resumable_after_stop?(config)
+    end
+  end
+
+  test "only a prepared Compose project can start another serving generation after a stop" do
+    config = %{"runner_module" => "MirrorNeuron.Runner.DockerCompose"}
+    refute MirrorNeuron.Runner.resumable_after_stop?(config)
+
+    assert MirrorNeuron.Runner.resumable_after_stop?(
+             Map.put(config, "mn_docker_compose", %{"project_name" => "owned-project"})
+           )
+  end
 end

@@ -382,7 +382,7 @@ defmodule MirrorNeuron.Runtime.RunnerResourcesTest do
     }
 
     refute RunnerResources.docker_worker?(job)
-    assert :ok = RunnerResources.cleanup_prepared_compose_projects(job)
+    assert :ok = RunnerResources.retire_prepared_services(job)
 
     assert_receive {:docker_compose_cleanup, request}
     assert [project_json] = request.projects_json

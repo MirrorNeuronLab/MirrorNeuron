@@ -62,31 +62,7 @@ defmodule MirrorNeuron.ResourceSpec do
 
   def with_runtime_driver(spec, _driver), do: spec
 
-  def infer_runtime_driver(config) when is_map(config) do
-    runner_module = map_get(config, "runner_module") |> to_string()
-
-    cond do
-      runner_module == "" ->
-        nil
-
-      String.ends_with?(runner_module, ".HostLocal") ->
-        "host_local"
-
-      String.ends_with?(runner_module, ".OpenShell") ->
-        "openshell"
-
-      String.ends_with?(runner_module, ".DockerWorker") ->
-        "docker_worker"
-
-      String.ends_with?(runner_module, ".DockerCompose") ->
-        "docker_compose"
-
-      true ->
-        nil
-    end
-  end
-
-  def infer_runtime_driver(_config), do: nil
+  defdelegate infer_runtime_driver(config), to: MirrorNeuron.Runner, as: :driver
 
   def scheduling_devices(%{"devices" => devices, "resources" => resources}) do
     case devices do

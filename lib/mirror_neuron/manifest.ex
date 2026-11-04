@@ -1159,18 +1159,26 @@ defmodule MirrorNeuron.Manifest do
     if is_list(steps) do
       steps
       |> Enum.filter(&is_map/1)
-      |> Enum.map(fn step ->
-        case Map.get(step, "run") || Map.get(step, "id") do
-          value when is_binary(value) -> value
-          value when is_atom(value) -> Atom.to_string(value)
-          value when is_integer(value) -> Integer.to_string(value)
-          _value -> ""
-        end
-      end)
+      |> Enum.map(&workflow_step_run_id/1)
       |> Enum.reject(&(&1 == ""))
       |> MapSet.new()
     else
       MapSet.new()
+    end
+  end
+
+  @doc false
+  def workflow_step_run_id(step) do
+    reference =
+      case step["run"] do
+        %{} = run -> run["agent"] || step["agent_id"] || run["binding"]
+        scalar -> scalar
+      end
+
+    case reference || step["id"] do
+      value when is_binary(value) -> value
+      value when is_atom(value) or is_integer(value) -> to_string(value)
+      _ -> ""
     end
   end
 

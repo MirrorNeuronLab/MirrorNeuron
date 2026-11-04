@@ -125,6 +125,64 @@ defmodule MirrorNeuron.Runtime.WorkflowMessageTest do
     assert Message.headers(outgoing) == %{"mn.attempt_epoch" => 3}
   end
 
+  test "a step retry recovers its workers' original effect keys on every route" do
+    first = incoming()
+    second = WorkflowMessage.retry_delivery(first, "second")
+    third = WorkflowMessage.retry_delivery(second, "third")
+
+    for retry <- [second, third] do
+      retry =
+        put_in(retry, ["headers", "mn.workflow.idempotency_key"], "retry:" <> Message.id(retry))
+
+      for {agent, edge} <- [{"intake__worker", "left"}, {"intake__other", "right"}] do
+        route = fn parent ->
+          WorkflowMessage.build(state("intake__start"), parent, agent, "work", %{},
+            delivery_key: edge
+          )
+        end
+
+        worker = route.(first)
+        retried = route.(retry)
+        refute Message.id(worker) == Message.id(retried)
+
+        assert WorkflowEnvironment.invocation_key(worker) ==
+                 WorkflowEnvironment.invocation_key(retried)
+
+        explicit = fn parent ->
+          message = put_in(incoming(), ["envelope", "to"], agent)
+          message = put_in(message, ["headers"], Message.headers(parent))
+
+          headers =
+            WorkflowMessage.explicit_output_headers(state("intake__start"), parent, message, 0)
+
+          id = WorkflowMessage.output_id(state("intake__start"), parent, Message.to(message), 0)
+          message |> put_in(["headers"], headers) |> put_in(["envelope", "message_id"], id)
+        end
+
+        assert WorkflowEnvironment.invocation_key(explicit.(first)) ==
+                 WorkflowEnvironment.invocation_key(explicit.(retry))
+
+        joined = fn parent ->
+          WorkflowMessage.build(state(agent), parent, "intake__end", "done", %{})
+        end
+
+        assert WorkflowEnvironment.invocation_key(joined.(worker)) ==
+                 WorkflowEnvironment.invocation_key(joined.(retried))
+
+        next =
+          WorkflowMessage.build(
+            state("intake__end"),
+            joined.(retried),
+            "next__start",
+            "done",
+            %{}
+          )
+
+        refute Map.has_key?(Message.headers(next), "mn.workflow.effect_origin")
+      end
+    end
+  end
+
   test "coordinator reports keep replay identity and isolate workflow and lease attempts" do
     state = state("intake__worker")
     first = incoming()

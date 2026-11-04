@@ -1,4 +1,5 @@
 defmodule MirrorNeuron.Runner.DockerWorker do
+  @behaviour MirrorNeuron.Runner
   @moduledoc false
   require Logger
 
@@ -16,6 +17,21 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     "MN_LLM_MODEL_RUNNER_MODEL"
   ]
 
+  @impl true
+  def stop_commands(job_id, agents), do: DockerCommand.terminate_agents(job_id, agents)
+
+  @impl true
+  def prepared_key(config, :finish),
+    do: MirrorNeuron.Sandbox.DockerJobSandbox.configured_container_name(config)
+
+  def prepared_key(_config, _transition), do: nil
+
+  @impl true
+  defdelegate stop_prepared(config),
+    to: MirrorNeuron.Sandbox.DockerJobSandbox,
+    as: :stop_prepared_container
+
+  @impl true
   def run(payload, config, opts \\ []) do
     DockerCommand.run(opts, &run_owned(payload, config, &1))
   end

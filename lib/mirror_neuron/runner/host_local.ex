@@ -1,4 +1,5 @@
 defmodule MirrorNeuron.Runner.HostLocal do
+  @behaviour MirrorNeuron.Runner
   alias MirrorNeuron.Message
   alias MirrorNeuron.Config
   alias MirrorNeuron.Runner.HostProcess
@@ -34,6 +35,10 @@ defmodule MirrorNeuron.Runner.HostLocal do
     end
   end
 
+  @impl true
+  def stop_commands(job_id, agents), do: terminate_agents(job_id, agents)
+
+  @impl true
   def run(payload, config, opts \\ []) do
     runner_name = build_runner_name(config, opts)
 

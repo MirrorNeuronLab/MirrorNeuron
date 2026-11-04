@@ -54,14 +54,20 @@ defmodule MirrorNeuron.Runtime.RunRetry do
   end
 
   def checkpoint(job, ledger, artifacts \\ %{}) do
+    checkpoint(job, ledger, artifacts, definition_identity(job["manifest"], job["inputs"]))
+  end
+
+  def definition_identity(manifest, inputs), do: {digest(manifest), digest(inputs)}
+
+  def checkpoint(job, ledger, artifacts, {manifest_digest, inputs_digest}) do
     %{
       "version" => @version,
       "run_id" => job["run_id"] || job["job_id"],
       "job_id" => job["stable_job_id"],
       "attempt" => job["attempt"],
       "data_generation" => job["data_generation"],
-      "manifest_digest" => digest(job["manifest"]),
-      "inputs_digest" => digest(job["inputs"]),
+      "manifest_digest" => manifest_digest,
+      "inputs_digest" => inputs_digest,
       "running_time" => job["running_time"],
       "configuration_overrides" => effective_overrides(job),
       "workflow" => ledger,
@@ -597,7 +603,7 @@ defmodule MirrorNeuron.Runtime.RunRetry do
     do:
       value
       |> canonical()
-      |> Jason.encode!()
+      |> Jason.encode_to_iodata!()
       |> then(&:crypto.hash(:sha256, &1))
       |> Base.encode16(case: :lower)
 

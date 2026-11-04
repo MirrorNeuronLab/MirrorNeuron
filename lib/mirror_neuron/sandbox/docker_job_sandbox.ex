@@ -102,13 +102,16 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
     do: {:error, "docker_worker prepared container is not ready (state: #{state})"}
 
   defp prepared_container_name(config) do
+    configured_container_name(config) || System.get_env("MN_DOCKER_WORKER_CONTAINER_NAME")
+  end
+
+  def configured_container_name(config) do
     env = config_env(config)
 
     Map.get(config, "docker_worker_container_name") ||
       Map.get(config, "container_name") ||
       get_in(config, ["docker", "container_name"]) ||
-      Map.get(env, "MN_DOCKER_WORKER_CONTAINER_NAME") ||
-      System.get_env("MN_DOCKER_WORKER_CONTAINER_NAME")
+      Map.get(env, "MN_DOCKER_WORKER_CONTAINER_NAME")
   end
 
   defp config_env(config) do

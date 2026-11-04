@@ -165,6 +165,8 @@ defmodule MirrorNeuron.Grpc.Handlers.Support do
 
   defp runtime_error_status(reason)
        when reason in [
+              :pause_cleanup_pending,
+              :retry_pause_cleanup,
               :relocation_requires_idle_job,
               :relocation_cleanup_pending,
               :pause_schedules_before_relocation,

@@ -4,7 +4,7 @@ defmodule MirrorNeuron.Runtime.RunnerResources do
   alias MirrorNeuron.Cluster.NodeAdapter
   alias MirrorNeuron.ModelServices
   alias MirrorNeuron.Persistence.RedisStore
-  alias MirrorNeuron.Runner.DockerCompose
+  alias MirrorNeuron.Runner
   alias MirrorNeuron.SafeAccess
   alias Mirrorneuron.Cluster.V1.CleanupDockerWorkerRequest
 
@@ -19,19 +19,7 @@ defmodule MirrorNeuron.Runtime.RunnerResources do
   @doc false
   def stop_run_workers(run_id) do
     with {:ok, job} <- RedisStore.fetch_job(run_id) do
-      stopped =
-        job
-        |> node_configs()
-        |> Enum.filter(&docker_worker_config?/1)
-        |> Enum.uniq_by(&detail(&1, "docker_worker_container_name"))
-        |> Enum.reduce_while(:ok, fn config, :ok ->
-          case MirrorNeuron.Sandbox.DockerJobSandbox.stop_prepared_container(config) do
-            :ok -> {:cont, :ok}
-            error -> {:halt, error}
-          end
-        end)
-
-      with :ok <- stopped, do: cleanup_prepared_compose_projects(job)
+      Runner.stop_prepared(node_configs(job), :finish)
     end
   end
 
@@ -107,7 +95,7 @@ defmodule MirrorNeuron.Runtime.RunnerResources do
     else
       case fetch_persisted_job(job_id) do
         {:ok, job} when is_map(job) ->
-          with :ok <- cleanup_prepared_compose_projects(job),
+          with :ok <- retire_prepared_services(job),
                :ok <-
                  if(docker_worker?(job),
                    do: cleanup_docker_worker(job_id),
@@ -213,37 +201,17 @@ defmodule MirrorNeuron.Runtime.RunnerResources do
   def cleanup_retired_native_resources(_retired, _current), do: :ok
 
   @doc false
-  def cleanup_prepared_compose_projects(job) when is_map(job) do
-    job
-    |> compose_configs()
-    |> Enum.reduce_while(:ok, fn config, :ok ->
-      case DockerCompose.cleanup_prepared_project(config) do
-        :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
+  def retire_prepared_services(job) do
+    Runner.stop_prepared(node_configs(job), :retire)
   end
-
-  def cleanup_prepared_compose_projects(_job), do: :ok
 
   @doc false
   def docker_worker?(job) when is_map(job) do
     has_docker_worker_metadata?(job) or
-      Enum.any?(node_configs(job), &docker_worker_config?/1)
+      Enum.any?(node_configs(job), &Runner.docker_worker?/1)
   end
 
   def docker_worker?(_job), do: false
-
-  defp compose_configs(job) do
-    job
-    |> node_configs()
-    |> Enum.filter(&(is_map(&1) and is_map(detail(&1, "mn_docker_compose"))))
-    |> Enum.uniq_by(fn config ->
-      config
-      |> detail("mn_docker_compose")
-      |> detail("project_name")
-    end)
-  end
 
   defp node_configs(job) do
     @node_paths
@@ -291,15 +259,6 @@ defmodule MirrorNeuron.Runtime.RunnerResources do
   defp native_resource_node(node) when is_binary(node), do: SafeAccess.node_name_to_atom(node)
   defp native_resource_node(_node), do: {:error, :invalid_owner_node}
 
-  defp docker_worker_config?(config) do
-    runner_module = detail(config, "runner_module")
-
-    (is_binary(runner_module) and String.ends_with?(runner_module, ".DockerWorker")) or
-      detail(config, "runtime_driver") == "docker_worker" or
-      is_binary(detail(config, "docker_worker_container_name")) or
-      is_binary(detail(config, "docker_worker_compose_service"))
-  end
-
   defp decode_cleanup(result_json, runner) when is_binary(result_json) do
     case Jason.decode(result_json) do
       {:ok, result} when is_map(result) ->
@@ -344,16 +303,10 @@ defmodule MirrorNeuron.Runtime.RunnerResources do
   defp key_atom("config"), do: :config
   defp key_atom("metadata"), do: :metadata
   defp key_atom("mn_docker_workers"), do: :mn_docker_workers
-  defp key_atom("mn_docker_compose"), do: :mn_docker_compose
   defp key_atom("mn_native_resources"), do: :mn_native_resources
   defp key_atom("resources"), do: :resources
   defp key_atom("kind"), do: :kind
   defp key_atom("external_id"), do: :external_id
   defp key_atom("owner_node"), do: :owner_node
-  defp key_atom("project_name"), do: :project_name
-  defp key_atom("runner_module"), do: :runner_module
-  defp key_atom("runtime_driver"), do: :runtime_driver
-  defp key_atom("docker_worker_container_name"), do: :docker_worker_container_name
-  defp key_atom("docker_worker_compose_service"), do: :docker_worker_compose_service
   defp key_atom(_key), do: nil
 end

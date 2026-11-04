@@ -1,4 +1,5 @@
 defmodule MirrorNeuron.Runner.OpenShell do
+  @behaviour MirrorNeuron.Runner
   require Logger
 
   alias MirrorNeuron.Config
@@ -11,6 +12,11 @@ defmodule MirrorNeuron.Runner.OpenShell do
   @result_start "__MN_RESULT_START__"
   @result_end "__MN_RESULT_END__"
 
+  @impl true
+  def stop_commands(job_id, :all), do: OpenShellJobSandbox.cleanup_job_local(job_id)
+  def stop_commands(_job_id, _agents), do: :ok
+
+  @impl true
   def run(payload, config, opts \\ []) do
     config = resolve_local_cli_paths(config, opts)
 

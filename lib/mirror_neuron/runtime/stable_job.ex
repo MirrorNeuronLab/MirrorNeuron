@@ -1479,7 +1479,7 @@ defmodule MirrorNeuron.Runtime.StableJob do
       # a false deletion failure and prevents the registry path from running.
       RunnerResources.cleanup_native_resources(job_id)
     else
-      with :ok <- RunnerResources.cleanup_prepared_compose_projects(definition),
+      with :ok <- RunnerResources.retire_prepared_services(definition),
            :ok <-
              if(RunnerResources.docker_worker?(definition),
                do: RunnerResources.cleanup_docker_worker(job_id),

@@ -9,8 +9,7 @@ defmodule MirrorNeuron.Runtime.WorkflowAdmission do
   def prepare(message, state) do
     steps = Map.get(state.runtime_context, :workflow_agent_steps, %{})
 
-    if Map.has_key?(steps, state.node.node_id) and
-         is_nil(Message.headers(message)["mn.workflow.idempotency_key"]) do
+    if Map.has_key?(steps, state.node.node_id) do
       GenServer.call(
         state.coordinator,
         {:workflow_admit_message, state.node.node_id, message},
@@ -20,6 +19,9 @@ defmodule MirrorNeuron.Runtime.WorkflowAdmission do
       {:ok, message}
     end
   catch
+    # A busy ledger may have admitted this same message before its reply was
+    # lost. Redelivery reuses the message ID and its original attempt.
+    :exit, {:timeout, {GenServer, :call, _}} -> {:defer, :workflow_admission_pending}
     :exit, reason -> {:error, {:workflow_admission_failed, reason}}
   end
 
@@ -35,11 +37,22 @@ defmodule MirrorNeuron.Runtime.WorkflowAdmission do
     ledger_trigger? =
       Message.from(message) == "workflow_ledger" and Message.type(message) == "workflow_trigger"
 
-    if WorkflowLedger.enabled?(ledger) and ChildWorkflow.managed_target?(ledger, step) and
-         not ledger_trigger? do
-      {:skip, ledger, []}
-    else
-      admit_step(ledger, agent_id, message, step_id)
+    fence = WorkflowLedger.delivery_fence(step, agent_id, message)
+
+    cond do
+      step["status"] in ["completed", "partial", "skipped", "failed"] or fence == :stale ->
+        {ledger, events} = WorkflowLedger.on_message_received(ledger, agent_id, message)
+        {:skip, ledger, events}
+
+      fence == :sealed ->
+        {{:ok, message}, ledger, []}
+
+      WorkflowLedger.enabled?(ledger) and ChildWorkflow.managed_target?(ledger, step) and
+          not ledger_trigger? ->
+        {:skip, ledger, []}
+
+      true ->
+        admit_step(ledger, agent_id, message, step_id)
     end
   end
 
@@ -63,7 +76,7 @@ defmodule MirrorNeuron.Runtime.WorkflowAdmission do
             saved
             |> Message.headers()
             |> Map.filter(fn {key, _} -> String.starts_with?(key, "mn.workflow.") end)
-            |> Map.delete("mn.workflow.source_step_id")
+            |> Map.drop(["mn.workflow.source_step_id", "mn.workflow.effect_origin"])
 
           {:ok, WorkflowLedger.decorate_message(ledger, agent_id, message, headers)}
 

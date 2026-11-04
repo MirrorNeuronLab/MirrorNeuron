@@ -55,6 +55,12 @@ defmodule MirrorNeuron.Runtime do
   def error_message({:redis_primary_unavailable, reason}),
     do: "Redis primary was unavailable: #{inspect(reason)}"
 
+  def error_message(:pause_cleanup_pending),
+    do: "The service is still pausing. Resume it after cleanup completes."
+
+  def error_message(:retry_pause_cleanup),
+    do: "Pause cleanup failed. Retry pause before resuming."
+
   def error_message({:job_call_timeout, job_id, timeout_ms}),
     do: "timed out calling job #{job_id} after #{timeout_ms}ms"
 

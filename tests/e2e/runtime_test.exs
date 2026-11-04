@@ -331,6 +331,25 @@ defmodule MirrorNeuron.RuntimeTest do
     end
   end
 
+  defmodule SlowServiceStop do
+    def run(payload, config, opts),
+      do: MirrorNeuron.RuntimeTest.LongSleepRunner.run(payload, config, opts)
+
+    def resumable_after_stop?(_config), do: true
+    def prepared_key(_config, :pause), do: :test_project
+    def prepared_key(_config, _transition), do: nil
+
+    def stop_prepared(_config) do
+      send(__MODULE__, {:stopping, self()})
+
+      receive do
+        {:stop_result, result} -> result
+      after
+        5_000 -> {:error, :missing_test_receipt}
+      end
+    end
+  end
+
   defmodule LongSleepRunner do
     def run(_payload, _config, _opts) do
       Process.sleep(30_000)
@@ -2532,6 +2551,39 @@ defmodule MirrorNeuron.RuntimeTest do
     RedisStore.delete_job(job_id)
   end
 
+  test "agent child specs do not replicate the Job definition on each worker heap" do
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "bounded_worker_context",
+      "metadata" => %{"domain_descriptor" => String.duplicate("x", 512 * 1024)},
+      "entrypoints" => ["idle"],
+      "nodes" => [
+        %{
+          "node_id" => "idle",
+          "agent_type" => "executor",
+          "config" => %{"runner_module" => DelayedCompleteRunner, "output_message_type" => nil}
+        }
+      ],
+      "edges" => [],
+      "policies" => %{"job_type" => "service"}
+    }
+
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
+
+    on_exit(fn ->
+      MirrorNeuron.cancel(job_id)
+      RedisStore.delete_job(job_id)
+    end)
+
+    wait_until(fn -> running_status?(job_id) end, 2_000)
+    worker = MirrorNeuron.Runtime.Naming.via_agent(job_id, "idle")
+    context = :sys.get_state(worker).runtime_context
+    refute Map.has_key?(context, :manifest)
+    assert :erlang.external_size(context) < 32 * 1024
+    assert {:ok, job} = RedisStore.fetch_job(job_id)
+    assert byte_size(job["manifest"]["metadata"]["domain_descriptor"]) == 512 * 1024
+  end
+
   test "service jobs ignore task completion and keep the allocation running" do
     manifest = %{
       "manifest_version" => "1.0",
@@ -2704,6 +2756,60 @@ defmodule MirrorNeuron.RuntimeTest do
     assert {:ok, %{"status" => "running"}} = RedisStore.fetch_job(job_id)
 
     RedisStore.delete_job(job_id)
+  end
+
+  test "a slow service pause acknowledges once and gates resume on physical cleanup" do
+    Process.register(self(), SlowServiceStop)
+
+    manifest = %{
+      "manifest_version" => "1.0",
+      "graph_id" => "slow_pause",
+      "type" => "service",
+      "entrypoints" => ["worker"],
+      "nodes" => [
+        %{
+          "node_id" => "worker",
+          "agent_type" => "executor",
+          "config" => %{"runner_module" => SlowServiceStop}
+        }
+      ],
+      "edges" => []
+    }
+
+    assert {:ok, job_id} = run_manifest(manifest, await: false)
+    on_exit(fn -> MirrorNeuron.cancel(job_id) end)
+    wait_until(fn -> running_status?(job_id) end)
+    assert {:ok, "pause_pending"} = MirrorNeuron.pause(job_id)
+    assert_receive {:stopping, first}
+    assert {:ok, "pause_pending"} = MirrorNeuron.pause(job_id)
+    assert {:error, :pause_cleanup_pending} = MirrorNeuron.resume(job_id)
+
+    assert {:ok, %{"status" => "paused", "pause_cleanup_status" => "pending"}} =
+             RedisStore.fetch_job(job_id)
+
+    [{coordinator, _}] = Horde.Registry.lookup(MirrorNeuron.DistributedRegistry, {:job, job_id})
+    send(coordinator, {:agent_failed, "worker", :stopped})
+    send(coordinator, {:agent_completed_run, "worker", %{}})
+    assert {:ok, "pause_pending"} = MirrorNeuron.pause(job_id)
+
+    send(first, {:stop_result, {:error, :injected}})
+
+    wait_until(fn ->
+      match?({:ok, %{"pause_cleanup_status" => "failed"}}, RedisStore.fetch_job(job_id))
+    end)
+
+    assert {:error, :retry_pause_cleanup} = MirrorNeuron.resume(job_id)
+
+    assert {:ok, "pause_pending"} = MirrorNeuron.pause(job_id)
+    assert_receive {:stopping, retry}
+    send(retry, {:stop_result, :ok})
+
+    wait_until(fn ->
+      match?({:ok, %{"pause_cleanup_status" => "complete"}}, RedisStore.fetch_job(job_id))
+    end)
+
+    assert {:ok, "resumed"} = MirrorNeuron.resume(job_id)
+    refute_receive {:stopping, _}
   end
 
   test "service jobs register and deregister declared service instances" do

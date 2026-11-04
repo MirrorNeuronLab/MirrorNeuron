@@ -6,7 +6,7 @@ defmodule MirrorNeuron.Builtins.Executor do
   alias MirrorNeuron.Builtins.StepContract
   alias MirrorNeuron.Message
   alias MirrorNeuron.Artifacts.StagedArtifact
-  alias MirrorNeuron.Runner.OpenShell
+  alias MirrorNeuron.Runner
 
   @transient_markers [
     "h2 protocol error",
@@ -281,38 +281,35 @@ defmodule MirrorNeuron.Builtins.Executor do
   defp run_configured_invocation(payload, state, context, message, attempt) do
     config = state.config
     runner_config = with_step_result_pointer(config, context, attempt)
-    runner = resolve_runner(config)
 
     # We pass the overall invocation counter (to salt sandbox directories securely between distinct payloads or retries)
     invocation = Map.get(context, :invocation, 1)
 
-    case MirrorNeuron.Runtime.NodeAdmission.run(config, context.job_id, fn ->
-           runner.run(
-             payload,
-             runner_config,
-             message: message,
-             attempt: attempt,
-             run_id: get_in(context, [:workflow, "run_id"]),
-             step_instance: step_instance(context, runner_config, message),
-             runtime_attempt:
-               get_in(context, [:workflow, "attempt"]) || Map.get(context, :job_attempt) ||
-                 attempt,
-             lease_epoch: Map.get(context, :lease_epoch),
-             invocation: invocation,
-             coordinator_node: node(context.coordinator),
-             job_id: context.job_id,
-             agent_id: context.node.node_id,
-             agent_type: Map.get(context.node, :agent_type),
-             template_type: Map.get(context.node, :type, "generic"),
-             agent_state: state.agent_state,
-             bundle_root: context.bundle_root,
-             manifest_path: context.manifest_path,
-             payloads_path: context.payloads_path,
-             event_callback: fn event_type, event_payload ->
-               report_event(context, event_type, event_payload)
-             end
-           )
-         end) do
+    case Runner.run(
+           payload,
+           runner_config,
+           message: message,
+           attempt: attempt,
+           run_id: get_in(context, [:workflow, "run_id"]),
+           step_instance: step_instance(context, runner_config, message),
+           runtime_attempt:
+             get_in(context, [:workflow, "attempt"]) || Map.get(context, :job_attempt) ||
+               attempt,
+           lease_epoch: Map.get(context, :lease_epoch),
+           invocation: invocation,
+           coordinator_node: node(context.coordinator),
+           job_id: context.job_id,
+           agent_id: context.node.node_id,
+           agent_type: Map.get(context.node, :agent_type),
+           template_type: Map.get(context.node, :type, "generic"),
+           agent_state: state.agent_state,
+           bundle_root: context.bundle_root,
+           manifest_path: context.manifest_path,
+           payloads_path: context.payloads_path,
+           event_callback: fn event_type, event_payload ->
+             report_event(context, event_type, event_payload)
+           end
+         ) do
       {:ok, result} ->
         case await_structured_result(result, runner_config, context) do
           {:ok, result} ->
@@ -854,22 +851,6 @@ defmodule MirrorNeuron.Builtins.Executor do
     |> maybe_put_int(:queue_timeout_ms, Map.get(config, :lease_queue_timeout_ms))
     |> maybe_put_int(:max_queue_length, Map.get(config, "lease_max_queue_length"))
     |> maybe_put_int(:max_queue_length, Map.get(config, :lease_max_queue_length))
-  end
-
-  defp resolve_runner(config) do
-    case Map.get(config, "runner_module") || Map.get(config, :runner_module) do
-      nil ->
-        OpenShell
-
-      module when is_atom(module) ->
-        module
-
-      module_name when is_binary(module_name) ->
-        module_name
-        |> String.split(".", trim: true)
-        |> Enum.map(&String.to_atom/1)
-        |> Module.concat()
-    end
   end
 
   defp lease_metadata(context) do

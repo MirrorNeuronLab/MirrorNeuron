@@ -69,6 +69,10 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     reclaim_deliveries? =
       recovery_flag?(recovery_snapshot, "reclaim_deliveries", :reclaim_deliveries)
 
+    service_resume_token =
+      if is_map(recovery_snapshot) and MirrorNeuron.Runner.resumable_after_stop?(node.config),
+        do: recovery_snapshot["service_resume_token"]
+
     case module.init(node) do
       {:ok, local_state} ->
         state = %{
@@ -86,6 +90,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
           command_streak: 0,
           checkpoint_pending?: false,
           delivery_bucket: node.node_id,
+          service_resume_token: service_resume_token,
           processed_messages: 0,
           inflight_message: nil,
           heartbeat_interval_ms: heartbeat_interval_ms(),
@@ -545,6 +550,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   defp handle_agent_message(message, state, context, workflow) do
     case MirrorNeuron.Runtime.InvocationOutbox.run(message, state, fn ->
            state.module.handle_message(message, state.local_state, context)
+           |> workflow_handler_result(workflow, state.node.node_id)
          end)
          |> checkpoint_result(state) do
       {:checkpointed, new_local_state, actions, sequence, response} ->
@@ -588,6 +594,27 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
         {:error, reason, failed_state}
     end
   end
+
+  # Once the handler has reported an outcome, the ledger owns its retry.
+  # The transport can replay this report without executing the handler again.
+  defp workflow_handler_result(
+         {:error, reason, local},
+         %{"attempt_id" => id} = workflow,
+         agent_id
+       )
+       when is_binary(id) do
+    error =
+      ErrorEnvelope.normalize(reason,
+        component: "workflow_ledger",
+        agent_id: agent_id,
+        step_id: workflow["step_id"],
+        attempt: workflow["attempt"]
+      )
+
+    {:ok, local, [{:event, :workflow_step_failed, %{"error" => error}}]}
+  end
+
+  defp workflow_handler_result(result, _workflow, _agent_id), do: result
 
   defp checkpoint_result({:ok, local, actions}, state),
     do:
@@ -712,12 +739,9 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     normalized =
       normalized
       |> put_in(["envelope", "message_id"], message_id)
-      |> Map.update(
-        "headers",
-        WorkflowMessage.with_attempt_epoch(Message.headers(normalized), state),
-        fn headers ->
-          WorkflowMessage.with_attempt_epoch(headers || %{}, state)
-        end
+      |> put_in(
+        ["headers"],
+        WorkflowMessage.explicit_output_headers(state, incoming, normalized, action_index)
       )
 
     result =
@@ -994,7 +1018,9 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   end
 
   defp inject_runtime_paths(node, runtime_context) do
-    allocation = Scheduler.allocation(runtime_context[:scheduler], node.node_id)
+    allocation =
+      runtime_context[:allocation] ||
+        Scheduler.allocation(runtime_context[:scheduler], node.node_id)
 
     runtime_config =
       node.config

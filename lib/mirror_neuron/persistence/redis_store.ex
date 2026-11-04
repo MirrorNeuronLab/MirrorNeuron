@@ -36,6 +36,10 @@ defmodule MirrorNeuron.Persistence.RedisStore do
          do: {:ok, request}
   end
 
+  defdelegate fetch_cancellation(run_id),
+    to: MirrorNeuron.Persistence.CancellationStore,
+    as: :fetch
+
   def fetch_node_admission(node_name) do
     case command(["GET", key("node-admission", node_name)]) do
       {:ok, nil} -> {:ok, MirrorNeuron.Runtime.NodeAdmissionState.new()}
@@ -385,7 +389,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
     with :ok <- validate_identifier("job_id", job_id),
          {:ok, job_map} <- with_run_clock(job_id, job_map) do
       encoded_summary = Jason.encode!(job_summary(job_id, job_map))
-      encoded_guard = Jason.encode!(job_guard(job_id, job_map))
+      encoded_guard = Jason.encode!(job_guard(job_id, job_map, :projection))
 
       with :ok <- validate_job_lease_epoch(job_id, job_map),
            {:ok, results} <-
@@ -623,6 +627,29 @@ defmodule MirrorNeuron.Persistence.RedisStore do
         {:error, reason} -> {:error, format_reason(reason)}
       end
     end
+  end
+
+  def fetch_delivery_settings(job_id) do
+    with :ok <- validate_identifier("job_id", job_id) do
+      case fetch_job_guard(job_id) do
+        {:ok, %{"delivery" => settings}} ->
+          {:ok, settings}
+
+        # Pre-upgrade records gain the projection on their next durable write.
+        {:ok, _legacy} ->
+          legacy_delivery_settings(job_id)
+
+        {:error, reason} = error ->
+          if reason == "job #{job_id} guard was not found",
+            do: legacy_delivery_settings(job_id),
+            else: error
+      end
+    end
+  end
+
+  defp legacy_delivery_settings(job_id) do
+    with {:ok, job} <- fetch_job(job_id),
+         do: {:ok, MirrorNeuron.Runtime.DeliveryChannels.settings(job)}
   end
 
   def fetch_job_summary(job_id) do
@@ -2557,8 +2584,8 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       end
   end
 
-  defp job_guard(job_id, job) do
-    %{
+  defp job_guard(job_id, job, mode \\ :durable) do
+    guard = %{
       "job_id" => field(job, "job_id") || job_id,
       "status" => field(job, "status"),
       "attempt" => field(job, "attempt", 0),
@@ -2567,6 +2594,13 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       "finalization_id" => field(job, "finalization_id"),
       "updated_at" => field(job, "updated_at")
     }
+
+    # A partial status projection cannot change a v2 job back into a v1 job
+    # or drop its configured queue limits. The fenced write retains its settings.
+    if mode == :durable or
+         (field(job, "delivery_version") != nil and field(job, "manifest") != nil),
+       do: Map.put(guard, "delivery", MirrorNeuron.Runtime.DeliveryChannels.settings(job)),
+       else: guard
   end
 
   defp workflow_state_summary(%{"steps" => steps} = state) when is_map(steps) do

@@ -74,6 +74,9 @@ gRPC.
 For SDK-staged shared submissions, terminal runs publish `outputs/runs/<run-id>/.mn_completion.json`
 with the final status and an inventory of durable regular files. The submitting
 host uses this receipt to wait for replication before copying declared outputs.
+Before publishing the receipt, Core gives the shared volume's owner read access
+to the inventoried output files and traversal access to their directories.
+Private output modes are preserved. The execution journal stays with its runner.
 Core never writes to a submitter-only host path on a remote worker node.
 After committing that receipt, an enabled Syncthing integration requests a scan
 of the owning submission's output subtree. The request uses the configured local
@@ -173,9 +176,15 @@ Routing within one logical step retains its attempt, deadlines, graph identity
 and step idempotency key. Crossing a logical-step boundary clears that context
 for the destination's ledger admission. Runner `MN_WORKFLOW_IDEMPOTENCY_KEY`
 identifies the individual worker delivery, derived from the step key, target
-agent and stable message ID. It survives delivery replay and differs between
-parallel workers. `MN_WORKFLOW_STEP_IDEMPOTENCY_KEY` retains the ledger key;
+agent and stable message ID. It survives transport replay and retries of the
+same logical input. A retry carries the original effect identity down the same
+route, so completed workers can recover their own receipts. Different inputs,
+parallel branches and distinct output routes retain independent identities.
+`MN_WORKFLOW_STEP_IDEMPOTENCY_KEY` retains the current attempt's ledger key;
 completion and stale-attempt fencing continue using the original message headers.
+An admitted handler records its failure through the same durable outbox as a
+successful result. The ledger owns the next attempt. Redelivery of the failure
+report does not execute the failed handler a second time.
 
 HostLocal binds `MN_BUNDLE_ROOT` to its staged invocation copy and
 `MN_BLUEPRINT_MANIFEST_PATH` to that copy's `runtime/manifest.json`, overriding
@@ -824,6 +833,11 @@ SDK/domain consumers. Their outputs use the existing seal/transfer/receipt
 transaction. Core does not import blueprint hooks or execute domain code while
 admitting artifacts. HostLocal and Docker worker choices remain unchanged.
 
+The run’s private `.handoff` store holds execution transactions and sealed
+artifacts for replay on the shared runtime. Host delivery receipts enumerate
+the materialized run files and declared exports. They exclude the private
+transport store.
+
 Private `MN_JOB_OUTPUT_DIR` points to `local/job-outputs`; it is distinct from
 `MN_ARTIFACT_OUTPUT_DIR`, whose contents must all have declared handoff references.
 Matching SDK dev31 publication turns logical output manifests into current
@@ -1197,3 +1211,26 @@ MN_FLOW_REDIS_URL=redis://127.0.0.1:<isolated-port> mix test --no-start \
 
 End-to-end API/browser and real federated latency must also be
 measured in the deployment environment.
+
+## Runner adapters and worker state
+
+`MirrorNeuron.Runner` dispatches native (HostLocal), DockerWorker, OpenShell and DockerCompose invocations under the same Run admission fence. Each adapter owns its command supervision and translates pause, finish and retirement into operations on its prepared resources. A Compose project is identified by its recorded owner and project name. A batch pause retains the Run reservation. A service pause also stops its prepared services. An interrupted stop remains retryable, and terminal cleanup releases model residency only after the owned work stops.
+
+A workflow retry enters through the delivery recorded by the ledger. During
+backoff and after that delivery is queued, a late message from the old attempt
+cannot start the retry or execute a handler under its credentials. Within an
+active attempt, specialists retain their own inputs and share its attempt fence.
+
+A service pause fences new work before stopping its resources. Fast pauses return
+`paused`. When shutdown is still running, the control returns `pause_pending`.
+The run records `pause_cleanup_status` and emits `job_paused` after the stop
+succeeds. A failed stop emits `job_pause_cleanup_failed`. The operator can retry
+pause, and resume requires a confirmed stop. Cancellation records its intent
+before the node reconciler stops resources. A slow cancellation returns
+`cancellation_pending` until the required nodes acknowledge it. If the public run is deleted before acknowledgment, owner-node admission uses
+the durable cancellation receipt and drains its remaining native request leases
+before releasing that reservation generation to the next Job.
+
+After the adapter confirms that the named Compose project stopped, an explicit resume can start a new serving generation. The current delivery owner consumes that authorization once in the invocation journal. Ordinary retries and other runners retain the existing uncertain-effect protection.
+
+The coordinator retains the executable definition once per deployment revision. Each worker receives its own placement, adjacent routing information and bundle references. Delivery polling reads the lane version and per-agent queue limits from the fenced Redis guard. Existing Jobs without this projection use their stored definition until its next write. A timeout awaiting ledger admission defers the same delivery before invoking the worker. A missing coordinator follows the normal recovery policy. Checkpoint validation keeps the same manifest and input digests.
