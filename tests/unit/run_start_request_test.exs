@@ -1,5 +1,7 @@
 defmodule MirrorNeuron.Runtime.RunStartRequestTest do
   use ExUnit.Case, async: false
+
+  @moduletag :blueprint_runtime
   alias MirrorNeuron.Runtime.RunStartRequest
 
   defmodule Store do

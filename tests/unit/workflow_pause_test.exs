@@ -1,6 +1,8 @@
 defmodule MirrorNeuron.Runtime.WorkflowPauseTest do
   use ExUnit.Case, async: true
 
+  @moduletag :blueprint_runtime
+
   alias MirrorNeuron.Runtime.WorkflowLedger
 
   test "long pauses freeze parent, dynamic child, beacon and retry clocks without replaying attempts" do

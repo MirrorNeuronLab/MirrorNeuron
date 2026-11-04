@@ -32,7 +32,9 @@ budgets, not hardware isolation. Measure the configured workload and revise its
 budget when models, context limits or concurrency change.
 
 Smallest compatible GPUs are selected first. Shared GPUs retain the larger of
-512 MiB and 10% headroom. Unified-memory GPU reservations also consume host RAM.
+512 MiB and 10% headroom. Unified-memory GPU reservations also consume host RAM
+for CPU-only admission checks. Verified shared weights count once on that
+device and remain charged while any Run holds them.
 Stale native telemetry cannot authorize a start. Unattributed live use is charged
 conservatively together with pending reservations. Shared weights are discounted
 only with a matching native resident-engine attestation covering model, engine

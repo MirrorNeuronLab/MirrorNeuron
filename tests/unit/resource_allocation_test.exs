@@ -1,5 +1,7 @@
 defmodule MirrorNeuron.Runtime.ResourceAllocationTest do
   use ExUnit.Case, async: true
+
+  @moduletag :blueprint_runtime
   alias MirrorNeuron.Runtime.{ResourceAllocation, NodeAdmissionState}
 
   defp gpu(id, memory),
@@ -21,6 +23,14 @@ defmodule MirrorNeuron.Runtime.ResourceAllocationTest do
       "gpu_ratio" => 1,
       "managed_usage" => %{}
     }
+  end
+
+  defp unified_capacity do
+    device = Map.update!(gpu("unified", 16384), "capabilities", &["unified-memory" | &1])
+
+    %{capacity() | "devices" => [device]}
+    |> put_in(["resources", "memory_mb"], 16384)
+    |> put_in(["available", "memory_mb"], 16384)
   end
 
   defp request(memory, extra \\ %{}) do
@@ -99,6 +109,82 @@ defmodule MirrorNeuron.Runtime.ResourceAllocationTest do
 
     assert %{"status" => "runnable_later"} =
              ResourceAllocation.check(request(16384), cap, [first])
+  end
+
+  test "a CPU-only Job cannot spend host RAM reserved by a unified-memory GPU Job" do
+    cap = unified_capacity()
+    gpu_job = request(8192)
+    cpu_job = request(0, %{"devices" => [], "memory_mb" => 8192})
+
+    for {first, second} <- [{gpu_job, cpu_job}, {cpu_job, gpu_job}] do
+      assert {:ok, held} = ResourceAllocation.allocate(first, cap, [])
+
+      assert %{"status" => "runnable_later", "blockers" => [%{"resource" => "memory_mb"}]} =
+               ResourceAllocation.check(second, cap, [held])
+
+      assert %{"status" => "runnable_now"} = ResourceAllocation.check(second, cap, [])
+    end
+
+    # The GPU Job uses 8 GiB for its device and 2 GiB for its workers.
+    {:ok, gpu_claim} = ResourceAllocation.allocate(gpu_job, cap, [])
+
+    assert {:ok, _} =
+             ResourceAllocation.allocate(%{cpu_job | "memory_mb" => 6144}, cap, [gpu_claim])
+  end
+
+  test "unified RAM charges verified shared weights once and keeps them until the last owner exits" do
+    cap = Map.put(unified_capacity(), "shared_model_keys", %{"unified" => ["engine-key"]})
+
+    gpu_job =
+      put_in(request(8192), ["devices", Access.at(0), "models"], [
+        %{"key" => "engine-key", "memory_mb" => 6144}
+      ])
+
+    cpu_job = request(0, %{"devices" => [], "memory_mb" => 2048})
+
+    assert {:ok, first} = ResourceAllocation.allocate(gpu_job, cap, [])
+    assert {:ok, second} = ResourceAllocation.allocate(gpu_job, cap, [first])
+    # 6 GiB shared weights, 2 GiB private GPU memory and 2 GiB host RAM per Job.
+    assert {:ok, _} = ResourceAllocation.allocate(cpu_job, cap, [first, second])
+
+    assert {:error, [%{"resource" => "memory_mb"}]} =
+             ResourceAllocation.allocate(%{cpu_job | "memory_mb" => 2049}, cap, [first, second])
+
+    # Dropping the first owner releases only its private memory. Removing the
+    # native attestation also removes the discount for concurrent owners.
+    assert {:error, [%{"resource" => "memory_mb"}]} =
+             ResourceAllocation.allocate(%{cpu_job | "memory_mb" => 6145}, cap, [second])
+
+    assert {:error, [%{"resource" => "memory_mb"}]} =
+             ResourceAllocation.allocate(cpu_job, Map.delete(cap, "shared_model_keys"), [
+               first,
+               second
+             ])
+  end
+
+  test "weight sharing requires a matching size regardless of reservation order" do
+    cap = Map.put(unified_capacity(), "shared_model_keys", %{"unified" => ["engine-key"]})
+
+    with_weights = fn size ->
+      put_in(request(4096), ["devices", Access.at(0), "models"], [
+        %{"key" => "engine-key", "memory_mb" => size}
+      ])
+    end
+
+    {:ok, large} = ResourceAllocation.allocate(with_weights.(3072), cap, [])
+    {:ok, small} = ResourceAllocation.allocate(with_weights.(1024), cap, [large])
+    cpu_job = request(0, %{"devices" => [], "memory_mb" => 4097})
+
+    for held <- [[large, small], [small, large]] do
+      # Each Job claims 4 GiB of GPU and 2 GiB of host memory. The two
+      # declarations disagree on weight size and cannot discount one another.
+      assert {:error, [%{"resource" => "memory_mb"}]} =
+               ResourceAllocation.allocate(cpu_job, cap, held)
+
+      assert {:ok, allocation} = ResourceAllocation.allocate(with_weights.(3072.0), cap, held)
+      assert [%{"incremental_memory_mb" => incremental}] = allocation["devices"]
+      assert incremental == 1024
+    end
   end
 
   test "releasing one run preserves another reservation and immediately makes capacity reusable" do

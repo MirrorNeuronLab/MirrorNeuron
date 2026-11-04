@@ -404,7 +404,7 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
       if request.queued_only do
         fn id ->
           case MirrorNeuron.Runtime.NodeAdmission.cancel(id) do
-            :ok -> {:ok, %{"job_id" => id, "status" => "cancelled"}}
+            :ok -> {:ok, "cancelled"}
             error -> error
           end
         end

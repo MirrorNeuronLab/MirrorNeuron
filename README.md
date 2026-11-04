@@ -383,6 +383,11 @@ mix compile --warnings-as-errors
 find scripts -name '*.sh' -print0 | xargs -0 -n1 bash -n
 ```
 
+Run `mix test --only blueprint_runtime` before testing a full blueprint. The
+tag selects the stable Job lifecycle, monitor, admission, allocation, schedule
+and queue tests. The integration cases start small workflows against Redis and
+inject GPU telemetry. They need no GPU, model download or blueprint checkout.
+
 Integration tests may require Docker, OpenShell, Redis, or multiple machines.
 Use the [development guide](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/development.md)
 and [testing guide](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/testing.md)

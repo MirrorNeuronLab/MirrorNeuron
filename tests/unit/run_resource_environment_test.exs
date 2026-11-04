@@ -1,5 +1,7 @@
 defmodule MirrorNeuron.Runtime.RunResourceEnvironmentTest do
   use ExUnit.Case, async: true
+
+  @moduletag :blueprint_runtime
   alias MirrorNeuron.Runtime.RunResourceEnvironment
 
   test "maps host GPU selections into a restricted container's local ordinal space" do

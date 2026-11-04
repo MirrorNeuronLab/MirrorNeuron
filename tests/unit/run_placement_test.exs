@@ -1,6 +1,8 @@
 defmodule MirrorNeuron.Grpc.RunPlacementTest do
   use ExUnit.Case, async: false
 
+  @moduletag :blueprint_runtime
+
   alias MirrorNeuron.Grpc.JobProjection
   alias MirrorNeuron.Runtime.{NodeAdmission, NodeAdmissionState}
 

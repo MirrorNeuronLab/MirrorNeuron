@@ -1,5 +1,7 @@
 defmodule MirrorNeuron.Runtime.SubmissionReadinessIntegrationTest do
-  use ExUnit.Case, async: false
+  use MirrorNeuron.RuntimeCase, async: false
+
+  @moduletag :blueprint_runtime
 
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
@@ -23,82 +25,22 @@ defmodule MirrorNeuron.Runtime.SubmissionReadinessIntegrationTest do
     end
   end
 
-  setup_all do
-    # Admission uses an actual runtime identity, including in an unmanaged Mix
-    # VM. Keep the single test node local and restore an unnamed VM afterward.
-    unless Node.alive?() do
-      :ok = Application.stop(:mirror_neuron)
-      {_, 0} = System.cmd("epmd", ["-daemon"])
-      name = String.to_atom("input_sync_tests_#{System.pid()}@127.0.0.1")
-      {:ok, _} = Node.start(name, :longnames)
-      {:ok, _} = Application.ensure_all_started(:mirror_neuron)
-
-      on_exit(fn ->
-        Application.stop(:mirror_neuron)
-        Node.stop()
-        Application.ensure_all_started(:mirror_neuron)
-      end)
-    end
-
-    :ok
-  end
-
-  setup do
-    id = "input-sync-#{System.unique_integer([:positive])}"
-    root = Path.join(System.tmp_dir!(), id)
-    namespace = String.replace(id, "-", "_")
-
-    variables = %{
-      "MN_REDIS_NAMESPACE" => namespace,
-      "MN_RUNTIME_SHARED_STORAGE_ROOT" => Path.join(root, "shared"),
-      "MN_BUNDLE_CACHE_DIR" => Path.join(root, "bundles"),
-      "MN_JOB_DATA_ROOT" => Path.join(root, "jobs"),
-      "MN_SHARED_STORAGE_READY_TIMEOUT_SECONDS" => "1800",
-      "MN_NODE_HARDWARE_JSON" =>
-        Jason.encode!(%{"native_sdk_grpc" => %{"capabilities" => ["resource_admission_v2"]}})
-    }
-
-    previous = Map.new(variables, fn {key, _} -> {key, System.get_env(key)} end)
-    System.put_env(variables)
-
-    MirrorNeuron.Cluster.Hardware.update_snapshot(%{
-      native_sdk_grpc: %{capabilities: ["resource_admission_v2"]},
-      cpu: %{logical_processors: 4},
-      memory: %{total_mb: 8192, available_mb: 8192},
-      disk: %{total_mb: 16384, available_mb: 16384}
-    })
-
+  setup %{id: id, shared: shared} do
+    previous = System.get_env("MN_SHARED_STORAGE_READY_TIMEOUT_SECONDS")
+    System.put_env("MN_SHARED_STORAGE_READY_TIMEOUT_SECONDS", "1800")
     :persistent_term.put({Runner, :test}, self())
-    {:ok, coordination_store} = RedisStore.coordination_store_status()
-
-    {:ok, _} =
-      MirrorNeuron.Cluster.NodeState.mark(Node.self(), "healthy", %{
-        "scheduling_eligible" => true,
-        "coordination_store" => coordination_store
-      })
 
     on_exit(fn ->
-      {:ok, jobs} = RedisStore.list_jobs()
-      Enum.each(jobs, &Runtime.terminate_local_job(&1["job_id"]))
-
-      case Redix.command(MirrorNeuron.Redis.Connection, ["KEYS", "#{namespace}:*"]) do
-        {:ok, []} -> :ok
-        {:ok, keys} -> Redix.command(MirrorNeuron.Redis.Connection, ["DEL" | keys])
-      end
-
-      Enum.each(previous, fn
-        {key, nil} -> System.delete_env(key)
-        {key, value} -> System.put_env(key, value)
-      end)
+      if previous,
+        do: System.put_env("MN_SHARED_STORAGE_READY_TIMEOUT_SECONDS", previous),
+        else: System.delete_env("MN_SHARED_STORAGE_READY_TIMEOUT_SECONDS")
 
       :persistent_term.erase({Runner, :test})
-      MirrorNeuron.Cluster.Hardware.clear_snapshot()
-      File.rm_rf!(root)
     end)
 
     contents = "verified input\n"
     relative = "documents/source.txt"
-    inputs = Path.join([variables["MN_RUNTIME_SHARED_STORAGE_ROOT"], "submissions", id, "inputs"])
+    inputs = Path.join([shared, "submissions", id, "inputs"])
 
     marker =
       Jason.encode!(%{
@@ -143,8 +85,6 @@ defmodule MirrorNeuron.Runtime.SubmissionReadinessIntegrationTest do
     }
 
     {:ok,
-     id: id,
-     root: root,
      inputs: inputs,
      input_path: Path.join(inputs, relative),
      marker_path: Path.join(inputs, ".mn-inputs-ready.json"),

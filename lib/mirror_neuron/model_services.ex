@@ -19,7 +19,7 @@ defmodule MirrorNeuron.ModelServices do
   @active_node_statuses ["healthy", "joining"]
   @native_sdk_grpc_target_env "MN_NATIVE_SDK_GRPC_TARGET"
   @native_sdk_grpc_timeout_env "MN_NATIVE_SDK_GRPC_TIMEOUT_MS"
-  @default_llm_model "gemma4:e2b"
+  @default_llm_model "nemotron-3.5-bolt-e4b:q4_k_m"
   @default_context_engine_model "default"
   @default_knowledge_rag_model "huggingface.co/zenmagnets/Nemotron-3-Embed-1B-Q4_K_M-GGUF:Q4_K_M"
   @service_env_vars [

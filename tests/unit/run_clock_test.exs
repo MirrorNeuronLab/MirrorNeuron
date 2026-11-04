@@ -1,5 +1,7 @@
 defmodule MirrorNeuron.Runtime.RunClockTest do
   use ExUnit.Case, async: true
+
+  @moduletag :blueprint_runtime
   alias MirrorNeuron.Runtime.RunClock
 
   defp step(old, status, seconds, session \\ "one") do

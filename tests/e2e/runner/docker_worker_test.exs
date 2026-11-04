@@ -271,8 +271,8 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
       exit 9
     fi
     if [ "$1" = "exec" ] && [ "$2" = "-w" ]; then
-      echo '__MN_EVENT__{"type":"runtime_model_install_started","payload":{"category":"system","message":"Installing gemma4:e2b on mirror_neuron@10.0.4.27.","model":"gemma4:e2b","node":"mirror_neuron@10.0.4.27","status":"started"}}'
-      echo '__MN_EVENT__{"type":"runtime_model_ready","payload":{"category":"system","message":"Runtime model gemma4:e2b is ready on mirror_neuron@10.0.4.27.","model":"gemma4:e2b","node":"mirror_neuron@10.0.4.27","status":"installed"}}'
+      echo '__MN_EVENT__{"type":"runtime_model_install_started","payload":{"category":"system","message":"Installing nemotron-3.5-bolt-e4b:q4_k_m on mirror_neuron@10.0.4.27.","model":"nemotron-3.5-bolt-e4b:q4_k_m","node":"mirror_neuron@10.0.4.27","status":"started"}}'
+      echo '__MN_EVENT__{"type":"runtime_model_ready","payload":{"category":"system","message":"Runtime model nemotron-3.5-bolt-e4b:q4_k_m is ready on mirror_neuron@10.0.4.27.","model":"nemotron-3.5-bolt-e4b:q4_k_m","node":"mirror_neuron@10.0.4.27","status":"installed"}}'
       echo "worker output"
       exit 0
     fi
@@ -315,14 +315,15 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
 
     assert_receive {:docker_event, "runtime_model_install_started",
                     %{
-                      "model" => "gemma4:e2b",
+                      "model" => "nemotron-3.5-bolt-e4b:q4_k_m",
                       "node" => "mirror_neuron@10.0.4.27",
-                      "message" => "Installing gemma4:e2b on mirror_neuron@10.0.4.27."
+                      "message" =>
+                        "Installing nemotron-3.5-bolt-e4b:q4_k_m on mirror_neuron@10.0.4.27."
                     }}
 
     assert_receive {:docker_event, "runtime_model_ready",
                     %{
-                      "model" => "gemma4:e2b",
+                      "model" => "nemotron-3.5-bolt-e4b:q4_k_m",
                       "node" => "mirror_neuron@10.0.4.27"
                     }}
 
@@ -352,7 +353,7 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
     """)
 
     File.chmod!(fake_docker, 0o755)
-    System.put_env("MN_NODE_RUNTIME_MODELS", "gemma4:e2b,nemotron3")
+    System.put_env("MN_NODE_RUNTIME_MODELS", "nemotron-3.5-bolt-e4b:q4_k_m,nemotron3")
 
     assert {:ok, result} =
              DockerWorker.run(

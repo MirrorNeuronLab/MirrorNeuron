@@ -1,5 +1,7 @@
 defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
   use ExUnit.Case, async: false
+
+  @moduletag :blueprint_runtime
   alias MirrorNeuron.Runtime.{NodeAdmission, NodeAdmissionState}
 
   defmodule Node do
@@ -22,7 +24,19 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
     def fetch_node_admission(node),
       do: {:ok, Agent.get(__MODULE__, &Map.get(&1.states, node, NodeAdmissionState.new()))}
 
+    def stop_before_next_compare(parent), do: Process.put({__MODULE__, :compare_barrier}, parent)
+
     def compare_node_admission(node, expected, next) do
+      if parent = Process.delete({__MODULE__, :compare_barrier}) do
+        send(parent, {:before_compare, self(), expected})
+
+        receive do
+          :commit -> :ok
+        after
+          5_000 -> raise "admission compare barrier timed out"
+        end
+      end
+
       Agent.get_and_update(__MODULE__, fn data ->
         current = Map.get(data.states, node, NodeAdmissionState.new())
 
@@ -223,6 +237,71 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
     id = state["reservations"] |> Map.keys() |> hd()
     assert {:ok, %{"state" => "preparing"}} = NodeAdmission.submit(job(id))
     Store.roundtrip()
+    assert {:ok, ^state} = NodeAdmission.snapshot()
+  end
+
+  test "competing Jobs cannot both spend the last GPU slice, even when both saw it free" do
+    MirrorNeuron.Cluster.Hardware.update_snapshot(MirrorNeuron.RuntimeCase.gpu_hardware())
+
+    profile = %{
+      "mode" => "shared",
+      "cpu_cores" => 1,
+      "memory_mb" => 512,
+      "devices" => [%{"driver" => "cuda", "sharing" => "shared", "reservation_memory_mb" => 4096}]
+    }
+
+    submit = fn id ->
+      job(id)
+      |> Map.put("manifest", %{"policies" => %{"resource_allocation" => profile}})
+      |> NodeAdmission.submit()
+    end
+
+    assert {:ok, %{"state" => "preparing"} = first} = submit.("first")
+    allocation = first["allocation"]
+    assert [%{"id" => "gpu-test", "reservation_memory_mb" => 4096}] = allocation["devices"]
+
+    # Multiple native users of this Job receive the same GPU allocation.
+    for token <- [String.duplicate("a", 32), String.duplicate("b", 32)] do
+      assert {:ok, %{"allocation" => ^allocation}} =
+               NodeAdmission.command(%{
+                 "operation" => "node_admission",
+                 "action" => "request_acquire",
+                 "run_id" => "first",
+                 "generation" => first["generation"],
+                 "token" => token
+               })
+    end
+
+    parent = self()
+
+    contenders =
+      for id <- ["second", "third"] do
+        Task.async(fn ->
+          Store.stop_before_next_compare(parent)
+          {:ok, receipt} = submit.(id)
+          {id, receipt}
+        end)
+      end
+
+    assert_receive {:before_compare, caller1, version}, 5_000
+    assert_receive {:before_compare, caller2, ^version}, 5_000
+    send(caller1, :commit)
+    send(caller2, :commit)
+
+    {started, queued} =
+      contenders
+      |> Task.await_many()
+      |> Enum.split_with(fn {_id, receipt} -> receipt["state"] == "preparing" end)
+
+    assert [{winner, _}] = started
+    assert [{waiter, %{"state" => "queued", "position" => 1, "queue_id" => queue_id}}] = queued
+    assert {:ok, state} = NodeAdmission.snapshot()
+    assert MapSet.new(Map.keys(state["reservations"])) == MapSet.new(["first", winner])
+    assert state["reservations"]["first"]["allocation"] == allocation
+    assert state["reservations"][winner]["allocation"]["devices"] == allocation["devices"]
+    assert [%{"run_id" => ^waiter}] = state["queue"]
+    assert {:error, :node_requests_active} = NodeAdmission.retire("first")
+    assert {:ok, %{"state" => "queued", "queue_id" => ^queue_id}} = submit.(waiter)
     assert {:ok, ^state} = NodeAdmission.snapshot()
   end
 

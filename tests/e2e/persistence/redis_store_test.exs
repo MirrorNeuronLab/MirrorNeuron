@@ -580,6 +580,34 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     assert {:ok, 3} = DeliveryChannels.limit(id, "replica", max_queue_depth: 3)
   end
 
+  @tag :blueprint_runtime
+  test "only one writer can commit a reservation against the same owner ledger version" do
+    owner = "admission-owner@test"
+    assert {:ok, initial} = RedisStore.fetch_node_admission(owner)
+    version = initial["version"]
+
+    # Both writers propose spending the same capacity from the same snapshot.
+    # The result must hold even if Redis receives their writes sequentially.
+    results =
+      ["run-a", "run-b"]
+      |> Task.async_stream(fn run_id ->
+        {:ok, proposal, %{"state" => "preparing"}} =
+          Runtime.NodeAdmissionState.transition(initial, "submit_now", %{"run_id" => run_id})
+
+        {run_id,
+         RedisStore.compare_node_admission(owner, version, %{proposal | "version" => version + 1})}
+      end)
+      |> Enum.map(fn {:ok, result} -> result end)
+
+    assert {[{winner, :ok}], [{_loser, {:error, :admission_conflict}}]} =
+             Enum.split_with(results, fn {_, result} -> result == :ok end)
+
+    assert {:ok, stored} = RedisStore.fetch_node_admission(owner)
+    assert stored["version"] == version + 1
+    assert Map.keys(stored["reservations"]) == [winner]
+  end
+
+  @tag :blueprint_runtime
   test "scheduler admission reads durable reservations omitted from monitoring summaries" do
     alias MirrorNeuron.{Config, Manifest, Scheduler}
 

@@ -1,5 +1,7 @@
 defmodule MirrorNeuron.Runtime.NodeAdmissionStateTest do
   use ExUnit.Case, async: true
+
+  @moduletag :blueprint_runtime
   alias MirrorNeuron.Runtime.NodeAdmissionState, as: Admission
 
   defp holder(state),

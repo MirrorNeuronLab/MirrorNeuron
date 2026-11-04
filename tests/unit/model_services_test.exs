@@ -10,11 +10,14 @@ defmodule MirrorNeuron.ModelServicesTest do
           "services" => [
             %{
               "name" => "docker-model-runner",
-              "tags" => ["model:gemma4:e2b", "model-id:gemma4:e2b"],
+              "tags" => [
+                "model:nemotron-3.5-bolt-e4b:q4_k_m",
+                "model-id:nemotron-3.5-bolt-e4b:q4_k_m"
+              ],
               "meta" => %{
-                "model_id" => "gemma4:e2b",
-                "model" => "ai/gemma4:E2B",
-                "api_model" => "ai/gemma4:E2B"
+                "model_id" => "nemotron-3.5-bolt-e4b:q4_k_m",
+                "model" => "nemotron-3.5-bolt-e4b:q4_k_m",
+                "api_model" => "nemotron-3.5-bolt-e4b:q4_k_m"
               }
             }
           ]
@@ -27,15 +30,18 @@ defmodule MirrorNeuron.ModelServicesTest do
     assert service["name"] == "docker-model-runner"
     assert service["node"] == "node@lab"
     assert service["status"] == "passing"
-    assert service["meta"]["model_id"] == "gemma4:e2b"
-    assert "model:gemma4:e2b" in service["tags"]
+    assert service["meta"]["model_id"] == "nemotron-3.5-bolt-e4b:q4_k_m"
+    assert "model:nemotron-3.5-bolt-e4b:q4_k_m" in service["tags"]
 
     assert [%{"url" => "http://model-runner.docker.internal/engines/v1/models"}] =
              service["checks"]
   end
 
   test "symbolic model refs no longer expand inside core" do
-    assert ModelServices.service_instances_for_models(["gemma4:e2b"], "node@lab") == []
+    assert ModelServices.service_instances_for_models(
+             ["nemotron-3.5-bolt-e4b:q4_k_m"],
+             "node@lab"
+           ) == []
   end
 
   test "runtime model preparation is rejected when native SDK target is missing" do
@@ -43,7 +49,9 @@ defmodule MirrorNeuron.ModelServicesTest do
     System.delete_env("MN_NATIVE_SDK_GRPC_TARGET")
 
     try do
-      assert {:error, message} = ModelServices.prepare_runtime_model(%{"model" => "gemma4:e2b"})
+      assert {:error, message} =
+               ModelServices.prepare_runtime_model(%{"model" => "nemotron-3.5-bolt-e4b:q4_k_m"})
+
       assert message =~ "mn-python-sdk"
       assert message =~ "MN_NATIVE_SDK_GRPC_TARGET"
     after
@@ -69,9 +77,13 @@ defmodule MirrorNeuron.ModelServicesTest do
       end)
 
       assert {:ok, %{"status" => "installed"}} =
-               ModelServices.prepare_runtime_model(%{"model" => "gemma4:e2b"}, 1234)
+               ModelServices.prepare_runtime_model(
+                 %{"model" => "nemotron-3.5-bolt-e4b:q4_k_m"},
+                 1234
+               )
 
-      assert_receive {:prepare_forwarded, "127.0.0.1:55052", %{"model" => "gemma4:e2b"}, 1234}
+      assert_receive {:prepare_forwarded, "127.0.0.1:55052",
+                      %{"model" => "nemotron-3.5-bolt-e4b:q4_k_m"}, 1234}
     after
       restore_env("MN_NATIVE_SDK_GRPC_TARGET", previous)
       restore_app_env(:native_sdk_grpc_client, previous_client)
@@ -135,8 +147,8 @@ defmodule MirrorNeuron.ModelServicesTest do
     parent = self()
 
     cases = [
-      {%{}, "gemma4:e2b"},
-      {%{"model" => "default"}, "gemma4:e2b"},
+      {%{}, "nemotron-3.5-bolt-e4b:q4_k_m"},
+      {%{"model" => "default"}, "nemotron-3.5-bolt-e4b:q4_k_m"},
       {%{"purpose" => "context_engine"}, "default"},
       {%{"purpose" => "knowledge_rag"},
        "huggingface.co/zenmagnets/Nemotron-3-Embed-1B-Q4_K_M-GGUF:Q4_K_M"}
@@ -170,7 +182,7 @@ defmodule MirrorNeuron.ModelServicesTest do
   test "runtime model preparation refuses requests sent to the wrong node" do
     assert {:error, message} =
              ModelServices.prepare_runtime_model_on_node("mirror_neuron@remote", %{
-               "model" => "gemma4:e2b"
+               "model" => "nemotron-3.5-bolt-e4b:q4_k_m"
              })
 
     assert message =~ "send PrepareRuntimeModel gRPC to the target node runtime"
@@ -433,9 +445,13 @@ defmodule MirrorNeuron.ModelServicesTest do
       end)
 
       assert {:ok, %{"status" => "removed"}} =
-               ModelServices.remove_litellm_gateway_route(%{"model" => "gemma4:e2b"}, 4321)
+               ModelServices.remove_litellm_gateway_route(
+                 %{"model" => "nemotron-3.5-bolt-e4b:q4_k_m"},
+                 4321
+               )
 
-      assert_receive {:remove_forwarded, "127.0.0.1:55052", %{"model" => "gemma4:e2b"}, 4321}
+      assert_receive {:remove_forwarded, "127.0.0.1:55052",
+                      %{"model" => "nemotron-3.5-bolt-e4b:q4_k_m"}, 4321}
     after
       restore_env("MN_NATIVE_SDK_GRPC_TARGET", previous)
       restore_app_env(:native_sdk_grpc_remove_gateway_route_client, previous_client)
@@ -452,7 +468,7 @@ defmodule MirrorNeuron.ModelServicesTest do
 
     assert {:error, remove_message} =
              ModelServices.remove_litellm_gateway_route_on_node("mirror_neuron@remote", %{
-               "model" => "gemma4:e2b"
+               "model" => "nemotron-3.5-bolt-e4b:q4_k_m"
              })
 
     assert remove_message =~ "matching gRPC command"

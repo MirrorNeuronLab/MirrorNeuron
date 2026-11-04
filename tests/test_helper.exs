@@ -35,4 +35,5 @@ Application.put_env(
   end
 )
 
+Code.require_file("support/runtime_case.exs", __DIR__)
 ExUnit.start()

@@ -791,7 +791,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   # Exit notifications from stopped agents cannot restart a paused service.
   def handle_info({signal, _agent, _result}, %{status: "paused"} = state)
-      when signal in [:agent_failed, :agent_completed_run], do: {:noreply, state}
+      when signal in [:agent_failed, :agent_completed_run],
+      do: {:noreply, state}
 
   def handle_info({:agent_completed_run, agent_id, result}, state) do
     cond do

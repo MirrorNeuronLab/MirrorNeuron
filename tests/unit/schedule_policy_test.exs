@@ -1,6 +1,8 @@
 defmodule MirrorNeuron.Runtime.SchedulePolicyTest do
   use ExUnit.Case, async: true
 
+  @moduletag :blueprint_runtime
+
   alias MirrorNeuron.Runtime.SchedulePolicy
 
   test "normalizes periodic schedules and computes next run" do

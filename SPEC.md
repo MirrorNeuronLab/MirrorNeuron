@@ -1067,6 +1067,10 @@ Explicit checkpoint retries reacquire capacity on the same PC or explicitly queu
 Queued retries preserve their checkpoint selection and idempotency receipt;
 dispatch verifies the checkpoint and original inputs again before a new attempt.
 
+Successful `CancelRun(queued_only: true)` returns the target `run_id` and
+the string status `cancelled`. If the Run has started, this control fails
+without stopping it.
+
 The node queue is projected as `resource_wait` schedules named `queue_<run_id>`.
 `ListSchedules`, `GetSchedule`, `UpdateSchedule`, and `DeleteSchedule` expose these
 through the authenticated Job service. Deleting a queue schedule cancels only an

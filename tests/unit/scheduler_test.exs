@@ -1091,7 +1091,7 @@ defmodule MirrorNeuron.SchedulerTest do
           "models" => %{
             "primary" => %{
               "provider" => "docker_model_runner",
-              "model" => "gemma4:e2b"
+              "model" => "nemotron-3.5-bolt-e4b:q4_k_m"
             }
           }
         },
@@ -1101,8 +1101,10 @@ defmodule MirrorNeuron.SchedulerTest do
             "node_id" => "worker",
             "agent_type" => "executor",
             "role" => "root",
-            "requires_services" => [model_service_requirement("gemma4:e2b")],
-            "placement_requirements" => %{"models" => [model_placement_requirement("gemma4:e2b")]}
+            "requires_services" => [model_service_requirement("nemotron-3.5-bolt-e4b:q4_k_m")],
+            "placement_requirements" => %{
+              "models" => [model_placement_requirement("nemotron-3.5-bolt-e4b:q4_k_m")]
+            }
           }
         ],
         "edges" => [],
@@ -1114,7 +1116,7 @@ defmodule MirrorNeuron.SchedulerTest do
                nodes: [large_node(), small_node()],
                jobs: [],
                service_instances: [
-                 model_service("gemma4:e2b", "small@lab")
+                 model_service("nemotron-3.5-bolt-e4b:q4_k_m", "small@lab")
                ]
              )
 
@@ -1128,7 +1130,7 @@ defmodule MirrorNeuron.SchedulerTest do
              }
            ] = plan["placements"]
 
-    assert model["id"] == "gemma4:e2b"
+    assert model["id"] == "nemotron-3.5-bolt-e4b:q4_k_m"
     assert get_in(model, ["service", "name"]) == "docker-model-runner"
   end
 
@@ -1287,7 +1289,7 @@ defmodule MirrorNeuron.SchedulerTest do
             "config" => %{
               "environment" => %{
                 "MN_LLM_RUNTIME_MODEL" => "otterdesk-voice-llm:default",
-                "MN_CONTEXT_ENGINE_MODEL" => "gemma4:e2b",
+                "MN_CONTEXT_ENGINE_MODEL" => "nemotron-3.5-bolt-e4b:q4_k_m",
                 "MN_LLM_MODEL" => "ollama/nemotron3:33b",
                 "OLLAMA_MODEL" => "ollama/nemotron3:33b",
                 "VL_MODEL_NAME" => "ollama/nemotron3:33b"
@@ -1305,7 +1307,7 @@ defmodule MirrorNeuron.SchedulerTest do
                jobs: [],
                service_instances: [
                  model_service("otterdesk-voice-llm:default", "h100@lab"),
-                 model_service("gemma4:e2b", "h100@lab")
+                 model_service("nemotron-3.5-bolt-e4b:q4_k_m", "h100@lab")
                ]
              )
 
@@ -1318,7 +1320,7 @@ defmodule MirrorNeuron.SchedulerTest do
         "llm" => %{
           "enabled" => true,
           "provider" => "docker_model_runner",
-          "model" => "gemma4:e2b"
+          "model" => "nemotron-3.5-bolt-e4b:q4_k_m"
         }
       })
 

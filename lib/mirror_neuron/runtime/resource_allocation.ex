@@ -312,25 +312,19 @@ defmodule MirrorNeuron.Runtime.ResourceAllocation do
   end
 
   defp fit_unified_memory(request, devices, capacity, reservations, live?) do
-    additional = unified_memory(devices, capacity)
+    additional =
+      Enum.sum(for device <- devices, unified?(device), do: device["incremental_memory_mb"])
 
-    if additional > 0 do
-      combined =
-        Enum.map(reservations, fn held ->
-          Map.update!(held, "resources", fn resources ->
-            Map.update(
-              resources,
-              "memory_mb",
-              unified_memory(held["devices"] || [], capacity),
-              &(&1 + unified_memory(held["devices"] || [], capacity))
-            )
-          end)
-        end)
+    reserved = reserved_unified_memory(reservations, capacity)
 
+    if additional + reserved > 0 do
+      # Unified GPU slices already held by other Jobs use host RAM even when
+      # the incoming request is CPU-only. Keep those bytes on the held side
+      # of the live-telemetry calculation.
       fit_scalars(
         Map.put(request, "memory_mb", (request["memory_mb"] || 0) + additional),
         capacity,
-        combined,
+        [%{"resources" => %{"memory_mb" => reserved}} | reservations],
         live?
       )
     else
@@ -341,12 +335,14 @@ defmodule MirrorNeuron.Runtime.ResourceAllocation do
   defp unified?(device),
     do: Enum.any?(device["capabilities"] || [], &(&1 in ["unified-memory", "unified_memory"]))
 
-  defp unified_memory(devices, capacity) do
-    Enum.sum(
-      for device <- devices,
-          unified?(device),
-          do: reserved_device_memory([device], verified_keys(capacity, device))
-    )
+  defp reserved_unified_memory(reservations, capacity) do
+    reservations
+    |> Enum.flat_map(&(&1["devices"] || []))
+    |> Enum.filter(&unified?/1)
+    |> Enum.group_by(& &1["id"])
+    |> Enum.reduce(0, fn {_id, [device | _] = claims}, total ->
+      total + reserved_device_memory(claims, verified_keys(capacity, device))
+    end)
   end
 
   defp worker_requirements(manifest, specs) do
@@ -420,21 +416,26 @@ defmodule MirrorNeuron.Runtime.ResourceAllocation do
         end)
       )
 
-    models = devices |> Enum.flat_map(&(&1["models"] || [])) |> Enum.uniq_by(& &1["key"])
+    models = devices |> Enum.flat_map(&(&1["models"] || [])) |> Enum.uniq_by(&weight_identity/1)
     private + Enum.sum(Enum.map(models, & &1["memory_mb"]))
   end
 
   defp incremental_memory(required, models, held, verified) do
     models = Enum.filter(models, &(&1["key"] in verified))
 
-    resident =
-      held |> Enum.flat_map(&(&1["models"] || [])) |> Map.new(&{&1["key"], &1["memory_mb"]})
+    resident = held |> Enum.flat_map(&(&1["models"] || [])) |> MapSet.new(&weight_identity/1)
 
     required -
       Enum.sum(
-        for model <- models, resident[model["key"]] == model["memory_mb"], do: model["memory_mb"]
+        for model <- models,
+            MapSet.member?(resident, weight_identity(model)),
+            do: model["memory_mb"]
       )
   end
+
+  # Both ledgers use the same sharing rule. JSON integers and floats can
+  # describe the same size, but different estimates get no shared discount.
+  defp weight_identity(model), do: {model["key"], model["memory_mb"] * 1.0}
 
   defp verified_keys(capacity, device),
     do: (capacity["shared_model_keys"] || %{})[device["id"]] || []

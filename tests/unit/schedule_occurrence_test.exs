@@ -1,5 +1,7 @@
 defmodule MirrorNeuron.Runtime.ScheduleOccurrenceTest do
   use ExUnit.Case, async: false
+
+  @moduletag :blueprint_runtime
   alias MirrorNeuron.Runtime.ScheduleOccurrence
 
   defmodule Store do
