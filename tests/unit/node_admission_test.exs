@@ -236,7 +236,6 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
     assert admission["reservations"]["research"]["run_id"] == "research"
     assert Enum.map(admission["queue"], & &1["run_id"]) == ["litigation"]
     assert admission["generation"] == 1
-    assert admission["legacy"] == []
     refute Map.has_key?(admission, "requests")
     refute Jason.encode!(admission) =~ token
 
@@ -374,27 +373,14 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
     end
   end
 
-  test "recovery charges an active legacy Run before restoring older waiting work" do
-    owned = fn id, status, at ->
-      job(id)
-      |> Map.merge(%{
-        "status" => status,
-        "submitted_at" => at,
-        "admission" => %{"owner_node" => "spark@test"}
-      })
-    end
+  test "an active Run missing its current reservation blocks admission" do
+    active =
+      job("active")
+      |> Map.merge(%{"status" => "paused", "admission" => %{"owner_node" => "spark@test"}})
 
-    Store.put_jobs([
-      owned.("older", "queued", "2026-01-01"),
-      owned.("active", "paused", "2026-02-01")
-    ])
-
-    assert {:ok, %{"position" => 2}} = NodeAdmission.submit(job("arrival"))
-
-    assert {:ok, %{"legacy" => ["active"], "reservations" => %{}, "queue" => queue}} =
-             NodeAdmission.snapshot()
-
-    assert Enum.map(queue, & &1["run_id"]) == ["older", "arrival"]
+    Store.put_jobs([active])
+    assert {:error, :missing_node_reservation} = NodeAdmission.submit(job("arrival"))
+    assert {:ok, %{"reservations" => %{}}} = NodeAdmission.snapshot()
   end
 
   test "absent resource policy defaults, outages deny new work and cleanup remains live" do
@@ -498,20 +484,11 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
     Store.put_jobs([remote])
     assert {:ok, %{"state" => "preparing"}} = NodeAdmission.submit(job("local"))
     {:ok, state} = NodeAdmission.snapshot()
-    assert state["legacy"] == []
     assert Map.keys(state["reservations"]) == ["local"]
 
-    # A true legacy distributed execution still reserves every participating PC.
     assert :ok = NodeAdmission.retire("local")
     Store.put_jobs([Map.delete(remote, "admission")])
-    assert {:ok, %{"state" => "queued"}} = NodeAdmission.submit(job("next"))
-
-    # An already-imported phantom is repaired from the authoritative owner too.
-    Store.put_jobs([remote])
-    NodeAdmission.reconcile()
-    {:ok, recovered} = NodeAdmission.snapshot()
-    assert recovered["legacy"] == []
-    assert Map.keys(recovered["reservations"]) == ["next"]
+    assert {:ok, %{"state" => "preparing"}} = NodeAdmission.submit(job("next"))
   end
 
   test "a retired run releases its committed reservation only with local cancellation proof" do

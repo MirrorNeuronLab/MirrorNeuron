@@ -16,7 +16,7 @@ defmodule MirrorNeuron.ContextEnginePreflight do
       {:error, attempts} ->
         {:error,
          "Context Engine is required by manifest required_context_engine=true, but it is not reachable. " <>
-           "Start it at MN_CONTEXT_ADDR (or the legacy CONTEXT_ENGINE_ADDR override). " <>
+           "Start it at MN_CONTEXT_ADDR. " <>
            "Tried: #{format_attempts(attempts)}"}
     end
   end
@@ -44,7 +44,7 @@ defmodule MirrorNeuron.ContextEnginePreflight do
 
   defp endpoints do
     configured =
-      ["MN_CONTEXT_ADDR", "CONTEXT_ENGINE_ADDR"]
+      ["MN_CONTEXT_ADDR"]
       |> Enum.map(&(System.get_env(&1, "") |> String.trim()))
       |> Enum.find(&(&1 != ""))
 

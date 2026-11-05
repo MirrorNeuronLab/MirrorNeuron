@@ -719,42 +719,12 @@ defmodule MirrorNeuron.Runner.OpenShellTest do
       assert File.dir?(Path.join(sandboxes_dir, result1["sandbox_name"]))
       assert File.read!(args_log) =~ "sandbox upload prepared-shared-test"
 
-      shared_root = Path.join(tmp_dir, "shared")
-      job_root = Path.join(shared_root, "job")
-      output_dir = Path.join(job_root, "outputs/user")
-      File.mkdir_p!(output_dir)
-      System.put_env("MN_SHARED_STORAGE_ROOT", shared_root)
-
-      shared_config =
-        Map.merge(config, %{
-          "sync_shared_storage" => true,
-          "environment" => %{
-            "MN_JOB_SHARED_STORAGE_ROOT" => job_root,
-            "MN_JOB_OUTPUT_DIR" => output_dir
-          }
-        })
-
-      assert {:ok, synced} =
-               OpenShell.run(
-                 %{"value" => "durable-before-cleanup"},
-                 shared_config,
-                 job_id: "job-shared-1",
-                 agent_id: "shared-writer",
-                 bundle_root: bundle_dir,
-                 payloads_path: payloads_dir
+      assert {:error, reason} =
+               OpenShell.run(%{}, Map.put(config, "sync_shared_storage", true),
+                 job_id: "job-shared-1"
                )
 
-      assert synced["exit_code"] == 0
-      assert File.read!(Path.join(output_dir, "result.txt")) == "durable-before-cleanup"
-
-      remote_workspace =
-        String.replace_prefix(
-          synced["remote_dir"],
-          "/sandbox",
-          Path.join(sandboxes_dir, synced["sandbox_name"])
-        )
-
-      refute File.exists?(remote_workspace)
+      assert reason =~ "unsupported"
 
       assert :ok = OpenShellJobSandbox.cleanup_job_local("job-shared-1")
       assert File.exists?(Path.join(sandboxes_dir, result1["sandbox_name"]))

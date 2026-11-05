@@ -194,6 +194,10 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     namespace: namespace
   } do
     job_id = "delivery-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _} =
+             RedisStore.persist_job(job_id, %{"status" => "running", "delivery_version" => 2})
+
     agent_id = "worker"
     message_id = "message-#{System.unique_integer([:positive])}"
     consumer = Delivery.consumer_id(job_id, agent_id)
@@ -231,6 +235,10 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
 
   test "delivery identity ignores transport timestamps and attempts" do
     job_id = "delivery-transport-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _} =
+             RedisStore.persist_job(job_id, %{"status" => "running", "delivery_version" => 2})
+
     agent_id = "worker"
     message_id = "message-#{System.unique_integer([:positive])}"
 
@@ -296,6 +304,10 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
 
   test "unacknowledged deliveries are reclaimed after their lease expires" do
     job_id = "delivery-reclaim-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _} =
+             RedisStore.persist_job(job_id, %{"status" => "running", "delivery_version" => 2})
+
     agent_id = "worker"
     message_id = "message-#{System.unique_integer([:positive])}"
 
@@ -350,6 +362,10 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
 
   test "queued delivery records and indexes always have ttl", %{namespace: namespace} do
     job_id = "delivery-ttl-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _} =
+             RedisStore.persist_job(job_id, %{"status" => "running", "delivery_version" => 2})
+
     agent_id = "worker"
     message_id = "message-#{System.unique_integer([:positive])}"
 
@@ -393,6 +409,10 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
     end)
 
     job_id = "delivery-cap-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _} =
+             RedisStore.persist_job(job_id, %{"status" => "running", "delivery_version" => 2})
+
     agent_id = "worker"
     consumer = Delivery.consumer_id(job_id, agent_id)
     first = Message.new(job_id, "source", agent_id, "work", %{}, message_id: "first")
@@ -411,6 +431,10 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
 
   test "expired deliveries are dead-lettered and removed from the stream" do
     job_id = "delivery-expired-#{System.unique_integer([:positive])}"
+
+    assert {:ok, _} =
+             RedisStore.persist_job(job_id, %{"status" => "running", "delivery_version" => 2})
+
     agent_id = "worker"
     message_id = "expired"
     consumer = Delivery.consumer_id(job_id, agent_id)
@@ -550,8 +574,7 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
              ])
 
     guard = Jason.decode!(encoded)
-    # An older guard lacks the projection. Until the next write the full Job
-    # remains authoritative, including for pre-upgrade v2 Runs.
+    # Obsolete guards cannot fall back to reading the full Job.
     assert {:ok, "OK"} =
              Redix.command(MirrorNeuron.Redis.Connection, [
                "SET",
@@ -559,8 +582,8 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
                Jason.encode!(Map.delete(guard, "delivery"))
              ])
 
-    assert {:ok, 2} = DeliveryChannels.version(id)
-    assert {:ok, 7} = DeliveryChannels.limit(id, "replica", [])
+    assert {:error, :unsupported_delivery_settings} = DeliveryChannels.version(id)
+    assert {:error, :unsupported_delivery_settings} = DeliveryChannels.limit(id, "replica", [])
 
     assert {:ok, "OK"} =
              Redix.command(MirrorNeuron.Redis.Connection, [
@@ -1676,12 +1699,8 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
                       "force" => true
                     }}
 
-    assert_receive {:docker_worker_cleanup, worker_request}
-    assert worker_request.job_id == "stable-delete-run-b-#{suffix}"
-
-    assert_receive {:docker_compose_cleanup, compose_request}
-    assert [project_json] = compose_request.projects_json
-    assert Jason.decode!(project_json)["project_name"] == "mn-compose-job"
+    refute_receive {:docker_worker_cleanup, _request}
+    refute_receive {:docker_compose_cleanup, _request}
 
     assert {:error, _reason} = RedisStore.fetch_job_definition(stable_job_id)
     refute File.exists?(Path.join(MirrorNeuron.JobData.root(), stable_job_id))
@@ -1897,12 +1916,8 @@ defmodule MirrorNeuron.Persistence.RedisStoreTest do
       assert definition["run_ids"] == []
     end
 
-    assert_receive {:docker_worker_cleanup, worker_request}
-    assert worker_request.job_id == "run-delete-worker-#{suffix}"
-
-    assert_receive {:docker_compose_cleanup, compose_request}
-    assert [project_json] = compose_request.projects_json
-    assert Jason.decode!(project_json)["project_name"] == "mn-compose-run"
+    refute_receive {:docker_worker_cleanup, _request}
+    refute_receive {:docker_compose_cleanup, _request}
   end
 
   test "archiving terminal DockerWorker and DockerCompose jobs retains their runs" do

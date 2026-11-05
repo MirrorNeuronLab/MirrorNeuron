@@ -511,19 +511,28 @@ defmodule MirrorNeuron.OpenShellArtifactHandoffTest do
     assert File.exists?(Path.join(ctx.root, "submission/outputs/user/verification.json"))
   end
 
-  test "advisor binding runs with immutable admission and no ledger in sandbox", ctx do
-    payloads =
-      Path.expand(
-        "../../otterdesk-blueprints/software_architecture_advisor/payloads",
-        File.cwd!()
-      )
+  test "stock block resolves immutable admission without an owner ledger in sandbox", ctx do
+    domain = Path.join(ctx.root, "domain")
+    File.mkdir_p!(domain)
+    File.write!(Path.join(domain, "__init__.py"), "")
+
+    File.write!(Path.join(domain, "admission.py"), """
+    import json
+    from mn_sdk.artifact_handoff import resolve_input
+    def review(block, inputs):
+        block.check()
+        frozen = json.loads(resolve_input(inputs['review_input']).read_text())
+        assert frozen['request'] == {'prompt': 'bounded frozen evidence'}
+        assert not list(block.store.run_dir.rglob('budget.sqlite'))
+        return {'request_hash': frozen['request_hash'], 'status': 'reviewed'}
+    """)
 
     python = System.get_env("MN_TEST_PYTHON") || System.find_executable("python3")
 
     admission = """
-    import json,time
+    import json
     from mn_sdk.artifact_handoff import publish_input
-    print(json.dumps(publish_input({'task':{'task_id':'scan-0001','kind':'source_scan'},'request':{'prompt':'bounded frozen evidence'},'request_hash':'frozen-hash','offline':False,'deadline':time.time()+60,'opencode':{'model':'fake'}},run_id='actual-run')))
+    print(json.dumps(publish_input({'request':{'prompt':'bounded frozen evidence'},'request_hash':'frozen-hash'},run_id='actual-run')))
     """
 
     {json, 0} =
@@ -538,7 +547,6 @@ defmodule MirrorNeuron.OpenShellArtifactHandoffTest do
     script = """
     import sys,os,json
     from dataclasses import asdict,replace
-    sys.path.insert(0, #{Jason.encode!(Path.expand("../mn-skills/opencode_skill/src"))})
     from pathlib import Path
     sdk=Path(#{Jason.encode!(Path.expand("../mn-python-sdk"))})
     for p in sdk.glob('packages/*/src'): sys.path.insert(0,str(p))
@@ -547,20 +555,13 @@ defmodule MirrorNeuron.OpenShellArtifactHandoffTest do
     os.environ['MN_SDK_COMPONENTS_JSON']='["blueprint-blocks"]'
     context=replace(StepContext.from_environment(),idempotency_key='actual-run/review',step_id='review')
     result=run(context,revision='probe@1',instance={'uses':'mn.blocks.domain_operation@1',
-        'hooks':{'operation':'domain.sandbox_review:review_admitted'}},
-        resources={'llm':lambda prompt:'{"task_id":"scan-0001","kind":"source_scan","status":"blocked","reason":"deterministic review"}'})
+        'hooks':{'operation':'domain.admission:review'}})
     print(json.dumps(asdict(result)))
     """
 
     config =
       ctx.config
-      |> Map.put(
-        "upload_paths",
-        for(
-          name <- ["domain", "agents"],
-          do: %{"source" => Path.join(payloads, name), "target" => name}
-        )
-      )
+      |> Map.put("upload_paths", [%{"source" => domain, "target" => "domain"}])
       |> Map.put("command", [python, "-c", script])
 
     work = %{"step_input" => %{"_child" => %{"revision" => 0}, "review_input" => input}}

@@ -699,21 +699,13 @@ defmodule MirrorNeuron.Persistence.RedisStore do
         {:ok, %{"delivery" => settings}} ->
           {:ok, settings}
 
-        # Pre-upgrade records gain the projection on their next durable write.
-        {:ok, _legacy} ->
-          legacy_delivery_settings(job_id)
+        {:ok, _} ->
+          {:error, :unsupported_delivery_settings}
 
-        {:error, reason} = error ->
-          if reason == "job #{job_id} guard was not found",
-            do: legacy_delivery_settings(job_id),
-            else: error
+        error ->
+          error
       end
     end
-  end
-
-  defp legacy_delivery_settings(job_id) do
-    with {:ok, job} <- fetch_job(job_id),
-         do: {:ok, MirrorNeuron.Runtime.DeliveryChannels.settings(job)}
   end
 
   def fetch_job_summary(job_id) do
@@ -748,9 +740,8 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   @doc """
   Persists a stable job definition independently from execution records.
 
-  Execution records intentionally remain under `job:<run_id>` for the v1
-  service surface. Stable definitions use `job-definition:<job_id>` so
-  the two identities can never overwrite one another during migration.
+  Execution records use `job:<run_id>`. Stable definitions use
+  `job-definition:<job_id>` so the two identities cannot overwrite one another.
   """
   def persist_job_definition(job_id, definition) when is_map(definition) do
     with :ok <- validate_identifier("job_id", job_id) do
@@ -1595,7 +1586,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
 
   defp do_delete_job(job_id, opts) do
     with {:ok, job_map} <- job_for_cleanup(job_id),
-         :ok <- MirrorNeuron.Runtime.ContextMemory.clear_run(job_id, job_map),
          :ok <- delete_service_instances(job_id: job_id),
          :ok <- cleanup_shared_storage(job_id, job_map),
          :ok <- JobStore.cleanup_job(job_id),

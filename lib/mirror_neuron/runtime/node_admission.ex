@@ -214,7 +214,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
 
   def claimed?(run_id) do
     with {:ok, state} <- snapshot() do
-      Map.has_key?(state["reservations"], run_id) or run_id in state["legacy"]
+      Map.has_key?(state["reservations"], run_id)
     else
       _ -> false
     end
@@ -236,16 +236,6 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
               error
           end
 
-        run_id in state["legacy"] ->
-          case mutate("release_legacy", %{"run_id" => run_id}) do
-            {:ok, _} ->
-              wake()
-              :ok
-
-            error ->
-              error
-          end
-
         true ->
           :ok
       end
@@ -256,7 +246,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
     if Map.has_key?(config, "node_admission_owner") do
       with true <- config["node_admission_owner"] == node_name(),
            {:ok, state} <- snapshot(),
-           true <- Map.has_key?(state["reservations"], run_id) or run_id in state["legacy"],
+           true <- Map.has_key?(state["reservations"], run_id),
            false <- NativeRequestClaim.native?(state["reservations"][run_id]),
            true <-
              not Map.has_key?(config, "node_admission_generation") or
@@ -298,9 +288,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
           do: %{state | "reservations" => Map.delete(state["reservations"], run_id)},
           else: state
 
-      allocations =
-        NodeAdmissionState.allocations(state) ++
-          if(state["legacy"] == [], do: [], else: [%{"mode" => "exclusive_node"}])
+      allocations = NodeAdmissionState.allocations(state)
 
       result =
         if retained and capacity["telemetry_current"] != false,

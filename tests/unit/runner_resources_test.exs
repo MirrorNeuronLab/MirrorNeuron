@@ -177,7 +177,7 @@ defmodule MirrorNeuron.Runtime.RunnerResourcesTest do
                     }}
   end
 
-  test "unified cleanup falls back to persisted legacy DockerWorker metadata" do
+  test "unified cleanup never falls back to pre-registry DockerWorker metadata" do
     run_id = "legacy-worker-#{System.unique_integer([:positive])}"
 
     on_exit(fn -> RedisStore.delete_job(run_id) end)
@@ -201,8 +201,7 @@ defmodule MirrorNeuron.Runtime.RunnerResourcesTest do
              })
 
     assert :ok = RunnerResources.cleanup_native_resources(run_id)
-    assert_receive {:docker_worker_cleanup, request}
-    assert request.job_id == run_id
+    refute_receive {:docker_worker_cleanup, _request}
   end
 
   test "registry-owned cleanup does not repeat legacy DockerWorker cleanup" do
@@ -239,7 +238,7 @@ defmodule MirrorNeuron.Runtime.RunnerResourcesTest do
     refute_receive {:docker_worker_cleanup, _request}
   end
 
-  test "zero-match registry cleanup falls back to a persisted stable definition" do
+  test "zero-match registry cleanup does not replay old stable-definition recipes" do
     job_id = "legacy-definition-#{System.unique_integer([:positive])}"
 
     on_exit(fn -> RedisStore.delete_job_definition(job_id) end)
@@ -269,9 +268,7 @@ defmodule MirrorNeuron.Runtime.RunnerResourcesTest do
              })
 
     assert :ok = RunnerResources.cleanup_native_resources(job_id)
-    assert_receive {:docker_compose_cleanup, request}
-    assert [project_json] = request.projects_json
-    assert Jason.decode!(project_json)["project_name"] == "mn-compose-legacy-definition"
+    refute_receive {:docker_compose_cleanup, _request}
   end
 
   test "exact external-id cleanup uses kind-scoped native resource selectors" do

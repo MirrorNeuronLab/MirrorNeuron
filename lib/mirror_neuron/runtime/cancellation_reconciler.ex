@@ -5,7 +5,7 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
 
   require Logger
 
-  alias MirrorNeuron.Persistence.{CancellationStore, RedisStore}
+  alias MirrorNeuron.Persistence.CancellationStore
   alias MirrorNeuron.Runner
   alias MirrorNeuron.Runtime.RunnerResources
   alias MirrorNeuron.Runtime
@@ -92,15 +92,11 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
       # particular, after a Core restart there may be no
       # HostLocal process to terminate, but persisted DockerWorker containers
       # and DockerCompose projects must still be brought down.
-      memory_fence = MirrorNeuron.Runtime.ContextMemory.cancel_run(job_id)
-
-      with {:ok, native_cleanup} <-
+      with {:ok, _native_cleanup} <-
              RunnerResources.cleanup_native_resources_with_result(job_id),
-           :ok <- cleanup_legacy_native_resources(job_id, native_cleanup),
            :ok <- Runner.stop_commands(job_id, :all),
            :ok <- stop_local_job(job_id),
-           :ok <- ServiceRegistry.deregister_job(job_id),
-           :ok <- memory_fence do
+           :ok <- ServiceRegistry.deregister_job(job_id) do
         case CancellationStore.acknowledge(job_id, local_node) do
           {:ok, :completed, _cancellation} ->
             EventBus.publish_if_job_exists(job_id, %{
@@ -149,57 +145,5 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
 
   defp stop_local_job(job_id) do
     Runtime.terminate_local_job(job_id)
-  end
-
-  # Current native SDKs register every resource before it is created. If that
-  # registry owned anything for this job, it has already performed the exact
-  # cleanup (including owned Compose source removal). Running the legacy
-  # cleanup a second time would turn a successful deletion into a false
-  # failure. A zero-match result identifies a pre-registry job, for which the
-  # persisted Core metadata remains the only safe cleanup recipe.
-  defp cleanup_legacy_native_resources(job_id, native_cleanup) do
-    if native_cleanup_count(native_cleanup) > 0 do
-      :ok
-    else
-      with :ok <- retire_prepared_services(job_id),
-           :ok <- cleanup_docker_worker(job_id) do
-        :ok
-      end
-    end
-  end
-
-  defp native_cleanup_count(result) when is_map(result) do
-    case Map.get(result, "removed_count") || Map.get(result, :removed_count) do
-      count when is_integer(count) and count > 0 -> count
-      _other -> 0
-    end
-  end
-
-  defp native_cleanup_count(_result), do: 0
-
-  # A cancellation can be reconciled after its JobCoordinator has exited or
-  # after Core has restarted.  The prepared Compose record lives in the
-  # persisted manifest/topology, so use it rather than relying on a live
-  # runner process.  DockerCompose only ever tears down that exact project.
-  defp retire_prepared_services(job_id) do
-    case RedisStore.fetch_job(job_id) do
-      {:ok, job} when is_map(job) ->
-        RunnerResources.retire_prepared_services(job)
-
-      _ ->
-        :ok
-    end
-  end
-
-  defp cleanup_docker_worker(job_id) do
-    case RedisStore.fetch_job(job_id) do
-      {:ok, job} when is_map(job) ->
-        if RunnerResources.docker_worker?(job),
-          do: RunnerResources.cleanup_docker_worker(job_id),
-          else: :ok
-
-      _ ->
-        :ok
-    end
   end
 end

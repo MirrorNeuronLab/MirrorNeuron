@@ -1,5 +1,11 @@
 # MirrorNeuron Core Specification
 
+## Current contracts
+
+Only current runtime contracts are supported. Admission snapshots require schema 3; older reservations and pre-policy request fingerprints are rejected without migration. Native resource cleanup uses its ownership registry. OpenShell workers use versioned artifact handoff; whole-tree `sync_shared_storage` and old runner names are unsupported. Configure the context engine with `MN_CONTEXT_ADDR`.
+
+Backward compatibility and automatic migration of obsolete state are unsupported.
+
 ## Job timeouts
 
 Workflow step limits use asynchronous inspection at their soft deadline (300
@@ -510,7 +516,7 @@ reports preserve both direct scheduler eligibility and the separate federated
 owner eligibility facts, so submitters can validate a remote owner without
 making that owner a member of their local scheduler.
 Authenticated federation advertisements and refreshes also preserve the owner's
-current admission capability, holder, FIFO, generation and legacy reservations
+current admission capability, reservation maps, FIFO and generation
 through node inspection and resource reports. Private native request claims are
 excluded. New definition placement can prefer an idle compatible PC over a busy
 peer; only the owner-local atomic claim authorizes execution. Prepared definitions
@@ -589,11 +595,8 @@ the command; manifest environment cannot override that placement identity.
 OpenShell CLI subprocesses give `OPENSHELL_GATEWAY_ENDPOINT` precedence over an
 inherited `OPENSHELL_GATEWAY` selector for every sandbox lifecycle operation;
 direct-endpoint command execution uses the gRPC exec transport with closed stdin.
-An OpenShell worker may explicitly set `sync_shared_storage=true`. Core then
-mirrors only the job-scoped `inputs` and `outputs` directories into an
-invocation-owned sandbox path, rewrites references rooted at
-`MN_JOB_SHARED_STORAGE_ROOT`, and synchronizes `outputs` back before accepting
-the worker result.
+OpenShell workers use versioned artifact handoff for durable input/output transfer.
+The `sync_shared_storage` option is rejected before execution.
 
 Isolation and network policies are least privilege. Blueprint-specific binaries,
 packages, domains, ports, and private IP allowances remain in blueprint/runtime
@@ -699,46 +702,10 @@ Validation: `mix test tests/unit/child_workflow_test.exs
 
 ## Retired working-index lifecycle
 
-The older Core lifecycle below applies only to `required_context_engine: true`.
-New catalog Markdown profiles do not set that retired Redis-index requirement;
-SDK `ContextSession` owns their Markdown lifecycle receipts.
-
-Jobs with `required_context_engine: true` check Membrane's context service
-at `MN_CONTEXT_ADDR`, the same address used by SDK workers.
-Startup checks that address on the job owner; the legacy `CONTEXT_ENGINE_ADDR`
-is used only when `MN_CONTEXT_ADDR` is unset or blank. An explicitly configured
-unreachable service fails startup rather than probing a different service.
-Jobs with this requirement may use Membrane's additive
-`mn.context.working.v1` RPC. `Runtime.ContextMemory` binds cleanup to the persisted
-stable job ID and run ID, using `MN_CONTEXT_REDIS_URL` from the common runtime
-Redis environment. Length-framed keys isolate runs; identifiers cannot inject
-Redis scan patterns. Cancellation attempts the index fence before stopping
-workers, and acknowledges only after both succeed. An unavailable index does
-not prevent worker shutdown. Cancellation reconciliation retries failures.
-
-Deleting a run fences new memory writes, paginates `SCAN`, and `UNLINK`s at most
-128 keys per command. Keep the cancellation tombstone; run IDs must not be
-reused. Existing artifact cleanup owns source blobs and SQLite invocation
-receipts. A memory failure cannot complete a logical step or alter its topology;
-`needs_partition` is handled by an explicitly admitted domain result/planning
-boundary. Public events do not carry source text or memory packet content.
-
-DockerWorker workflow attempts, including dynamic child tasks, use the declared
-step timeout as their default liveness deadline. Node-level beacon settings are
-not inherited as a separate liveness contract; live SDK progress is relayed. An explicit
-workflow `control.beacon_timeout_ms` remains authoritative for workloads that
-provide a separate beacon producer. HostLocal node beacon settings are unchanged.
-
-Generated step sources consume authoritative upstream outputs carried by Core
-workflow triggers after child-workflow completion. They preserve run-input
-references and artifacts and retain the same one-dispatch-per-attempt behavior
-as ordinary generated sink deliveries.
-
-Native SDK runtime services publish fresh host hardware snapshots through the
-`hardware` runtime-status domain every 30 seconds. Core uses those snapshots for
-local admission and federated advertisements instead of retaining startup memory
-readings. After 90 seconds without a refresh, advertised available memory becomes
-zero until telemetry recovers. GPU vendor and capacity requirements remain enforced.
+Jobs with `required_context_engine: true` check the current Membrane endpoint
+at `MN_CONTEXT_ADDR` before scheduling. SDK context sessions own current Markdown
+memory lifecycle receipts. The retired Redis working-index namespace, cleanup and
+cancellation adapter are removed.
 
 ## Response tool descriptions
 
@@ -883,7 +850,7 @@ escapes remain failures. Temporary export files are removed on failure. The
 `artifact_handoff.export_outputs` setting accepts only a boolean when present.
 
 `artifact_handoff.version = "mn.artifact_handoff/v1"` selects an immutable
-artifact protocol. It cannot coexist with `sync_shared_storage=true`; no error
+artifact protocol. The retired `sync_shared_storage` option is rejected; no error
 falls back to whole-tree synchronization. Optional positive quotas are
 `max_bytes` (default 64 MB), `max_files` (256), and `max_result_bytes` (1 MB).
 `export_outputs=true` materializes the successful structured result's `exports`
@@ -1086,11 +1053,8 @@ containers and stages Compose projects. Cached model artifacts are retained.
 Pause, automatic retry, and recovery retain ownership. The claim is released only
 after a terminal run has stopped commands/containers, drained native inference
 leases and released run-owned GPU residency. A missing process, timeout, owner
-partition or stale advertisement cannot release it. Pre-existing distributed
-runs remain protected on their participating nodes through confirmed cleanup.
-An authoritative admission owner overrides historical scheduler placements when
-reconstructing local claims. Only ownerless legacy executions reserve every
-participating PC. Native gateway-process attestations can prove that a request
+partition or stale advertisement cannot release it. Recovery requires a current admission owner and reservation. Older distributed
+executions and ownerless claim imports are unsupported. Native gateway-process attestations can prove that a request
 owner exited; live or unverifiable requests continue to block release. Automatic
 queue dispatch after verified cleanup is tested across admission-service restart
 without a client reconciliation call.
@@ -1162,8 +1126,8 @@ It remains a presentation contract: serving does not complete ledger steps.
 
 ## Delivery contract v2
 
-New runs persist `delivery_version: 2`; a run without that field keeps contract
-v1 until drained. Upgrade Core, native SDK (including the job-response component),
+Runs use `delivery_version: 2`; version 1 delivery and outbox bypasses are
+unsupported. Deploy Core, native SDK (including the job-response component),
 API, and monitor together. Distributed agent startup rejects workers that cannot
 serve the recorded version. Federation forwards channel, cursor, receipt identity,
 and overload information; an owner that ignores protected channels is rejected.

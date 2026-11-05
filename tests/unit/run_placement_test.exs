@@ -94,9 +94,7 @@ defmodule MirrorNeuron.Grpc.RunPlacementTest do
     assert project("queued")["reservation"] == %{"state" => "queued"}
   end
 
-  test "unknown, legacy and remote-owner reservations cannot be reported as zero" do
-    assert project()["reservation"] == %{"state" => "unavailable"}
-    Process.put(:placement_state, {:ok, Map.put(NodeAdmissionState.new(), "legacy", ["run-1"])})
+  test "unknown and remote-owner reservations cannot be reported as zero" do
     assert project()["reservation"] == %{"state" => "unavailable"}
     reserve()
 

@@ -576,20 +576,12 @@ defmodule MirrorNeuron.Runtime.FlowsTest do
     assert ttl > 3600
   end
 
-  test "legacy runs keep their single delivery lane", %{run: run} do
+  test "retired delivery versions are rejected", %{run: run} do
     {:ok, job} = RedisStore.fetch_job(run)
+    assert {:ok, _} = RedisStore.persist_job(run, Map.put(job, "delivery_version", 1))
 
-    RedisStore.storage_command([
-      "SET",
-      RedisStore.storage_key(["job", run]),
-      Jason.encode!(Map.delete(job, "delivery_version"))
-    ])
-
-    Delivery.enqueue(run, "worker", message(run, "data"))
-    Delivery.enqueue(run, "worker", message(run, "command"), command_admitted: true)
-    assert {:ok, [item]} = Delivery.read(run, "worker", "owner")
-    assert item.version == 1
-    assert item.message_id == "data"
+    assert {:error, {:unsupported_delivery_version, 1}} =
+             Delivery.enqueue(run, "worker", message(run, "data"))
   end
 
   @tag timeout: 30_000

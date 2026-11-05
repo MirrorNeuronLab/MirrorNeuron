@@ -102,40 +102,16 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionStateTest do
              Admission.transition(acquired, "request_release", %{"token" => token})
   end
 
-  test "a persisted native claim migrates only with proof and never exposes the bearer token" do
+  test "current native claims survive persistence without exposing bearer tokens" do
     token = String.duplicate("f", 32)
     attrs = %{"token" => token, "run_id" => ""}
-    {:ok, new, reply} = Admission.transition(Admission.new(), "request_acquire", attrs)
-    [private] = Map.keys(new["reservations"])
-    old = "request_" <> token
-    legacy = new["reservations"][private] |> Map.put("run_id", old) |> Map.delete("claim_kind")
-    encoded = %{new | "reservations" => %{old => legacy}} |> Jason.encode!() |> Jason.decode!()
-    assert {:ok, migrated, ^reply} = Admission.transition(encoded, "request_acquire", attrs)
-    assert Admission.allocations(migrated) == [reply["allocation"]]
-    refute Jason.encode!(Admission.report(migrated)) =~ token
-    assert {:ok, released, _} = Admission.transition(migrated, "request_release", attrs)
+    {:ok, state, reply} = Admission.transition(Admission.new(), "request_acquire", attrs)
+    encoded = state |> Jason.encode!() |> Jason.decode!()
+    assert {:ok, replayed, ^reply} = Admission.transition(encoded, "request_acquire", attrs)
+    assert Admission.allocations(replayed) == [reply["allocation"]]
+    refute Jason.encode!(Admission.report(replayed)) =~ token
+    assert {:ok, released, _} = Admission.transition(replayed, "request_release", attrs)
     assert released["reservations"] == %{}
-
-    # An orphan still charges capacity but an unknown release cannot free it,
-    # and a matching public Run cannot inherit its allocation.
-    orphan = Map.put(encoded, "requests", %{})
-    assert {:ok, charged, _} = Admission.transition(orphan, "request_release", attrs)
-    assert Admission.allocations(charged) == [reply["allocation"]]
-    refute Jason.encode!(Admission.report(charged)) =~ token
-
-    assert {:error, :stale_node_reservation} =
-             Admission.transition(charged, "request_acquire", attrs)
-
-    {_queued, %{"state" => "queued"}} = submit(charged, old)
-
-    # Old code could attach an unscoped token to the reservation of a real Run.
-    ambiguous = put_in(encoded, ["reservations", old, "job_id"], "real-job")
-
-    assert {:error, :stale_node_reservation} =
-             Admission.transition(ambiguous, "request_acquire", attrs)
-
-    assert {:ok, safe, _} = Admission.transition(ambiguous, "request_release", attrs)
-    assert safe["reservations"][old] == ambiguous["reservations"][old]
   end
 
   test "receipt replay is idempotent, cancellation never cancels the holder" do
@@ -191,18 +167,16 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionStateTest do
     assert state["deferred"] == []
   end
 
-  test "legacy active and paused runs block new admission until confirmed cleanup" do
-    {:ok, state, _} =
-      Admission.transition(Admission.new(), "import", %{"runs" => ["paused", "distributed"]})
+  test "unsupported admission snapshots and import commands are rejected" do
+    for snapshot <- [%{}, %{"schema_version" => 1}, Map.put(Admission.new(), "schema_version", 2)] do
+      assert {:error, :unsupported_node_admission_state} = Admission.decode(snapshot)
 
-    {state, receipt} = submit(state, "new")
-    assert receipt["state"] == "queued"
-    {:ok, state, _} = Admission.transition(state, "release_legacy", %{"run_id" => "paused"})
-    {:ok, state, _} = Admission.transition(state, "promote", %{})
-    assert holder(state) == nil
-    {:ok, state, _} = Admission.transition(state, "release_legacy", %{"run_id" => "distributed"})
-    {:ok, state, _} = Admission.transition(state, "promote", %{})
-    assert holder(state)["run_id"] == "new"
+      assert {:error, :unsupported_node_admission_state} =
+               Admission.transition(snapshot, "submit", entry("new"))
+    end
+
+    assert {:error, :invalid_node_admission_command} =
+             Admission.transition(Admission.new(), "import", %{"runs" => ["old-run"]})
   end
 
   test "new arrivals cannot bypass an overdue scheduled start after a missed tick" do

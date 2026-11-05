@@ -4,7 +4,7 @@ defmodule MirrorNeuron.Runtime.DeliveryChannels do
   alias MirrorNeuron.SafeAccess
   alias MirrorNeuron.Runtime.{Backpressure, Delivery}
 
-  def supported_versions, do: [1, 2]
+  def supported_versions, do: [2]
 
   # Polling happens even for idle agents. A guard is a small fenced record,
   # whereas the durable Job can contain megabytes of executable definitions.
@@ -32,26 +32,26 @@ defmodule MirrorNeuron.Runtime.DeliveryChannels do
         end
       end)
 
-    %{"version" => SafeAccess.map_get(job, "delivery_version", 1), "limits" => limits}
+    %{"version" => SafeAccess.map_get(job, "delivery_version", 2), "limits" => limits}
   end
 
   def version(job_id) do
     case RedisStore.fetch_delivery_settings(job_id) do
-      {:ok, %{"version" => version}} when version in [1, 2] ->
+      {:ok, %{"version" => version}} when version == 2 ->
         {:ok, version}
 
       {:ok, %{"version" => version}} ->
         {:error, {:unsupported_delivery_version, version}}
 
-      {:error, reason} = error ->
-        if reason == "job #{job_id} was not found", do: {:ok, 1}, else: error
+      error ->
+        error
     end
   end
 
   def bucket(agent_id, lane, 2) when lane in [:command, :control],
     do: "__mn_#{lane}__/" <> agent_id
 
-  def bucket(agent_id, _lane, _version), do: agent_id
+  def bucket(agent_id, :data, 2), do: agent_id
 
   def lane(agent_id, opts) do
     cond do

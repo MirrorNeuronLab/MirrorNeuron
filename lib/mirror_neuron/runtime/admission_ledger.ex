@@ -8,7 +8,7 @@ defmodule MirrorNeuron.Runtime.AdmissionLedger do
   def snapshot(node \\ NodeAdmission.node_name()) do
     if store() != RedisStore or Process.whereis(MirrorNeuron.Redis.Connection) do
       case store().fetch_node_admission(node) do
-        {:ok, state} -> {:ok, NodeAdmissionState.upgrade(state)}
+        {:ok, state} -> NodeAdmissionState.decode(state)
         error -> error
       end
     else

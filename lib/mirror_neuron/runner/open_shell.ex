@@ -5,7 +5,6 @@ defmodule MirrorNeuron.Runner.OpenShell do
   alias MirrorNeuron.Config
   alias MirrorNeuron.Message
   alias MirrorNeuron.ModelServices
-  alias MirrorNeuron.Runner.OpenShellSharedStorage
   alias MirrorNeuron.Sandbox.OpenShellCLI
   alias MirrorNeuron.Sandbox.OpenShellJobSandbox
 
@@ -116,110 +115,27 @@ defmodule MirrorNeuron.Runner.OpenShell do
 
       prepared_config = Map.put(config, "sandbox_name", sandbox["sandbox_name"])
 
-      with {:ok, shared_storage} <-
-             OpenShellSharedStorage.plan(payload, prepared_config, remote_dir, opts),
-           {:ok, staged_dir} <-
-             stage_workspace(
-               shared_storage.payload,
-               shared_storage.config,
-               shared_storage.opts
-             ) do
+      with {:ok, staged_dir} <- stage_workspace(payload, prepared_config, opts) do
         try do
           with {:ok, :uploaded} <-
-                 upload_workspace(
-                   executable,
-                   sandbox["sandbox_name"],
-                   staged_dir,
-                   remote_dir
-                 ),
-               :ok <- OpenShellSharedStorage.upload(shared_storage, executable),
-               {:ok, command} <-
-                 build_command(
-                   shared_command_config(shared_storage),
-                   remote_dir,
-                   shared_storage.opts
-                 ),
+                 upload_workspace(executable, sandbox["sandbox_name"], staged_dir, remote_dir),
+               {:ok, command} <- build_command(prepared_config, remote_dir, opts),
                {:ok, output, ssh_exit_code} <-
                  run_ssh_command(
-                   shared_storage.config,
+                   prepared_config,
                    sandbox["sandbox_name"],
                    sandbox["ssh_host"],
                    command,
-                   shared_storage.opts
-                 ) do
-            with :ok <- OpenShellSharedStorage.download(shared_storage, executable),
-                 :ok <-
-                   cleanup_shared_storage(
-                     shared_storage,
-                     shared_storage.config,
-                     sandbox,
-                     remote_dir
-                   ),
-                 {:ok, result} <-
-                   extract_result(
-                     output,
-                     sandbox["sandbox_name"],
-                     remote_dir,
-                     ssh_exit_code
-                   ) do
-              if result["exit_code"] == 0 do
-                {:ok, result}
-              else
-                {:error, result}
-              end
-            end
+                   opts
+                 ),
+               {:ok, result} <-
+                 extract_result(output, sandbox["sandbox_name"], remote_dir, ssh_exit_code) do
+            if result["exit_code"] == 0, do: {:ok, result}, else: {:error, result}
           end
         after
           File.rm_rf(staged_dir)
         end
       end
-    end
-  end
-
-  defp shared_command_config(%OpenShellSharedStorage{enabled: true, config: config}),
-    do: Map.put(config, "cleanup_remote_dir", false)
-
-  defp shared_command_config(%OpenShellSharedStorage{config: config}), do: config
-
-  defp cleanup_shared_storage(
-         %OpenShellSharedStorage{enabled: false},
-         _config,
-         _sandbox,
-         _remote_dir
-       ),
-       do: :ok
-
-  defp cleanup_shared_storage(
-         %OpenShellSharedStorage{remote_root: remote_root},
-         config,
-         sandbox,
-         remote_dir
-       ) do
-    # The mirror lives inside the invocation directory. Remove it only after
-    # download succeeds, preserving both on transfer failure for recovery.
-    cleanup_path = if cleanup_remote_dir?(config), do: remote_dir, else: remote_root
-    command = ["rm", "-rf", "--", cleanup_path]
-
-    case run_ssh_command(
-           config,
-           sandbox["sandbox_name"],
-           sandbox["ssh_host"],
-           command
-         ) do
-      {:ok, _output, 0} ->
-        :ok
-
-      {:ok, output, exit_code} ->
-        {:error,
-         %{
-           "error" => "failed to clean OpenShell shared-storage mirror",
-           "remote_root" => remote_root,
-           "exit_code" => exit_code,
-           "logs" => output
-         }}
-
-      {:error, _reason} = error ->
-        error
     end
   end
 

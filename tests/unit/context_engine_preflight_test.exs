@@ -35,14 +35,12 @@ defmodule MirrorNeuron.ContextEnginePreflightTest do
     assert reason =~ "127.0.0.1:1:"
   end
 
-  test "accepts the legacy address when the canonical address is blank" do
-    {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
-    on_exit(fn -> :gen_tcp.close(listener) end)
-    {:ok, port} = :inet.port(listener)
-    System.put_env("MN_CONTEXT_ADDR", " ")
-    System.put_env("CONTEXT_ENGINE_ADDR", "127.0.0.1:#{port}")
-
-    assert :ok = ContextEnginePreflight.ensure_available(true)
+  test "an unsupported address override never replaces the canonical address" do
+    System.put_env("MN_CONTEXT_ADDR", "127.0.0.1:1")
+    System.put_env("CONTEXT_ENGINE_ADDR", "127.0.0.1:2")
+    assert {:error, reason} = ContextEnginePreflight.ensure_available(true)
+    assert reason =~ "127.0.0.1:1"
+    refute reason =~ "127.0.0.1:2"
   end
 
   test "skips the check when context engine is not required" do
@@ -50,19 +48,19 @@ defmodule MirrorNeuron.ContextEnginePreflightTest do
   end
 
   test "returns an actionable error when required context engine is unreachable" do
-    previous_addr = System.get_env("CONTEXT_ENGINE_ADDR")
+    previous_addr = System.get_env("MN_CONTEXT_ADDR")
     previous_timeout = System.get_env("CONTEXT_ENGINE_READY_TIMEOUT_MS")
 
-    System.put_env("CONTEXT_ENGINE_ADDR", "127.0.0.1:1")
+    System.put_env("MN_CONTEXT_ADDR", "127.0.0.1:1")
     System.put_env("CONTEXT_ENGINE_READY_TIMEOUT_MS", "25")
 
     try do
       assert {:error, reason} = ContextEnginePreflight.ensure_available(true)
       assert reason =~ "required_context_engine=true"
-      assert reason =~ "CONTEXT_ENGINE_ADDR"
+      assert reason =~ "MN_CONTEXT_ADDR"
       assert reason =~ "127.0.0.1:1"
     after
-      restore_env("CONTEXT_ENGINE_ADDR", previous_addr)
+      restore_env("MN_CONTEXT_ADDR", previous_addr)
       restore_env("CONTEXT_ENGINE_READY_TIMEOUT_MS", previous_timeout)
     end
   end

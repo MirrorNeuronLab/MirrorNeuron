@@ -26,7 +26,7 @@ defmodule MirrorNeuron.Runtime.InvocationOutbox do
         end
       end
     else
-      {:ok, state}
+      {:error, :unsupported_delivery_version}
     end
   end
 
@@ -50,7 +50,7 @@ defmodule MirrorNeuron.Runtime.InvocationOutbox do
         end
       end
     else
-      MirrorNeuron.Runtime.WorkflowAdmission.prepare(message, state)
+      {:error, :unsupported_delivery_version}
     end
   end
 
@@ -67,7 +67,7 @@ defmodule MirrorNeuron.Runtime.InvocationOutbox do
         {:error, reason} -> {:defer, {:outbox_unavailable, reason}, state.local_state}
       end
     else
-      handler.()
+      {:error, :unsupported_delivery_version, state.local_state}
     end
   end
 
@@ -145,7 +145,7 @@ defmodule MirrorNeuron.Runtime.InvocationOutbox do
   defp command_result(local_state),
     do: Map.get(local_state, :last_output_payload, %{"handled" => true})
 
-  defp versioned?(state), do: Map.get(state.runtime_context, :delivery_version, 1) == 2
+  defp versioned?(state), do: Map.get(state.runtime_context, :delivery_version) == 2
 
   defp identity(message, state),
     do:

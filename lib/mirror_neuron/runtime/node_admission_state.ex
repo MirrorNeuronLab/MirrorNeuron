@@ -4,45 +4,42 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionState do
 
   def new do
     %{
-      "schema_version" => 2,
+      "schema_version" => 3,
       "version" => 0,
       "generation" => 0,
       "reservations" => %{},
       "queue" => [],
       "deferred" => [],
-      "requests" => %{},
-      "legacy" => []
+      "requests" => %{}
     }
   end
 
-  # Existing whole-PC claims remain exclusive until their original cleanup.
-  def upgrade(%{"schema_version" => 2} = state),
-    do: state |> normalize_empty_lists() |> NativeRequestClaim.upgrade()
+  def decode(
+        %{
+          "schema_version" => 3,
+          "reservations" => reservations,
+          "requests" => requests,
+          "queue" => _,
+          "deferred" => _,
+          "version" => version,
+          "generation" => generation
+        } = state
+      )
+      when is_map(reservations) and is_map(requests) and is_integer(version) and
+             is_integer(generation) do
+    state = normalize_empty_lists(state)
 
-  def upgrade(state) do
-    reservations =
-      case state["holder"] do
-        %{"run_id" => id} = holder ->
-          %{
-            id =>
-              holder
-              |> Map.put("allocation", %{"mode" => "exclusive_node"})
-              |> Map.put("committed", true)
-          }
-
-        _ ->
-          %{}
-      end
-
-    new()
-    |> Map.merge(Map.take(state, ~w(version generation queue deferred requests legacy)))
-    |> Map.put("reservations", reservations)
-    |> normalize_empty_lists()
-    |> NativeRequestClaim.upgrade()
+    if is_list(state["queue"]) and is_list(state["deferred"]) do
+      {:ok, state}
+    else
+      {:error, :unsupported_node_admission_state}
+    end
   end
 
+  def decode(_), do: {:error, :unsupported_node_admission_state}
+
   defp normalize_empty_lists(state) do
-    Enum.reduce(~w(queue deferred legacy), state, fn key, acc ->
+    Enum.reduce(~w(queue deferred), state, fn key, acc ->
       Map.update(acc, key, [], fn
         value when is_map(value) and map_size(value) == 0 -> []
         value -> value
@@ -50,7 +47,9 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionState do
     end)
   end
 
-  def transition(state, operation, attrs), do: apply_transition(upgrade(state), operation, attrs)
+  def transition(state, operation, attrs) do
+    with {:ok, state} <- decode(state), do: apply_transition(state, operation, attrs)
+  end
 
   defp apply_transition(state, "submit", entry) do
     id = entry["run_id"]
@@ -210,7 +209,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionState do
           (held != nil and held["generation"] != attrs["generation"]) ->
         {:error, :stale_node_reservation}
 
-      held != nil or id in state["legacy"] ->
+      held != nil ->
         {:ok, put_in(state, ["requests", token], id),
          acquired(token, (held || %{})["allocation"])}
 
@@ -247,18 +246,6 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionState do
     end
   end
 
-  defp apply_transition(state, "import", %{"runs" => runs}) do
-    known =
-      Map.keys(state["reservations"]) ++
-        Enum.map(state["queue"] ++ state["deferred"], & &1["run_id"])
-
-    {:ok, %{state | "legacy" => Enum.uniq(state["legacy"] ++ Enum.reject(runs, &(&1 in known)))},
-     %{}}
-  end
-
-  defp apply_transition(state, "release_legacy", %{"run_id" => id}),
-    do: {:ok, %{state | "legacy" => List.delete(state["legacy"], id)}, %{}}
-
   defp apply_transition(_state, _operation, _attrs), do: {:error, :invalid_node_admission_command}
 
   defp acquire_native(state, token, attrs, {:ok, ""}) do
@@ -287,19 +274,15 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionState do
     do: %{"status" => "acquired", "token" => token, "allocation" => allocation}
 
   def report(state) do
-    state = upgrade(state)
-
     reservations =
       Map.new(state["reservations"], fn {id, entry} ->
         NativeRequestClaim.report_entry(id, entry)
       end)
 
-    Map.take(state, ~w(queue generation legacy)) |> Map.put("reservations", reservations)
+    Map.take(state, ~w(queue generation)) |> Map.put("reservations", reservations)
   end
 
   def receipt(state, id) do
-    state = upgrade(state)
-
     case state["reservations"][id] do
       %{} = held ->
         held
@@ -322,12 +305,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionState do
             |> Enum.sort_by(&(&1["generation"] || 0))
             |> List.first()
 
-          blocker =
-            blocker ||
-              if(state["legacy"] != [],
-                do: %{"run_id" => hd(state["legacy"])},
-                else: %{"job_name" => "resource preparation or inference"}
-              )
+          blocker = blocker || %{"job_name" => "resource preparation or inference"}
 
           %{
             "state" => "queued",
@@ -347,7 +325,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionState do
     end
   end
 
-  def allocations(state), do: reservation_allocations(upgrade(state))
+  def allocations(state), do: reservation_allocations(state)
 
   defp reservation_allocations(state),
     do: Enum.map(Map.values(state["reservations"]), & &1["allocation"])
@@ -375,7 +353,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionState do
 
         allocations =
           reservation_allocations(acc) ++
-            protected_allocations(waiting, capacity) ++ legacy_allocations(acc)
+            protected_allocations(waiting, capacity)
 
         case ResourceAllocation.allocate(request, capacity, allocations) do
           {:ok, allocation} ->
@@ -415,16 +393,6 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionState do
         _ -> []
       end
     end)
-  end
-
-  defp legacy_allocations(state) do
-    unowned =
-      Enum.any?(state["requests"], fn {token, run} ->
-        run == "" and
-          not NativeRequestClaim.native?(state["reservations"][NativeRequestClaim.id(token)])
-      end)
-
-    if state["legacy"] != [] or unowned, do: [%{"mode" => "exclusive_node"}], else: []
   end
 
   defp active_requests?(state, id),

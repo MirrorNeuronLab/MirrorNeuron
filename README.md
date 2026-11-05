@@ -1,5 +1,11 @@
 <h1 align="center">MirrorNeuron 🧠</h1>
 
+## Current contracts
+
+Only current runtime contracts are supported. Admission snapshots require schema 3; older reservations and pre-policy request fingerprints are rejected without migration. Native resource cleanup uses its ownership registry. OpenShell workers use versioned artifact handoff; whole-tree `sync_shared_storage` and old runner names are unsupported. Configure the context engine with `MN_CONTEXT_ADDR`.
+
+Backward compatibility and automatic migration of obsolete state are unsupported.
+
 ## Job timeouts
 
 Workflow step limits use asynchronous inspection at their soft deadline (300
@@ -572,9 +578,8 @@ committed receipt after sandbox cleanup, without another domain invocation.
 SDK optional-file declarations retain required-report delivery when an optional
 copy is unavailable. Core reports `export_warnings`; corrupt bytes and unsafe
 paths remain errors, and required copy errors remain failures.
-This mode rejects `sync_shared_storage: true`; that flag explicitly selects the
-legacy whole-tree contract for unmigrated blueprints. Deploy the matching SDK
-in worker images when upgrading Core.
+The `sync_shared_storage` option is unsupported. Use the current artifact-handoff
+contract for workers and deploy the matching SDK in worker images.
 
 Core records dispatch before execution, captures diagnostics separately, seals
 and verifies declared files, and atomically publishes a receipt with their
@@ -789,8 +794,8 @@ Regenerate the Job wire bindings in Core and the sibling SDK with
 
 ## Runtime delivery flows
 
-New runs persist `delivery_version: 2`; a run without that field keeps contract
-v1 until drained. Upgrade Core, native SDK (including the job-response component),
+Runs use `delivery_version: 2`; version 1 delivery and outbox bypasses are
+unsupported. Deploy Core, native SDK (including the job-response component),
 API, and monitor together. Distributed agent startup rejects workers that cannot
 serve the recorded version. Federation forwards channel, cursor, receipt identity,
 and overload information; an owner that ignores protected channels is rejected.

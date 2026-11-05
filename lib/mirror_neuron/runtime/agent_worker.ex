@@ -551,8 +551,7 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     case MirrorNeuron.Runtime.InvocationOutbox.run(message, state, fn ->
            state.module.handle_message(message, state.local_state, context)
            |> workflow_handler_result(workflow, state.node.node_id)
-         end)
-         |> checkpoint_result(state) do
+         end) do
       {:checkpointed, new_local_state, actions, sequence, response} ->
         next_state =
           %{
@@ -615,13 +614,6 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
   end
 
   defp workflow_handler_result(result, _workflow, _agent_id), do: result
-
-  defp checkpoint_result({:ok, local, actions}, state),
-    do:
-      {:checkpointed, local, actions, state.processed_messages + 1,
-       Map.get(local, :last_output_payload)}
-
-  defp checkpoint_result(result, _state), do: result
 
   defp capacity_wait?({:backpressure, _}), do: true
   defp capacity_wait?({:delivery_backpressure, _, _}), do: true

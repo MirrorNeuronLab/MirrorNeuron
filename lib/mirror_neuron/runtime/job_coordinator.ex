@@ -47,7 +47,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
     state = %{
       job_id: job_id,
-      delivery_version: Map.get(existing_job || %{}, "delivery_version", 1),
+      delivery_version: Map.get(existing_job || %{}, "delivery_version", 2),
       clock_session: unique_id(),
       manifest: manifest,
       bundle: bundle,
@@ -2291,19 +2291,16 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
         start_agent_here(spec)
 
       Node.connect(target_node) ->
-        version = Map.get(spec, :mirror_neuron_delivery_version, 1)
+        version = Map.get(spec, :mirror_neuron_delivery_version, 2)
 
         supported =
-          if version == 1,
-            do: [1],
-            else:
-              :rpc.call(
-                target_node,
-                MirrorNeuron.Runtime.DeliveryChannels,
-                :supported_versions,
-                [],
-                5_000
-              )
+          :rpc.call(
+            target_node,
+            MirrorNeuron.Runtime.DeliveryChannels,
+            :supported_versions,
+            [],
+            5_000
+          )
 
         if is_list(supported) and version in supported do
           case :rpc.call(
@@ -3456,7 +3453,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
     %{
       job_id: state.job_id,
-      delivery_version: Map.get(state, :delivery_version, 1),
+      delivery_version: Map.get(state, :delivery_version, 2),
       run_id: Keyword.get(state.opts, :run_id, state.job_id),
       workflow_run_id: WorkflowLedger.run_id(state.workflow_state),
       stable_job_id: Keyword.get(state.opts, :stable_job_id),

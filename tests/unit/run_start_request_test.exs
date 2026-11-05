@@ -53,12 +53,12 @@ defmodule MirrorNeuron.Runtime.RunStartRequestTest do
              run(fn _, _ -> flunk("changed request") end, {"other", "{}", false})
   end
 
-  test "migrates a pre-policy request without allocating another physical run" do
-    assert {:ok, receipt} = run(fn id, _ -> {:ok, %{run_id: id, status: "queued"}} end)
+  test "rejects a pre-policy fingerprint without allocating another physical run" do
+    assert {:ok, _receipt} = run(fn id, _ -> {:ok, %{run_id: id, status: "queued"}} end)
 
-    assert {:ok, ^receipt} =
+    assert {:error, :idempotency_key_reused} =
              run(
-               fn _, _ -> flunk("migration launched twice") end,
+               fn _, _ -> flunk("unsupported request launched") end,
                {"run-1", "{}", false, "start_now"}
              )
 

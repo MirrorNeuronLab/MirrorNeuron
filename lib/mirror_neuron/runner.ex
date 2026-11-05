@@ -128,8 +128,6 @@ defmodule MirrorNeuron.Runner do
 
   defp resolve(nil), do: {:ok, OpenShell}
 
-  # Stored Python bundles from before the runner namespace migration.
-  defp resolve("MirrorNeuron.Sandbox.OpenShell"), do: {:ok, OpenShell}
   defp resolve("Elixir." <> name), do: resolve(name)
 
   defp resolve(module) when is_atom(module) do

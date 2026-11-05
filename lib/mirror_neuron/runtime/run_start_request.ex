@@ -19,8 +19,6 @@ defmodule MirrorNeuron.Runtime.RunStartRequest do
 
     gate.("request_" <> identity, fn ->
       with {:ok, request} <- request(store, identity, fingerprint, run_id, job_id),
-           {:ok, request} <-
-             migrate_policy_fingerprint(store, identity, request, payload, fingerprint),
            true <- request["fingerprint"] == fingerprint do
         case request["result"] do
           %{} = result -> {:ok, result}
@@ -32,27 +30,6 @@ defmodule MirrorNeuron.Runtime.RunStartRequest do
       end
     end)
   end
-
-  # Schema migration for requests accepted before admission_policy was added.
-  # Preserve their physical run identity; never reinterpret an explicit queue
-  # request as an older default start.
-  defp migrate_policy_fingerprint(
-         store,
-         identity,
-         request,
-         {run, inputs, replace, policy},
-         fingerprint
-       )
-       when policy in ["", "start_now"] do
-    if request["fingerprint"] == digest({run, inputs, replace}) do
-      store.persist_run_start_request(identity, Map.put(request, "fingerprint", fingerprint))
-    else
-      {:ok, request}
-    end
-  end
-
-  defp migrate_policy_fingerprint(_store, _identity, request, _payload, _fingerprint),
-    do: {:ok, request}
 
   defp request(store, identity, fingerprint, run_id, job_id) do
     case store.fetch_run_start_request(identity) do

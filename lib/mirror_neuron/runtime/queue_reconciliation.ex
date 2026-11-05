@@ -24,7 +24,6 @@ defmodule MirrorNeuron.Runtime.QueueReconciliation do
       known =
         MapSet.new(
           Map.keys(state["reservations"]) ++
-            state["legacy"] ++
             Enum.map(state["queue"] ++ state["deferred"], & &1["run_id"])
         )
 
@@ -54,7 +53,7 @@ defmodule MirrorNeuron.Runtime.QueueReconciliation do
           with {:ok, attrs} <- entry(job), do: mutate("submit", attrs, witness)
 
         status when status in @active and not waiting? ->
-          mutate("import", %{"runs" => [id]}, witness)
+          {:error, :missing_node_reservation}
 
         status when status in ["queued" | @active] ->
           {:error, :admission_run_changed}
@@ -71,8 +70,6 @@ defmodule MirrorNeuron.Runtime.QueueReconciliation do
 
   def reconcile do
     with {:ok, state} <- snapshot() do
-      Enum.each(state["legacy"], &cleanup_legacy/1)
-
       Enum.each(state["requests"], fn {token, owner} ->
         if owner == "" do
           case MirrorNeuron.ModelServices.native_resource_command(%{
@@ -207,14 +204,7 @@ defmodule MirrorNeuron.Runtime.QueueReconciliation do
     }
   end
 
-  def local_run?(job) do
-    owner = admission_owner(job)
-
-    if is_binary(owner) and owner != "",
-      do: owner == node_name(),
-      else:
-        Enum.any?(get_in(job, ["scheduler", "placements"]) || [], &(&1["node"] == node_name()))
-  end
+  def local_run?(job), do: admission_owner(job) == node_name()
 
   defp admission_owner(job) do
     Enum.find(
@@ -321,30 +311,5 @@ defmodule MirrorNeuron.Runtime.QueueReconciliation do
       (job["recovery_hint"] == "runner_interruption" or
          (get_in(job, ["result", "agent_id"]) == "job_runner" and
             get_in(job, ["result", "error"]) == "job coordinator exited before terminal state"))
-  end
-
-  defp cleanup_legacy(id) do
-    case store().fetch_job(id) do
-      {:ok, job} ->
-        owner = admission_owner(job)
-
-        cond do
-          is_binary(owner) and owner != node_name() ->
-            # This legacy entry was derived from historical placements. The
-            # authoritative single-PC owner proves it is not a local claim.
-            mutate("release_legacy", %{"run_id" => id})
-
-          job["status"] in @terminal ->
-            with :ok <- JobCleanup.cleanup_sandboxes(id, job, []),
-                 {:ok, _} <- mutate("release_legacy", %{"run_id" => id}),
-                 do: :ok
-
-          true ->
-            :ok
-        end
-
-      _ ->
-        :ok
-    end
   end
 end

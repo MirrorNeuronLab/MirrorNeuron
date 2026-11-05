@@ -73,21 +73,15 @@ def inspect(request):
     def references(value):
         if isinstance(value, dict):
             handoff = value.get("version") == VERSION
-            legacy = set(value) == {"path", "sha256"} or (
-                isinstance(value.get("kind"), str)
+            if not handoff and (
+                set(value) == {"path", "sha256"}
+                or isinstance(value.get("kind"), str)
                 and isinstance(value.get("path"), str)
-                and set(value)
-                <= {
-                    "kind",
-                    "path",
-                    "sha256",
-                    "size_bytes",
-                    "type",
-                    "version",
-                    "media_type",
-                }
-            )
-            identity = digest(value) if handoff or legacy else None
+            ):
+                raise ValueError(
+                    "unsupported checkpoint artifact reference; require artifact handoff v1"
+                )
+            identity = digest(value) if handoff else None
             if identity in checked:
                 return
             if handoff:
@@ -95,46 +89,6 @@ def inspect(request):
                 if run not in run_roots:
                     raise ValueError("cross-run artifact reference")
                 resolve(run_roots[run] / ".handoff", value)
-            elif legacy:
-                matched = False
-                for run, root in run_roots.items():
-                    candidate = confined(root / safe(value["path"]))
-                    if not candidate.resolve().is_relative_to(root.resolve()):
-                        raise ValueError("checkpoint artifact escapes run directory")
-                    if candidate.is_file() or candidate.is_dir():
-                        files = (
-                            [candidate]
-                            if candidate.is_file()
-                            else sorted(candidate.rglob("*"))
-                        )
-                        for path in files:
-                            confined(path)
-                            if path.is_dir():
-                                continue
-                            if request.get("mode") == "capture":
-                                remember(root, path, run)
-                            elif (
-                                "sha256" not in value
-                                and (run, path.relative_to(root).as_posix())
-                                not in captured
-                            ):
-                                raise ValueError(
-                                    "artifact has no retained integrity inventory"
-                                )
-                        if "sha256" in value:
-                            verify(
-                                root,
-                                {
-                                    **value,
-                                    "size_bytes": value.get(
-                                        "size_bytes", candidate.stat().st_size
-                                    ),
-                                },
-                            )
-                        matched = True
-                        break
-                if not matched:
-                    raise ValueError("checkpoint artifact is missing")
             else:
                 for child in value.values():
                     references(child)

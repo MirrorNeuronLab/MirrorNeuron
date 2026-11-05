@@ -278,7 +278,7 @@ defmodule MirrorNeuron.Runtime.JobRelocation do
       ids = MapSet.new(Enum.map(runs, & &1["run_id"]))
 
       busy =
-        Enum.any?(Map.keys(state["reservations"]) ++ state["legacy"], &MapSet.member?(ids, &1))
+        Enum.any?(Map.keys(state["reservations"]), &MapSet.member?(ids, &1))
 
       if busy, do: {:error, :relocation_cleanup_pending}, else: :ok
     end

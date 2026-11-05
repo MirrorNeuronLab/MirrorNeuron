@@ -8,8 +8,7 @@ defmodule MirrorNeuron.Grpc.RunPlacement do
     placement = %{"owner_node" => owner, "reservation" => %{"state" => "unavailable"}}
 
     with true <- owner == NodeAdmission.node_name(),
-         {:ok, state} <- NodeAdmission.snapshot(),
-         false <- run_id in state["legacy"] do
+         {:ok, state} <- NodeAdmission.snapshot() do
       receipt = state |> NodeAdmissionState.receipt(run_id) |> NodeAdmission.decorate()
 
       placement

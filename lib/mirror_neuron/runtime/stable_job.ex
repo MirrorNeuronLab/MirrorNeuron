@@ -1467,27 +1467,8 @@ defmodule MirrorNeuron.Runtime.StableJob do
     }
   end
 
-  defp cleanup_definition_native_resources(job_id, definition) do
-    metadata = get_in(definition, ["manifest", "metadata"]) || %{}
-
-    if is_map(metadata["mn_native_resources"]) do
-      # The native registry is the durable owner for current definitions. It
-      # can clean by the exact recorded resource or, when staged Compose source
-      # has already retired, by the exact project labels. Running the legacy
-      # source-dependent cleanup first can turn a successful owned cleanup into
-      # a false deletion failure and prevents the registry path from running.
-      RunnerResources.cleanup_native_resources(job_id)
-    else
-      with :ok <- RunnerResources.retire_prepared_services(definition),
-           :ok <-
-             if(RunnerResources.docker_worker?(definition),
-               do: RunnerResources.cleanup_docker_worker(job_id),
-               else: :ok
-             ) do
-        :ok
-      end
-    end
-  end
+  defp cleanup_definition_native_resources(job_id, _definition),
+    do: RunnerResources.cleanup_native_resources(job_id)
 
   defp maybe_put_resource_cleanup_errors(definition, []), do: definition
 

@@ -8,6 +8,14 @@ defmodule MirrorNeuron.Runner.OpenShellArtifactHandoff do
   @version "mn.artifact_handoff/v1"
 
   def validate(config) do
+    if Map.has_key?(config, "sync_shared_storage") do
+      {:error, "sync_shared_storage is unsupported; use artifact_handoff v1"}
+    else
+      validate_handoff(config)
+    end
+  end
+
+  defp validate_handoff(config) do
     case config["artifact_handoff"] do
       nil ->
         if get_in(config, ["environment", "MN_WORKFLOW_STEP_HANDLER"]) in [
@@ -19,9 +27,6 @@ defmodule MirrorNeuron.Runner.OpenShellArtifactHandoff do
 
       %{"version" => @version} ->
         cond do
-          config["sync_shared_storage"] == true ->
-            {:error, "artifact_handoff conflicts with legacy sync_shared_storage"}
-
           Enum.any?(
             [
               {"max_bytes", 1_000_000_000},
