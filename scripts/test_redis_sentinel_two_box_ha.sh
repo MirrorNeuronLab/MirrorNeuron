@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Remote commands deliberately interpolate locally selected paths and node settings.
+# shellcheck disable=SC2029
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -35,47 +37,47 @@ EOF
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --remote-host)
-      REMOTE_HOST="$2"
-      shift 2
-      ;;
-    --local-ip)
-      LOCAL_IP="$2"
-      shift 2
-      ;;
-    --remote-ip)
-      REMOTE_IP="$2"
-      shift 2
-      ;;
-    --redis-port)
-      REDIS_PORT="$2"
-      shift 2
-      ;;
-    --sentinel-port)
-      SENTINEL_PORT="$2"
-      shift 2
-      ;;
-    --redis-image)
-      REDIS_IMAGE="$2"
-      shift 2
-      ;;
-    --remote-network)
-      REMOTE_NETWORK="$2"
-      shift 2
-      ;;
-    --initial-primary)
-      INITIAL_PRIMARY="$2"
-      shift 2
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "unknown argument: $1" >&2
-      usage >&2
-      exit 1
-      ;;
+  --remote-host)
+    REMOTE_HOST="$2"
+    shift 2
+    ;;
+  --local-ip)
+    LOCAL_IP="$2"
+    shift 2
+    ;;
+  --remote-ip)
+    REMOTE_IP="$2"
+    shift 2
+    ;;
+  --redis-port)
+    REDIS_PORT="$2"
+    shift 2
+    ;;
+  --sentinel-port)
+    SENTINEL_PORT="$2"
+    shift 2
+    ;;
+  --redis-image)
+    REDIS_IMAGE="$2"
+    shift 2
+    ;;
+  --remote-network)
+    REMOTE_NETWORK="$2"
+    shift 2
+    ;;
+  --initial-primary)
+    INITIAL_PRIMARY="$2"
+    shift 2
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    echo "unknown argument: $1" >&2
+    usage >&2
+    exit 1
+    ;;
   esac
 done
 
@@ -116,6 +118,8 @@ ssh_remote() {
 }
 
 detect_remote_ip() {
+  # This script runs in the remote host shell.
+  # shellcheck disable=SC2016
   ssh_remote '
     if command -v hostname >/dev/null 2>&1 && hostname -I >/dev/null 2>&1; then
       hostname -I | awk "{print \$1}"
@@ -183,21 +187,19 @@ require_bin nc
 ssh_remote "command -v docker >/dev/null && command -v nc >/dev/null"
 
 case "$REMOTE_NETWORK" in
-  auto|host|bridge)
-    ;;
-  *)
-    echo "--remote-network must be auto, host, or bridge" >&2
-    exit 1
-    ;;
+auto | host | bridge) ;;
+*)
+  echo "--remote-network must be auto, host, or bridge" >&2
+  exit 1
+  ;;
 esac
 
 case "$INITIAL_PRIMARY" in
-  auto|local|remote)
-    ;;
-  *)
-    echo "--initial-primary must be auto, local, or remote" >&2
-    exit 1
-    ;;
+auto | local | remote) ;;
+*)
+  echo "--initial-primary must be auto, local, or remote" >&2
+  exit 1
+  ;;
 esac
 
 if [ "$REMOTE_NETWORK" = "auto" ]; then

@@ -771,7 +771,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
         {:ok, definition}
       else
         {:error, reason} -> {:error, format_reason(reason)}
-        other -> {:error, format_reason(other)}
       end
     end
   end
@@ -893,7 +892,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       :ok
     else
       {:error, reason} -> {:error, format_reason(reason)}
-      other -> {:error, format_reason(other)}
     end
   end
 
@@ -973,7 +971,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       {:ok, schedule}
     else
       {:error, reason} -> {:error, format_reason(reason)}
-      other -> {:error, format_reason(other)}
     end
   end
 
@@ -1090,7 +1087,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       :ok
     else
       {:error, reason} -> {:error, format_reason(reason)}
-      other -> {:error, format_reason(other)}
     end
   end
 
@@ -1177,7 +1173,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       {:ok, event}
     else
       {:error, reason} -> {:error, format_reason(reason)}
-      other -> {:error, format_reason(other)}
     end
   end
 
@@ -1367,7 +1362,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       {:ok, version_record}
     else
       {:error, reason} -> {:error, format_reason(reason)}
-      other -> {:error, format_reason(other)}
     end
   end
 
@@ -1530,7 +1524,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       {:ok, events}
     else
       {:error, reason} -> {:error, format_reason(reason)}
-      other -> {:error, format_reason(other)}
     end
   end
 
@@ -1665,7 +1658,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       :ok
     else
       {:error, reason} -> {:error, format_reason(reason)}
-      other -> {:error, format_reason(other)}
     end
   end
 
@@ -2265,7 +2257,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       {:ok, state}
     else
       {:error, reason} -> {:error, format_reason(reason)}
-      other -> {:error, format_reason(other)}
     end
   end
 
@@ -2470,7 +2461,6 @@ defmodule MirrorNeuron.Persistence.RedisStore do
       {:ok, eval}
     else
       {:error, reason} -> {:error, format_reason(reason)}
-      other -> {:error, format_reason(other)}
     end
   end
 

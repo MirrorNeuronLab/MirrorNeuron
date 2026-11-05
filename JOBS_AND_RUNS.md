@@ -32,10 +32,10 @@ attached run. A run belongs to exactly one job.
 Core derives storage paths from validated identifiers; callers cannot supply a
 host job-data path.
 
-| Scope | Default path | Lifetime |
-| --- | --- | --- |
+| Scope    | Default path                  | Lifetime                                               |
+| -------- | ----------------------------- | ------------------------------------------------------ |
 | Job data | `$MN_HOME/job-data/<job-id>/` | Until an explicit data reset or confirmed job deletion |
-| Run data | `$MN_HOME/runs/<run-id>/` | Subject to run completion, retention, and run deletion |
+| Run data | `$MN_HOME/runs/<run-id>/`     | Subject to run completion, retention, and run deletion |
 
 Run cleanup may remove submissions, sandboxes, logs, outputs, and artifacts
 owned by that run. It must not remove job data. Archiving prevents new work but
@@ -92,13 +92,13 @@ declared read-only or read-write mode.
 
 Every run receives:
 
-| Variable | Meaning |
-| --- | --- |
-| `MN_JOB_ID` | Stable job identity |
-| `MN_RUN_ID` | Current execution identity |
-| `MN_ATTEMPT_ID` | Current retry/recovery attempt identity |
-| `MN_JOB_DATA_DIR` | Derived persistent job-data directory |
-| `MN_JOB_DATA_ACCESS` | Effective `read_only` or `read_write` access |
+| Variable                 | Meaning                                                         |
+| ------------------------ | --------------------------------------------------------------- |
+| `MN_JOB_ID`              | Stable job identity                                             |
+| `MN_RUN_ID`              | Current execution identity                                      |
+| `MN_ATTEMPT_ID`          | Current retry/recovery attempt identity                         |
+| `MN_JOB_DATA_DIR`        | Derived persistent job-data directory                           |
+| `MN_JOB_DATA_ACCESS`     | Effective `read_only` or `read_write` access                    |
 | `MN_JOB_DATA_GENERATION` | Generation opened by the run; changes only after explicit reset |
 
 SDK and payload code must use `MN_RUN_ID` for execution state. There is no

@@ -65,21 +65,21 @@ its coordinator.
 
 ## Reviewed timeout boundaries
 
-| Boundary | Owner and behavior |
-| --- | --- |
-| Blueprint preparation, additions and launch | API durable operations already run asynchronously. Poll/SSE observation does not limit their lifetime. |
-| Workflow step and child step | Core soft deadline plus async ownership/progress inspection. |
-| SDK lazy model/dependency/service preparation | Separate bounded preparation scope; excluded from workflow, block and runner execution time. |
-| Model preparation RPC | Existing native operation allowance (1200 seconds by default), same request identity and one transport retry; scope covers both attempts. |
-| Runtime package download/install | Independent 600-second subprocess bound; preparation failure closes its scope and preserves the actual error. |
-| Model inference and explicitly budgeted tools/blocks | Their declared computation/network/call budgets remain enforced. Progress cannot silently increase a domain spending or simulation limit. |
-| Host/Docker/OpenShell command execution | Monotonic inactivity clock, true SDK progress and bounded waits; preparation excluded. |
-| SDK process beacons / explicit workflow heartbeat | Physical liveness remains independent from execution. An automatic beacon does not establish useful progress. |
-| Staged-input replication and verification | Async verification and progress-aware inactivity bound; no entrypoint until integrity checks pass. |
-| Workflow admission RPC | Timeout defers delivery; it does not declare the work failed or duplicate the invocation. |
-| API/CLI desktop follow and transport requests | Observe/reconcile durable identities. Existing follow limits do not cancel accepted runs. |
-| Native image/environment/OpenShell provisioning | Independent preparation operation budgets bound their owning subprocesses; these run before workflow execution. |
-| Delivery leases, cleanup, shutdown, locks and resource admission | Keep their bounded lease/control semantics. They are not task execution limits and must not be extended by unrelated output. |
+| Boundary                                                         | Owner and behavior                                                                                                                        |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Blueprint preparation, additions and launch                      | API durable operations already run asynchronously. Poll/SSE observation does not limit their lifetime.                                    |
+| Workflow step and child step                                     | Core soft deadline plus async ownership/progress inspection.                                                                              |
+| SDK lazy model/dependency/service preparation                    | Separate bounded preparation scope; excluded from workflow, block and runner execution time.                                              |
+| Model preparation RPC                                            | Existing native operation allowance (1200 seconds by default), same request identity and one transport retry; scope covers both attempts. |
+| Runtime package download/install                                 | Independent 600-second subprocess bound; preparation failure closes its scope and preserves the actual error.                             |
+| Model inference and explicitly budgeted tools/blocks             | Their declared computation/network/call budgets remain enforced. Progress cannot silently increase a domain spending or simulation limit. |
+| Host/Docker/OpenShell command execution                          | Monotonic inactivity clock, true SDK progress and bounded waits; preparation excluded.                                                    |
+| SDK process beacons / explicit workflow heartbeat                | Physical liveness remains independent from execution. An automatic beacon does not establish useful progress.                             |
+| Staged-input replication and verification                        | Async verification and progress-aware inactivity bound; no entrypoint until integrity checks pass.                                        |
+| Workflow admission RPC                                           | Timeout defers delivery; it does not declare the work failed or duplicate the invocation.                                                 |
+| API/CLI desktop follow and transport requests                    | Observe/reconcile durable identities. Existing follow limits do not cancel accepted runs.                                                 |
+| Native image/environment/OpenShell provisioning                  | Independent preparation operation budgets bound their owning subprocesses; these run before workflow execution.                           |
+| Delivery leases, cleanup, shutdown, locks and resource admission | Keep their bounded lease/control semantics. They are not task execution limits and must not be extended by unrelated output.              |
 
 Deploy matching Core, SDK, common and blocks code before preparing future Jobs.
 Already failed runs stay failed. Existing cached prepared workers must be

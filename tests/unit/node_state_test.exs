@@ -163,6 +163,13 @@ defmodule MirrorNeuron.Cluster.NodeStateTest do
     assert get_in(unchanged, ["snapshot", "reported_at"]) == reported_at
   end
 
+  test "model publications accept empty inventories and reject non-list data" do
+    assert {:ok, _} = NodeState.publish_runtime_status("models", "empty-v1", %{"models" => []})
+
+    assert {:error, "model status requires a models list"} =
+             NodeState.publish_runtime_status("models", "invalid-v1", %{"models" => %{}})
+  end
+
   test "hardware telemetry replaces stale startup availability without rejoining" do
     alias MirrorNeuron.Cluster.Hardware
     Hardware.clear_snapshot()

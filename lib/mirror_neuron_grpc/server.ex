@@ -55,6 +55,7 @@ defmodule MirrorNeuron.Grpc.ClusterServer do
         get_resource: :GetResource,
         set_resource: :SetResource,
         get_runtime_statuses: :GetRuntimeStatuses,
+        get_node_runtime_status: :GetNodeRuntimeStatus,
         publish_runtime_status: :PublishRuntimeStatus,
         ack_runtime_status_events: :AckRuntimeStatusEvents,
         sync_lite_llm_gateway: :SyncLiteLLMGateway,

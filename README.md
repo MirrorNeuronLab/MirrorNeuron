@@ -89,15 +89,15 @@ Agent workflows become harder to operate when they span many steps, wait for
 input, call external services, or need to survive a restart. MirrorNeuron gives
 that work an explicit execution model and a durable record of progress.
 
-| Capability | What it gives you |
-| --- | --- |
-| **Reusable blueprints** | Package a workflow with its configuration, input/output contracts, worker code, and dependencies. |
-| **Durable jobs and runs** | Keep a configured definition and its execution history; inspect, pause, resume, or cancel an individual run. |
-| **Observable execution** | Follow workflow steps, events, logs, and output artifacts through the CLI and Web UI. |
-| **Bounded adaptive workflows** | Use branches, parallel steps, scatter–gather, and declared dynamic regions or child workflows under runtime-enforced limits. |
-| **Resource-aware execution** | Select an eligible owner using declared hardware, model, and service requirements, then admit work locally. |
-| **Recovery controls** | Use supervision, durable delivery, leases, and retry policies, with operator review when replay is unsafe. |
-| **Local and configured remote models** | Route model calls through the job owner's LiteLLM gateway, with Docker Model Runner for local inference. |
+| Capability                             | What it gives you                                                                                                            |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| **Reusable blueprints**                | Package a workflow with its configuration, input/output contracts, worker code, and dependencies.                            |
+| **Durable jobs and runs**              | Keep a configured definition and its execution history; inspect, pause, resume, or cancel an individual run.                 |
+| **Observable execution**               | Follow workflow steps, events, logs, and output artifacts through the CLI and Web UI.                                        |
+| **Bounded adaptive workflows**         | Use branches, parallel steps, scatter–gather, and declared dynamic regions or child workflows under runtime-enforced limits. |
+| **Resource-aware execution**           | Select an eligible owner using declared hardware, model, and service requirements, then admit work locally.                  |
+| **Recovery controls**                  | Use supervision, durable delivery, leases, and retry policies, with operator review when replay is unsafe.                   |
+| **Local and configured remote models** | Route model calls through the job owner's LiteLLM gateway, with Docker Model Runner for local inference.                     |
 
 See [Why MirrorNeuron](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/why-mirrorneuron.md)
 for workload fit and the
@@ -165,6 +165,18 @@ Each federated Core has its **own writable Redis**. A job and all of its workers
 stay on one owner Core. Peers exchange authenticated gRPC requests and cached
 job/run summaries; federation does not require shared Redis or a Distributed
 Erlang cluster.
+
+Authoritative model inventory reads use authenticated
+`GetNodeRuntimeStatus(node_name, version=1)` through the connected Core. Core
+reads its own or a direct cluster node's store, or forwards once using its
+private federation credential. Peer connection setup and the status RPC share
+a five-second budget. This read never acknowledges status events. Both Cores
+must support this RPC, with matching SDK/CLI builds; older Cores produce an
+upgrade-required diagnostic. Model preparation and gateway commands also pass
+through Core, retaining their selected owner and operation deadlines.
+
+Regenerate the cluster contract and Python bindings with
+`bash scripts/generate_cluster_proto.sh ../mn-python-sdk` (requires protoc and uv).
 
 Owner-forwarded Job creation and executable-bundle replacement allow up to two
 minutes to persist payloads and initialize Job data. Metadata-only updates,
@@ -267,11 +279,11 @@ keep it private. Use `mn runtime doctor` for diagnostics.
 
 The default installed endpoints are:
 
-| Surface | Default |
-| --- | --- |
-| Web UI | `http://localhost:55173` |
-| REST API | `http://localhost:54001/api/v1` |
-| Core gRPC | `localhost:55051` |
+| Surface   | Default                         |
+| --------- | ------------------------------- |
+| Web UI    | `http://localhost:55173`        |
+| REST API  | `http://localhost:54001/api/v1` |
+| Core gRPC | `localhost:55051`               |
 
 Use the endpoints reported by your runtime if configured differently. Local
 state defaults to `~/.mn` (`MN_HOME`). See
@@ -328,9 +340,9 @@ and [CLI reference](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/cli.md)
 
 ## Execution and reliability boundaries
 
-| Runner | Execution boundary |
-| --- | --- |
-| **HostLocal** | Runs trusted worker code directly in the host execution environment. |
+| Runner           | Execution boundary                                                                                                       |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| **HostLocal**    | Runs trusted worker code directly in the host execution environment.                                                     |
 | **DockerWorker** | Runs prepared commands in Docker containers; image, mounts, environment, and network access remain part of the contract. |
 
 DockerWorker starts a stopped prepared container in place when a run uses it
@@ -352,17 +364,17 @@ for deployment and replay boundaries.
 
 ## Explore the ecosystem
 
-| Component | Responsibility |
-| --- | --- |
-| **MirrorNeuron Core** — this repository | Workflow execution, supervision, scheduling, persistence, runners, and gRPC services. |
-| [mn-cli](https://github.com/MirrorNeuronLab/mn-cli) | Install-facing runtime controls and blueprint, job, run, model, and node commands. |
-| [mn-python-sdk](https://github.com/MirrorNeuronLab/mn-python-sdk) | Python integration, blueprint validation/compilation, bundle preparation, and runtime clients. |
-| [mn-api](https://github.com/MirrorNeuronLab/mn-api) | REST gateway and streaming surfaces. |
-| [mn-web-ui](https://github.com/MirrorNeuronLab/mn-web-ui) | Browser-based runtime and workflow inspection. |
-| [mn-deploy](https://github.com/MirrorNeuronLab/mn-deploy) | Installation, Compose services, and release tooling. |
-| [mn-agents](https://github.com/MirrorNeuronLab/mn-agents) / [mn-skills](https://github.com/MirrorNeuronLab/mn-skills) | Reusable agents and Python skill packages. |
-| [Membrane](https://github.com/MirrorNeuronLab/Membrane) | Authoritative Markdown runtime memory and CPU DuckDB context retrieval through the SDK. |
-| [mn-system-tests](https://github.com/MirrorNeuronLab/mn-system-tests) | Cross-component integration and system validation. |
+| Component                                                                                                             | Responsibility                                                                                 |
+| --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| **MirrorNeuron Core** — this repository                                                                               | Workflow execution, supervision, scheduling, persistence, runners, and gRPC services.          |
+| [mn-cli](https://github.com/MirrorNeuronLab/mn-cli)                                                                   | Install-facing runtime controls and blueprint, job, run, model, and node commands.             |
+| [mn-python-sdk](https://github.com/MirrorNeuronLab/mn-python-sdk)                                                     | Python integration, blueprint validation/compilation, bundle preparation, and runtime clients. |
+| [mn-api](https://github.com/MirrorNeuronLab/mn-api)                                                                   | REST gateway and streaming surfaces.                                                           |
+| [mn-web-ui](https://github.com/MirrorNeuronLab/mn-web-ui)                                                             | Browser-based runtime and workflow inspection.                                                 |
+| [mn-deploy](https://github.com/MirrorNeuronLab/mn-deploy)                                                             | Installation, Compose services, and release tooling.                                           |
+| [mn-agents](https://github.com/MirrorNeuronLab/mn-agents) / [mn-skills](https://github.com/MirrorNeuronLab/mn-skills) | Reusable agents and Python skill packages.                                                     |
+| [Membrane](https://github.com/MirrorNeuronLab/Membrane)                                                               | Authoritative Markdown runtime memory and CPU DuckDB context retrieval through the SDK.        |
+| [mn-system-tests](https://github.com/MirrorNeuronLab/mn-system-tests)                                                 | Cross-component integration and system validation.                                             |
 
 Native Docker Compose service attempts report typed startup observations through
 the existing worker-activity bridge. Serving requires a successful native project
@@ -428,13 +440,13 @@ and release procedures.
 The detailed [mn-docs index](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/index.md)
 is the source for cross-component guides and references.
 
-| I want to… | Read |
-| --- | --- |
-| Write a workflow | [Blueprint standard](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/blueprint-standard.md) · [DAG flow patterns](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/dag-flow-patterns.md) |
-| Integrate Python or HTTP | [Python SDK](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/SDK.md) · [REST API](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/api.md) |
-| Operate recurring or service work | [Schedules and events](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/schedules-and-events.md) · [Deployments](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/deployments.md) |
-| Add machines or model capacity | [Federation guide](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/cluster.md) · [Resources and devices](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/resources-and-devices.md) |
-| Diagnose a failure | [Troubleshooting](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/troubleshooting.md) · [Environment variables](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/env_variables.md) |
+| I want to…                        | Read                                                                                                                                                                                              |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Write a workflow                  | [Blueprint standard](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/blueprint-standard.md) · [DAG flow patterns](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/dag-flow-patterns.md) |
+| Integrate Python or HTTP          | [Python SDK](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/SDK.md) · [REST API](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/api.md)                                               |
+| Operate recurring or service work | [Schedules and events](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/schedules-and-events.md) · [Deployments](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/deployments.md)         |
+| Add machines or model capacity    | [Federation guide](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/cluster.md) · [Resources and devices](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/resources-and-devices.md)      |
+| Diagnose a failure                | [Troubleshooting](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/troubleshooting.md) · [Environment variables](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/env_variables.md)       |
 
 ## Security and license
 
@@ -678,7 +690,6 @@ launch. A submitter's credential cannot authenticate a different node's service.
 Missing execution-node endpoint/authentication fails before dispatch. Secrets
 stay in the trusted runner environment and are excluded from diagnostic output.
 
-
 Run placement failures expose bounded measured resource blockers to the SDK.
 With updated Core and SDK services, callers receive the existing problem codes
 (for example `MN_GPU_MEMORY_UNAVAILABLE` / `2001`), a friendly PC name, free
@@ -708,7 +719,6 @@ Runtime events use the shared [`mn.runtime.event.v1` contract](../mn-python-sdk/
 including level, blueprint owner, UTC timestamp and actor attribution.
 The SDK selects meaningful activity for the CLI, API, desktop and web monitors;
 raw events remain available for diagnostics.
-
 
 ### Resource availability and waiting for a busy PC
 
@@ -776,7 +786,6 @@ Resource-aware admission, queueing, reclamation and idle Job transfers are descr
 
 Regenerate the Job wire bindings in Core and the sibling SDK with
 `bash scripts/generate_job_proto.sh ../mn-python-sdk` (requires protoc and uv).
-
 
 ## Runtime delivery flows
 

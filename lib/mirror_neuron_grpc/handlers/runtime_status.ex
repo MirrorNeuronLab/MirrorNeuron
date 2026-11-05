@@ -6,8 +6,19 @@ defmodule MirrorNeuron.Grpc.Handlers.RuntimeStatus do
   alias MirrorNeuron.Cluster.NodeState
   alias MirrorNeuron.Grpc.Handlers.Support
   alias MirrorNeuron.Cluster.NodeAdapter
+  alias MirrorNeuron.Cluster.RuntimeStatus
 
   alias Mirrorneuron.Cluster.V1.{GetResourceResponse, SetResourceResponse}
+
+  def get_node_runtime_status(request, stream) do
+    snapshot =
+      RuntimeStatus.fetch(request.node_name, hop: MirrorNeuron.Grpc.Auth.federation_hop(stream))
+
+    %GetResourceResponse{
+      resource_json: Support.versioned_json(snapshot),
+      version: @interface_version
+    }
+  end
 
   def get_runtime_statuses(_request, _stream) do
     local_node = to_string(NodeAdapter.self())
@@ -15,7 +26,7 @@ defmodule MirrorNeuron.Grpc.Handlers.RuntimeStatus do
     nodes =
       NodeState.list()
       |> Enum.filter(&runtime_node_status?/1)
-      |> Enum.map(&runtime_node_status/1)
+      |> Enum.map(&RuntimeStatus.snapshot(&1, local_node))
       |> Enum.sort_by(& &1["name"])
 
     with {:ok, all_events} <- NodeState.runtime_status_events(),
@@ -124,19 +135,6 @@ defmodule MirrorNeuron.Grpc.Handlers.RuntimeStatus do
 
   defp runtime_node_status?(_state), do: false
 
-  defp runtime_node_status(state) do
-    node_name = to_string(Map.get(state, "node") || "")
-    host = Map.get(state, "grpc_host") || Map.get(state, "address") || node_host(node_name)
-
-    %{
-      "name" => node_name,
-      "grpc_host" => host,
-      "status" => Map.get(state, "status", "healthy"),
-      "self" => node_name == to_string(NodeAdapter.self()),
-      "runtime_status" => Map.get(state, "runtime_status", %{})
-    }
-  end
-
   defp auto_ack_event_ids(events, local_node) do
     events
     |> Enum.filter(fn event ->
@@ -153,12 +151,5 @@ defmodule MirrorNeuron.Grpc.Handlers.RuntimeStatus do
 
   defp remote_events(events, local_node) do
     Enum.reject(events, &(to_string(&1["node"] || "") == local_node))
-  end
-
-  defp node_host(node_name) do
-    case String.split(node_name, "@", parts: 2) do
-      [_name, host] -> host
-      _ -> nil
-    end
   end
 end

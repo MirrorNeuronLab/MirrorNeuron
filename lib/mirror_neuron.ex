@@ -1,6 +1,4 @@
 defmodule MirrorNeuron do
-  require Logger
-
   alias MirrorNeuron.Cluster.{Control, FederatedServices}
   alias MirrorNeuron.JobBundle
   alias MirrorNeuron.Monitor

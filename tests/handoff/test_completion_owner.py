@@ -1,4 +1,5 @@
 """Host and worker UIDs may differ even on the same shared mount."""
+
 import os
 import sys
 from pathlib import Path
@@ -15,16 +16,27 @@ def volume(tmp_path, monkeypatch):
     run.mkdir(parents=True)
     owner = os.getuid() + 1
     original = Path.stat
-    monkeypatch.setattr(Path, "stat", lambda path, **kw:
-                        SimpleNamespace(st_uid=owner, st_gid=os.getgid())
-                        if path == tmp_path else original(path, **kw))
+    monkeypatch.setattr(
+        Path,
+        "stat",
+        lambda path, **kw: (
+            SimpleNamespace(st_uid=owner, st_gid=os.getgid())
+            if path == tmp_path
+            else original(path, **kw)
+        ),
+    )
     transfers = {}
-    monkeypatch.setattr(os, "fchown", lambda fd, uid, gid:
-                        transfers.update({os.fstat(fd).st_ino: (uid, gid)}))
+    monkeypatch.setattr(
+        os,
+        "fchown",
+        lambda fd, uid, gid: transfers.update({os.fstat(fd).st_ino: (uid, gid)}),
+    )
     return run, owner, transfers
 
 
-def test_fenced_inventory_transfers_private_outputs_without_changing_modes(tmp_path, monkeypatch):
+def test_fenced_inventory_transfers_private_outputs_without_changing_modes(
+    tmp_path, monkeypatch
+):
     run, owner, transfers = volume(tmp_path, monkeypatch)
     private_folder = run / "evidence"
     private_folder.mkdir(mode=0o700)
@@ -37,13 +49,22 @@ def test_fenced_inventory_transfers_private_outputs_without_changing_modes(tmp_p
     for path in (snapshot, public_report, published, journal):
         path.write_text("fixture")
         path.chmod(0o644 if path == public_report else 0o600)
-    handoff_to_volume_owner(tmp_path, run, [{"path": str(p)} for p in (snapshot, published, public_report, journal)])
-    assert transfers == {path.stat().st_ino: (owner, -1) for path in (snapshot, private_folder, published)}
+    handoff_to_volume_owner(
+        tmp_path,
+        run,
+        [{"path": str(p)} for p in (snapshot, published, public_report, journal)],
+    )
+    assert transfers == {
+        path.stat().st_ino: (owner, -1)
+        for path in (snapshot, private_folder, published)
+    }
     assert snapshot.stat().st_mode & 0o777 == 0o600
 
 
 @pytest.mark.parametrize("link", ["hard", "symbolic"])
-def test_other_inodes_cannot_be_reowned_through_a_publication_link(tmp_path, monkeypatch, link):
+def test_other_inodes_cannot_be_reowned_through_a_publication_link(
+    tmp_path, monkeypatch, link
+):
     run, _, transfers = volume(tmp_path, monkeypatch)
     outside = tmp_path / "unrelated"
     outside.write_bytes(b"private")

@@ -142,6 +142,9 @@ defmodule MirrorNeuron.Cluster.NodeState do
                    Enum.all?(status["devices"], &is_map/1)) ->
         {:error, "hardware status requires memory, gpu, and devices"}
 
+      domain == "models" and not is_list(status["models"]) ->
+        {:error, "model status requires a models list"}
+
       revision == "" ->
         {:error, "runtime status revision is required"}
 

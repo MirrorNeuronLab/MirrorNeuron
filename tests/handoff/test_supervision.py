@@ -1,4 +1,5 @@
 """Exercise the same stdlib-only supervisor uploaded into real sandboxes."""
+
 import json
 from pathlib import Path
 import sys
@@ -12,18 +13,34 @@ from supervision import Supervision
 @pytest.fixture
 def supervisor():
     clock, emitted = [0], []
-    value = Supervision(300, {"MN_WORKFLOW_ATTEMPT_ID": "attempt"}, lambda: clock[0], emitted.append)
+    value = Supervision(
+        300, {"MN_WORKFLOW_ATTEMPT_ID": "attempt"}, lambda: clock[0], emitted.append
+    )
     return value, clock, emitted
 
 
 def preparation(identity="model", timeout=1200000):
-    return {"type": "runtime_preparation_started", "payload": {"kind": "model", "preparation_id": identity,
-            "attempt_id": "attempt", "timeout_ms": timeout}}
+    return {
+        "type": "runtime_preparation_started",
+        "payload": {
+            "kind": "model",
+            "preparation_id": identity,
+            "attempt_id": "attempt",
+            "timeout_ms": timeout,
+        },
+    }
 
 
 def beacon(sequence=1, **extra):
-    return {"type": "agent_beacon", "payload": {"source": "agent", "pid": 7,
-            "progress_sequence": sequence, **extra}}
+    return {
+        "type": "agent_beacon",
+        "payload": {
+            "source": "agent",
+            "pid": 7,
+            "progress_sequence": sequence,
+            **extra,
+        },
+    }
 
 
 def test_remote_clock_excludes_only_union_of_setup_and_never_the_idle_gap(supervisor):
@@ -33,13 +50,28 @@ def test_remote_clock_excludes_only_union_of_setup_and_never_the_idle_gap(superv
     clock[0] = 20
     value.observe(preparation("nested"))
     clock[0] = 30
-    value.observe({"type": "runtime_preparation_finished", "payload": preparation("nested")["payload"]})
+    value.observe(
+        {
+            "type": "runtime_preparation_finished",
+            "payload": preparation("nested")["payload"],
+        }
+    )
     clock[0] = 110
-    value.observe({"type": "runtime_preparation_finished", "payload": preparation("first")["payload"]})
+    value.observe(
+        {
+            "type": "runtime_preparation_finished",
+            "payload": preparation("first")["payload"],
+        }
+    )
     clock[0] = 210
     value.observe(preparation("second"))
     clock[0] = 510
-    value.observe({"type": "runtime_preparation_finished", "payload": preparation("second")["payload"]})
+    value.observe(
+        {
+            "type": "runtime_preparation_finished",
+            "payload": preparation("second")["payload"],
+        }
+    )
     assert value.deadline == 700
     clock[0] = 699
     assert not value.expired()
@@ -54,11 +86,15 @@ def test_remote_stalled_preparation_keeps_its_fixed_deadline(supervisor):
     value.observe(preparation(timeout=10000))
     assert not value.expired()
     clock[0] = 10
-    value.observe({"type": "runtime_preparation_finished", "payload": preparation()["payload"]})
+    value.observe(
+        {"type": "runtime_preparation_finished", "payload": preparation()["payload"]}
+    )
     assert value.expired()
 
 
-def test_remote_progress_and_bounded_wait_are_not_renewed_by_replayed_beacons(supervisor):
+def test_remote_progress_and_bounded_wait_are_not_renewed_by_replayed_beacons(
+    supervisor,
+):
     value, clock, _ = supervisor
     clock[0] = 290
     value.observe(beacon())
@@ -73,8 +109,17 @@ def test_remote_progress_and_bounded_wait_are_not_renewed_by_replayed_beacons(su
     assert value.expired()
 
 
-@pytest.mark.parametrize("fault", [{"attempt_id": "old"}, {"source": "runtime"}, {"pid": 0},
-                                  {"pid": True}, {"progress_sequence": True}, {"progress_sequence": -1}])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        {"attempt_id": "old"},
+        {"source": "runtime"},
+        {"pid": 0},
+        {"pid": True},
+        {"progress_sequence": True},
+        {"progress_sequence": -1},
+    ],
+)
 def test_remote_invalid_receipts_cannot_extend_execution(supervisor, fault):
     value, clock, _ = supervisor
     clock[0] = 299
@@ -100,15 +145,33 @@ def test_live_relay_handles_split_lines_and_hides_non_protocol_output(supervisor
 
 def test_closed_pipes_do_not_bypass_remote_dead_step_detection(tmp_path):
     from supervision import execute_command
-    result = execute_command({"command": [sys.executable, "-c",
-        "import os,time; os.close(1); os.close(2); time.sleep(60)"],
-        "workdir": str(tmp_path), "timeout_seconds": .2})
+
+    result = execute_command(
+        {
+            "command": [
+                sys.executable,
+                "-c",
+                "import os,time; os.close(1); os.close(2); time.sleep(60)",
+            ],
+            "workdir": str(tmp_path),
+            "timeout_seconds": 0.2,
+        }
+    )
     assert result["exit_code"] != 0
 
 
 def test_orphaned_pipe_holders_are_retired_instead_of_waiting_forever(tmp_path):
     from supervision import execute_command
-    result = execute_command({"command": [sys.executable, "-c",
-        "import subprocess,sys; subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'])"],
-        "workdir": str(tmp_path), "timeout_seconds": .2})
+
+    result = execute_command(
+        {
+            "command": [
+                sys.executable,
+                "-c",
+                "import subprocess,sys; subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'])",
+            ],
+            "workdir": str(tmp_path),
+            "timeout_seconds": 0.2,
+        }
+    )
     assert result["exit_code"] == 124

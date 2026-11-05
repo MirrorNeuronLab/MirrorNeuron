@@ -59,93 +59,93 @@ prompt_if_missing() {
   local prompt_text="$2"
 
   if [ -z "${!var_name}" ]; then
-    read -r -p "$prompt_text" "$var_name"
+    read -r -p "$prompt_text" "${var_name?}"
   fi
 }
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --box1-ip)
-      BOX1_IP="$2"
-      shift 2
-      ;;
-    --box2-ip)
-      BOX2_IP="$2"
-      shift 2
-      ;;
-    --box)
-      BOX_INDEX="$2"
-      shift 2
-      ;;
-    --redis-host)
-      REDIS_HOST="$2"
-      shift 2
-      ;;
-    --redis-port)
-      REDIS_PORT="$2"
-      shift 2
-      ;;
-    --redis-ha-mode)
-      REDIS_HA_MODE="$2"
-      shift 2
-      ;;
-    --redis-sentinels)
-      REDIS_SENTINELS="$2"
-      shift 2
-      ;;
-    --sentinel-port)
-      REDIS_SENTINEL_PORT="$2"
-      shift 2
-      ;;
-    --sentinel-master)
-      REDIS_SENTINEL_MASTER="$2"
-      shift 2
-      ;;
-    --sentinel-quorum)
-      REDIS_SENTINEL_QUORUM="$2"
-      shift 2
-      ;;
-    --redis-wait-replicas)
-      REDIS_WAIT_REPLICAS="$2"
-      shift 2
-      ;;
-    --skip-redis-ha)
-      REDIS_HA_AUTOCONFIG="0"
-      shift
-      ;;
-    --cookie)
-      COOKIE="$2"
-      shift 2
-      ;;
-    --executor-capacity)
-      EXECUTOR_CAPACITY="$2"
-      shift 2
-      ;;
-    --dist-port)
-      DIST_PORT="$2"
-      shift 2
-      ;;
-    --skip-openshell)
-      START_OPENSHELL="0"
-      shift
-      ;;
-    --recreate-openshell)
-      RECREATE_OPENSHELL="1"
-      shift
-      ;;
-    --restart-runtime)
-      RESTART_RUNTIME="1"
-      shift
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "unknown argument: $1" >&2
-      usage >&2
-      exit 1
-      ;;
+  --box1-ip)
+    BOX1_IP="$2"
+    shift 2
+    ;;
+  --box2-ip)
+    BOX2_IP="$2"
+    shift 2
+    ;;
+  --box)
+    BOX_INDEX="$2"
+    shift 2
+    ;;
+  --redis-host)
+    REDIS_HOST="$2"
+    shift 2
+    ;;
+  --redis-port)
+    REDIS_PORT="$2"
+    shift 2
+    ;;
+  --redis-ha-mode)
+    REDIS_HA_MODE="$2"
+    shift 2
+    ;;
+  --redis-sentinels)
+    REDIS_SENTINELS="$2"
+    shift 2
+    ;;
+  --sentinel-port)
+    REDIS_SENTINEL_PORT="$2"
+    shift 2
+    ;;
+  --sentinel-master)
+    REDIS_SENTINEL_MASTER="$2"
+    shift 2
+    ;;
+  --sentinel-quorum)
+    REDIS_SENTINEL_QUORUM="$2"
+    shift 2
+    ;;
+  --redis-wait-replicas)
+    REDIS_WAIT_REPLICAS="$2"
+    shift 2
+    ;;
+  --skip-redis-ha)
+    REDIS_HA_AUTOCONFIG="0"
+    shift
+    ;;
+  --cookie)
+    COOKIE="$2"
+    shift 2
+    ;;
+  --executor-capacity)
+    EXECUTOR_CAPACITY="$2"
+    shift 2
+    ;;
+  --dist-port)
+    DIST_PORT="$2"
+    shift 2
+    ;;
+  --skip-openshell)
+    START_OPENSHELL="0"
+    shift
+    ;;
+  --recreate-openshell)
+    RECREATE_OPENSHELL="1"
+    shift
+    ;;
+  --restart-runtime)
+    RESTART_RUNTIME="1"
+    shift
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    echo "unknown argument: $1" >&2
+    usage >&2
+    exit 1
+    ;;
   esac
 done
 
@@ -265,8 +265,8 @@ EOF
 }
 
 existing_runtime_pid() {
-  lsof -nP -iTCP:"$DIST_PORT" -sTCP:LISTEN 2>/dev/null \
-    | awk '/beam\.smp/ {print $2; exit}'
+  lsof -nP -iTCP:"$DIST_PORT" -sTCP:LISTEN 2>/dev/null |
+    awk '/beam\.smp/ {print $2; exit}'
 }
 
 handle_existing_runtime() {

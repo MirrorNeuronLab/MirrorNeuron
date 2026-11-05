@@ -1,4 +1,5 @@
 """Fail-closed replay admission for durable Core handoff receipts."""
+
 import sys
 from pathlib import Path
 
@@ -13,13 +14,35 @@ from retry_verify import inspect  # noqa: E402
 def admission(tmp_path):
     submission = tmp_path / "submissions" / "source"
     root = submission / "outputs" / "runs" / "run" / ".handoff"
-    producer = {"job_id": "job", "run_id": "run", "step_instance": "work:node", "attempt": 1, "lease_epoch": 1}
-    state = {"producer": producer, "phase": "prepared", "commit_id": "receipt",
-             "request_hash": "mn.logical_request/v1:hash"}
-    state_path = root / "transactions" / digest({"run_id": "run", "step_instance": "work:node"}) / "state.json"
+    producer = {
+        "job_id": "job",
+        "run_id": "run",
+        "step_instance": "work:node",
+        "attempt": 1,
+        "lease_epoch": 1,
+    }
+    state = {
+        "producer": producer,
+        "phase": "prepared",
+        "commit_id": "receipt",
+        "request_hash": "mn.logical_request/v1:hash",
+    }
+    state_path = (
+        root
+        / "transactions"
+        / digest({"run_id": "run", "step_instance": "work:node"})
+        / "state.json"
+    )
     write(state_path, state)
-    value = {"trusted_root": str(tmp_path), "submission_path": str(submission), "run_ids": ["run"],
-             "workflow_run_id": "run", "workflow": {}, "handoff_steps": ["work:node"], "mode": "verify"}
+    value = {
+        "trusted_root": str(tmp_path),
+        "submission_path": str(submission),
+        "run_ids": ["run"],
+        "workflow_run_id": "run",
+        "workflow": {},
+        "handoff_steps": ["work:node"],
+        "mode": "verify",
+    }
     return value, state, state_path, root
 
 
@@ -33,8 +56,12 @@ def test_prepared_request_is_safe_but_uncertain_dispatch_is_blocked(admission):
 def test_committed_receipt_requires_matching_successful_execution(admission):
     value, state, path, root = admission
     write(path, {**state, "phase": "committed"})
-    receipt = {"producer": state["producer"], "request_hash": state["request_hash"],
-               "execution": {"exit_code": 0}, "references": []}
+    receipt = {
+        "producer": state["producer"],
+        "request_hash": state["request_hash"],
+        "execution": {"exit_code": 0},
+        "references": [],
+    }
     receipt_path = root / "commits" / "receipt" / "receipt.json"
     write(receipt_path, receipt)
     assert inspect(value)["safe_handoff_steps"] == ["work:node"]
@@ -52,7 +79,9 @@ def test_legacy_request_digest_cannot_authorize_checkpoint_replay(admission):
         inspect(value)
 
 
-def test_repeated_descriptors_are_verified_once_without_reusing_checks_across_calls(admission, monkeypatch):
+def test_repeated_descriptors_are_verified_once_without_reusing_checks_across_calls(
+    admission, monkeypatch
+):
     import hashlib
     import retry_verify
 
@@ -60,7 +89,12 @@ def test_repeated_descriptors_are_verified_once_without_reusing_checks_across_ca
     run = root.parent
     path = run / "report.json"
     path.write_text("saved")
-    ref = {"kind": "report", "path": "report.json", "sha256": hashlib.sha256(b"saved").hexdigest(), "size_bytes": 5}
+    ref = {
+        "kind": "report",
+        "path": "report.json",
+        "sha256": hashlib.sha256(b"saved").hexdigest(),
+        "size_bytes": 5,
+    }
     value.update(workflow={"repeated": [ref] * 2000}, handoff_steps=[])
     calls = []
     original = retry_verify.verify
@@ -82,7 +116,12 @@ def test_reference_deduplication_does_not_ignore_conflicting_hashes(admission):
 
     value, _, _, root = admission
     (root.parent / "report.json").write_text("saved")
-    ref = {"kind": "report", "path": "report.json", "sha256": hashlib.sha256(b"saved").hexdigest(), "size_bytes": 5}
+    ref = {
+        "kind": "report",
+        "path": "report.json",
+        "sha256": hashlib.sha256(b"saved").hexdigest(),
+        "size_bytes": 5,
+    }
     value.update(workflow=[ref, {**ref, "sha256": "0" * 64}], handoff_steps=[])
     with pytest.raises(ValueError, match="checksum mismatch"):
         inspect(value)

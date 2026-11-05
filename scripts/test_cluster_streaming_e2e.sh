@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Remote commands deliberately interpolate locally selected paths and node settings.
+# shellcheck disable=SC2029
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,6 +20,8 @@ JITTER="4"
 PEAK_HEIGHT="55"
 PEAK_POSITIONS=""
 CONTENT_ENCODING="gzip"
+# Remote login environment variables must expand on the remote host.
+# shellcheck disable=SC2016
 REMOTE_PATH_PREFIX='export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH";'
 LOCAL_LOG="/tmp/mirror_neuron_mn1_stream_e2e.log"
 REMOTE_LOG="/tmp/mirror_neuron_mn2_stream_e2e.log"
@@ -55,79 +59,79 @@ EOF
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --box1-ip)
-      BOX1_IP="$2"
-      shift 2
-      ;;
-    --box2-ip)
-      BOX2_IP="$2"
-      shift 2
-      ;;
-    --sample-count)
-      SAMPLE_COUNT="$2"
-      shift 2
-      ;;
-    --chunk-size)
-      CHUNK_SIZE="$2"
-      shift 2
-      ;;
-    --baseline)
-      BASELINE="$2"
-      shift 2
-      ;;
-    --jitter)
-      JITTER="$2"
-      shift 2
-      ;;
-    --peak-height)
-      PEAK_HEIGHT="$2"
-      shift 2
-      ;;
-    --peak-positions)
-      PEAK_POSITIONS="$2"
-      shift 2
-      ;;
-    --content-encoding)
-      CONTENT_ENCODING="$2"
-      shift 2
-      ;;
-    --remote-root)
-      REMOTE_ROOT="$2"
-      shift 2
-      ;;
-    --cookie)
-      COOKIE="$2"
-      shift 2
-      ;;
-    --dist-port)
-      DIST_PORT="$2"
-      shift 2
-      ;;
-    --wait-timeout-seconds)
-      WAIT_TIMEOUT_SECONDS="$2"
-      shift 2
-      ;;
-    --poll-interval-seconds)
-      POLL_INTERVAL_SECONDS="$2"
-      shift 2
-      ;;
-    --skip-sync)
-      SKIP_SYNC="1"
-      shift
-      ;;
-    --keep-cluster-up)
-      KEEP_CLUSTER_UP="1"
-      shift
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "unknown argument: $1" >&2
-      usage >&2
-      exit 1
-      ;;
+  --box1-ip)
+    BOX1_IP="$2"
+    shift 2
+    ;;
+  --box2-ip)
+    BOX2_IP="$2"
+    shift 2
+    ;;
+  --sample-count)
+    SAMPLE_COUNT="$2"
+    shift 2
+    ;;
+  --chunk-size)
+    CHUNK_SIZE="$2"
+    shift 2
+    ;;
+  --baseline)
+    BASELINE="$2"
+    shift 2
+    ;;
+  --jitter)
+    JITTER="$2"
+    shift 2
+    ;;
+  --peak-height)
+    PEAK_HEIGHT="$2"
+    shift 2
+    ;;
+  --peak-positions)
+    PEAK_POSITIONS="$2"
+    shift 2
+    ;;
+  --content-encoding)
+    CONTENT_ENCODING="$2"
+    shift 2
+    ;;
+  --remote-root)
+    REMOTE_ROOT="$2"
+    shift 2
+    ;;
+  --cookie)
+    COOKIE="$2"
+    shift 2
+    ;;
+  --dist-port)
+    DIST_PORT="$2"
+    shift 2
+    ;;
+  --wait-timeout-seconds)
+    WAIT_TIMEOUT_SECONDS="$2"
+    shift 2
+    ;;
+  --poll-interval-seconds)
+    POLL_INTERVAL_SECONDS="$2"
+    shift 2
+    ;;
+  --skip-sync)
+    SKIP_SYNC="1"
+    shift
+    ;;
+  --keep-cluster-up)
+    KEEP_CLUSTER_UP="1"
+    shift
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    echo "unknown argument: $1" >&2
+    usage >&2
+    exit 1
+    ;;
   esac
 done
 
@@ -149,7 +153,9 @@ stop_runtime_local() {
   pids="$(local_runtime_pids || true)"
   if [ -n "$pids" ]; then
     echo "Stopping local MirrorNeuron runtimes: $pids"
-    kill $pids >/dev/null 2>&1 || true
+    while IFS= read -r pid; do
+      [ -z "$pid" ] || kill "$pid" >/dev/null 2>&1 || true
+    done <<<"$pids"
     sleep 1
   fi
 }
@@ -174,8 +180,8 @@ ensure_local_docker() {
     open -a Docker >/dev/null 2>&1 || true
   fi
 
-  local attempt
-  for attempt in $(seq 1 60); do
+  local _attempt
+  for _attempt in $(seq 1 60); do
     if docker info >/dev/null 2>&1; then
       return
     fi
@@ -381,8 +387,8 @@ wait_for_cluster() {
         -- inspect nodes 2>/dev/null || true
     )"
 
-    if printf '%s\n' "$output" | grep -q "mn1@${BOX1_IP}" \
-      && printf '%s\n' "$output" | grep -q "mn2@${BOX2_IP}"; then
+    if printf '%s\n' "$output" | grep -q "mn1@${BOX1_IP}" &&
+      printf '%s\n' "$output" | grep -q "mn2@${BOX2_IP}"; then
       echo "Cluster is healthy."
       return
     fi

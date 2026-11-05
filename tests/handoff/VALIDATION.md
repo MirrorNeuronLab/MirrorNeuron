@@ -198,12 +198,12 @@ and shell syntax checks pass.
 
 ## Bounded live checks
 
-| Run | Outcome |
-| --- | --- |
-| `handoff-demo-smoke3-20260928` | One live OpenCode invocation timed out at 120 seconds. Its worker error was committed; verification did not run. |
-| `handoff-demo-deterministic-20260928` | Completed through the real Core/OpenShell gateway using a temporary blueprint copy with a deterministic generator. Both steps committed; four files exported to `/tmp/mn-handoff-live-demo-export`. Export replay did not rerun workers. |
-| `handoff-advisor-smoke2-20260928` | One review reached the provider and received HTTP 403. The failure was committed and its reservation retained. No automatic retry or model fallback. |
-| `handoff-advisor-offline2-20260928` | Explicit offline mode, one task, one round. Completed on real OpenShell; owner reconciled the committed task result and exported report/sections/JSON audit to `/tmp/mn-handoff-advisor-offline-export`. Host delivery receipt reports success. |
+| Run                                   | Outcome                                                                                                                                                                                                                                         |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `handoff-demo-smoke3-20260928`        | One live OpenCode invocation timed out at 120 seconds. Its worker error was committed; verification did not run.                                                                                                                                |
+| `handoff-demo-deterministic-20260928` | Completed through the real Core/OpenShell gateway using a temporary blueprint copy with a deterministic generator. Both steps committed; four files exported to `/tmp/mn-handoff-live-demo-export`. Export replay did not rerun workers.        |
+| `handoff-advisor-smoke2-20260928`     | One review reached the provider and received HTTP 403. The failure was committed and its reservation retained. No automatic retry or model fallback.                                                                                            |
+| `handoff-advisor-offline2-20260928`   | Explicit offline mode, one task, one round. Completed on real OpenShell; owner reconciled the committed task result and exported report/sections/JSON audit to `/tmp/mn-handoff-advisor-offline-export`. Host delivery receipt reports success. |
 
 Early smoke attempts also found and corrected missing SDK staging, the sandbox
 Python interpreter selection, and definition-label versus physical run-ID

@@ -1,4 +1,5 @@
 """Core handoff filesystem primitives. No third-party dependencies."""
+
 import hashlib
 import json
 import os
@@ -10,7 +11,10 @@ VERSION = "mn.artifact_handoff/v1"
 
 
 def encode(value):
-    return (json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n").encode()
+    return (
+        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        + "\n"
+    ).encode()
 
 
 def digest(value):
@@ -58,9 +62,14 @@ def read(path):
 
 
 def safe(value):
-    if (not isinstance(value, str) or not value or value.startswith("/")
-            or "\\" in value or "\x00" in value
-            or any(p in {"", ".", ".."} for p in value.split("/"))):
+    if (
+        not isinstance(value, str)
+        or not value
+        or value.startswith("/")
+        or "\\" in value
+        or "\x00" in value
+        or any(p in {"", ".", ".."} for p in value.split("/"))
+    ):
         raise ValueError("unsafe artifact path")
     return value
 
@@ -97,8 +106,11 @@ def validate_declarations(value):
     if isinstance(value, dict):
         if "artifacts" in value:
             if not isinstance(value["artifacts"], list) or any(
-                    not isinstance(ref, dict) or ref.get("type") != "artifact_ref" or ref.get("version") != VERSION
-                    for ref in value["artifacts"]):
+                not isinstance(ref, dict)
+                or ref.get("type") != "artifact_ref"
+                or ref.get("version") != VERSION
+                for ref in value["artifacts"]
+            ):
                 raise ValueError("all result artifacts require versioned declarations")
         for child in value.values():
             validate_declarations(child)

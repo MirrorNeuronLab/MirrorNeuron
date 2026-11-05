@@ -69,6 +69,18 @@ defmodule Mirrorneuron.Cluster.V1.GetResourceRequest do
   field(:version, 1, type: :uint32)
 end
 
+defmodule Mirrorneuron.Cluster.V1.GetNodeRuntimeStatusRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.cluster.v1.GetNodeRuntimeStatusRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:node_name, 1, type: :string, json_name: "nodeName")
+  field(:version, 2, type: :uint32)
+end
+
 defmodule Mirrorneuron.Cluster.V1.GetResourceResponse do
   @moduledoc false
 
@@ -587,6 +599,12 @@ defmodule Mirrorneuron.Cluster.V1.ClusterService.Service do
   rpc(
     :GetRuntimeStatuses,
     Mirrorneuron.Cluster.V1.GetResourceRequest,
+    Mirrorneuron.Cluster.V1.GetResourceResponse
+  )
+
+  rpc(
+    :GetNodeRuntimeStatus,
+    Mirrorneuron.Cluster.V1.GetNodeRuntimeStatusRequest,
     Mirrorneuron.Cluster.V1.GetResourceResponse
   )
 

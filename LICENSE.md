@@ -11,13 +11,13 @@ used by this package. The selected model artifact and its accompanying notices
 retain their upstream terms; this section does not change the package's own
 license or relicense third-party materials.
 
-| Open model | Upstream license | Upstream reference |
-| --- | --- | --- |
-| NVIDIA Nemotron 3.5 | OpenMDW License Agreement, version 1.1 (`OpenMDW-1.1`) | [NVIDIA Nemotron 3.5 model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16) |
-| NVIDIA Cosmos 3 (Cosmos3) | OpenMDW License Agreement, version 1.1 (`OpenMDW-1.1`) | [NVIDIA Cosmos3-Edge model card](https://huggingface.co/nvidia/Cosmos3-Edge) |
-| Bonsai2 (Bonsai 2) | Apache License, Version 2.0 (`Apache-2.0`) | [Prism ML Bonsai 2 license](https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf/blob/main/LICENSE) |
-| Google Gemma 4 | Apache License, Version 2.0 (`Apache-2.0`) | [Google Gemma 4 model card](https://huggingface.co/google/gemma-4-26B-A4B-it) |
-| Google EmbeddingGemma 2 | Apache License, Version 2.0 (`Apache-2.0`) | [Google EmbeddingGemma 2 model card](https://huggingface.co/google/embeddinggemma-2) |
+| Open model                | Upstream license                                       | Upstream reference                                                                                         |
+| ------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| NVIDIA Nemotron 3.5       | OpenMDW License Agreement, version 1.1 (`OpenMDW-1.1`) | [NVIDIA Nemotron 3.5 model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16) |
+| NVIDIA Cosmos 3 (Cosmos3) | OpenMDW License Agreement, version 1.1 (`OpenMDW-1.1`) | [NVIDIA Cosmos3-Edge model card](https://huggingface.co/nvidia/Cosmos3-Edge)                               |
+| Bonsai2 (Bonsai 2)        | Apache License, Version 2.0 (`Apache-2.0`)             | [Prism ML Bonsai 2 license](https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf/blob/main/LICENSE)   |
+| Google Gemma 4            | Apache License, Version 2.0 (`Apache-2.0`)             | [Google Gemma 4 model card](https://huggingface.co/google/gemma-4-26B-A4B-it)                              |
+| Google EmbeddingGemma 2   | Apache License, Version 2.0 (`Apache-2.0`)             | [Google EmbeddingGemma 2 model card](https://huggingface.co/google/embeddinggemma-2)                       |
 
 ### Bonsai2 attribution
 

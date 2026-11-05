@@ -1,4 +1,5 @@
 """Bounded execution supervision and live, structured activity relay."""
+
 import json
 import math
 import sys
@@ -37,8 +38,9 @@ class Supervision:
 
     def expired(self):
         now = self.account()
-        return (any(deadline <= now for deadline in self.preparations.values())
-                or now >= max(self.deadline, self.wait or self.deadline))
+        return any(
+            deadline <= now for deadline in self.preparations.values()
+        ) or now >= max(self.deadline, self.wait or self.deadline)
 
     def feed(self, data):
         # Relay protocol records only; normal stdout remains a bounded artifact.
@@ -52,14 +54,25 @@ class Supervision:
             self.pending.clear()
 
     def line(self, line):
-        prefix = next((p for p in (b"__MN_EVENT__", b"__MN_AGENT_BEACON__") if line.startswith(p)), None)
+        prefix = next(
+            (
+                p
+                for p in (b"__MN_EVENT__", b"__MN_AGENT_BEACON__")
+                if line.startswith(p)
+            ),
+            None,
+        )
         if prefix is None:
             return
         try:
-            record = json.loads(line[len(prefix):])
+            record = json.loads(line[len(prefix) :])
             if not isinstance(record, dict):
                 return
-            self.observe(record if prefix == b"__MN_EVENT__" else {"type": "agent_beacon", "payload": record})
+            self.observe(
+                record
+                if prefix == b"__MN_EVENT__"
+                else {"type": "agent_beacon", "payload": record}
+            )
         except (ValueError, TypeError, OverflowError):
             return
         self.emit(line)
@@ -75,21 +88,35 @@ class Supervision:
         identity = payload.get("preparation_id")
         if kind == "runtime_preparation_started":
             timeout = payload.get("timeout_ms")
-            if (payload.get("attempt_id") == self.attempt and self.attempt
-                    and isinstance(identity, str) and 0 < len(identity) <= 128
-                    and payload.get("kind") in {"model", "dependencies", "service"}
-                    and type(timeout) is int and 0 < timeout <= 86400000
-                    and identity not in self.seen_preparations and len(self.seen_preparations) < 1024
-                    and not self.expired()):
+            if (
+                payload.get("attempt_id") == self.attempt
+                and self.attempt
+                and isinstance(identity, str)
+                and 0 < len(identity) <= 128
+                and payload.get("kind") in {"model", "dependencies", "service"}
+                and type(timeout) is int
+                and 0 < timeout <= 86400000
+                and identity not in self.seen_preparations
+                and len(self.seen_preparations) < 1024
+                and not self.expired()
+            ):
                 self.preparations[identity] = now + timeout / 1000
                 self.seen_preparations.add(identity)
         elif kind == "runtime_preparation_finished":
-            if (payload.get("attempt_id") == self.attempt and identity in self.preparations
-                    and self.preparations[identity] > now):
+            if (
+                payload.get("attempt_id") == self.attempt
+                and identity in self.preparations
+                and self.preparations[identity] > now
+            ):
                 self.preparations.pop(identity)
         elif kind == "agent_beacon" and payload.get("source") == "agent":
             sequence, pid = payload.get("progress_sequence"), payload.get("pid")
-            if type(sequence) is not int or sequence < 0 or type(pid) is not int or pid <= 0:
+            if (
+                type(sequence) is not int
+                or sequence < 0
+                or type(pid) is not int
+                or pid <= 0
+            ):
                 return
             if sequence <= self.progress.get(pid, -1):
                 return
@@ -97,8 +124,12 @@ class Supervision:
                 return
             self.progress[pid] = sequence
             wait, timeout = payload.get("wait_id"), payload.get("wait_timeout_ms")
-            if (isinstance(wait, str) and 0 < len(wait) <= 128
-                    and type(timeout) is int and 0 < timeout <= 86400000):
+            if (
+                isinstance(wait, str)
+                and 0 < len(wait) <= 128
+                and type(timeout) is int
+                and 0 < timeout <= 86400000
+            ):
                 if wait not in self.seen_waits and len(self.seen_waits) < 1024:
                     self.seen_waits.add(wait)
                     self.wait = now + timeout / 1000 + self.allowance
@@ -117,9 +148,15 @@ def execute_command(spec):
     environment = {**os.environ, **spec.get("environment", {})}
     supervision = Supervision(spec.get("timeout_seconds", 600), environment)
     command = spec["command"]
-    process = subprocess.Popen(command, cwd=spec["workdir"], env=environment,
-        shell=isinstance(command, str), start_new_session=True,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    process = subprocess.Popen(
+        command,
+        cwd=spec["workdir"],
+        env=environment,
+        shell=isinstance(command, str),
+        start_new_session=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
     selector = selectors.DefaultSelector()
     buffers = {"stdout": bytearray(), "stderr": bytearray()}
     limit = spec.get("max_result_bytes", 1000000)
@@ -161,14 +198,21 @@ def execute_command(spec):
             pass
         process.wait()
     stdout = buffers["stdout"].decode("utf-8", errors="replace")
-    stdout = "\n".join(line for line in stdout.splitlines()
-                        if not line.startswith(("__MN_EVENT__", "__MN_AGENT_BEACON__")))
-    return {"exit_code": code, "stdout": stdout,
-            "stderr": buffers["stderr"].decode("utf-8", errors="replace")}
+    stdout = "\n".join(
+        line
+        for line in stdout.splitlines()
+        if not line.startswith(("__MN_EVENT__", "__MN_AGENT_BEACON__"))
+    )
+    return {
+        "exit_code": code,
+        "stdout": stdout,
+        "stderr": buffers["stderr"].decode("utf-8", errors="replace"),
+    }
 
 
 if __name__ == "__main__":
     from pathlib import Path
+
     spec = json.load(sys.stdin)
     result = execute_command(spec)
     Path(spec["stdout_path"]).write_text(result["stdout"])

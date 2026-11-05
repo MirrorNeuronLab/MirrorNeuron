@@ -177,11 +177,13 @@ defmodule MirrorNeuron.Grpc.CommandPolicy do
                             {:cluster, :ResolveService},
                             {:cluster, :CheckServices},
                             {:cluster, :GetRuntimeStatuses},
+                            {:cluster, :GetNodeRuntimeStatus},
                             {:cluster, :RegisterFederatedPeer},
                             {:cluster, :GetFederatedPeer},
                             {:cluster, :RemoveFederatedPeer},
                             {:cluster, :PublishRuntimeStatus},
                             {:cluster, :AckRuntimeStatusEvents},
+                            {:cluster, :PrepareRuntimeModel},
                             {:cluster, :SyncLiteLLMGateway},
                             {:cluster, :RemoveLiteLLMGatewayRoute},
                             {:operations, :StartOperation},
@@ -275,6 +277,8 @@ defmodule MirrorNeuron.Grpc.CommandHub do
                      {:cluster, :GetResource} => MirrorNeuron.Grpc.Handlers.Resource,
                      {:cluster, :SetResource} => MirrorNeuron.Grpc.Handlers.Resource,
                      {:cluster, :GetRuntimeStatuses} => MirrorNeuron.Grpc.Handlers.RuntimeStatus,
+                     {:cluster, :GetNodeRuntimeStatus} =>
+                       MirrorNeuron.Grpc.Handlers.RuntimeStatus,
                      {:cluster, :PublishRuntimeStatus} =>
                        MirrorNeuron.Grpc.Handlers.RuntimeStatus,
                      {:cluster, :AckRuntimeStatusEvents} =>

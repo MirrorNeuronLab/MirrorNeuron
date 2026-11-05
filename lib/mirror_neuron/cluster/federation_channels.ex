@@ -10,11 +10,11 @@ defmodule MirrorNeuron.Cluster.FederationChannels do
     GenServer.start_link(__MODULE__, opts, Keyword.take(opts, [:name]))
   end
 
-  def checkout(key, connect, server \\ __MODULE__) do
+  def checkout(key, connect, server \\ __MODULE__, timeout \\ @checkout_timeout) do
     lease = make_ref()
 
     try do
-      GenServer.call(server, {:checkout, key, connect, lease}, @checkout_timeout)
+      GenServer.call(server, {:checkout, key, connect, lease}, timeout)
     catch
       :exit, reason ->
         release(lease, false, server)

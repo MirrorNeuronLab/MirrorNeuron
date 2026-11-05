@@ -6,7 +6,7 @@ sdk_dir="${1:-../mn-python-sdk}"
 mix deps.compile protobuf
 plugin="$(mktemp)"
 trap 'rm -f "$plugin"' EXIT
-cat > "$plugin" <<EOF
+cat >"$plugin" <<EOF
 #!/usr/bin/env bash
 elixir -e 'Code.append_paths(Path.wildcard("$PWD/_build/dev/lib/*/ebin")); Application.load(:protobuf); Protobuf.Protoc.CLI.main([])'
 EOF

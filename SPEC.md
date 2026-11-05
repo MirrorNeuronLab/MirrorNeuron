@@ -522,6 +522,26 @@ refresh failures mark cached summaries stale without changing peer availability.
 Service discovery aggregates each authenticated federated owner's local
 registry in one hop, preserving the normal service filters without recursively
 forwarding a peer request.
+
+`GetNodeRuntimeStatus(GetNodeRuntimeStatusRequest {node_name, version: 1})`
+requires client identity and returns exactly one public node snapshot in
+`GetResourceResponse.resource_json`. Local and direct shared-store nodes read
+`NodeState`; registered federation peers use `FederationClient` with the local
+identity and peer-scoped credential. Unknown nodes return `NOT_FOUND`. Forwarded
+requests can only read their destination; another hop fails with
+`MN_FEDERATION_LOOP`. Returned owner identities and snapshot shapes are checked.
+Connection checkout, setup and peer status retrieval share a five-second budget.
+Authentication rejection remains `UNAUTHENTICATED`; deadlines remain
+`DEADLINE_EXCEEDED`, without reflecting remote diagnostic text or credentials.
+This RPC does not consume or acknowledge runtime status events. Model prepare
+requires identity and retains a 20-minute forwarding deadline; gateway sync and
+route removal retain their two-minute owner deadlines. Matching Core support on
+both nodes is required; clients must report an upgrade requirement on
+`UNIMPLEMENTED` rather than contacting a peer with local credentials.
+Model publications require a `models` list. Snapshot readers restore this typed
+list when Redis Lua cjson has encoded an empty array as an empty object, so an
+explicit empty publication remains authoritative in aggregate and owner reads.
+
 Declared inbound ports may be fixed integers or request runtime allocation with
 `"auto"`. The scheduler makes automatic ports exclusive per active placement
 on a target node, persists the resolved integer in the scheduler plan, exports
@@ -616,7 +636,6 @@ coverage when those contracts change.
 Stable Job summary and detail projections retain the definition revision so
 HTTP and SDK callers can perform optimistic concurrency checks on mutations.
 
-
 The current Compose template starts authenticated Membrane v2 with persistent
 Markdown memory and CPU DuckDB processing. Set `MN_CONTEXT_AUTH_TOKEN` before
 direct Compose startup; installed runtimes generate/reuse a private token and
@@ -625,7 +644,6 @@ Optional last-resort record selection uses the existing LiteLLM `default` route
 after CPU compaction. Context-purpose requests resolve the normal default route.
 Deploy a matching SDK/engine release before
 running new Markdown profiles; historical support snapshots remain unchanged.
-
 
 The Core image also runs the LiteLLM gateway. Its Python environment includes
 `grpcio>=1.82.1` and `protobuf>=7.35.1` for automatic Membrane `CompilePrompt`
@@ -716,7 +734,6 @@ workflow triggers after child-workflow completion. They preserve run-input
 references and artifacts and retain the same one-dispatch-per-attempt behavior
 as ordinary generated sink deliveries.
 
-
 Native SDK runtime services publish fresh host hardware snapshots through the
 `hardware` runtime-status domain every 30 seconds. Core uses those snapshots for
 local admission and federated advertisements instead of retaining startup memory
@@ -730,6 +747,7 @@ most 1,200 Unicode code points after trimming. Core preserves this planner
 guidance without changing effects, argument validation, or execution authority.
 Deploy this validator with the matching SDK common and job-response packages
 before loading description-bearing blueprint declarations.
+
 # Managed desktop identity
 
 When MN_NODE_NAME is supplied, Core validates that it is a valid distributed
@@ -743,7 +761,6 @@ backoff. Existing peer registrations may change endpoints only with the same
 node name, coordination-store identity, and peer credential. Job projections
 and ownership survive these updates. Unreachable peers retain their identity;
 operators may need to re-add their current endpoint if no known address works.
-
 
 ## Durable batch schedule occurrences
 
@@ -1019,7 +1036,6 @@ Core; API and SDK supervision adapters do not infer completed transitions.
 
 Checkpoint artifact helpers have a 60-second execution bound. Within one inspection, identical complete artifact descriptors share verification; distinct descriptors and subsequent inspections retain independent hash, size, confinement, receipt and replay checks. A failed integrity capture still blocks checkpoint retry.
 
-
 ## Resource admission per PC
 
 The detailed `GetRun` projection includes `placement` with the exact owner node,
@@ -1143,7 +1159,6 @@ It remains a presentation contract: serving does not complete ledger steps.
 ## Resource admission and ownership transfer
 
 [Run resource allocation](docs/resource-allocation.md) defines the executable policy and lifecycle contract. Admission reserves before execution persistence; uncertain cleanup cannot fund another start. Transfers require a frozen source, verified inactive destination and ownership commit before activation.
-
 
 ## Delivery contract v2
 

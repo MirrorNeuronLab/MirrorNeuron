@@ -159,20 +159,27 @@ defmodule MirrorNeuron.Cluster.FederationClient do
   def decode_services(_json), do: []
 
   defp rpc_call(node_name, stub, function, request) do
+    # Snapshot reads have one budget spanning channel setup and the RPC itself.
+    deadline =
+      if function == :get_node_runtime_status,
+        do: System.monotonic_time(:millisecond) + request_timeout(function, request)
+
     with {:ok, peer} <- FederationRegistry.fetch(node_name),
          {:ok, target} <- target(peer) do
       result =
         try do
           invoke_unary(
             channel_key(node_name, target, peer),
-            fn -> connect(target, peer) end,
+            fn -> connect(target, peer, remaining_timeout(deadline, @timeout)) end,
             fn channel ->
               apply(stub, function, [
                 channel,
                 request,
-                [timeout: request_timeout(function, request)]
+                [timeout: remaining_timeout(deadline, request_timeout(function, request))]
               ])
-            end
+            end,
+            FederationChannels,
+            remaining_timeout(deadline, 20_000)
           )
         rescue
           error ->
@@ -181,6 +188,11 @@ defmodule MirrorNeuron.Cluster.FederationClient do
             end
 
             reraise error, __STACKTRACE__
+        catch
+          :exit, {:timeout, _} ->
+            raise GRPC.RPCError,
+              status: :deadline_exceeded,
+              message: "federated peer channel setup timed out"
         end
 
       case result do
@@ -206,8 +218,15 @@ defmodule MirrorNeuron.Cluster.FederationClient do
   end
 
   @doc false
-  def invoke_unary(key, connect, invoke, channels \\ FederationChannels) do
-    with {:ok, lease, channel} <- FederationChannels.checkout(key, connect, channels) do
+  def invoke_unary(
+        key,
+        connect,
+        invoke,
+        channels \\ FederationChannels,
+        checkout_timeout \\ 20_000
+      ) do
+    with {:ok, lease, channel} <-
+           FederationChannels.checkout(key, connect, channels, checkout_timeout) do
       try do
         result = invoke.(channel)
 
@@ -237,6 +256,13 @@ defmodule MirrorNeuron.Cluster.FederationClient do
   @doc false
   def request_timeout(function, request \\ nil)
 
+  def request_timeout(:get_node_runtime_status, _request), do: 5_000
+  def request_timeout(:prepare_runtime_model, _request), do: 1_200_000
+
+  def request_timeout(function, _request)
+      when function in [:sync_lite_llm_gateway, :remove_lite_llm_gateway_route],
+      do: 120_000
+
   def request_timeout(:create_job, _request), do: @job_definition_timeout
   def request_timeout(:relocate_job, _request), do: 600_000
 
@@ -250,6 +276,18 @@ defmodule MirrorNeuron.Cluster.FederationClient do
     do: @destructive_job_timeout
 
   def request_timeout(_function, _request), do: @timeout
+
+  defp remaining_timeout(nil, default), do: default
+
+  defp remaining_timeout(deadline, _default) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+
+    if remaining <= 0 do
+      raise GRPC.RPCError, status: :deadline_exceeded, message: "federated peer read timed out"
+    end
+
+    remaining
+  end
 
   defp discover_owner(resource_id, function, field, options) do
     peers = Keyword.get(options, :peers, FederationRegistry.list())
@@ -543,9 +581,20 @@ defmodule MirrorNeuron.Cluster.FederationClient do
   defp unavailable!(node_name, reason, operation \\ :peer_request) do
     MirrorNeuron.Cluster.FederationMonitor.request_failed(node_name, operation, reason)
 
-    raise GRPC.RPCError,
-      status: GRPC.Status.unavailable(),
-      message: "MN_NODE_UNAVAILABLE: owner #{node_name} is unreachable (#{safe_reason(reason)})"
+    {status, message} =
+      case reason do
+        %GRPC.RPCError{status: 16} ->
+          {:unauthenticated, "federation credentials were rejected by peer #{node_name}"}
+
+        %GRPC.RPCError{status: 4} ->
+          {:deadline_exceeded, "federated request to peer #{node_name} timed out"}
+
+        _ ->
+          {:unavailable,
+           "MN_NODE_UNAVAILABLE: owner #{node_name} is unreachable (#{safe_reason(reason)})"}
+      end
+
+    raise GRPC.RPCError, status: status, message: message
   end
 
   defp relay_failure!(node_name, reason) do

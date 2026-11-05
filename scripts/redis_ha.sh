@@ -53,47 +53,47 @@ EOF
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --self-host)
-      SELF_HOST="$2"
-      shift 2
-      ;;
-    --redis-port)
-      REDIS_PORT="$2"
-      shift 2
-      ;;
-    --sentinel-port)
-      SENTINEL_PORT="$2"
-      shift 2
-      ;;
-    --sentinels)
-      SENTINELS="$2"
-      shift 2
-      ;;
-    --master-name)
-      MASTER_NAME="$2"
-      shift 2
-      ;;
-    --quorum)
-      QUORUM="$2"
-      shift 2
-      ;;
-    --data-dir)
-      DATA_DIR="$2"
-      shift 2
-      ;;
-    --purge-local)
-      PURGE_LOCAL="1"
-      shift
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "unknown argument: $1" >&2
-      usage >&2
-      exit 1
-      ;;
+  --self-host)
+    SELF_HOST="$2"
+    shift 2
+    ;;
+  --redis-port)
+    REDIS_PORT="$2"
+    shift 2
+    ;;
+  --sentinel-port)
+    SENTINEL_PORT="$2"
+    shift 2
+    ;;
+  --sentinels)
+    SENTINELS="$2"
+    shift 2
+    ;;
+  --master-name)
+    MASTER_NAME="$2"
+    shift 2
+    ;;
+  --quorum)
+    QUORUM="$2"
+    shift 2
+    ;;
+  --data-dir)
+    DATA_DIR="$2"
+    shift 2
+    ;;
+  --purge-local)
+    PURGE_LOCAL="1"
+    shift
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    echo "unknown argument: $1" >&2
+    usage >&2
+    exit 1
+    ;;
   esac
 done
 
@@ -429,10 +429,10 @@ status() {
 need_bins
 
 case "$COMMAND" in
-  join)
-    require_join_credentials
-    join_cluster
-    ;;
-  leave) leave_cluster ;;
-  status) status ;;
+join)
+  require_join_credentials
+  join_cluster
+  ;;
+leave) leave_cluster ;;
+status) status ;;
 esac

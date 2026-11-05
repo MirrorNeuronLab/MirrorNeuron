@@ -3,6 +3,7 @@
 The per-step flock serializes fence changes and atomic publication. A receipt
 is stored *inside* the published directory so bytes and receipt appear together.
 """
+
 import fcntl
 import json
 import os
@@ -11,7 +12,19 @@ import sys
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from files import VERSION, digest, read, references, regular, safe, sync_dir, verify, write, mkdir, validate_declarations
+from files import (
+    VERSION,
+    digest,
+    read,
+    references,
+    regular,
+    safe,
+    sync_dir,
+    verify,
+    write,
+    mkdir,
+    validate_declarations,
+)
 from committed_inputs import admit
 from output_index import public_name, record as record_outputs
 
@@ -71,12 +84,17 @@ def resolve(root, ref):
 
 def handle(request):
     root = Path(request["root"])
-    if request.get("trusted_root") and not root.resolve().is_relative_to(Path(request["trusted_root"]).resolve()):
+    if request.get("trusted_root") and not root.resolve().is_relative_to(
+        Path(request["trusted_root"]).resolve()
+    ):
         raise ValueError("artifact storage escapes runtime root")
     mkdir(root)
     identity = request["identity"]
-    if (identity["run_id"] != root.parent.name or not identity["step_instance"]
-            or type(identity["lease_epoch"]) is not int):
+    if (
+        identity["run_id"] != root.parent.name
+        or not identity["step_instance"]
+        or type(identity["lease_epoch"]) is not int
+    ):
         raise ValueError("invalid producer identity")
     with locked(root, identity) as folder:
         state = record(folder)
@@ -85,7 +103,9 @@ def handle(request):
             if state:
                 fence(state, identity)
                 if state["producer"].get("owner_node") != identity.get("owner_node"):
-                    raise ValueError("artifact transaction belongs to another owner node")
+                    raise ValueError(
+                        "artifact transaction belongs to another owner node"
+                    )
                 if state["request_hash"] != request["request_hash"]:
                     raise ValueError("step replay input conflict")
                 state["fence"] = identity["lease_epoch"]
@@ -95,10 +115,16 @@ def handle(request):
                 write(folder / "state.json", state)
                 return state
             commit_id = digest(identity)
-            state = {"phase": "prepared", "producer": identity, "commit_id": commit_id,
-                     "request_hash": request["request_hash"], "fence": identity["lease_epoch"],
-                     "workspace": request["workspace"] + "/" + commit_id,
-                     "sandbox": request["sandbox"], "cleanup_pending": True}
+            state = {
+                "phase": "prepared",
+                "producer": identity,
+                "commit_id": commit_id,
+                "request_hash": request["request_hash"],
+                "fence": identity["lease_epoch"],
+                "workspace": request["workspace"] + "/" + commit_id,
+                "sandbox": request["sandbox"],
+                "cleanup_pending": True,
+            }
             write(folder / "state.json", state)
             return state
         if state is None:
@@ -106,7 +132,9 @@ def handle(request):
         fence(state, identity)
         if op == "started":
             if state["phase"] != "prepared":
-                raise ValueError("execution may already have started; explicit retry required")
+                raise ValueError(
+                    "execution may already have started; explicit retry required"
+                )
             state["phase"] = "started"
         elif op == "reconcile":
             committed = receipt(root, state)
@@ -123,9 +151,12 @@ def handle(request):
             target = Path(request["target"])
             target.mkdir(parents=True, exist_ok=True)
             index = {}
-            admitted = admit(root, request["payload"],
-                             max_files=request.get("max_files", 256),
-                             max_bytes=request.get("max_bytes", 64_000_000))
+            admitted = admit(
+                root,
+                request["payload"],
+                max_files=request.get("max_files", 256),
+                max_bytes=request.get("max_bytes", 64_000_000),
+            )
             for ref in [*references(request["payload"]), *admitted]:
                 committed_ref = ref.get("committed_ref")
                 ref = {k: v for k, v in ref.items() if k != "committed_ref"}
@@ -133,12 +164,16 @@ def handle(request):
                 if key in index:
                     if index[key]["reference"] != ref:
                         raise ValueError("conflicting artifact input identity")
-                    if committed_ref and committed_ref not in index[key].get("committed_refs", []):
-                        index[key].setdefault("committed_refs", []).append(committed_ref)
+                    if committed_ref and committed_ref not in index[key].get(
+                        "committed_refs", []
+                    ):
+                        index[key].setdefault("committed_refs", []).append(
+                            committed_ref
+                        )
                     continue
-                if (len(index) >= request.get("max_files", 256)
-                        or sum(e["reference"]["size_bytes"] for e in index.values()) + ref["size_bytes"]
-                        > request.get("max_bytes", 64_000_000)):
+                if len(index) >= request.get("max_files", 256) or sum(
+                    e["reference"]["size_bytes"] for e in index.values()
+                ) + ref["size_bytes"] > request.get("max_bytes", 64_000_000):
                     raise ValueError("artifact input quota exceeded")
                 source = resolve(root, ref)
                 name = "files/" + ref["sha256"]
@@ -155,16 +190,31 @@ def handle(request):
             stage = Path(request["stage"])
             execution = request["execution"]
             manifest = read(regular(stage, "manifest.json"))
-            if manifest["producer"] != state["producer"] or manifest["commit_id"] != state["commit_id"] or manifest["version"] != VERSION:
+            if (
+                manifest["producer"] != state["producer"]
+                or manifest["commit_id"] != state["commit_id"]
+                or manifest["version"] != VERSION
+            ):
                 raise ValueError("manifest producer mismatch")
             validate_declarations(execution.get("structured_result", {}))
             entries = manifest["references"]
-            if any(type(r["size_bytes"]) is not int or r["size_bytes"] < 0 for r in entries) or len(entries) > request["max_files"] or sum(r["size_bytes"] for r in entries) > request["max_bytes"]:
+            if (
+                any(
+                    type(r["size_bytes"]) is not int or r["size_bytes"] < 0
+                    for r in entries
+                )
+                or len(entries) > request["max_files"]
+                or sum(r["size_bytes"] for r in entries) > request["max_bytes"]
+            ):
                 raise ValueError("artifact quota exceeded")
             names = set()
             for ref in entries:
-                if (ref["producer"] != state["producer"] or ref["commit_id"] != state["commit_id"]
-                        or ref["version"] != VERSION or ref["path"] in names):
+                if (
+                    ref["producer"] != state["producer"]
+                    or ref["commit_id"] != state["commit_id"]
+                    or ref["version"] != VERSION
+                    or ref["path"] in names
+                ):
                     raise ValueError("manifest reference mismatch")
                 names.add(ref["path"])
                 verify(stage / "outputs", ref)
@@ -176,7 +226,11 @@ def handle(request):
                     if ref not in manifest.get("inputs", []):
                         raise ValueError("result input missing from manifest")
                     resolve(root, ref)
-            committed = {**manifest, "execution": execution, "request_hash": state["request_hash"]}
+            committed = {
+                **manifest,
+                "execution": execution,
+                "request_hash": state["request_hash"],
+            }
             destination = root / "commits" / state["commit_id"]
             mkdir(destination.parent)
             if destination.exists():
@@ -185,7 +239,9 @@ def handle(request):
                 receipt(root, state)
             else:
                 # Only validated files enter the publication, never a downloaded tree.
-                temporary = Path(tempfile.mkdtemp(prefix=".publish-", dir=destination.parent))
+                temporary = Path(
+                    tempfile.mkdtemp(prefix=".publish-", dir=destination.parent)
+                )
                 try:
                     for ref in entries:
                         src = verify(stage / "outputs", ref)
@@ -215,10 +271,19 @@ def handle(request):
             if not committed or committed["execution"]["exit_code"] != 0:
                 raise ValueError("only successful committed artifacts may be exported")
             result = committed["execution"].get("structured_result", {})
-            exports, optional = result.get("exports", {}), result.get("optional_exports", [])
-            if (not isinstance(exports, dict) or len(exports) > 10000 or not isinstance(optional, list)
-                    or len(optional) > 10000 or any(not isinstance(name, str) for name in optional)
-                    or len(set(optional)) != len(optional) or not set(optional) <= set(exports)):
+            exports, optional = (
+                result.get("exports", {}),
+                result.get("optional_exports", []),
+            )
+            if (
+                not isinstance(exports, dict)
+                or len(exports) > 10000
+                or not isinstance(optional, list)
+                or len(optional) > 10000
+                or any(not isinstance(name, str) for name in optional)
+                or len(set(optional)) != len(optional)
+                or not set(optional) <= set(exports)
+            ):
                 raise ValueError("invalid publication export policy")
             plans, warnings = [], []
             for name, ref in exports.items():
@@ -228,17 +293,31 @@ def handle(request):
                 # configured folder. The sandbox's private index is not copied.
                 for directory in {target, root.parent}:
                     destination = directory / name
-                    if not destination.parent.resolve().is_relative_to(directory.resolve()) or destination.is_symlink():
+                    if (
+                        not destination.parent.resolve().is_relative_to(
+                            directory.resolve()
+                        )
+                        or destination.is_symlink()
+                    ):
                         raise ValueError("export escapes output directory")
                     plans.append((name, source, destination, directory))
             failed = set()
-            for name, source, destination, directory in sorted(plans, key=lambda plan: plan[0] in optional):
+            for name, source, destination, directory in sorted(
+                plans, key=lambda plan: plan[0] in optional
+            ):
                 temporary = None
                 try:
                     destination.parent.mkdir(parents=True, exist_ok=True)
-                    if not destination.parent.resolve().is_relative_to(directory.resolve()) or destination.is_symlink():
+                    if (
+                        not destination.parent.resolve().is_relative_to(
+                            directory.resolve()
+                        )
+                        or destination.is_symlink()
+                    ):
                         raise ValueError("export escapes output directory")
-                    fd, temporary = tempfile.mkstemp(prefix=".export-", dir=destination.parent)
+                    fd, temporary = tempfile.mkstemp(
+                        prefix=".export-", dir=destination.parent
+                    )
                     with os.fdopen(fd, "wb") as sink, source.open("rb") as stream:
                         shutil.copyfileobj(stream, sink)
                         sink.flush()
@@ -249,13 +328,20 @@ def handle(request):
                     if name not in optional:
                         raise
                     if name not in failed:
-                        warnings.append({"code": "optional_artifact_delivery_failed", "artifact_id": name,
-                                         "error_type": type(error).__name__})
+                        warnings.append(
+                            {
+                                "code": "optional_artifact_delivery_failed",
+                                "artifact_id": name,
+                                "error_type": type(error).__name__,
+                            }
+                        )
                     failed.add(name)
                 finally:
                     if temporary is not None:
                         Path(temporary).unlink(missing_ok=True)
-            delivered = {name: ref for name, ref in exports.items() if name not in failed}
+            delivered = {
+                name: ref for name, ref in exports.items() if name not in failed
+            }
             for directory in {target, root.parent}:
                 record_outputs(directory, delivered)
             return {**state, "export_warnings": warnings}
@@ -268,11 +354,16 @@ def handle(request):
                     shutil.rmtree(owner_stage)
                     sync_dir(owner_stage.parent)
             except OSError:
-                request["warning"] = "committed artifacts retained; owner staging cleanup pending"
+                request["warning"] = (
+                    "committed artifacts retained; owner staging cleanup pending"
+                )
             state["cleanup_pending"] = bool(request.get("warning"))
             state["cleanup_warning"] = request.get("warning")
         elif op == "unknown":
-            state.update(phase="unknown_blocked", error="execution outcome unknown; explicit retry required")
+            state.update(
+                phase="unknown_blocked",
+                error="execution outcome unknown; explicit retry required",
+            )
         else:
             raise ValueError("unknown transaction operation")
         write(folder / "state.json", state)

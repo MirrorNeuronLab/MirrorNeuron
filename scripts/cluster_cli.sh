@@ -48,73 +48,73 @@ prompt_if_missing() {
   local prompt_text="$2"
 
   if [ -z "${!var_name}" ]; then
-    read -r -p "$prompt_text" "$var_name"
+    read -r -p "$prompt_text" "${var_name?}"
   fi
 }
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --box1-ip)
-      BOX1_IP="$2"
-      shift 2
-      ;;
-    --box2-ip)
-      BOX2_IP="$2"
-      shift 2
-      ;;
-    --self-ip)
-      SELF_IP="$2"
-      shift 2
-      ;;
-    --seed-ip)
-      SEED_IP="$2"
-      shift 2
-      ;;
-    --redis-host)
-      REDIS_HOST="$2"
-      shift 2
-      ;;
-    --redis-port)
-      REDIS_PORT="$2"
-      shift 2
-      ;;
-    --redis-ha-mode)
-      REDIS_HA_MODE="$2"
-      shift 2
-      ;;
-    --redis-sentinels)
-      REDIS_SENTINELS="$2"
-      shift 2
-      ;;
-    --sentinel-port)
-      REDIS_SENTINEL_PORT="$2"
-      shift 2
-      ;;
-    --sentinel-master)
-      REDIS_SENTINEL_MASTER="$2"
-      shift 2
-      ;;
-    --cookie)
-      COOKIE="$2"
-      shift 2
-      ;;
-    --cli-port)
-      CLI_PORT="$2"
-      shift 2
-      ;;
-    --)
-      shift
-      break
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "unknown argument: $1" >&2
-      usage >&2
-      exit 1
-      ;;
+  --box1-ip)
+    BOX1_IP="$2"
+    shift 2
+    ;;
+  --box2-ip)
+    BOX2_IP="$2"
+    shift 2
+    ;;
+  --self-ip)
+    SELF_IP="$2"
+    shift 2
+    ;;
+  --seed-ip)
+    SEED_IP="$2"
+    shift 2
+    ;;
+  --redis-host)
+    REDIS_HOST="$2"
+    shift 2
+    ;;
+  --redis-port)
+    REDIS_PORT="$2"
+    shift 2
+    ;;
+  --redis-ha-mode)
+    REDIS_HA_MODE="$2"
+    shift 2
+    ;;
+  --redis-sentinels)
+    REDIS_SENTINELS="$2"
+    shift 2
+    ;;
+  --sentinel-port)
+    REDIS_SENTINEL_PORT="$2"
+    shift 2
+    ;;
+  --sentinel-master)
+    REDIS_SENTINEL_MASTER="$2"
+    shift 2
+    ;;
+  --cookie)
+    COOKIE="$2"
+    shift 2
+    ;;
+  --cli-port)
+    CLI_PORT="$2"
+    shift 2
+    ;;
+  --)
+    shift
+    break
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    echo "unknown argument: $1" >&2
+    usage >&2
+    exit 1
+    ;;
   esac
 done
 
@@ -164,7 +164,8 @@ find_free_port() {
 CLI_PORT="$(find_free_port "$CLI_PORT")"
 
 export ERL_AFLAGS="-connect_all false -kernel inet_dist_listen_min ${CLI_PORT} inet_dist_listen_max ${CLI_PORT}"
-export MN_NODE_NAME="cli-$(date +%s)-$$@${SELF_IP}"
+MN_NODE_NAME="cli-$(date +%s)-$$@${SELF_IP}"
+export MN_NODE_NAME
 export MN_NODE_ROLE="control"
 export MN_COOKIE="$COOKIE"
 export MN_CLUSTER_NODES="$SEED_NODE"
@@ -177,7 +178,8 @@ export MN_REDIS_DB="${MN_REDIS_DB:-0}"
 export MN_REDIS_WAIT_REPLICAS="$REDIS_WAIT_REPLICAS"
 export MN_REDIS_WAIT_TIMEOUT_MS="$REDIS_WAIT_TIMEOUT_MS"
 
-export MN_API_PORT="$(find_free_port 4010)"
+MN_API_PORT="$(find_free_port 4010)"
+export MN_API_PORT
 
 >&2 echo "Running MirrorNeuron cluster CLI"
 >&2 echo "  node: $MN_NODE_NAME"

@@ -328,6 +328,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
   end
 
   test "network-only mode forwards runtime model preparation to node-local SDK" do
+    System.put_env(@identity_token_env, "model-prepare-test")
     previous_target = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
     previous_client = Application.get_env(:mirror_neuron, :native_sdk_grpc_client)
     System.put_env("MN_NETWORK_ONLY", "true")
@@ -369,7 +370,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
                 "source" => "mn-python-sdk"
               })
           },
-          nil
+          identity_stream("model-prepare-test")
         )
 
       assert %Mirrorneuron.Cluster.V1.SetResourceResponse{} = response
@@ -391,6 +392,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
   end
 
   test "prepare runtime model command forwards normalized default payload" do
+    System.put_env(@identity_token_env, "model-prepare-test")
     previous_target = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
     previous_client = Application.get_env(:mirror_neuron, :native_sdk_grpc_client)
     System.put_env("MN_NATIVE_SDK_GRPC_TARGET", "mn-native-sdk-grpc:55052")
@@ -416,7 +418,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
             version: 1,
             resource_json: Jason.encode!(%{"purpose" => "knowledge_rag"})
           },
-          nil
+          identity_stream("model-prepare-test")
         )
 
       assert %Mirrorneuron.Cluster.V1.SetResourceResponse{} = response
@@ -534,7 +536,29 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
     assert_receive {:runtime_status_events_acked, ["1-0", "2-0"]}
   end
 
+  test "authoritative node status requires identity and never acknowledges events" do
+    System.put_env(@identity_token_env, "runtime-status-test")
+
+    request = %Mirrorneuron.Cluster.V1.GetNodeRuntimeStatusRequest{
+      node_name: "mirror_neuron@test",
+      version: 1
+    }
+
+    assert_raise GRPC.RPCError, fn -> ClusterServer.get_node_runtime_status(request, nil) end
+    assert {:ok, _} = NodeState.mark("mirror_neuron@test", "healthy", %{"runtime_status" => %{}})
+
+    response =
+      ClusterServer.get_node_runtime_status(request, identity_stream("runtime-status-test"))
+
+    assert %{"name" => "mirror_neuron@test", "runtime_status" => %{}} =
+             Jason.decode!(response.resource_json)
+
+    refute_receive {:runtime_status_events_acked, _}
+    refute_receive {:cluster_runtime_status_events_acked, _}
+  end
+
   test "prepare runtime model command preserves native model preconditions" do
+    System.put_env(@identity_token_env, "model-prepare-test")
     previous_target = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
     previous_client = Application.get_env(:mirror_neuron, :native_sdk_grpc_client)
     System.put_env("MN_NATIVE_SDK_GRPC_TARGET", "mn-native-sdk-grpc:55052")
@@ -557,7 +581,7 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
               version: 1,
               resource_json: Jason.encode!(%{"model" => "nemotron3"})
             },
-            nil
+            identity_stream("model-prepare-test")
           )
         end
 
@@ -567,6 +591,20 @@ defmodule MirrorNeuron.Grpc.JobServerTest do
       restore_env("MN_NATIVE_SDK_GRPC_TARGET", previous_target)
       restore_env(:native_sdk_grpc_client, previous_client)
     end
+  end
+
+  test "model preparation rejects missing credentials before dispatch" do
+    System.put_env(@identity_token_env, "model-prepare-test")
+
+    error =
+      assert_raise GRPC.RPCError, fn ->
+        ClusterServer.prepare_runtime_model(
+          %SetResourceRequest{version: 1, resource_json: "{}"},
+          nil
+        )
+      end
+
+    assert error.status == GRPC.Status.unauthenticated()
   end
 
   test "network handshake accepts the configured join token", %{redis_url: redis_url} do

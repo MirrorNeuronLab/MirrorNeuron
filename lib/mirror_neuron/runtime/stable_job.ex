@@ -102,7 +102,6 @@ defmodule MirrorNeuron.Runtime.StableJob do
           error
       end
     else
-      {:ok, true} -> {:error, :job_already_exists}
       {:error, reason} -> {:error, reason}
     end
   end

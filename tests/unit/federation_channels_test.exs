@@ -79,6 +79,26 @@ defmodule MirrorNeuron.Cluster.FederationChannelsTest do
     FederationChannels.release(second, false, pool)
   end
 
+  test "a bounded checkout releases its pending lease on timeout", ctx do
+    pool = pool(ctx)
+    parent = self()
+
+    connect = fn ->
+      send(parent, {:connecting, self()})
+
+      receive do
+        :ready -> {:ok, :channel}
+      end
+    end
+
+    assert {:timeout, _} = catch_exit(FederationChannels.checkout(key(), connect, pool, 10))
+    assert_receive {:connecting, owner}
+    eventually(fn -> map_size(:sys.get_state(pool).leases) == 0 end)
+    send(owner, :ready)
+    assert {:ok, lease, :channel} = FederationChannels.checkout(key(), connect, pool)
+    FederationChannels.release(lease, false, pool)
+  end
+
   test "endpoint, identity and credential changes retire the old channel without interrupting users",
        ctx do
     pool = pool(ctx)

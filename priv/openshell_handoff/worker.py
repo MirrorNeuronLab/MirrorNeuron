@@ -1,11 +1,20 @@
 """Sandbox execution and sealing. Persist completion before transport can fail."""
+
 import json
 import os
 import sys
 from pathlib import Path
 from supervision import execute_command
 from cache import hydrate
-from files import VERSION, encode, read, references, sanitize, verify, write, validate_declarations
+from files import (
+    VERSION,
+    read,
+    references,
+    sanitize,
+    verify,
+    write,
+    validate_declarations,
+)
 
 
 def execute(spec):
@@ -25,8 +34,11 @@ def execute(spec):
     environment = {**os.environ, **spec["environment"]}
     captured = execute_command({**spec, "environment": environment})
     stdout = captured["stdout"]
-    result = {"exit_code": captured["exit_code"], "stdout": sanitize(stdout),
-              "stderr": sanitize(captured["stderr"])}
+    result = {
+        "exit_code": captured["exit_code"],
+        "stdout": sanitize(stdout),
+        "stderr": sanitize(captured["stderr"]),
+    }
     structured = root / "result.json"
     try:
         if structured.exists():
@@ -71,10 +83,18 @@ def seal(root, spec, result):
             raise ValueError(result["result_error"])
         # Reject unregistered files and unsupported types, including symlink dirs.
         for file in (root / "outputs").rglob("*"):
-            if file.is_symlink() or (not file.is_dir() and file.relative_to(root / "outputs").as_posix() not in seen):
+            if file.is_symlink() or (
+                not file.is_dir()
+                and file.relative_to(root / "outputs").as_posix() not in seen
+            ):
                 raise ValueError("unregistered or unsupported output")
-        manifest = {"version": VERSION, "producer": spec["producer"],
-                    "commit_id": spec["commit_id"], "references": sorted(entries, key=lambda x: x["path"]), "inputs": upstream}
+        manifest = {
+            "version": VERSION,
+            "producer": spec["producer"],
+            "commit_id": spec["commit_id"],
+            "references": sorted(entries, key=lambda x: x["path"]),
+            "inputs": upstream,
+        }
         write(root / "sealed" / "manifest.json", manifest)
     except Exception as error:
         result["seal_error"] = sanitize(str(error))

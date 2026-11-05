@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Remote commands deliberately interpolate locally selected paths and node settings.
+# shellcheck disable=SC2029
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -16,6 +18,8 @@ SKIP_SYNC="0"
 KEEP_CLUSTER_UP="0"
 WAIT_TIMEOUT_SECONDS=""
 POLL_INTERVAL_SECONDS="5"
+# Remote login environment variables must expand on the remote host.
+# shellcheck disable=SC2016
 REMOTE_PATH_PREFIX='export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH";'
 
 usage() {
@@ -47,68 +51,68 @@ EOF
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --box1-ip)
-      BOX1_IP="$2"
-      shift 2
-      ;;
-    --box2-ip)
-      BOX2_IP="$2"
-      shift 2
-      ;;
-    --start)
-      START="$2"
-      shift 2
-      ;;
-    --end)
-      END="$2"
-      shift 2
-      ;;
-    --chunk-size)
-      CHUNK_SIZE="$2"
-      CHUNK_SIZE_EXPLICIT="1"
-      shift 2
-      ;;
-    --remote-root)
-      REMOTE_ROOT="$2"
-      shift 2
-      ;;
-    --cookie)
-      COOKIE="$2"
-      shift 2
-      ;;
-    --dist-port)
-      DIST_PORT="$2"
-      shift 2
-      ;;
-    --executor-capacity)
-      EXECUTOR_CAPACITY="$2"
-      shift 2
-      ;;
-    --wait-timeout-seconds)
-      WAIT_TIMEOUT_SECONDS="$2"
-      shift 2
-      ;;
-    --poll-interval-seconds)
-      POLL_INTERVAL_SECONDS="$2"
-      shift 2
-      ;;
-    --skip-sync)
-      SKIP_SYNC="1"
-      shift
-      ;;
-    --keep-cluster-up)
-      KEEP_CLUSTER_UP="1"
-      shift
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "unknown argument: $1" >&2
-      usage >&2
-      exit 1
-      ;;
+  --box1-ip)
+    BOX1_IP="$2"
+    shift 2
+    ;;
+  --box2-ip)
+    BOX2_IP="$2"
+    shift 2
+    ;;
+  --start)
+    START="$2"
+    shift 2
+    ;;
+  --end)
+    END="$2"
+    shift 2
+    ;;
+  --chunk-size)
+    CHUNK_SIZE="$2"
+    CHUNK_SIZE_EXPLICIT="1"
+    shift 2
+    ;;
+  --remote-root)
+    REMOTE_ROOT="$2"
+    shift 2
+    ;;
+  --cookie)
+    COOKIE="$2"
+    shift 2
+    ;;
+  --dist-port)
+    DIST_PORT="$2"
+    shift 2
+    ;;
+  --executor-capacity)
+    EXECUTOR_CAPACITY="$2"
+    shift 2
+    ;;
+  --wait-timeout-seconds)
+    WAIT_TIMEOUT_SECONDS="$2"
+    shift 2
+    ;;
+  --poll-interval-seconds)
+    POLL_INTERVAL_SECONDS="$2"
+    shift 2
+    ;;
+  --skip-sync)
+    SKIP_SYNC="1"
+    shift
+    ;;
+  --keep-cluster-up)
+    KEEP_CLUSTER_UP="1"
+    shift
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    echo "unknown argument: $1" >&2
+    usage >&2
+    exit 1
+    ;;
   esac
 done
 
@@ -177,7 +181,9 @@ stop_runtime_local() {
   pids="$(local_runtime_pids || true)"
   if [ -n "$pids" ]; then
     echo "Stopping local MirrorNeuron runtimes: $pids"
-    kill $pids >/dev/null 2>&1 || true
+    while IFS= read -r pid; do
+      [ -z "$pid" ] || kill "$pid" >/dev/null 2>&1 || true
+    done <<<"$pids"
     sleep 1
   fi
 }
@@ -199,8 +205,8 @@ cleanup_sandboxes_local() {
 
   local names
   names="$(
-    NO_COLOR=1 openshell sandbox list 2>/dev/null \
-      | awk 'NR > 1 && (index($1, "prime-worker-") == 1 || index($1, "mirror-neuron-job-") == 1) {print $1}'
+    NO_COLOR=1 openshell sandbox list 2>/dev/null |
+      awk 'NR > 1 && (index($1, "prime-worker-") == 1 || index($1, "mirror-neuron-job-") == 1) {print $1}'
   )"
 
   if [ -n "$names" ]; then
@@ -233,8 +239,8 @@ ensure_local_docker() {
     open -a Docker >/dev/null 2>&1 || true
   fi
 
-  local attempt
-  for attempt in $(seq 1 60); do
+  local _attempt
+  for _attempt in $(seq 1 60); do
     if docker info >/dev/null 2>&1; then
       return
     fi
@@ -443,8 +449,8 @@ wait_for_cluster() {
         -- inspect nodes 2>/dev/null || true
     )"
 
-    if printf '%s\n' "$output" | grep -q "mn1@${BOX1_IP}" \
-      && printf '%s\n' "$output" | grep -q "mn2@${BOX2_IP}"; then
+    if printf '%s\n' "$output" | grep -q "mn1@${BOX1_IP}" &&
+      printf '%s\n' "$output" | grep -q "mn2@${BOX2_IP}"; then
       echo "Cluster is healthy."
       return
     fi
@@ -546,8 +552,8 @@ SUBMIT_JSON="$(
 )"
 
 JOB_ID="$(
-  printf '%s\n' "$SUBMIT_JSON" \
-    | python3.12 -c 'import json,sys; print(json.load(sys.stdin)["job_id"])'
+  printf '%s\n' "$SUBMIT_JSON" |
+    python3.12 -c 'import json,sys; print(json.load(sys.stdin)["job_id"])'
 )"
 
 echo "Submitted job:"

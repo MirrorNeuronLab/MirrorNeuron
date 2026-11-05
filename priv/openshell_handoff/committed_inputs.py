@@ -3,6 +3,7 @@
 The source root is derived from Core's current run, never from an artifact path
 or a worker environment. No SDK installation or domain code is imported here.
 """
+
 import json
 import os
 import re
@@ -25,13 +26,21 @@ def admit(root, payload, *, max_files, max_bytes):
                 if value.get("version") != "mn.block_handoff/v1":
                     raise ValueError("unsupported block handoff version")
                 return  # Its bytes are already covered by explicit handoff refs.
-            if value.get("type") == "artifact_ref" and value.get("version") in {JSON, BYTES}:
+            if value.get("type") == "artifact_ref" and value.get("version") in {
+                JSON,
+                BYTES,
+            }:
                 ref = value
-                if (set(ref) != {"type", "version", "path", "kind", "sha256", "size_bytes"}
-                        or type(ref["size_bytes"]) is not int or ref["size_bytes"] < 0
-                        or not isinstance(ref["kind"], str) or not ref["kind"]
-                        or not isinstance(ref["sha256"], str)
-                        or re.fullmatch(r"[a-f0-9]{64}", ref["sha256"]) is None):
+                if (
+                    set(ref)
+                    != {"type", "version", "path", "kind", "sha256", "size_bytes"}
+                    or type(ref["size_bytes"]) is not int
+                    or ref["size_bytes"] < 0
+                    or not isinstance(ref["kind"], str)
+                    or not ref["kind"]
+                    or not isinstance(ref["sha256"], str)
+                    or re.fullmatch(r"[a-f0-9]{64}", ref["sha256"]) is None
+                ):
                     raise ValueError("invalid committed artifact reference")
                 name = safe(ref["path"])
                 if ":" in name:
@@ -44,12 +53,20 @@ def admit(root, payload, *, max_files, max_bytes):
                 if len(found) >= max_files or size > max_bytes:
                     raise ValueError("artifact input quota exceeded")
                 source = verify(root.parent, ref)
-                promoted = {"type": "artifact_ref", "version": VERSION,
-                            "commit_id": "input-" + ref["sha256"],
-                            "path": ref["sha256"] + ".json", "sha256": ref["sha256"],
-                            "size_bytes": ref["size_bytes"], "kind": "committed_input",
-                            "producer": {"run_id": root.parent.name, "step_instance": "owner-admission"},
-                            "committed_ref": dict(ref)}
+                promoted = {
+                    "type": "artifact_ref",
+                    "version": VERSION,
+                    "commit_id": "input-" + ref["sha256"],
+                    "path": ref["sha256"] + ".json",
+                    "sha256": ref["sha256"],
+                    "size_bytes": ref["size_bytes"],
+                    "kind": "committed_input",
+                    "producer": {
+                        "run_id": root.parent.name,
+                        "step_instance": "owner-admission",
+                    },
+                    "committed_ref": dict(ref),
+                }
                 found[name] = promoted
                 destination = root / "inputs" / promoted["path"]
                 mkdir(destination.parent)
@@ -86,5 +103,7 @@ def admit(root, payload, *, max_files, max_bytes):
     for promoted in found.values():
         ref = promoted["committed_ref"]
         if ref["version"] == JSON:
-            inherited.extend(references(json.loads(verify(root.parent, ref).read_bytes())))
+            inherited.extend(
+                references(json.loads(verify(root.parent, ref).read_bytes()))
+            )
     return [*found.values(), *inherited]
