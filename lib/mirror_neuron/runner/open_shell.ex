@@ -43,7 +43,8 @@ defmodule MirrorNeuron.Runner.OpenShell do
          {:ok, resource_id} <- register_one_shot_sandbox(sandbox_name, opts) do
       try do
         with {:ok, args} <- build_args(sandbox_name, staged_dir, remote_dir, config, opts),
-             {:ok, output, openshell_exit_code} <- run_command(executable, args),
+             {:ok, output, openshell_exit_code} <-
+               stream_transport(executable, args, config, opts),
              :ok <-
                release_one_shot_sandbox(
                  resource_id,
@@ -143,7 +144,8 @@ defmodule MirrorNeuron.Runner.OpenShell do
                    shared_storage.config,
                    sandbox["sandbox_name"],
                    sandbox["ssh_host"],
-                   command
+                   command,
+                   shared_storage.opts
                  ) do
             with :ok <- OpenShellSharedStorage.download(shared_storage, executable),
                  :ok <-
@@ -294,6 +296,16 @@ defmodule MirrorNeuron.Runner.OpenShell do
         ":"
       end
 
+    supervision_spec =
+      Jason.encode!(%{
+        "command" => actual_command,
+        "workdir" => workdir,
+        "timeout_seconds" => Map.get(config, "timeout_seconds", 600),
+        "max_result_bytes" => Map.get(config, "max_output_bytes", 1_000_000),
+        "stdout_path" => stdout_file,
+        "stderr_path" => stderr_file
+      })
+
     wrapper = """
     set +e
     export MN_INPUT_FILE=#{shell_escape(input_file)}
@@ -310,9 +322,10 @@ defmodule MirrorNeuron.Runner.OpenShell do
     #{extra_env_exports}
     mkdir -p #{shell_escape(remote_dir)}
     cd #{shell_escape(workdir)}
-    (
-    #{actual_command}
-    ) >#{shell_escape(stdout_file)} 2>#{shell_escape(stderr_file)}
+    export MN_AGENT_BEACON_STDOUT_PREFIX=__MN_AGENT_BEACON__
+    /usr/bin/python3 #{shell_escape(Path.join(remote_dir, "mirror_neuron_supervision.py"))} <<'MN_SUPERVISION'
+    #{supervision_spec}
+    MN_SUPERVISION
     status=$?
     MN_EXIT_CODE="$status" /usr/bin/python3 - <<'PY'
     import json
@@ -392,16 +405,21 @@ defmodule MirrorNeuron.Runner.OpenShell do
   end
 
   @doc false
-  def run_ssh_command(config, sandbox_name, ssh_host, command) do
+  def run_ssh_command(config, sandbox_name, ssh_host, command, opts \\ nil) do
     executable = sandbox_cli(config)
 
     case OpenShellCLI.direct_exec_args(sandbox_name, command) do
-      nil -> run_registered_gateway_ssh(config, executable, sandbox_name, ssh_host, command)
-      args -> OpenShellCLI.run_with_closed_stdin(executable, args)
+      nil ->
+        run_registered_gateway_ssh(config, executable, sandbox_name, ssh_host, command, opts)
+
+      args ->
+        if is_list(opts),
+          do: stream_transport(executable, args, config, opts),
+          else: OpenShellCLI.run_with_closed_stdin(executable, args)
     end
   end
 
-  defp run_registered_gateway_ssh(config, executable, sandbox_name, ssh_host, command) do
+  defp run_registered_gateway_ssh(config, executable, sandbox_name, ssh_host, command, opts) do
     ssh_bin = Map.get(config, "ssh_bin", "ssh")
 
     temp_config =
@@ -417,7 +435,11 @@ defmodule MirrorNeuron.Runner.OpenShell do
            ) do
         {ssh_config, 0} ->
           File.write!(temp_config, ssh_config)
-          run_command(ssh_bin, ["-F", temp_config, ssh_host | command])
+          args = ["-F", temp_config, ssh_host | command]
+
+          if is_list(opts),
+            do: stream_transport(ssh_bin, args, config, opts),
+            else: run_command(ssh_bin, args)
 
         {output, exit_code} ->
           {:error,
@@ -434,6 +456,28 @@ defmodule MirrorNeuron.Runner.OpenShell do
   rescue
     error in ErlangError ->
       {:error, "failed to invoke ssh for #{sandbox_name}: #{Exception.message(error)}"}
+  end
+
+  defp stream_transport(executable, args, config, opts) do
+    command = ["/bin/sh", "-c", ~S(exec </dev/null; exec "$@"), "openshell", executable | args]
+    limits = config["artifact_handoff"] || %{}
+
+    transport =
+      config
+      |> Map.put("max_output_bytes", 4 * Map.get(limits, "max_result_bytes", 1_000_000) + 16_384)
+      |> Map.put("beacon_enabled", true)
+      |> Map.put("agent_beacon_required", false)
+
+    case MirrorNeuron.Runner.HostLocal.stream_command(
+           command,
+           OpenShellCLI.command_env(),
+           File.cwd!(),
+           transport,
+           opts
+         ) do
+      {:ok, output, code} -> {:ok, output, code}
+      other -> other
+    end
   end
 
   defp extract_result(output, sandbox_name, remote_dir, openshell_exit_code) do
@@ -508,6 +552,11 @@ defmodule MirrorNeuron.Runner.OpenShell do
     message = build_message(payload, config, opts)
 
     with :ok <- copy_uploads(base_dir, config, opts),
+         :ok <-
+           File.cp(
+             Path.join(MirrorNeuron.Runner.OpenShellArtifactStore.helper_dir(), "supervision.py"),
+             Path.join(base_dir, "mirror_neuron_supervision.py")
+           ),
          :ok <-
            File.write(
              Path.join(base_dir, "mirror_neuron_input.json"),

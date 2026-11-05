@@ -1,6 +1,27 @@
 defmodule MirrorNeuron.Runtime.WorkflowActivityTest do
   use ExUnit.Case, async: true
 
+  defp reconcile(state, now) do
+    {state, events, actions} = MirrorNeuron.Runtime.WorkflowLedger.reconcile(state, now)
+
+    Enum.reduce(actions, {state, events, []}, fn
+      {:inspect_step, id, token, agents}, {state, events, actions} ->
+        {state, inspected, resolved} =
+          MirrorNeuron.Runtime.WorkflowLedger.inspection_result(
+            state,
+            id,
+            token,
+            Map.new(agents, &{&1, "alive"}),
+            now
+          )
+
+        {state, events ++ inspected, actions ++ resolved}
+
+      action, {state, events, actions} ->
+        {state, events, actions ++ [action]}
+    end)
+  end
+
   alias MirrorNeuron.{Manifest, Message}
   alias MirrorNeuron.Runtime.WorkflowLedger
 
@@ -11,7 +32,7 @@ defmodule MirrorNeuron.Runtime.WorkflowActivityTest do
     state =
       Enum.reduce(1..120, state, fn number, state ->
         state = beacon(state, number * 30, number)
-        {state, [], []} = WorkflowLedger.reconcile(state, at(number * 30))
+        {state, [], []} = reconcile(state, at(number * 30))
         assert state["steps"]["a"]["status"] == "running"
         state
       end)
@@ -33,7 +54,7 @@ defmodule MirrorNeuron.Runtime.WorkflowActivityTest do
     deadline = state["steps"]["a"]["progress_deadline_at"]
     state = Enum.reduce(1..11, state, fn n, state -> beacon(state, n * 30, 1) end)
     assert state["steps"]["a"]["progress_deadline_at"] == deadline
-    {state, _, actions} = WorkflowLedger.reconcile(state, at(330))
+    {state, _, actions} = reconcile(state, at(330))
     assert state["steps"]["a"]["status"] == "failed"
     assert state["steps"]["a"]["terminal_error"]["code"] == "workflow.step.progress_timeout"
     assert Enum.any?(actions, &match?({:fail_job, "a", _}, &1))
@@ -52,7 +73,7 @@ defmodule MirrorNeuron.Runtime.WorkflowActivityTest do
       )
 
     assert state["steps"]["a"]["progress_sequences"]["a"]["sequence"] == 1
-    {state, _, _} = WorkflowLedger.reconcile(state, at(76))
+    {state, _, _} = reconcile(state, at(76))
     assert state["steps"]["a"]["terminal_error"]["code"] == "workflow.step.heartbeat_timeout"
   end
 
@@ -63,11 +84,11 @@ defmodule MirrorNeuron.Runtime.WorkflowActivityTest do
     deadline = state["steps"]["a"]["progress_deadline_at"]
     state = beacon(state, 1000, 2, wait)
     assert state["steps"]["a"]["progress_deadline_at"] == deadline
-    {state, [], []} = WorkflowLedger.reconcile(state, at(1000))
+    {state, [], []} = reconcile(state, at(1000))
     assert state["steps"]["a"]["work_state"] == "waiting"
     state = beacon(state, 1001, 3)
     assert state["steps"]["a"]["work_state"] == "active"
-    {state, [], []} = WorkflowLedger.reconcile(state, at(1001))
+    {state, [], []} = reconcile(state, at(1001))
     assert state["steps"]["a"]["status"] == "running"
   end
 
@@ -78,14 +99,14 @@ defmodule MirrorNeuron.Runtime.WorkflowActivityTest do
     {resumed, _} = WorkflowLedger.resume(paused, at(3602))
     assert resumed["steps"]["a"]["progress_deadline_at"] == at(3901)
     resumed = beacon(resumed, 3603, 2)
-    {resumed, [], []} = WorkflowLedger.reconcile(resumed, at(3603))
+    {resumed, [], []} = reconcile(resumed, at(3603))
     assert resumed["steps"]["a"]["attempt_count"] == 1
   end
 
   test "repeated waiting heartbeats cannot hide an expired external wait" do
     wait = %{"wait_id" => "review-1", "wait_timeout_ms" => 3_600_000}
     state = started() |> beacon(1, 1, wait) |> beacon(4000, 2, wait)
-    {state, _, _} = WorkflowLedger.reconcile(state, at(4000))
+    {state, _, _} = reconcile(state, at(4000))
     assert state["steps"]["a"]["terminal_error"]["code"] == "workflow.step.progress_timeout"
   end
 
@@ -113,10 +134,11 @@ defmodule MirrorNeuron.Runtime.WorkflowActivityTest do
              )
   end
 
-  test "explicit execution budgets remain authoritative despite healthy progress" do
+  test "authored workflow limits inspect and extend healthy progress" do
     state = started(%{"timeout_seconds" => 60}) |> beacon(59, 1) |> beacon(61, 2)
-    {state, _, _} = WorkflowLedger.reconcile(state, at(61))
-    assert state["steps"]["a"]["terminal_reason"] == "workflow step deadline exceeded"
+    {state, _, _} = reconcile(state, at(61))
+    assert state["steps"]["a"]["status"] == "running"
+    assert state["steps"]["a"]["deadline_at"] == at(121)
   end
 
   defp started(control \\ %{}) do

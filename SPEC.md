@@ -1,12 +1,25 @@
 # MirrorNeuron Core Specification
 
+## Job timeouts
+
+Workflow step limits use asynchronous inspection at their soft deadline (300
+seconds by default). Healthy SDK progress or a bounded external wait extends the
+same attempt; liveness alone does not. Lazy platform preparation is excluded
+from workflow and runner execution time, with its own bounded watchdog.
+HostLocal, Docker and OpenShell stream this evidence live. Staged-input checks
+run asynchronously and measure transfer inactivity instead of total elapsed
+copy time. Cancellation and explicit operation budgets remain enforced.
+
+See [Job timeout ownership](JOB_TIMEOUTS.md) for the reviewed timeout
+boundaries, event contract, dead-step detection, recovery and deployment.
+
 ## Activity-supervised workflows
 
 `workflow.execution.supervision: "activity"` uses live SDK progress and process
 heartbeats instead of an implicit batch elapsed deadline. Core requires HostLocal
 executor nodes with enabled, required agent beacons; buffered runners are rejected.
-An explicit step or runner `timeout_seconds` remains an intentional hard budget.
-Existing workflows without this declaration retain their deadline semantics.
+Step and command `timeout_seconds` values use the shared soft inspection and
+inactivity contract. Explicit domain/tool/block operation budgets remain independent.
 
 A step may run for any total duration while its progress sequence advances.
 Automatic process/runtime beacons only establish liveness. Core tracks progress
@@ -218,9 +231,11 @@ For SDK-staged local inputs, Core verifies the versioned
 workflow entrypoint. The run remains `pending` while Syncthing catches up,
 emitting rate-limited `submission_storage_waiting` events, then emits
 `submission_storage_ready` and dispatches automatically. A non-ready tree
-fails before any source message on the configured
-`MN_SHARED_STORAGE_READY_TIMEOUT_SECONDS` deadline (default 1800) with a
-`submission_storage_timeout` event. Legacy submissions without an inventory
+fails before any source message after the configured
+`MN_SHARED_STORAGE_READY_TIMEOUT_SECONDS` inactivity interval (default 1800) with a
+`submission_storage_timeout` event. Verification runs asynchronously; observed
+byte growth or newly verified files renews the inactivity allowance, and repeated
+snapshots do not. Legacy submissions without an inventory
 remain immediate. Fresh and FIFO-queued starts both delegate staged-input
 readiness to this coordinator gate after admission. An inventory or file still
 replicating is not a terminal admission failure or a human-review request;
@@ -628,10 +643,10 @@ runs the installed library against loopback-only synthetic streams with both
 empty and non-empty choices; an upstream source change fails the build and
 requires review. Rebuild the Core/gateway image to deploy this correction.
 
-OpenShell buffers command output until completion, including artifact-handoff
-workers. Its inherited node beacon timeout does not shorten a workflow task
-deadline. Explicit workflow heartbeat controls remain authoritative; otherwise
-the declared step timeout governs both fixed and child tasks.
+OpenShell relays structured SDK activity live for both artifact-handoff and legacy
+workers. Explicit workflow heartbeat controls remain authoritative. The step
+timeout triggers asynchronous inspection for both fixed and child tasks;
+command progress and preparation use the same execution-clock contract.
 
 ## Runtime-owned child workflow rounds
 
@@ -692,7 +707,7 @@ boundary. Public events do not carry source text or memory packet content.
 
 DockerWorker workflow attempts, including dynamic child tasks, use the declared
 step timeout as their default liveness deadline. Node-level beacon settings are
-not applied because this runner does not stream workflow beacons. An explicit
+not inherited as a separate liveness contract; live SDK progress is relayed. An explicit
 workflow `control.beacon_timeout_ms` remains authoritative for workloads that
 provide a separate beacon producer. HostLocal node beacon settings are unchanged.
 

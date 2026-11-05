@@ -551,7 +551,20 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     executable = System.find_executable(docker_bin) || docker_bin
     timeout_ms = timeout_ms(config)
     deadline = if timeout_ms, do: System.monotonic_time(:millisecond) + timeout_ms
-    event_state = agent_event_state(config, opts)
+
+    event_state =
+      agent_event_state(config, opts)
+      |> Map.put(
+        :budget,
+        MirrorNeuron.Runner.CommandBudget.new(
+          timeout_ms,
+          Map.merge(
+            Map.get(config, "environment", %{}),
+            MirrorNeuron.Runner.WorkflowEnvironment.from_options(opts)
+          ),
+          System.monotonic_time(:millisecond)
+        )
+      )
 
     emit_runner_event(opts, "docker_worker_command_started", %{
       "category" => "system",
@@ -596,10 +609,21 @@ defmodule MirrorNeuron.Runner.DockerWorker do
          chunks,
          bytes,
          max_output_bytes,
-         deadline,
+         _previous_deadline,
          event_state
        ) do
     owner_ref = Keyword.fetch!(opts, :docker_owner_monitor)
+
+    {remaining, budget} =
+      MirrorNeuron.Runner.CommandBudget.remaining(
+        event_state.budget,
+        System.monotonic_time(:millisecond)
+      )
+
+    event_state = %{event_state | budget: budget}
+
+    deadline =
+      if remaining == :infinity, do: nil, else: System.monotonic_time(:millisecond) + remaining
 
     receive do
       {^port, {:data, data}} ->
@@ -649,31 +673,55 @@ defmodule MirrorNeuron.Runner.DockerWorker do
         stop_owned_command(port, container_name, config, opts)
     after
       receive_timeout(deadline) ->
-        cleanup_result = stop_owned_command(port, container_name, config, opts)
-        output = chunks |> Enum.reverse() |> IO.iodata_to_binary()
+        {remaining, budget} =
+          MirrorNeuron.Runner.CommandBudget.remaining(
+            event_state.budget,
+            System.monotonic_time(:millisecond)
+          )
 
-        emit_runner_event(opts, "docker_worker_command_timed_out", %{
-          "category" => "error",
-          "message" => "DockerWorker command timed out",
-          "status" => "failed",
-          "runner" => "docker_worker",
-          "target" => container_name,
-          "duration_ms" => timeout_ms_from_deadline(deadline),
-          "result_summary" => compact_output_tail(output)
-        })
+        if remaining != 0 do
+          collect_docker_output(
+            port,
+            container_name,
+            config,
+            opts,
+            chunks,
+            bytes,
+            max_output_bytes,
+            deadline,
+            %{event_state | budget: budget}
+          )
+        else
+          cleanup_result = stop_owned_command(port, container_name, config, opts)
+          output = chunks |> Enum.reverse() |> IO.iodata_to_binary()
 
-        {:error,
-         %{
-           "error" => "docker worker command timed out",
-           "timeout_ms" => timeout_ms_from_deadline(deadline),
-           "cleanup_result" => inspect(cleanup_result),
-           "stdout" => output
-         }}
+          emit_runner_event(opts, "docker_worker_command_timed_out", %{
+            "category" => "error",
+            "message" => "DockerWorker command timed out",
+            "status" => "failed",
+            "runner" => "docker_worker",
+            "target" => container_name,
+            "duration_ms" => timeout_ms_from_deadline(deadline),
+            "result_summary" => compact_output_tail(output)
+          })
+
+          {:error,
+           %{
+             "error" => "docker worker command timed out",
+             "timeout_ms" => timeout_ms_from_deadline(deadline),
+             "cleanup_result" => inspect(cleanup_result),
+             "stdout" => output
+           }}
+        end
     end
   end
 
   defp agent_event_state(config, opts) do
-    environment = Map.get(config, "environment", %{})
+    environment =
+      Map.merge(
+        Map.get(config, "environment", %{}),
+        MirrorNeuron.Runner.WorkflowEnvironment.from_options(opts)
+      )
 
     %{
       prefix: agent_event_prefix(config),
@@ -710,10 +758,30 @@ defmodule MirrorNeuron.Runner.DockerWorker do
         line = String.trim_trailing(line, "\r")
 
         if String.starts_with?(line, current_state.prefix) do
-          emit_agent_event_line(line, current_state)
-          {acc, current_state}
+          {acc, emit_agent_event_line(line, current_state)}
         else
-          {[line | acc], current_state}
+          if String.starts_with?(line, "__MN_AGENT_BEACON__") do
+            case Jason.decode(String.replace_prefix(line, "__MN_AGENT_BEACON__", "")) do
+              {:ok, payload} when is_map(payload) ->
+                payload = agent_event_payload(current_state, payload)
+                emit_event(current_state, "agent_beacon", payload)
+
+                budget =
+                  MirrorNeuron.Runner.CommandBudget.observe(
+                    current_state.budget,
+                    "agent_beacon",
+                    payload,
+                    System.monotonic_time(:millisecond)
+                  )
+
+                {acc, %{current_state | budget: budget}}
+
+              _ ->
+                {acc, current_state}
+            end
+          else
+            {[line | acc], current_state}
+          end
         end
       end)
 
@@ -732,7 +800,7 @@ defmodule MirrorNeuron.Runner.DockerWorker do
     line = String.trim_trailing(state.line_buffer, "\r")
 
     if String.starts_with?(line, state.prefix) do
-      emit_agent_event_line(line, state)
+      state = emit_agent_event_line(line, state)
       {"", %{state | line_buffer: ""}}
     else
       {state.line_buffer, %{state | line_buffer: ""}}
@@ -744,6 +812,24 @@ defmodule MirrorNeuron.Runner.DockerWorker do
       line
       |> String.replace_prefix(state.prefix, "")
       |> String.trim()
+
+    state =
+      case Jason.decode(raw_payload) do
+        {:ok, %{"type" => type, "payload" => payload}} when is_map(payload) ->
+          %{
+            state
+            | budget:
+                MirrorNeuron.Runner.CommandBudget.observe(
+                  state.budget,
+                  type,
+                  payload,
+                  System.monotonic_time(:millisecond)
+                )
+          }
+
+        _ ->
+          state
+      end
 
     case Jason.decode(raw_payload) do
       {:ok, %{"type" => event_type, "payload" => payload}}
@@ -766,6 +852,8 @@ defmodule MirrorNeuron.Runner.DockerWorker do
           agent_event_payload(state, %{"message" => raw_payload, "category" => "agent"})
         )
     end
+
+    state
   end
 
   defp agent_event_payload(state, payload) do
@@ -1249,6 +1337,12 @@ defmodule MirrorNeuron.Runner.DockerWorker do
         _ ->
           %{}
       end
+
+    env =
+      Map.merge(env, %{
+        "MN_AGENT_BEACON_STDOUT_PREFIX" => "__MN_AGENT_BEACON__",
+        "MN_AGENT_BEACON_INTERVAL_MS" => to_string(Map.get(config, "beacon_interval_ms", 15_000))
+      })
 
     MirrorNeuron.Runtime.RunResourceEnvironment.for_container(config, env)
   end

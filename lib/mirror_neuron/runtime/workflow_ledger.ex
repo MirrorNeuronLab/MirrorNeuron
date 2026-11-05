@@ -9,7 +9,9 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
   alias MirrorNeuron.Runtime.ErrorEnvelope
   alias MirrorNeuron.Runtime.WorkflowTrigger
   alias MirrorNeuron.Runtime.WorkflowMessage
+  alias MirrorNeuron.Runtime.WorkflowSupervision
   alias MirrorNeuron.Runtime.WorkflowActivity
+  alias MirrorNeuron.Runtime.WorkflowPreparation
   alias MirrorNeuron.Runtime.ServiceEventWorkflow
 
   @schema_version 3
@@ -372,6 +374,9 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
                stale_attempt_output?(step, payload)) ->
           ignore_stale_step_output(state, step, payload, now)
 
+        normalized_event_type == "agent_beacon" and stale_attempt_output?(step, payload) ->
+          {state, [], []}
+
         step_terminal?(step) ->
           ignore_terminal_step_event(state, step, normalized_event_type, payload, now)
 
@@ -401,8 +406,17 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
 
   defp handle_step_agent_event(state, agent_id, step, event_type, payload, now) do
     case event_type do
+      type when type in ["runtime_preparation_started", "runtime_preparation_finished"] ->
+        state = WorkflowPreparation.on_event(state, step["id"], agent_id, type, payload, now)
+        {state, [], []}
+
       "agent_beacon" ->
-        step = refresh_beacon(step, payload, now) |> WorkflowActivity.observe(payload, now)
+        step =
+          step
+          |> WorkflowPreparation.advance(now)
+          |> refresh_beacon(payload, now)
+          |> WorkflowActivity.observe(payload, now)
+
         state = put_step(state, step)
         {state, [workflow_event(:workflow_step_beacon, step, beacon_payload(payload, now))], []}
 
@@ -542,22 +556,46 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
     {state, [dead_letter_event, failure_event]}
   end
 
-  defp reconcile_step(state, %{"status" => "running"} = step, now) do
-    cond do
-      expired?(Map.get(step, "deadline_at"), now) ->
-        {state, events, actions} =
-          fail_current_attempt(state, step, "workflow step deadline exceeded", now)
+  def inspection_result(state, step_id, token, observations, now \\ Runtime.timestamp()) do
+    step = get_in(state, ["steps", step_id]) || %{}
 
-        {state,
+    case WorkflowSupervision.resolve(state, step, token, observations, now) do
+      :stale ->
+        {state, [], []}
+
+      {:continued, step, reason} ->
+        {put_step(state, step),
          [
-           workflow_event(:workflow_step_attempt_timed_out, step, %{
-             "reason" => "deadline exceeded"
+           workflow_event(:workflow_step_continued, step, %{
+             "reason" => reason,
+             "deadline_at" => step["deadline_at"]
            })
-           | events
-         ],
-         [{:terminate_agent, primary_agent_id(step), "workflow step deadline exceeded"} | actions]}
+         ], []}
 
-      expired?(Map.get(step, "heartbeat_deadline_at"), now) ->
+      {:failed, reason} ->
+        {state, events, actions} = fail_current_attempt(state, step, reason, now)
+        event = workflow_event(:workflow_step_attempt_timed_out, step, %{"reason" => reason})
+        {state, [event | events], timeout_terminations(state, step, reason) ++ actions}
+    end
+  end
+
+  defp timeout_terminations(state, step, reason) do
+    Enum.uniq((step["agent_ids"] || []) ++ WorkflowSupervision.agents(state, step))
+    |> Enum.map(&{:terminate_agent, &1, reason})
+  end
+
+  defp reconcile_step(state, %{"status" => "running"} = step, now) do
+    step = WorkflowPreparation.advance(step, now)
+    state = put_step(state, step)
+
+    cond do
+      WorkflowPreparation.expired?(step, now) ->
+        reason = "workflow step preparation deadline exceeded"
+        {state, events, actions} = fail_current_attempt(state, step, reason, now)
+        {state, events, timeout_terminations(state, step, reason) ++ actions}
+
+      not step["heartbeat_uses_execution_budget"] and
+          expired?(Map.get(step, "heartbeat_deadline_at"), now) ->
         {state, events, actions} =
           fail_current_attempt(state, step, "workflow step heartbeat deadline exceeded", now)
 
@@ -568,20 +606,26 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
            })
            | events
          ],
-         [
-           {:terminate_agent, primary_agent_id(step), "workflow step heartbeat deadline exceeded"}
-           | actions
-         ]}
+         timeout_terminations(state, step, "workflow step heartbeat deadline exceeded") ++ actions}
 
-      expired?(Map.get(step, "progress_deadline_at"), now) ->
-        {state, events, actions} =
-          fail_current_attempt(state, step, "workflow step progress deadline exceeded", now)
+      expired?(step["deadline_at"], now) or expired?(step["progress_deadline_at"], now) ->
+        case WorkflowSupervision.request(step, now) do
+          :pending ->
+            {state, [], []}
 
-        {state, events,
-         [
-           {:terminate_agent, primary_agent_id(step), "workflow step progress deadline exceeded"}
-           | actions
-         ]}
+          {:inspect, inspected, token} ->
+            event =
+              workflow_event(:workflow_step_inspection_started, inspected, %{
+                "reason" => "soft deadline reached"
+              })
+
+            {put_step(state, inspected), [event],
+             [{:inspect_step, step["id"], token, WorkflowSupervision.agents(state, step)}]}
+
+          {:failed, reason} ->
+            {state, events, actions} = fail_current_attempt(state, step, reason, now)
+            {state, events, timeout_terminations(state, step, reason) ++ actions}
+        end
 
       true ->
         {state, [], []}
@@ -1215,6 +1259,15 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
         "terminal_error" => nil,
         "last_error" => nil
       })
+      |> WorkflowPreparation.reset()
+      |> Map.drop([
+        "inspection",
+        "inspection_retry_used",
+        "progress_sequences",
+        "seen_waits",
+        "waiting_id",
+        "progress_deadline_at"
+      ])
       |> WorkflowActivity.start(now)
 
     state =
@@ -1920,10 +1973,9 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
           positive_int(configured_timeout_seconds, @default_timeout_seconds)
         end
 
-      # These runners buffer command output and report terminal results; they
-      # cannot satisfy a node-level beacon deadline during an in-flight command.
-      # Use the declared step deadline unless workflow control explicitly
-      # declares a heartbeat supplied by another producer.
+      # A runner's inherited defaults do not create a second workflow liveness
+      # contract. Docker/OpenShell relay SDK progress live; explicit workflow
+      # heartbeat controls remain authoritative alongside soft inspection.
       node_beacon_timeout_ms =
         if Map.get(node_config, "runner_module") in [
              "MirrorNeuron.Runner.DockerWorker",
@@ -1988,7 +2040,9 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
         "retry_backoff_multiplier" => positive_number(Map.get(retry, "backoff_multiplier"), 2),
         "supervision" => if(activity?, do: "activity"),
         "timeout_seconds" => timeout_seconds,
-        "beacon_timeout_ms" => beacon_timeout_ms
+        "beacon_timeout_ms" => beacon_timeout_ms,
+        "heartbeat_uses_execution_budget" =>
+          is_nil(configured_beacon_timeout_ms) and not activity?
       }
     end
   end
@@ -2048,7 +2102,9 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
           end)
           |> Map.new()
 
-        steps = Map.merge(merged_base_steps, persisted_mapped_steps)
+        steps =
+          Map.merge(merged_base_steps, persisted_mapped_steps)
+          |> Map.new(fn {id, step} -> {id, Map.delete(step, "inspection")} end)
 
         persisted_order =
           existing

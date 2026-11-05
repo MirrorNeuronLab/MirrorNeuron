@@ -4,7 +4,18 @@ defmodule MirrorNeuron.Runtime.WorkflowPause do
   @clocks ["deadline_at", "heartbeat_deadline_at", "progress_deadline_at", "retry_at"]
   @active ["queued", "running", "retry_wait", "waiting"]
 
-  def pause(state, now), do: Map.put_new(state, "paused_at", now)
+  def pause(%{"paused_at" => _} = state, _now), do: state
+
+  def pause(state, now) do
+    state
+    |> Map.update!("steps", fn steps ->
+      Map.new(steps, fn {id, step} ->
+        {id,
+         step |> MirrorNeuron.Runtime.WorkflowPreparation.pause(now) |> Map.delete("inspection")}
+      end)
+    end)
+    |> Map.put("paused_at", now)
+  end
 
   def resume(state, now) do
     with paused_at when is_binary(paused_at) <- state["paused_at"],

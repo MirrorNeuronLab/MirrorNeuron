@@ -251,85 +251,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
   # A submission readiness marker is present only for SDK-staged host inputs.
   # Workers are prepared first, but no generated source receives its initial
   # message until the selected owner has verified every staged file locally.
-  defp submission_storage_status(state) do
-    now_ms = System.monotonic_time(:millisecond)
-    storage = Map.get(state, :submission_storage, %{})
-    started_at_ms = Map.get(storage, :started_at_ms, now_ms)
-    elapsed_ms = max(now_ms - started_at_ms, 0)
-
-    case SubmissionReadiness.verify(state.manifest) do
-      {:ready, %{"managed" => true} = metrics} ->
-        EventBus.publish(
-          state.job_id,
-          submission_storage_event(:submission_storage_ready, metrics, elapsed_ms)
-        )
-
-        {:ready, %{state | submission_storage: Map.put(storage, :timer_token, nil)}}
-
-      {:ready, _legacy_or_local} ->
-        {:ready, %{state | submission_storage: Map.put(storage, :timer_token, nil)}}
-
-      {:waiting, metrics} ->
-        timeout_seconds = SubmissionReadiness.timeout_seconds()
-        details = submission_storage_event(:submission_storage_waiting, metrics, elapsed_ms)
-
-        cond do
-          elapsed_ms >= timeout_seconds * 1_000 ->
-            timeout_details = Map.put(details, :timeout_seconds, timeout_seconds)
-
-            EventBus.publish(
-              state.job_id,
-              Map.put(timeout_details, :type, :submission_storage_timeout)
-            )
-
-            {:error,
-             "staged inputs were not ready on #{Map.fetch!(timeout_details, :node)} after #{timeout_seconds} seconds",
-             %{state | submission_storage: Map.put(storage, :timer_token, nil)}}
-
-          wait_event_due?(storage, now_ms) ->
-            EventBus.publish(state.job_id, details)
-
-            {:waiting,
-             %{
-               state
-               | submission_storage:
-                   storage
-                   |> Map.put(:waiting?, true)
-                   |> Map.put(:last_wait_event_at_ms, now_ms)
-             }}
-
-          true ->
-            {:waiting, %{state | submission_storage: Map.put(storage, :waiting?, true)}}
-        end
-
-      {:error, reason, metrics} ->
-        EventBus.publish(
-          state.job_id,
-          submission_storage_event(
-            :submission_storage_timeout,
-            Map.put(metrics, "reason", reason),
-            elapsed_ms
-          )
-        )
-
-        {:error, reason, %{state | submission_storage: Map.put(storage, :timer_token, nil)}}
-    end
-  end
-
-  defp submission_storage_event(type, metrics, elapsed_ms) do
-    metrics
-    |> Map.put(:type, type)
-    |> Map.put(:node, to_string(Node.self()))
-    |> Map.put(:elapsed_ms, elapsed_ms)
-    |> Map.put(:timestamp, Runtime.timestamp())
-  end
-
-  defp wait_event_due?(storage, now_ms) do
-    case Map.get(storage, :last_wait_event_at_ms) do
-      nil -> true
-      previous -> now_ms - previous >= SubmissionReadiness.event_interval_ms()
-    end
-  end
+  defp submission_storage_status(state),
+    do: MirrorNeuron.Runtime.SubmissionPreparation.status(state)
 
   defp schedule_submission_storage_check(state) do
     storage = Map.get(state, :submission_storage, %{})
@@ -704,6 +627,30 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   def handle_info({:submission_storage_check, _token}, state), do: {:noreply, state}
 
+  def handle_info({ref, result}, %{submission_storage: %{check_task: %Task{ref: ref}}} = state) do
+    Process.demonitor(ref, [:flush])
+    state = MirrorNeuron.Runtime.SubmissionPreparation.received(state, result)
+
+    if state.status == "pending",
+      do: continue_bootstrap_after_storage_check(state),
+      else: {:noreply, state}
+  end
+
+  def handle_info(
+        {:DOWN, ref, :process, _pid, _reason},
+        %{submission_storage: %{check_task: %Task{ref: ref}}} = state
+      ) do
+    state =
+      MirrorNeuron.Runtime.SubmissionPreparation.received(
+        state,
+        {:error, "submission_readiness_inspection_failed", %{}}
+      )
+
+    if state.status == "pending",
+      do: continue_bootstrap_after_storage_check(state),
+      else: {:noreply, state}
+  end
+
   @impl true
   def handle_info(
         {:coordinator_delivery_poll, token},
@@ -750,6 +697,38 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
             %{step_id: step_id, error: reason},
             :job_failed,
             %{step_id: step_id, reason: reason}
+          )
+
+        {:stop, {:shutdown, reason}, failed_state}
+    end
+  end
+
+  def handle_info(
+        {:workflow_step_inspected, _step_id, _token, _observations},
+        %{status: status} = state
+      )
+      when status != "running", do: {:noreply, state}
+
+  def handle_info({:workflow_step_inspected, step_id, token, observations}, state) do
+    {ledger, events, actions} =
+      WorkflowLedger.inspection_result(state.workflow_state, step_id, token, observations)
+
+    state = %{state | workflow_state: ledger}
+    publish_workflow_events(state, events)
+
+    case apply_workflow_actions(state, actions) do
+      {:ok, next_state} ->
+        persist_job(next_state)
+        continue_or_complete_workflow(next_state)
+
+      {:fail_job, failed_step, reason, failed_state} ->
+        failed_state =
+          finalize_job(
+            failed_state,
+            "failed",
+            %{step_id: failed_step, error: reason},
+            :job_failed,
+            %{step_id: failed_step, reason: reason}
           )
 
         {:stop, {:shutdown, reason}, failed_state}
@@ -947,6 +926,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   @impl true
   def terminate(_reason, state) do
+    MirrorNeuron.Runtime.SubmissionPreparation.stop(state)
     if task = Map.get(state, :pause_cleanup_task), do: Task.shutdown(task, :brutal_kill)
 
     state
@@ -1374,6 +1354,10 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
 
   defp apply_workflow_actions(state, actions) do
     Enum.reduce_while(actions, {:ok, state}, fn
+      {:inspect_step, step_id, token, agents}, {:ok, acc_state} ->
+        MirrorNeuron.Runtime.StepInspector.start(self(), acc_state.job_id, step_id, token, agents)
+        {:cont, {:ok, acc_state}}
+
       {:terminate_agent, nil, _reason}, {:ok, acc_state} ->
         {:cont, {:ok, acc_state}}
 

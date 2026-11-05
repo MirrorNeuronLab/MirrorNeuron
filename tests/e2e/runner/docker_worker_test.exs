@@ -778,6 +778,61 @@ defmodule MirrorNeuron.Runner.DockerWorkerTest do
 
   # These fixtures represent already-running SDK-prepared containers. Tests for
   # stopped and missing containers live at the sandbox lifecycle boundary.
+  test "live preparation and progress receipts survive Docker's own soft deadline", %{
+    tmp_dir: tmp_dir
+  } do
+    fake = Path.join(tmp_dir, "progress-docker")
+    python = System.find_executable("python3")
+
+    write_prepared_docker(fake, """
+    #!/bin/sh
+    if [ "$1" = exec ] && [ "$2" = -w ]; then
+      exec #{python} -u - <<'PY'
+    import json, time
+    def preparation(kind):
+        print('__MN_EVENT__'+json.dumps({"type":"runtime_preparation_"+kind,
+          "payload":{"attempt_id":"actual-attempt","preparation_id":"model","kind":"model","timeout_ms":5000}}), flush=True)
+    preparation('started')
+    time.sleep(1.2)
+    preparation('finished')
+    for n in range(12):
+        print('__MN_AGENT_BEACON__'+json.dumps({"source":"agent","pid":7,"progress_sequence":n}), flush=True)
+        time.sleep(.1)
+    print('finished')
+    PY
+    fi
+    exit 0
+    """)
+
+    File.chmod!(fake, 0o755)
+    cleanup_docker_job_on_exit("progress-job", fake)
+
+    message =
+      MirrorNeuron.Message.new("progress-job", "source", "worker", "input", %{},
+        headers: %{
+          "mn.workflow.attempt_id" => "actual-attempt",
+          "mn.workflow.step_id" => "logical-step"
+        }
+      )
+
+    config = %{
+      "image" => "prepared:latest",
+      "docker_bin" => fake,
+      "command" => ["true"],
+      "timeout_seconds" => 0.5
+    }
+
+    assert {:ok, result} =
+             DockerWorker.run(%{}, config,
+               job_id: "progress-job",
+               agent_id: "worker",
+               message: message
+             )
+
+    assert result["stdout"] =~ "finished"
+    refute result["stdout"] =~ "__MN_"
+  end
+
   defp write_prepared_docker(path, script) do
     [shebang, body] = String.split(script, "\n", parts: 2)
 

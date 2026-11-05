@@ -17,6 +17,8 @@ defmodule MirrorNeuron.Artifacts.SubmissionReadiness do
   paths are rejected immediately rather than being used to read outside the
   shared-storage mount.
   """
+  def managed?(manifest), do: readiness_descriptor(manifest) != :none
+
   def verify(manifest) do
     case readiness_descriptor(manifest) do
       :none ->
@@ -164,7 +166,14 @@ defmodule MirrorNeuron.Artifacts.SubmissionReadiness do
       "total_files" => length(entries),
       "total_bytes" => Enum.sum(Enum.map(entries, &elem(&1, 1))),
       "remaining_files" => remaining_files,
-      "remaining_bytes" => remaining_bytes
+      "remaining_bytes" => remaining_bytes,
+      "observed_bytes" =>
+        Enum.reduce(entries, 0, fn {relative, expected, _}, total ->
+          case File.stat(Path.join(inputs_root, relative)) do
+            {:ok, %{type: :regular, size: size}} -> total + min(size, expected)
+            _ -> total
+          end
+        end)
     }
 
     if remaining_files == 0,

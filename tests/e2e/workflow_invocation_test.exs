@@ -1,5 +1,5 @@
 defmodule MirrorNeuron.WorkflowInvocationTest do
-  use ExUnit.Case, async: false
+  use MirrorNeuron.RuntimeCase, async: false
 
   alias MirrorNeuron.Persistence.RedisStore
 
@@ -21,7 +21,12 @@ defmodule MirrorNeuron.WorkflowInvocationTest do
     System.put_env(delivery_settings)
     namespace = "workflow_invocation_#{System.unique_integer([:positive])}"
     System.put_env("MN_REDIS_NAMESPACE", namespace)
-    hardware = Jason.decode!(original_hardware || "{}")
+
+    hardware =
+      Map.merge(
+        MirrorNeuron.RuntimeCase.gpu_hardware() |> Map.delete(:devices),
+        Jason.decode!(original_hardware || "{}")
+      )
 
     hardware =
       Map.put(hardware, "native_sdk_grpc", %{"capabilities" => ["resource_admission_v2"]})
@@ -356,6 +361,45 @@ defmodule MirrorNeuron.WorkflowInvocationTest do
              Map.new(ids, &{&1, &1})
 
     assert get_in(job, ["workflow_state", "steps", "publish", "attempt_count"]) == 1
+  end
+
+  test "a supervised real workflow outlives its soft deadline with one attempt" do
+    step = compiled_step("slow", [], %{})
+    step = put_in(step.step["control"], %{"timeout_seconds" => 1})
+    worker = worker_config("slow_worked") |> Map.put("timeout_seconds", 1)
+
+    worker =
+      Map.put(worker, "command", [
+        System.find_executable("python3"),
+        "-u",
+        "-c",
+        ~S"""
+        import json, os, time
+        for sequence in range(32):
+            print('__MN_AGENT_BEACON__'+json.dumps({"source":"agent", "pid":os.getpid(), "progress_sequence":sequence,
+                  "attempt_id":os.environ['MN_WORKFLOW_ATTEMPT_ID']}), flush=True)
+            time.sleep(.1)
+        print(json.dumps({"outputs":{"done":True},"artifacts":[],"metrics":{},"status":"completed","runtime_step_mode":"manifest_handler"}))
+        """
+      ])
+
+    step =
+      update_in(step.nodes, fn nodes ->
+        Enum.map(nodes, fn
+          %{"node_id" => "slow__worker"} = node ->
+            %{node | "agent_type" => "executor", "config" => worker}
+
+          node ->
+            node
+        end)
+      end)
+
+    job = run_compiled([step], ["slow"])
+    result = job["workflow_state"]["steps"]["slow"]
+    assert result["attempt_count"] == 1
+    {:ok, started, _} = DateTime.from_iso8601(result["started_at"])
+    {:ok, finished, _} = DateTime.from_iso8601(result["ended_at"])
+    assert DateTime.diff(finished, started, :millisecond) >= 3_000
   end
 
   defp compiled_step(id, upstreams, fields) do

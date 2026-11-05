@@ -1,5 +1,18 @@
 <h1 align="center">MirrorNeuron 🧠</h1>
 
+## Job timeouts
+
+Workflow step limits use asynchronous inspection at their soft deadline (300
+seconds by default). Healthy SDK progress or a bounded external wait extends the
+same attempt; liveness alone does not. Lazy platform preparation is excluded
+from workflow and runner execution time, with its own bounded watchdog.
+HostLocal, Docker and OpenShell stream this evidence live. Staged-input checks
+run asynchronously and measure transfer inactivity instead of total elapsed
+copy time. Cancellation and explicit operation budgets remain enforced.
+
+See [Job timeout ownership](JOB_TIMEOUTS.md) for the reviewed timeout
+boundaries, event contract, dead-step detection, recovery and deployment.
+
 Runner execution and cleanup share the adapter contract described in [Runner adapters and worker state](SPEC.md#runner-adapters-and-worker-state).
 
 ## Activity-supervised workflows
@@ -7,8 +20,8 @@ Runner execution and cleanup share the adapter contract described in [Runner ada
 `workflow.execution.supervision: "activity"` uses live SDK progress and process
 heartbeats instead of an implicit batch elapsed deadline. Core requires HostLocal
 executor nodes with enabled, required agent beacons; buffered runners are rejected.
-An explicit step or runner `timeout_seconds` remains an intentional hard budget.
-Existing workflows without this declaration retain their deadline semantics.
+Step and command `timeout_seconds` values use the shared soft inspection and
+inactivity contract. Explicit domain/tool/block operation budgets remain independent.
 
 A step may run for any total duration while its progress sequence advances.
 Automatic process/runtime beacons only establish liveness. Core tracks progress
@@ -91,10 +104,10 @@ for workload fit and the
 [reliability guide](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/reliability.md)
 for guarantees and limits.
 
-OpenShell buffers command output until completion, including artifact-handoff
-workers. Its inherited node beacon timeout does not shorten a workflow task
-deadline. Explicit workflow heartbeat controls remain authoritative; otherwise
-the declared step timeout governs both fixed and child tasks.
+OpenShell relays structured SDK activity live for artifact-handoff and legacy
+workers. Explicit workflow heartbeat controls remain authoritative, and the
+declared step timeout triggers asynchronous ownership/progress inspection for
+both fixed and child tasks.
 
 ## How it works
 

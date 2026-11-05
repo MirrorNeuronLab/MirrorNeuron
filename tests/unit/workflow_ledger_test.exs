@@ -1,6 +1,27 @@
 defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
   use ExUnit.Case, async: true
 
+  defp reconcile(state, now) do
+    {state, events, actions} = MirrorNeuron.Runtime.WorkflowLedger.reconcile(state, now)
+
+    Enum.reduce(actions, {state, events, []}, fn
+      {:inspect_step, id, token, agents}, {state, events, actions} ->
+        {state, inspected, resolved} =
+          MirrorNeuron.Runtime.WorkflowLedger.inspection_result(
+            state,
+            id,
+            token,
+            Map.new(agents, &{&1, "alive"}),
+            now
+          )
+
+        {state, events ++ inspected, actions ++ resolved}
+
+      action, {state, events, actions} ->
+        {state, events, actions ++ [action]}
+    end)
+  end
+
   alias MirrorNeuron.Message
   alias MirrorNeuron.Manifest
   alias MirrorNeuron.Artifacts.StagedArtifact
@@ -113,7 +134,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
 
     first_delivery = get_in(state, ["steps", "step_a", "last_message"])
 
-    {state, events, actions} = WorkflowLedger.reconcile(state, "2026-06-02T16:00:02.000Z")
+    {state, events, actions} = reconcile(state, "2026-06-02T16:00:02.000Z")
 
     assert Enum.any?(events, &(&1.type == :workflow_step_attempt_timed_out))
     assert Enum.any?(events, &(&1.type == :workflow_step_attempt_retry_scheduled))
@@ -121,7 +142,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     assert get_in(state, ["steps", "step_a", "status"]) == "retry_wait"
 
     {state, [], [{:redeliver, "step_a", "step_a", retry_message}]} =
-      WorkflowLedger.reconcile(state, "2026-06-02T16:00:04.000Z")
+      reconcile(state, "2026-06-02T16:00:04.000Z")
 
     refute Message.id(retry_message) == Message.id(decorated)
 
@@ -152,7 +173,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     assert get_in(state, ["steps", "step_a", "current_attempt", "idempotency_key"]) ==
              retry_message["headers"]["mn.workflow.idempotency_key"]
 
-    {state, events, actions} = WorkflowLedger.reconcile(state, "2026-06-02T16:00:06.000Z")
+    {state, events, actions} = reconcile(state, "2026-06-02T16:00:06.000Z")
 
     failed_event = Enum.find(events, &(&1.type == :workflow_step_failed))
     assert failed_event
@@ -173,7 +194,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     late =
       Message.new("job-1", "specialist", "join", "result", %{}, headers: Message.headers(first))
 
-    {ledger, _, _} = WorkflowLedger.reconcile(ledger, "2026-06-02T16:00:03.000Z")
+    {ledger, _, _} = reconcile(ledger, "2026-06-02T16:00:03.000Z")
     assert ledger["steps"]["step_a"]["status"] == "retry_wait"
 
     assert {:skip, _, _} = WorkflowAdmission.admit(ledger, "join", late)
@@ -182,7 +203,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     assert waiting["steps"]["step_a"]["current_attempt"] == nil
 
     {queued, _, [{:redeliver, "step_a", "step_a", retry}]} =
-      WorkflowLedger.reconcile(waiting, "2026-06-02T16:00:04.000Z")
+      reconcile(waiting, "2026-06-02T16:00:04.000Z")
 
     for state <- [
           queued,
@@ -241,9 +262,9 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
         &WorkflowLedger.on_message_received(state, "step_a", &1, "2026-06-02T16:00:00.000Z")
       )
 
-    {state, events, actions} = WorkflowLedger.reconcile(state, "2026-06-02T16:00:02.000Z")
+    {state, events, actions} = reconcile(state, "2026-06-02T16:00:02.000Z")
 
-    assert actions == [{:terminate_agent, "step_a", "workflow step deadline exceeded"}]
+    assert actions == [{:terminate_agent, "step_a", "workflow step heartbeat deadline exceeded"}]
     assert Enum.any?(events, &(&1.type == :workflow_step_partial))
     assert get_in(state, ["steps", "step_a", "status"]) == "partial"
   end
@@ -330,7 +351,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     assert completed.type == :workflow_step_completed
 
     {state, [], [{:redeliver, "join_step", "join_step", redelivered}]} =
-      WorkflowLedger.reconcile(state, "2026-06-02T16:00:02.000Z")
+      reconcile(state, "2026-06-02T16:00:02.000Z")
 
     assert redelivered == join_message
     assert get_in(state, ["steps", "join_step", "status"]) == "queued"
@@ -574,9 +595,9 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
         "2026-06-02T16:00:00.000Z"
       )
 
-    {state, [], []} = WorkflowLedger.reconcile(state, "2026-06-02T16:01:00.000Z")
+    {state, [], []} = reconcile(state, "2026-06-02T16:01:00.000Z")
     assert state["steps"]["slow_llm_step"]["status"] == "running"
-    {state, events, _} = WorkflowLedger.reconcile(state, "2026-06-02T16:05:01.000Z")
+    {state, events, _} = reconcile(state, "2026-06-02T16:05:01.000Z")
     assert Enum.any?(events, &(&1.type == :workflow_step_attempt_timed_out))
     assert state["steps"]["slow_llm_step"]["status"] == "failed"
   end
@@ -619,9 +640,9 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
         "2026-06-02T16:00:00.000Z"
       )
 
-    {state, [], []} = WorkflowLedger.reconcile(state, "2026-06-02T16:01:00.000Z")
+    {state, [], []} = reconcile(state, "2026-06-02T16:01:00.000Z")
     assert state["steps"]["slow_llm_step"]["status"] == "running"
-    {state, events, _} = WorkflowLedger.reconcile(state, "2026-06-02T16:05:01.000Z")
+    {state, events, _} = reconcile(state, "2026-06-02T16:05:01.000Z")
     assert Enum.any?(events, &(&1.type == :workflow_step_attempt_timed_out))
     assert state["steps"]["slow_llm_step"]["status"] == "failed"
   end
@@ -681,7 +702,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     assert get_in(state, ["steps", "service", "heartbeat_deadline_at"]) == nil
 
     {reconciled, [], []} =
-      WorkflowLedger.reconcile(state, "2026-06-03T16:00:00.000Z")
+      reconcile(state, "2026-06-03T16:00:00.000Z")
 
     assert get_in(reconciled, ["steps", "service", "status"]) == "running"
   end
@@ -714,7 +735,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     state = dag_state(["a", "b", "c"], [edge("a", "b"), edge("b", "c")])
     {state, [_]} = receive_message(state, "b")
     state = state |> receive_message("a") |> elem(0) |> complete_step("a")
-    {state, _, [{:redeliver, "b", "b", message}]} = WorkflowLedger.reconcile(state, timestamp(2))
+    {state, _, [{:redeliver, "b", "b", message}]} = reconcile(state, timestamp(2))
     state = state |> receive_workflow_message(message) |> elem(0) |> complete_step("b")
     {state, [_]} = receive_message(state, "c")
     state = complete_step(state, "c")
@@ -743,7 +764,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
       end)
 
     {state, _, [{:redeliver, "join", "join", message}]} =
-      WorkflowLedger.reconcile(state, timestamp(2))
+      reconcile(state, timestamp(2))
 
     {state, [_]} = receive_workflow_message(state, message)
     assert get_in(state, ["steps", "join", "status"]) == "running"
@@ -772,7 +793,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     assert get_in(state, ["steps", "worker", "status"]) == "skipped"
 
     state = complete_step(state, "source")
-    {state, _, worker_actions} = WorkflowLedger.reconcile(state, timestamp(2))
+    {state, _, worker_actions} = reconcile(state, timestamp(2))
 
     assert Enum.map(worker_actions, fn {:redeliver, step_id, _, _} -> step_id end) == [
              "worker[0]",
@@ -788,7 +809,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     state = state |> complete_step("worker[0]") |> complete_step("worker[1]")
 
     {state, _, [{:redeliver, "collect", "collect", message}]} =
-      WorkflowLedger.reconcile(state, timestamp(3))
+      reconcile(state, timestamp(3))
 
     {state, [_]} = receive_workflow_message(state, message)
     assert get_in(state, ["steps", "collect", "status"]) == "running"
@@ -837,7 +858,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     state = complete_step(state, "source")
 
     {state, _, [{:redeliver, "worker[0]", "worker", message}]} =
-      WorkflowLedger.reconcile(state, timestamp(2))
+      reconcile(state, timestamp(2))
 
     {state, [_]} = receive_workflow_message(state, message)
 
@@ -900,7 +921,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     state = state |> receive_message("a") |> elem(0) |> complete_step("a")
 
     {state, _, [{:redeliver, "join", "join", message}]} =
-      WorkflowLedger.reconcile(state, timestamp(2))
+      reconcile(state, timestamp(2))
 
     {state, [_]} = receive_workflow_message(state, message)
     assert get_in(state, ["steps", "join", "status"]) == "running"
@@ -951,7 +972,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     state = state |> on_failed("b", "failed work") |> elem(0)
 
     {state, _, [{:redeliver, "cleanup", "cleanup", message}]} =
-      WorkflowLedger.reconcile(state, timestamp(2))
+      reconcile(state, timestamp(2))
 
     {state, [_]} = receive_workflow_message(state, message)
     assert get_in(state, ["steps", "cleanup", "status"]) == "running"
@@ -977,7 +998,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
       )
 
     {state, _, [{:redeliver, "join", "join", message}]} =
-      WorkflowLedger.reconcile(state, timestamp(2))
+      reconcile(state, timestamp(2))
 
     {state, [_]} = receive_workflow_message(state, message)
     assert get_in(state, ["steps", "join", "status"]) == "running"
@@ -1020,7 +1041,7 @@ defmodule MirrorNeuron.Runtime.WorkflowLedgerTest do
     state = state |> receive_message("b") |> elem(0) |> complete_step("b")
 
     {state, _, [{:redeliver, "join", "join", message}]} =
-      WorkflowLedger.reconcile(state, timestamp(2))
+      reconcile(state, timestamp(2))
 
     {state, [_]} = receive_workflow_message(state, message)
     assert get_in(state, ["steps", "join", "status"]) == "running"

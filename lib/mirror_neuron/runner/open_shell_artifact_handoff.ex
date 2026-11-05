@@ -167,11 +167,17 @@ defmodule MirrorNeuron.Runner.OpenShellArtifactHandoff do
           event(opts, "execution_started")
           # No automatic redispatch after this persisted boundary, even if SSH fails.
           dispatched =
-            OpenShell.run_ssh_command(config, sandbox["sandbox_name"], sandbox["ssh_host"], [
-              "python3",
-              Path.join(state["workspace"], ".handoff/worker.py"),
-              Path.join(state["workspace"], ".handoff/spec.json")
-            ])
+            OpenShell.run_ssh_command(
+              config,
+              sandbox["sandbox_name"],
+              sandbox["ssh_host"],
+              [
+                "python3",
+                Path.join(state["workspace"], ".handoff/worker.py"),
+                Path.join(state["workspace"], ".handoff/spec.json")
+              ],
+              opts
+            )
 
           state = capture_execution(base, state, dispatched)
           transfer(base, state, config, opts)
@@ -231,13 +237,15 @@ defmodule MirrorNeuron.Runner.OpenShellArtifactHandoff do
     dir = Path.join(staged, ".handoff")
     File.mkdir_p!(dir)
 
-    for name <- ["files.py", "worker.py", "cache.py"],
+    for name <- ["files.py", "worker.py", "cache.py", "supervision.py"],
         do: File.cp!(Path.join(OpenShellArtifactStore.helper_dir(), name), Path.join(dir, name))
 
     environment =
       (config["environment"] || %{})
       |> Map.merge(MirrorNeuron.Runner.WorkflowEnvironment.from_options(opts))
       |> Map.merge(%{
+        "MN_AGENT_BEACON_STDOUT_PREFIX" => "__MN_AGENT_BEACON__",
+        "MN_AGENT_BEACON_INTERVAL_MS" => to_string(Map.get(config, "beacon_interval_ms", 15_000)),
         "MN_INPUT_FILE" => Path.join(remote, "mirror_neuron_input.json"),
         "MN_MESSAGE_FILE" => Path.join(remote, "mirror_neuron_message.json"),
         "MN_CONTEXT_FILE" => Path.join(remote, "mirror_neuron_context.json"),

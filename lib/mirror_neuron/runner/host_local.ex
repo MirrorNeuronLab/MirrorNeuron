@@ -265,6 +265,10 @@ defmodule MirrorNeuron.Runner.HostLocal do
     end
   end
 
+  def stream_command(command, env, workdir, config, opts) do
+    run_command(command, env, workdir, config, opts, Keyword.get(opts, :message))
+  end
+
   defp run_command([command | args], env, workdir, config, opts, message) do
     owner = self()
     result_ref = make_ref()
@@ -332,7 +336,19 @@ defmodule MirrorNeuron.Runner.HostLocal do
     max_output_bytes = max_output_bytes(config)
     timeout_ms = timeout_ms(config)
     deadline = if timeout_ms, do: System.monotonic_time(:millisecond) + timeout_ms
-    beacon_state = beacon_state(config, opts, message)
+
+    beacon_state =
+      beacon_state(config, opts, message)
+      |> Map.put(
+        :budget,
+        MirrorNeuron.Runner.CommandBudget.new(
+          timeout_ms,
+          Map.merge(Map.get(config, "environment", %{}), Map.new(env))
+          |> Map.merge(WorkflowEnvironment.from_options(opts)),
+          now_ms()
+        )
+      )
+
     owner_ref = Process.monitor(owner)
     job_id = Keyword.get(opts, :job_id)
 
@@ -349,7 +365,8 @@ defmodule MirrorNeuron.Runner.HostLocal do
           {:cd, String.to_charlist(workdir)},
           {:env,
            Enum.map(env, fn {key, value} ->
-             {String.to_charlist(key), String.to_charlist(value)}
+             {String.to_charlist(key),
+              if(is_nil(value), do: false, else: String.to_charlist(value))}
            end)}
         ]
       )
@@ -413,13 +430,18 @@ defmodule MirrorNeuron.Runner.HostLocal do
          chunks,
          bytes,
          max_output_bytes,
-         deadline,
+         _previous_deadline,
          beacon_state,
          owner,
          owner_ref,
          process_group?,
          job_id
        ) do
+    {remaining, budget} =
+      MirrorNeuron.Runner.CommandBudget.remaining(beacon_state.budget, now_ms())
+
+    beacon_state = %{beacon_state | budget: budget}
+    deadline = if remaining == :infinity, do: nil, else: now_ms() + remaining
     timeout = receive_timeout(deadline, beacon_state)
 
     receive do
@@ -459,8 +481,13 @@ defmodule MirrorNeuron.Runner.HostLocal do
       timeout ->
         now = now_ms()
 
+        {remaining, budget} =
+          MirrorNeuron.Runner.CommandBudget.remaining(beacon_state.budget, now)
+
+        beacon_state = %{beacon_state | budget: budget}
+
         cond do
-          deadline && now >= deadline ->
+          remaining == 0 ->
             HostProcess.terminate(port, process_group?)
 
             {:error,
@@ -720,6 +747,19 @@ defmodule MirrorNeuron.Runner.HostLocal do
       |> String.replace_prefix(state.event_prefix, "")
       |> String.trim()
 
+    state =
+      case Jason.decode(raw_payload) do
+        {:ok, %{"type" => type, "payload" => payload}} when is_map(payload) ->
+          %{
+            state
+            | budget:
+                MirrorNeuron.Runner.CommandBudget.observe(state.budget, type, payload, now_ms())
+          }
+
+        _ ->
+          state
+      end
+
     case Jason.decode(raw_payload) do
       {:ok, %{"type" => event_type, "payload" => payload}}
       when is_binary(event_type) and is_map(payload) ->
@@ -769,7 +809,8 @@ defmodule MirrorNeuron.Runner.HostLocal do
       )
 
     emit_beacon_event(state, :agent_beacon, payload)
-    {"", %{state | sequence: state.sequence + 1, last_agent_beacon_at: now}}
+    budget = MirrorNeuron.Runner.CommandBudget.observe(state.budget, :agent_beacon, payload, now)
+    {"", %{state | sequence: state.sequence + 1, last_agent_beacon_at: now, budget: budget}}
   end
 
   defp maybe_emit_runtime_beacon(%{enabled: false} = state, _now), do: state
@@ -1398,6 +1439,8 @@ defmodule MirrorNeuron.Runner.HostLocal do
       "MN_WORKDIR" => workdir
     }
   end
+
+  defp workflow_context(nil), do: %{}
 
   defp workflow_context(message) do
     headers = Message.headers(message)

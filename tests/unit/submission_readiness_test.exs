@@ -45,7 +45,8 @@ defmodule MirrorNeuron.Artifacts.SubmissionReadinessTest do
 
     File.mkdir_p!(Path.dirname(input_path))
     File.write!(input_path, "partial")
-    assert {:waiting, _waiting} = SubmissionReadiness.verify(manifest)
+    assert {:waiting, waiting} = SubmissionReadiness.verify(manifest)
+    assert waiting["observed_bytes"] == byte_size("partial")
 
     File.write!(input_path, contents)
     assert {:ready, ready} = SubmissionReadiness.verify(manifest)

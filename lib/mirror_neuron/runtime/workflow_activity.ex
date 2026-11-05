@@ -36,7 +36,7 @@ defmodule MirrorNeuron.Runtime.WorkflowActivity do
 
   def start(step, _now), do: step
 
-  def observe(%{"supervision" => "activity"} = step, payload, now) do
+  def observe(%{"status" => "running"} = step, payload, now) do
     # Runner-generated liveness and duplicate/replayed beacons cannot prove work
     # advanced. Keep counters per physical worker within this logical attempt.
     sequence = payload["progress_sequence"]
@@ -45,7 +45,9 @@ defmodule MirrorNeuron.Runtime.WorkflowActivity do
     previous = Map.get(step["progress_sequences"] || %{}, key, %{})
     previous_sequence = if previous["pid"] == pid, do: previous["sequence"], else: -1
 
-    if payload["source"] == "agent" and is_integer(sequence) and sequence >= 0 and
+    if (is_nil(payload["attempt_id"]) or
+          payload["attempt_id"] == get_in(step, ["current_attempt", "attempt_id"])) and
+         payload["source"] == "agent" and is_integer(sequence) and sequence >= 0 and
          is_integer(pid) and pid > 0 and key in step["agent_ids"] and
          sequence > previous_sequence do
       step
@@ -65,13 +67,14 @@ defmodule MirrorNeuron.Runtime.WorkflowActivity do
        when is_binary(id) and byte_size(id) in 1..128 and is_integer(timeout) and
               timeout > 0 and timeout <= @max_wait_ms do
     # A repeated wait identity must never extend an unanswered human request.
-    if step["waiting_id"] == id do
+    if Map.has_key?(step["seen_waits"] || %{}, id) do
       step
     else
       Map.merge(step, %{
         "waiting_id" => id,
+        "seen_waits" => Map.put(step["seen_waits"] || %{}, id, true),
         "work_state" => "waiting",
-        "progress_deadline_at" => after_ms(now, timeout + @progress_timeout_ms)
+        "progress_deadline_at" => after_ms(now, timeout + allowance(step))
       })
     end
   end
@@ -80,8 +83,15 @@ defmodule MirrorNeuron.Runtime.WorkflowActivity do
     Map.merge(step, %{
       "waiting_id" => nil,
       "work_state" => "active",
-      "progress_deadline_at" => after_ms(now, @progress_timeout_ms)
+      "progress_deadline_at" => after_ms(now, allowance(step))
     })
+  end
+
+  defp allowance(step) do
+    case step["timeout_seconds"] do
+      seconds when is_number(seconds) and seconds > 0 -> round(seconds * 1000)
+      _ -> @progress_timeout_ms
+    end
   end
 
   defp after_ms(now, ms) do

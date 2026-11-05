@@ -1,12 +1,9 @@
 """Sandbox execution and sealing. Persist completion before transport can fail."""
 import json
 import os
-import selectors
-import signal
-import time
-import subprocess
 import sys
 from pathlib import Path
+from supervision import execute_command
 from cache import hydrate
 from files import VERSION, encode, read, references, sanitize, verify, write, validate_declarations
 
@@ -26,28 +23,10 @@ def execute(spec):
     os.close(fd)
     (root / "outputs").mkdir(exist_ok=True)
     environment = {**os.environ, **spec["environment"]}
-    command = spec["command"]
-    process = subprocess.Popen(command, cwd=spec["workdir"], env=environment,
-                               shell=isinstance(command, str), start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    selector = selectors.DefaultSelector()
-    buffers = {"stdout": bytearray(), "stderr": bytearray()}
-    for stream, name in [(process.stdout, "stdout"), (process.stderr, "stderr")]:
-        selector.register(stream, selectors.EVENT_READ, name)
-    deadline = time.monotonic() + spec.get("timeout_seconds", 600)
-    while selector.get_map():
-        if time.monotonic() > deadline:
-            os.killpg(process.pid, signal.SIGKILL)
-        for key, _ in selector.select(timeout=0.2):
-            data = os.read(key.fileobj.fileno(), 65536)
-            if not data:
-                selector.unregister(key.fileobj)
-            else:
-                buffers[key.data].extend(data)
-                del buffers[key.data][:-spec["max_result_bytes"]]
-    code = process.wait()
-    stdout = buffers["stdout"].decode("utf-8", errors="replace")
-    result = {"exit_code": code, "stdout": sanitize(stdout),
-              "stderr": sanitize(buffers["stderr"].decode("utf-8", errors="replace"))}
+    captured = execute_command({**spec, "environment": environment})
+    stdout = captured["stdout"]
+    result = {"exit_code": captured["exit_code"], "stdout": sanitize(stdout),
+              "stderr": sanitize(captured["stderr"])}
     structured = root / "result.json"
     try:
         if structured.exists():
