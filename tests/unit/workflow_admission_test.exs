@@ -248,6 +248,59 @@ defmodule MirrorNeuron.Runtime.WorkflowAdmissionTest do
              WorkflowAdmission.admit(ledger, "publish", foreign)
   end
 
+  @tag :blueprint_runtime
+  test "a handled failure admits one fallback when its output races the ledger trigger" do
+    definition = %Manifest{
+      flow: %{
+        "steps" => [
+          %{
+            "id" => "primary",
+            "run" => "primary",
+            "control" => %{
+              "failure_policy" => "continue_partial",
+              "retry" => %{"max_attempts" => 1}
+            }
+          },
+          %{"id" => "fallback", "run" => "fallback", "trigger_rule" => "one_failed"}
+        ],
+        "graph" => %{
+          "edges" => [%{"from" => "primary", "to" => "fallback", "accepts" => ["failed"]}]
+        }
+      }
+    }
+
+    nodes = Enum.map(~w(primary fallback), &%{node_id: &1, config: %{}})
+    {ledger, []} = WorkflowLedger.new(definition, nodes) |> WorkflowLedger.job_running()
+    input = Message.new("job", "runtime", "primary", "start", %{})
+    {{:ok, _}, ledger, [_]} = WorkflowAdmission.admit(ledger, "primary", input)
+
+    {ledger, _, [{:redeliver, "fallback", "fallback", trigger}]} =
+      WorkflowLedger.on_agent_failed(ledger, "primary", "intentional outage")
+
+    output =
+      Message.new("job", "primary", "fallback", "primary_done", %{},
+        headers: %{"mn.workflow.source_step_id" => "primary"}
+      )
+
+    for [first, second] <- [[output, trigger], [trigger, output]] do
+      {{:ok, admitted}, started, [_]} = WorkflowAdmission.admit(ledger, "fallback", first)
+      attempt = started["steps"]["fallback"]["current_attempt"]
+      restored = started |> Jason.encode!() |> Jason.decode!()
+      assert {:skip, skipped, [ignored]} = WorkflowAdmission.admit(restored, "fallback", second)
+      assert ignored.type == :workflow_step_duplicate_message_ignored
+      assert skipped["messages"][Message.id(second)]["status"] == "ignored"
+      assert skipped["steps"]["fallback"]["current_attempt"] == attempt
+      assert skipped["steps"]["fallback"]["attempt_count"] == 1
+      assert {{:ok, replay}, _, []} = WorkflowAdmission.admit(skipped, "fallback", first)
+      assert Message.headers(replay) == Message.headers(admitted)
+
+      foreign = Message.new("job", "workflow_ledger", "fallback", "unrelated", %{})
+
+      assert {{:error, :missing_workflow_attempt_context}, _, _} =
+               WorkflowAdmission.admit(skipped, "fallback", foreign)
+    end
+  end
+
   defp boundary(step_id) do
     Message.new(
       "job",

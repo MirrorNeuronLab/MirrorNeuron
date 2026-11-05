@@ -178,6 +178,8 @@ For a single-delivery step with several parents, later triggers from declared
 upstream edges are acknowledged as redundant while its owning attempt runs.
 They neither execute another handler nor fail the run. Unrelated deliveries
 remain rejected by the message-specific fence.
+The same rule applies when a ledger-generated failure trigger races the parent's
+output: either can open the fallback attempt, and the later trigger is ignored.
 
 Static services whose declared phases each bind exactly one native
 `mn.block_events/v1` executor use event delivery rather than finite DAG admission.

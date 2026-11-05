@@ -251,7 +251,7 @@ defmodule MirrorNeuron.Runtime.ResourceAllocationTest do
              })
   end
 
-  test "the previous whole-PC holder is upgraded without weakening protection" do
+  test "obsolete whole-PC holders reject admission without migration" do
     old = %{
       "version" => 4,
       "generation" => 2,
@@ -262,11 +262,36 @@ defmodule MirrorNeuron.Runtime.ResourceAllocationTest do
       "legacy" => []
     }
 
-    upgraded = NodeAdmissionState.upgrade(old)
-    assert upgraded["reservations"]["old"]["allocation"]["mode"] == "exclusive_node"
+    assert {:error, :unsupported_node_admission_state} = NodeAdmissionState.decode(old)
+
+    assert {:error, :unsupported_node_admission_state} =
+             NodeAdmissionState.transition(old, "submit_now", entry("new", request(4096)))
+  end
+
+  test "decoding a current whole-PC reservation preserves its protection" do
+    {:ok, state, held} =
+      NodeAdmissionState.transition(
+        NodeAdmissionState.new(),
+        "submit_now",
+        entry("holder", %{"mode" => "exclusive_node", "devices" => []})
+      )
+
+    assert {:ok, restored} =
+             state |> Jason.encode!() |> Jason.decode!() |> NodeAdmissionState.decode()
+
+    assert restored["reservations"]["holder"]["allocation"]["mode"] == "exclusive_node"
 
     assert {:error, {:admission_blocked, _}} =
-             NodeAdmissionState.transition(upgraded, "submit_now", entry("new", request(4096)))
+             NodeAdmissionState.transition(restored, "submit_now", entry("next", request(4096)))
+
+    {:ok, released, _} =
+      NodeAdmissionState.transition(restored, "release", %{
+        "run_id" => "holder",
+        "generation" => held["generation"]
+      })
+
+    assert {:ok, _, %{"state" => "preparing"}} =
+             NodeAdmissionState.transition(released, "submit_now", entry("next", request(4096)))
   end
 
   test "bounded backfill protects an older GPU run while CPU-only work still progresses" do

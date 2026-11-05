@@ -3,7 +3,7 @@ defmodule MirrorNeuron.Runtime.CoordinatorReportTest do
 
   alias MirrorNeuron.Message
   alias MirrorNeuron.Persistence.RedisStore
-  alias MirrorNeuron.Runtime.{Delivery, WorkflowMessage}
+  alias MirrorNeuron.Runtime.{Delivery, DeliveryChannels, WorkflowMessage}
 
   setup do
     Application.ensure_all_started(:telemetry)
@@ -28,6 +28,14 @@ defmodule MirrorNeuron.Runtime.CoordinatorReportTest do
 
   test "a readmitted delivery reports its new attempt after the old report was acknowledged" do
     state = %{job_id: "run", node: %{node_id: "vision"}, runtime_context: %{lease_epoch: 1}}
+
+    assert {:ok, _} =
+             RedisStore.persist_job(state.job_id, %{
+               "status" => "running",
+               "delivery_version" => 2,
+               "lease_epoch" => 1
+             })
+
     agent = Delivery.coordinator_agent_id()
     consumer = Delivery.consumer_id(state.job_id, agent)
 
@@ -57,7 +65,7 @@ defmodule MirrorNeuron.Runtime.CoordinatorReportTest do
       }
 
       assert :ok = Delivery.report(state.job_id, "vision", report_id, body, attempt_epoch: 1)
-      assert {:ok, 1} = RedisStore.delivery_pending_count(state.job_id, agent)
+      assert {:ok, 1} = DeliveryChannels.depth(state.job_id, agent, :control)
       assert {:ok, [delivery]} = Delivery.read(state.job_id, agent, consumer)
 
       assert get_in(delivery.message, ["body", "message", "headers", "mn.workflow.attempt_id"]) ==
@@ -71,7 +79,7 @@ defmodule MirrorNeuron.Runtime.CoordinatorReportTest do
       assert :ok =
                Delivery.report(state.job_id, "vision", report_id, replay_body, attempt_epoch: 1)
 
-      assert {:ok, 0} = RedisStore.delivery_pending_count(state.job_id, agent)
+      assert {:ok, 0} = DeliveryChannels.depth(state.job_id, agent, :control)
 
       conflicting = put_in(body, ["message", "body", "batch_id"], "changed-batch")
 

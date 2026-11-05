@@ -34,11 +34,10 @@ defmodule MirrorNeuron.RunnerNamespaceTest do
     assert_raise ArgumentError, fn -> String.to_existing_atom("Elixir." <> name) end
   end
 
-  test "stored OpenShell wire names dispatch to the same fenced adapter" do
+  test "current OpenShell wire names dispatch to the fenced adapter" do
     for name <- [
           "MirrorNeuron.Runner.OpenShell",
-          "MirrorNeuron.Sandbox.OpenShell",
-          "Elixir.MirrorNeuron.Sandbox.OpenShell"
+          "Elixir.MirrorNeuron.Runner.OpenShell"
         ] do
       config = %{
         "runner_module" => name,
@@ -47,6 +46,13 @@ defmodule MirrorNeuron.RunnerNamespaceTest do
 
       assert {:error, "OpenShell block workers require artifact_handoff v1"} =
                MirrorNeuron.Runner.run(%{}, config, job_id: "stored")
+    end
+  end
+
+  test "retired OpenShell namespaces cannot dispatch workers" do
+    for name <- ["MirrorNeuron.Sandbox.OpenShell", "Elixir.MirrorNeuron.Sandbox.OpenShell"] do
+      assert {:error, "Unknown runner module"} =
+               MirrorNeuron.Runner.run(%{}, %{"runner_module" => name}, job_id: "retired")
     end
   end
 

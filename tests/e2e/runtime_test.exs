@@ -4,7 +4,7 @@ defmodule MirrorNeuron.RuntimeTest do
   alias MirrorNeuron.Message
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
-  alias MirrorNeuron.Runtime.{AgentWorker, Delivery}
+  alias MirrorNeuron.Runtime.{AgentWorker, Delivery, DeliveryChannels}
   alias MirrorNeuron.ServiceRegistry
 
   defmodule BundlePathEchoRunner do
@@ -1006,12 +1006,12 @@ defmodule MirrorNeuron.RuntimeTest do
 
     wait_until(
       fn ->
-        RedisStore.delivery_pending_count(job_id, Delivery.coordinator_agent_id()) == {:ok, 0}
+        DeliveryChannels.depth(job_id, Delivery.coordinator_agent_id(), :control) == {:ok, 0}
       end,
       1_000
     )
 
-    assert {:ok, 0} = RedisStore.delivery_pending_count(job_id, Delivery.coordinator_agent_id())
+    assert {:ok, 0} = DeliveryChannels.depth(job_id, Delivery.coordinator_agent_id(), :control)
 
     wait_until(fn -> event_count(job_id, "job_completed") == 1 end, 1_000)
     assert {:ok, events} = MirrorNeuron.events(job_id)
@@ -1150,6 +1150,7 @@ defmodule MirrorNeuron.RuntimeTest do
 
   test "agent workers materialize archived bundles when original bundle path is unavailable" do
     job_id = "remote-bundle-agent-#{System.unique_integer([:positive])}"
+    persist_delivery_job(job_id)
     bundle_root = Path.join(System.tmp_dir!(), "#{job_id}-bundle")
     File.mkdir_p!(Path.join(bundle_root, "payloads"))
 
@@ -1189,6 +1190,8 @@ defmodule MirrorNeuron.RuntimeTest do
     }
 
     runtime_context = %{
+      delivery_version: 2,
+      lease_epoch: 1,
       bundle_root: missing_root,
       manifest_path: Path.join(missing_root, "manifest.json"),
       payloads_path: Path.join(missing_root, "payloads"),
@@ -3489,6 +3492,7 @@ defmodule MirrorNeuron.RuntimeTest do
 
   test "keeps a terminal report durable while the coordinator is gone" do
     job_id = "worker_fallback_test-#{System.unique_integer([:positive])}"
+    persist_delivery_job(job_id)
 
     node = %{
       node_id: "sink",
@@ -3508,6 +3512,8 @@ defmodule MirrorNeuron.RuntimeTest do
     Process.exit(coordinator, :kill)
 
     runtime_context = %{
+      delivery_version: 2,
+      lease_epoch: 1,
       graph_id: "worker_fallback_test",
       job_name: "worker_fallback_test",
       entrypoints: ["sink"],
@@ -3529,10 +3535,11 @@ defmodule MirrorNeuron.RuntimeTest do
     GenServer.cast(pid, {:deliver, message})
 
     wait_until(fn ->
-      RedisStore.delivery_pending_count(job_id, Delivery.coordinator_agent_id()) == {:ok, 1}
+      DeliveryChannels.depth(job_id, Delivery.coordinator_agent_id(), :control) == {:ok, 1}
     end)
 
-    assert {:error, _reason} = MirrorNeuron.inspect_job(job_id)
+    assert {:ok, %{"status" => "running"} = retained} = RedisStore.fetch_job(job_id)
+    refute retained["result"]
 
     consumer = Delivery.consumer_id(job_id, Delivery.coordinator_agent_id())
 
@@ -3559,6 +3566,7 @@ defmodule MirrorNeuron.RuntimeTest do
 
   test "workflow coordinator reports remain idempotent across delivery retries" do
     job_id = "workflow_report_retry_test-#{System.unique_integer([:positive])}"
+    persist_delivery_job(job_id)
     report_id = "stable-workflow-received-report"
 
     first_attempt =
@@ -3600,7 +3608,7 @@ defmodule MirrorNeuron.RuntimeTest do
                report_body.(second_attempt)
              )
 
-    assert RedisStore.delivery_pending_count(job_id, Delivery.coordinator_agent_id()) ==
+    assert DeliveryChannels.depth(job_id, Delivery.coordinator_agent_id(), :control) ==
              {:ok, 1}
 
     consumer = Delivery.consumer_id(job_id, Delivery.coordinator_agent_id())
@@ -3625,6 +3633,7 @@ defmodule MirrorNeuron.RuntimeTest do
 
   test "heartbeats and checkpoint actions never serialize agent memory" do
     job_id = "checkpoint_perf_test-#{System.unique_integer([:positive])}"
+    persist_delivery_job(job_id)
     parent = self()
 
     coordinator =
@@ -3640,6 +3649,8 @@ defmodule MirrorNeuron.RuntimeTest do
     }
 
     runtime_context = %{
+      delivery_version: 2,
+      lease_epoch: 1,
       graph_id: "checkpoint_perf_test",
       job_name: "checkpoint_perf_test",
       entrypoints: ["checkpoint_agent"],
@@ -4224,6 +4235,16 @@ defmodule MirrorNeuron.RuntimeTest do
         }
       }
     }
+  end
+
+  defp persist_delivery_job(job_id) do
+    assert {:ok, _} =
+             RedisStore.persist_job(job_id, %{
+               "job_id" => job_id,
+               "status" => "running",
+               "delivery_version" => 2,
+               "lease_epoch" => 1
+             })
   end
 
   defp persist_recoverable_job(manifest, suffix, extra_attrs \\ %{}) do

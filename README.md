@@ -2,6 +2,10 @@
 
 ## Current contracts
 
+Workflow admission acknowledges redundant ledger-generated failure triggers when
+a parent's output has already started the fallback step. Either arrival order
+uses one attempt; replay preserves its context and unrelated deliveries are rejected.
+
 Only current runtime contracts are supported. Admission snapshots require schema 3; older reservations and pre-policy request fingerprints are rejected without migration. Native resource cleanup uses its ownership registry. OpenShell workers use versioned artifact handoff; whole-tree `sync_shared_storage` and old runner names are unsupported. Configure the context engine with `MN_CONTEXT_ADDR`.
 
 Backward compatibility and automatic migration of obsolete state are unsupported.

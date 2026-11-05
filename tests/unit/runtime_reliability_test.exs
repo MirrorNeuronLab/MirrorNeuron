@@ -536,6 +536,12 @@ defmodule MirrorNeuron.RuntimeReliabilityTest do
         agent_id = "missing-agent"
         message_id = unique_id("message")
 
+        assert {:ok, _} =
+                 RedisStore.persist_job(
+                   job_id,
+                   Map.put(active_job(job_id), "delivery_version", 2)
+                 )
+
         message =
           MirrorNeuron.Message.new(job_id, "source", agent_id, "hello", %{},
             message_id: message_id
