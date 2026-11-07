@@ -4,7 +4,13 @@ defmodule MirrorNeuron.Runtime.WorkflowPreparation do
   # A preparation owns a fixed deadline; progress events cannot renew it.
   @max_timeout_ms 86_400_000
   @max_preparations 1_024
-  @events ["runtime_preparation_started", "runtime_preparation_finished"]
+  @events [
+    "runtime_model_wait_started",
+    "runtime_model_wait_finished",
+    "runtime_preparation_started",
+    "runtime_preparation_progress",
+    "runtime_preparation_finished"
+  ]
 
   def event?(type), do: type in @events
 
@@ -84,11 +90,13 @@ defmodule MirrorNeuron.Runtime.WorkflowPreparation do
     |> Enum.any?(&(&1["deadline_ms"] <= millis(now)))
   end
 
-  def reset(step), do: Map.delete(step, "preparation")
+  def reset(step), do: Map.drop(step, ["preparation", "model_waits"])
 
   # Pausing stops the owning commands. Account their setup once and retire the
   # old scopes; a replacement worker must announce its own bounded preparation.
   def pause(step, now) do
+    step = Map.delete(step, "model_waits")
+
     case advance(step, now) do
       %{"preparation" => clock} = updated ->
         Map.put(updated, "preparation", %{clock | "active" => %{}})
@@ -119,7 +127,8 @@ defmodule MirrorNeuron.Runtime.WorkflowPreparation do
       active =
         Map.put(clock["active"], id, %{
           "agent_id" => agent_id,
-          "deadline_ms" => millis(now) + timeout
+          "deadline_ms" => millis(now) + timeout,
+          "progress" => progress(payload)
         })
 
       Map.put(step, "preparation", %{
@@ -131,6 +140,20 @@ defmodule MirrorNeuron.Runtime.WorkflowPreparation do
       })
     else
       step
+    end
+  end
+
+  defp change(step, agent_id, "runtime_preparation_progress", payload, now) do
+    id = payload["preparation_id"]
+
+    case get_in(step, ["preparation", "active", id]) do
+      %{"agent_id" => ^agent_id, "deadline_ms" => deadline} when deadline > 0 ->
+        if deadline > millis(now),
+          do: put_in(step, ["preparation", "active", id, "progress"], progress(payload)),
+          else: step
+
+      _ ->
+        step
     end
   end
 
@@ -148,7 +171,69 @@ defmodule MirrorNeuron.Runtime.WorkflowPreparation do
     end
   end
 
+  # A gateway request may include lazy loading and inference. Its visible wait
+  # is durable, but must never pause or extend any execution deadline.
+  defp change(step, agent_id, "runtime_model_wait_started", payload, now) do
+    clock = step["model_waits"] || %{"active" => %{}}
+    id = payload["preparation_id"]
+    timeout = payload["timeout_ms"]
+
+    if is_integer(timeout) and timeout > 0 and timeout <= @max_timeout_ms and
+         map_size(clock["active"]) < 128 and not Map.has_key?(clock["active"], id) do
+      active =
+        Map.put(clock["active"], id, %{
+          "agent_id" => agent_id,
+          "deadline_ms" => millis(now) + timeout,
+          "progress" =>
+            progress(
+              Map.merge(payload, %{"kind" => "model", "phase" => "waiting", "percent" => nil})
+            )
+        })
+
+      Map.put(step, "model_waits", %{clock | "active" => active})
+    else
+      step
+    end
+  end
+
+  defp change(step, agent_id, "runtime_model_wait_finished", payload, _now) do
+    id = payload["preparation_id"]
+
+    case get_in(step, ["model_waits", "active", id]) do
+      %{"agent_id" => ^agent_id} ->
+        update_in(step, ["model_waits", "active"], &Map.delete(&1, id))
+
+      _ ->
+        step
+    end
+  end
+
   defp change(step, _agent_id, _type, _payload, _now), do: step
+
+  defp progress(payload) do
+    %{
+      "kind" => allowed(payload["kind"], ["model", "dependencies", "service"], "model"),
+      "purpose" =>
+        allowed(
+          payload["purpose"],
+          ["model", "ocr", "transcription", "embedding", "vision", "speech", "llm"],
+          "model"
+        ),
+      "phase" =>
+        allowed(
+          payload["phase"],
+          ["preparing", "downloading", "loading", "waiting", "ready", "failed", "cancelled"],
+          "preparing"
+        ),
+      "percent" =>
+        case payload["percent"] do
+          value when is_number(value) and value >= 0 and value <= 100 -> value
+          _ -> nil
+        end
+    }
+  end
+
+  defp allowed(value, values, default), do: if(value in values, do: value, else: default)
 
   defp shift_execution_clocks(step, elapsed) do
     keys = ["deadline_at", "progress_deadline_at"]

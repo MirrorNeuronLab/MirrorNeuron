@@ -406,7 +406,14 @@ defmodule MirrorNeuron.Runtime.WorkflowLedger do
 
   defp handle_step_agent_event(state, agent_id, step, event_type, payload, now) do
     case event_type do
-      type when type in ["runtime_preparation_started", "runtime_preparation_finished"] ->
+      type
+      when type in [
+             "runtime_preparation_started",
+             "runtime_preparation_progress",
+             "runtime_preparation_finished",
+             "runtime_model_wait_started",
+             "runtime_model_wait_finished"
+           ] ->
         state = WorkflowPreparation.on_event(state, step["id"], agent_id, type, payload, now)
         {state, [], []}
 

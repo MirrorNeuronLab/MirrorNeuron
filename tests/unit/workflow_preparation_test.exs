@@ -89,6 +89,36 @@ defmodule MirrorNeuron.Runtime.WorkflowPreparationTest do
     state
   end
 
+  test "progress is persisted without renewing preparation or accepting foreign updates" do
+    state = state() |> event("started", payload(), 10)
+
+    update =
+      Map.merge(payload(), %{
+        "purpose" => "ocr",
+        "phase" => "downloading",
+        "percent" => 10,
+        "model" => "PRIVATE"
+      })
+
+    state = event(state, "progress", update, 20)
+    receipt = get_in(state, ["steps", "plan", "preparation", "active", "setup"])
+
+    assert receipt["progress"] == %{
+             "kind" => "model",
+             "purpose" => "ocr",
+             "phase" => "downloading",
+             "percent" => 10
+           }
+
+    assert receipt["deadline_ms"] ==
+             DateTime.to_unix(DateTime.from_iso8601(at(1210)) |> elem(1), :millisecond)
+
+    foreign = Map.put(update, "attempt_id", "plan:attempt:0")
+    assert event(state, "progress", foreign, 30) == state
+    state = event(state, "finished", payload(), 40)
+    assert event(state, "progress", update, 50) == state
+  end
+
   test "cold preparation longer than the step allowance leaves actual work its remaining time" do
     state = state() |> event("started", payload(), 10)
     {state, [], []} = reconcile(state, at(1_000))
@@ -100,6 +130,41 @@ defmodule MirrorNeuron.Runtime.WorkflowPreparationTest do
     {state, _, actions} = reconcile(state, at(1_300))
     assert state["steps"]["plan"]["status"] == "failed"
     assert Enum.any?(actions, &match?({:terminate_agent, _, _}, &1))
+  end
+
+  test "gateway waits survive snapshots without changing execution deadlines" do
+    payload =
+      payload() |> Map.merge(%{"purpose" => "llm", "phase" => "waiting", "model" => "PRIVATE"})
+
+    {waiting, [], []} =
+      WorkflowLedger.on_agent_event(
+        state(),
+        "planner",
+        "runtime_model_wait_started",
+        payload,
+        at(10)
+      )
+
+    assert waiting["steps"]["plan"]["deadline_at"] == at(300)
+    assert waiting["steps"]["plan"]["preparation"] == nil
+    receipt = waiting["steps"]["plan"]["model_waits"]["active"]["setup"]
+    assert receipt["progress"]["purpose"] == "llm"
+    refute Jason.encode!(receipt) =~ "PRIVATE"
+    restored = waiting |> Jason.encode!() |> Jason.decode!()
+
+    {finished, [], []} =
+      WorkflowLedger.on_agent_event(
+        restored,
+        "planner",
+        "runtime_model_wait_finished",
+        payload,
+        at(20)
+      )
+
+    assert finished["steps"]["plan"]["model_waits"]["active"] == %{}
+    assert finished["steps"]["plan"]["deadline_at"] == at(300)
+    assert WorkflowPreparation.reset(waiting["steps"]["plan"])["model_waits"] == nil
+    assert WorkflowPreparation.pause(waiting["steps"]["plan"], at(30))["model_waits"] == nil
   end
 
   test "overlapping and nested preparations are excluded once and duplicate starts do not renew" do
