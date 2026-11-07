@@ -19,7 +19,6 @@ requests whose loading and inference cannot be separated. Their durable wait
 receipts never extend execution budgets and have no percentage. Upgrade Core,
 SDK/common, API, CLI and desktop together to consume this contract.
 
-
 ## Current contracts
 
 Workflow admission acknowledges redundant ledger-generated failure triggers when

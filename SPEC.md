@@ -19,7 +19,6 @@ requests whose loading and inference cannot be separated. Their durable wait
 receipts never extend execution budgets and have no percentage. Upgrade Core,
 SDK/common, API, CLI and desktop together to consume this contract.
 
-
 ## Current contracts
 
 Only current runtime contracts are supported. Admission snapshots require schema 3; older reservations and pre-policy request fingerprints are rejected without migration. Native resource cleanup uses its ownership registry. OpenShell workers use versioned artifact handoff; whole-tree `sync_shared_storage` and old runner names are unsupported. Configure the context engine with `MN_CONTEXT_ADDR`.
