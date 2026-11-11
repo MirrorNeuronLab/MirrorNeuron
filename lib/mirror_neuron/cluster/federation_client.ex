@@ -265,6 +265,7 @@ defmodule MirrorNeuron.Cluster.FederationClient do
 
   def request_timeout(:create_job, _request), do: @job_definition_timeout
   def request_timeout(:relocate_job, _request), do: 600_000
+  def request_timeout(:drain_node, _request), do: 35_000
 
   def request_timeout(:update_job, %{manifest_json: manifest})
       when is_binary(manifest) and manifest != "",

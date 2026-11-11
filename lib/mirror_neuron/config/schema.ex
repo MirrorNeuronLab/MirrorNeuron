@@ -14,6 +14,8 @@ defmodule MirrorNeuron.Config.Schema do
       spec("MN_GRPC_PORT", :grpc_port, :integer, default: 50_051),
       spec("MN_GRPC_AUTH_TOKEN", :grpc_auth_token, :secret),
       spec("MN_GRPC_AUTH_TOKEN_FILE", :grpc_auth_token_file, :path),
+      spec("MN_RUNTIME_CONTROL_TOKEN", :runtime_control_token, :secret),
+      spec("MN_RUNTIME_CONTROL_TOKEN_FILE", :runtime_control_token_file, :path),
       spec("MN_COOKIE", :cookie, :secret),
       spec("MN_REDIS_HOST", :redis_host, :string, default: "localhost"),
       spec("MN_REDIS_URL", :redis_url, :url, default: {:redis_url, "MN_REDIS_HOST"}),

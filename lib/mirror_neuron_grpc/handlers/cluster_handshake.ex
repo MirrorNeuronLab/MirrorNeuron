@@ -10,7 +10,7 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
   alias Mirrorneuron.Cluster.V1.NetworkHandshakeResponse
 
   def network_handshake(request, stream) do
-    authorize_network_join!(Map.get(request, :token, ""))
+    authorize_network_join!(Map.get(request, :token, ""), Map.get(request, :node_name, ""))
 
     if MirrorNeuron.Grpc.NetworkOnly.enabled?() do
       reserve_join_claim!(request, stream)
@@ -336,7 +336,7 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
     end
   end
 
-  defp authorize_network_join!(request_token) do
+  defp authorize_network_join!(request_token, peer_name) do
     expected_token =
       "MN_NETWORK_JOIN_TOKEN"
       |> MirrorNeuron.Config.secret(:network_join_token)
@@ -345,7 +345,15 @@ defmodule MirrorNeuron.Grpc.Handlers.ClusterHandshake do
 
     request_token = to_string(request_token || "") |> String.trim()
 
-    unless expected_token != "" and secure_compare(request_token, expected_token) do
+    control_token =
+      MirrorNeuron.Grpc.Tokens.runtime_control_token() |> to_string() |> String.trim()
+
+    runtime_join =
+      is_binary(peer_name) and String.trim(peer_name) != "" and
+        control_token != "" and secure_compare(request_token, control_token)
+
+    unless runtime_join or
+             (expected_token != "" and secure_compare(request_token, expected_token)) do
       raise GRPC.RPCError,
         status: GRPC.Status.unauthenticated(),
         message: "valid MN_NETWORK_JOIN_TOKEN is required"

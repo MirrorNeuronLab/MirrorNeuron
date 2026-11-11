@@ -1253,3 +1253,11 @@ before releasing that reservation generation to the next Job.
 After the adapter confirms that the named Compose project stopped, an explicit resume can start a new serving generation. The current delivery owner consumes that authorization once in the invocation journal. Ordinary retries and other runners retain the existing uncertain-effect protection.
 
 The coordinator retains the executable definition once per deployment revision. Each worker receives its own placement, adjacent routing information and bundle references. Delivery polling reads the lane version and per-agent queue limits from the fenced Redis guard. Existing Jobs without this projection use their stored definition until its next write. A timeout awaiting ledger admission defers the same delivery before invoking the worker. A missing coordinator follows the normal recovery policy. Checkpoint validation keeps the same manifest and input digests.
+
+## Runtime and surface separation
+
+Core exposes the authenticated `RuntimeControlService` gRPC gateway. Host lifecycle,
+blueprint preparation and native execution services belong to `mirrorneuron-runtime`
+(`mn_runtime`), while CLI/API use the same SDK connection locally and remotely.
+Runtime-only installations need no application surface. See the
+[role and connection contract](../mn-deploy/docs/installation-roles.md).

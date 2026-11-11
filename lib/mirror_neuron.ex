@@ -289,7 +289,9 @@ defmodule MirrorNeuron do
     if control_node?() do
       Control.call(__MODULE__, :cancel_node_drain, [node_name, opts])
     else
-      MirrorNeuron.Cluster.NodeDrainer.cancel_node_drain(node_name, opts)
+      if MirrorNeuron.Cluster.FederatedNodeControl.remote?(node_name),
+        do: MirrorNeuron.Cluster.FederatedNodeControl.cancel(node_name, opts),
+        else: MirrorNeuron.Cluster.NodeDrainer.cancel_node_drain(node_name, opts)
     end
   end
 
@@ -297,7 +299,9 @@ defmodule MirrorNeuron do
     if control_node?() do
       Control.call(__MODULE__, :set_node_maintenance, [node_name, enabled, opts])
     else
-      MirrorNeuron.Cluster.NodeDrainer.set_node_maintenance(node_name, enabled, opts)
+      if MirrorNeuron.Cluster.FederatedNodeControl.remote?(node_name),
+        do: MirrorNeuron.Cluster.FederatedNodeControl.maintenance(node_name, enabled, opts),
+        else: MirrorNeuron.Cluster.NodeDrainer.set_node_maintenance(node_name, enabled, opts)
     end
   end
 
@@ -305,7 +309,9 @@ defmodule MirrorNeuron do
     if control_node?() do
       Control.call(__MODULE__, :node_drain_status, [node_name])
     else
-      MirrorNeuron.Cluster.NodeDrainer.node_drain_status(node_name)
+      if MirrorNeuron.Cluster.FederatedNodeControl.remote?(node_name),
+        do: MirrorNeuron.Cluster.FederatedNodeControl.status(node_name),
+        else: MirrorNeuron.Cluster.NodeDrainer.node_drain_status(node_name)
     end
   end
 

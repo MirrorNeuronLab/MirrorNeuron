@@ -1,7 +1,7 @@
 defmodule MirrorNeuron.Operations do
   @moduledoc false
 
-  alias MirrorNeuron.Cluster.{Control, NodeDrainer, Reconciler}
+  alias MirrorNeuron.Cluster.{Control, NodeDrainer, Reconciler, FederatedNodeControl}
   alias MirrorNeuron.Monitor
   alias MirrorNeuron.Operations.Supervisor
   alias MirrorNeuron.Persistence.{CancellationStore, OperationStore}
@@ -151,8 +151,15 @@ defmodule MirrorNeuron.Operations do
     if control_node?() do
       execute_on_runtime("drain_node", %{"node_name" => node_name}, opts)
     else
-      case NodeDrainer.drain_node(node_name, Keyword.put(opts, :continue, true)) do
-        {:ok, result} -> drain_result(result)
+      result =
+        if FederatedNodeControl.remote?(node_name) do
+          FederatedNodeControl.drain(node_name, opts)
+        else
+          NodeDrainer.drain_node(node_name, Keyword.put(opts, :continue, true))
+        end
+
+      case result do
+        {:ok, value} -> drain_result(value)
         {:error, reason} -> {:failed, %{}, inspect(reason)}
       end
     end
@@ -251,7 +258,7 @@ defmodule MirrorNeuron.Operations do
           )
 
         targets =
-          if kind == "drain_node" and targets == [] do
+          if kind == "drain_node" and (targets == [] or FederatedNodeControl.remote?(node_name)) do
             [%{"id" => "node:" <> node_name, "node_name" => node_name}]
           else
             targets

@@ -124,4 +124,5 @@ defmodule MirrorNeuron.Grpc.Endpoint do
   run(MirrorNeuron.Grpc.ObservabilityServer)
   run(MirrorNeuron.Grpc.OperationsServer)
   run(MirrorNeuron.Grpc.InteractionServer)
+  run(MirrorNeuron.Grpc.RuntimeControlServer)
 end

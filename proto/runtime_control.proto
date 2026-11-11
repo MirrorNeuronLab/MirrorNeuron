@@ -1,0 +1,42 @@
+syntax = "proto3";
+package mirrorneuron.runtime.v1;
+
+// The public Core gateway authenticates every call and delegates native work to
+// its private host service. Actions are a closed, versioned domain vocabulary;
+// no HTTP route, Python import path, shell command or arbitrary URL is executed.
+service RuntimeControlService {
+  rpc GetCapabilities (RuntimeRequest) returns (RuntimeReply);
+  rpc Catalog (RuntimeRequest) returns (RuntimeReply);
+  rpc Prepare (RuntimeRequest) returns (RuntimeReply);
+  rpc Execute (RuntimeRequest) returns (RuntimeReply);
+  rpc Read (RuntimeRequest) returns (RuntimeReply);
+  rpc Events (RuntimeRequest) returns (stream RuntimeFrame);
+  rpc ReadFile (RuntimeRequest) returns (stream RuntimeFrame);
+  rpc Upload (stream RuntimeFrame) returns (RuntimeReply);
+  rpc JobUi (stream RuntimeFrame) returns (stream RuntimeFrame);
+}
+
+message RuntimeRequest {
+  uint32 version = 1;
+  string action = 2;
+  string arguments_json = 3;
+  string request_id = 4;
+}
+
+message RuntimeReply {
+  uint32 version = 1;
+  string value_json = 2;
+  uint32 status = 3;
+  map<string, string> metadata = 4;
+  string error_json = 5;
+}
+
+// Headers and errors use the same reply contract. Data frames are bounded;
+// streams close on cancellation and do not determine a Job's lifetime.
+message RuntimeFrame {
+  uint32 version = 1;
+  string kind = 2;
+  bytes data = 3;
+  RuntimeRequest request = 4;
+  RuntimeReply reply = 5;
+}

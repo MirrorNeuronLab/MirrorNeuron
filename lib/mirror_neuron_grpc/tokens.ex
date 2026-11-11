@@ -3,6 +3,15 @@ defmodule MirrorNeuron.Grpc.Tokens do
 
   import Bitwise
 
+  def runtime_control_token do
+    MirrorNeuron.Config.secret(
+      "MN_RUNTIME_CONTROL_TOKEN",
+      :runtime_control_token,
+      "MN_RUNTIME_CONTROL_TOKEN_FILE",
+      :runtime_control_token_file
+    )
+  end
+
   def auth_token do
     MirrorNeuron.Config.secret(
       "MN_GRPC_AUTH_TOKEN",

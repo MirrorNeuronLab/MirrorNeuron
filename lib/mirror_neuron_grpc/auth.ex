@@ -3,6 +3,17 @@ defmodule MirrorNeuron.Grpc.Auth do
 
   @token_headers ["authorization"]
 
+  def authorize_runtime!(stream, allow_peer \\ false) do
+    unless authorized?(stream, MirrorNeuron.Grpc.Tokens.runtime_control_token()) or
+             (allow_peer and runtime_peer_authorized?(stream)) do
+      raise GRPC.RPCError,
+        status: GRPC.Status.unauthenticated(),
+        message: "A runtime control credential is required"
+    end
+
+    :ok
+  end
+
   def authorize_identity!(stream) do
     expected_token = MirrorNeuron.Grpc.Tokens.auth_token()
 
@@ -54,6 +65,14 @@ defmodule MirrorNeuron.Grpc.Auth do
       metadata
       |> token_candidates()
       |> Enum.any?(&MirrorNeuron.Grpc.Tokens.secure_compare(&1, expected))
+  end
+
+  defp runtime_peer_authorized?(stream) do
+    peer_name =
+      stream |> metadata() |> Map.get("x-mn-federation-peer") |> header_values() |> List.first()
+
+    is_binary(peer_name) and peer_authorized?(stream) and
+      match?({:ok, _}, MirrorNeuron.Cluster.FederationRegistry.fetch(peer_name))
   end
 
   defp metadata(stream) when is_map(stream) do

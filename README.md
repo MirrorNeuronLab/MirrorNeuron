@@ -825,3 +825,11 @@ and overload information; an owner that ignores protected channels is rejected.
 Do not downgrade an owner while v2 runs or their retry checkpoints remain active.
 
 See [SPEC.md](SPEC.md) for queue guarantees, correlation, replay, and compatibility details.
+
+## Runtime and surface separation
+
+Core exposes the authenticated `RuntimeControlService` gRPC gateway. Host lifecycle,
+blueprint preparation and native execution services belong to `mirrorneuron-runtime`
+(`mn_runtime`), while CLI/API use the same SDK connection locally and remotely.
+Runtime-only installations need no application surface. See the
+[role and connection contract](../mn-deploy/docs/installation-roles.md).
