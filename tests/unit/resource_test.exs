@@ -31,6 +31,7 @@ defmodule MirrorNeuron.ResourceTest do
             "platform" => %{
               "family" => "unix",
               "os" => "linux",
+              "os_name" => "Ubuntu",
               "hostname" => "local-lab",
               "display_name" => "Local Lab"
             },
@@ -92,6 +93,7 @@ defmodule MirrorNeuron.ResourceTest do
         %{
           "name" => "mn1@127.0.0.1",
           "hardware" => %{
+            "platform" => %{"os" => "darwin", "os_name" => %{"invalid" => true}},
             "cpu" => %{"logical_processors" => 8},
             "memory" => %{"total_bytes" => 16 * 1024 * 1024 * 1024},
             "disk" => %{
@@ -168,6 +170,7 @@ defmodule MirrorNeuron.ResourceTest do
     assert draining["scheduling_eligible"] == false
     assert draining["drain"] == %{"status" => "blocked_no_placement", "reason" => "kernel update"}
     assert draining["platform"]["os"] == "linux"
+    assert draining["platform"]["os_name"] == "Ubuntu"
     assert draining["cpu_model"] == "AMD Ryzen AI Max+ 395"
     assert draining["cpu_load_average_1m"] == 2.5
     assert draining["gpu_model"] == "NVIDIA RTX 4090"
@@ -196,7 +199,18 @@ defmodule MirrorNeuron.ResourceTest do
 
     assert report["mode"] == "single_node"
     assert report["node_count"] == 1
-    assert [%{"name" => "mn1@127.0.0.1", "cpu_cores" => 8, "gpu_count" => 1}] = report["nodes"]
+
+    assert [
+             %{
+               "name" => "mn1@127.0.0.1",
+               "cpu_cores" => 8,
+               "gpu_count" => 1,
+               "platform" => platform
+             }
+           ] =
+             report["nodes"]
+
+    assert platform == %{"os" => "darwin"}
 
     assert report["combined"] == %{
              "cpu_cores" => 8,

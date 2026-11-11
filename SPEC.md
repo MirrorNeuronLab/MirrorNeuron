@@ -536,6 +536,8 @@ Federation handshakes advertise the owner's complete hardware profile. Resource
 reports preserve both direct scheduler eligibility and the separate federated
 owner eligibility facts, so submitters can validate a remote owner without
 making that owner a member of their local scheduler.
+Resource reports preserve the hardware snapshot's optional `platform.os_name`
+alongside the machine-readable `platform.os`.
 Authenticated federation advertisements and refreshes also preserve the owner's
 current admission capability, reservation maps, FIFO and generation
 through node inspection and resource reports. Private native request claims are

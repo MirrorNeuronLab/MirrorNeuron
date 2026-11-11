@@ -135,7 +135,7 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
     :ok
   end
 
-  test "generated v1 service and endpoint expose exactly the durable job/run contract" do
+  test "generated v1 services and endpoint expose the job and runtime control contracts" do
     assert Mirrorneuron.Job.V1.JobService.Service.__meta__(:name) ==
              "mirrorneuron.job.v1.JobService"
 
@@ -144,13 +144,29 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
                [:ExportJobBackup, :RestoreJobBackup] ++
                Enum.map(Enum.drop(@rpc_cases, 7), &elem(&1, 0))
 
+    runtime = Mirrorneuron.Runtime.V1.RuntimeControlService.Service
+    assert runtime.__meta__(:name) == "mirrorneuron.runtime.v1.RuntimeControlService"
+
+    assert Enum.map(runtime.__rpc_calls__(), &elem(&1, 0)) == [
+             :GetCapabilities,
+             :Catalog,
+             :Prepare,
+             :Execute,
+             :Read,
+             :Events,
+             :ReadFile,
+             :Upload,
+             :JobUi
+           ]
+
     assert Endpoint.__meta__(:servers) |> Enum.sort() ==
              [
                JobServer,
                MirrorNeuron.Grpc.ClusterServer,
                MirrorNeuron.Grpc.InteractionServer,
                MirrorNeuron.Grpc.ObservabilityServer,
-               MirrorNeuron.Grpc.OperationsServer
+               MirrorNeuron.Grpc.OperationsServer,
+               MirrorNeuron.Grpc.RuntimeControlServer
              ]
              |> Enum.sort()
 

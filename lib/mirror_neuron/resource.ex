@@ -356,9 +356,12 @@ defmodule MirrorNeuron.Resource do
   end
 
   defp platform_summary(platform) when is_map(platform) do
+    os_name = map_get(platform, "os_name")
+
     %{
       "family" => map_get(platform, "family"),
       "os" => map_get(platform, "os"),
+      "os_name" => if(is_binary(os_name) and byte_size(os_name) in 1..128, do: os_name),
       "node" => map_get(platform, "node"),
       "hostname" => map_get(platform, "hostname"),
       "display_name" => map_get(platform, "display_name")
