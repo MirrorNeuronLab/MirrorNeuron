@@ -6,6 +6,33 @@ start and retry reserve before persisting an execution. Busy `start_now` request
 return `accepted: false` without creating a failed run. `enqueue_if_busy` accepts
 compatible work into the durable queue. Permanent incompatibilities are rejected.
 
+## Code layout
+
+Scheduling implementation lives under `lib/mirror_neuron/scheduler/`:
+
+| Path | Responsibility |
+| --- | --- |
+| `scheduler.ex` | Public `MirrorNeuron.Scheduler` API and plan inspection |
+| `placement/planner.ex` | Assemble a plan from demand, node inventory and reservations |
+| `placement/` | Worker demands, node eligibility, scoring, group/system placement, allocations and diagnostics |
+| `admission/` | Owner-local reservations, resource budgets, durable state transitions, queue reconciliation and native request claims |
+| `schedules/` | Schedule CRUD, cron/event policy, fenced dispatch, occurrence replay and service windows |
+
+The existing `MirrorNeuron.Runtime.NodeAdmission`, `ScheduleDispatcher`,
+`SchedulePolicy` and other admission/schedule module names are preserved, including
+the supervised process identity. Moving their source files does not change
+callers or stored contracts. The runtime lifecycle, cluster leader, gRPC handlers
+and Redis store continue to call these APIs from their own layers.
+
+Tests mirror the layout in `tests/unit/scheduler/`. Placement fixtures live in
+`tests/support/scheduler_case.ex`; the regression suites are divided by behavior.
+Pure allocation, accounting, cron and window decisions have isolated unit tests.
+Run the complete scheduler checks with Redis available:
+
+```bash
+mix test tests/unit/scheduler tests/e2e/schedule_occurrence_store_test.exs tests/e2e/blueprint_runtime_test.exs
+```
+
 ## Peak budgets
 
 Missing profiles preserve whole-PC exclusivity. Opt in through executable

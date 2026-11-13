@@ -1,5 +1,7 @@
 defmodule MirrorNeuron.Runtime.SchedulePolicy do
-  @moduledoc false
+  @moduledoc "Schedule normalization, due occurrences, catch-up and event matching."
+
+  alias MirrorNeuron.Scheduler.Schedules.Cron
 
   @default_grace_ms 60_000
   @default_catchup_limit 10
@@ -73,7 +75,7 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
     schedule
     |> Map.get("crons", [])
     |> Enum.flat_map(fn cron ->
-      case next_cron_after(cron, after_dt) do
+      case Cron.next_cron_after(cron, after_dt) do
         {:ok, datetime} -> [datetime]
         _ -> []
       end
@@ -84,6 +86,7 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
   end
 
   def next_run_at(%{"kind" => "delayed", "run_at" => run_at}, _after_iso_or_dt), do: run_at
+
   def next_run_at(_schedule, _after_iso_or_dt), do: nil
 
   def due_instances(schedule, now_iso_or_dt \\ now()) do
@@ -183,11 +186,17 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
   end
 
   defp infer_kind(%{"kind" => kind}) when is_binary(kind), do: String.downcase(kind)
+
   defp infer_kind(%{"auto_schedule" => true}), do: "resource_wait"
+
   defp infer_kind(%{"event_type" => _}), do: "event"
+
   defp infer_kind(%{"trigger" => _}), do: "event"
+
   defp infer_kind(%{"run_at" => _}), do: "delayed"
+
   defp infer_kind(%{"delay_ms" => _}), do: "delayed"
+
   defp infer_kind(_raw), do: "periodic"
 
   defp normalize_crons(raw) do
@@ -207,6 +216,7 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
   end
 
   defp normalize_timezone(value) when is_binary(value) and value != "", do: value
+
   defp normalize_timezone(_value), do: "UTC"
 
   defp normalize_run_at(raw, now) do
@@ -259,6 +269,7 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
   end
 
   defp normalize_parameterized(value) when is_map(value), do: stringify(value)
+
   defp normalize_parameterized(_value), do: %{}
 
   defp validate_kind(errors, %{"kind" => "periodic"} = schedule) do
@@ -326,7 +337,7 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
 
   defp invalid_cron_errors(crons) do
     crons
-    |> Enum.reject(fn cron -> match?({:ok, _}, parse_cron(cron)) end)
+    |> Enum.reject(fn cron -> match?({:ok, _}, Cron.parse_cron(cron)) end)
     |> Enum.map(&"invalid cron expression #{inspect(&1)}")
   end
 
@@ -365,140 +376,6 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
     |> Enum.reverse()
   end
 
-  defp next_cron_after(cron, after_dt) do
-    with {:ok, spec} <- parse_cron(cron) do
-      after_dt
-      |> DateTime.add(60 - after_dt.second, :second)
-      |> DateTime.truncate(:second)
-      |> find_next_matching_minute(spec, 0)
-    end
-  end
-
-  defp find_next_matching_minute(_candidate, _spec, minutes) when minutes > 366 * 24 * 60,
-    do: {:error, :no_match}
-
-  defp find_next_matching_minute(candidate, spec, minutes) do
-    if cron_matches?(candidate, spec) do
-      {:ok, candidate}
-    else
-      candidate
-      |> DateTime.add(60, :second)
-      |> find_next_matching_minute(spec, minutes + 1)
-    end
-  end
-
-  defp parse_cron("@hourly"), do: parse_cron("0 * * * *")
-  defp parse_cron("@daily"), do: parse_cron("0 0 * * *")
-  defp parse_cron("@weekly"), do: parse_cron("0 0 * * 0")
-  defp parse_cron("@monthly"), do: parse_cron("0 0 1 * *")
-  defp parse_cron("@yearly"), do: parse_cron("0 0 1 1 *")
-  defp parse_cron("@annually"), do: parse_cron("@yearly")
-
-  defp parse_cron(cron) when is_binary(cron) do
-    case String.split(cron, ~r/\s+/, trim: true) do
-      [minute, hour, day, month, dow] ->
-        with {:ok, minute_values} <- parse_field(minute, 0, 59),
-             {:ok, hour_values} <- parse_field(hour, 0, 23),
-             {:ok, day_values} <- parse_field(day, 1, 31),
-             {:ok, month_values} <- parse_field(month, 1, 12),
-             {:ok, dow_values} <- parse_field(dow, 0, 7) do
-          {:ok,
-           %{
-             minute: minute_values,
-             hour: hour_values,
-             day: day_values,
-             month: month_values,
-             dow:
-               MapSet.new(
-                 Enum.map(dow_values, fn
-                   7 -> 0
-                   value -> value
-                 end)
-               ),
-             day_any: day == "*",
-             dow_any: dow == "*"
-           }}
-        end
-
-      _ ->
-        {:error, :invalid_cron}
-    end
-  end
-
-  defp parse_cron(_cron), do: {:error, :invalid_cron}
-
-  defp parse_field(field, min, max) do
-    field
-    |> String.split(",", trim: true)
-    |> Enum.reduce_while(MapSet.new(), fn part, acc ->
-      case parse_field_part(part, min, max) do
-        {:ok, values} -> {:cont, MapSet.union(acc, values)}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      %MapSet{} = values -> {:ok, values}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp parse_field_part(part, min, max) do
-    [range_part, step_part] =
-      case String.split(part, "/", parts: 2) do
-        [range] -> [range, "1"]
-        [range, step] -> [range, step]
-      end
-
-    with {step, ""} <- Integer.parse(step_part),
-         true <- step > 0,
-         {:ok, first, last} <- parse_range(range_part, min, max) do
-      {:ok, MapSet.new(Enum.take_every(first..last, step))}
-    else
-      _ -> {:error, :invalid_field}
-    end
-  end
-
-  defp parse_range("*", min, max), do: {:ok, min, max}
-
-  defp parse_range(range, min, max) do
-    case String.split(range, "-", parts: 2) do
-      [single] ->
-        with {value, ""} <- Integer.parse(single),
-             true <- value >= min and value <= max do
-          {:ok, value, value}
-        else
-          _ -> {:error, :invalid_range}
-        end
-
-      [left, right] ->
-        with {first, ""} <- Integer.parse(left),
-             {last, ""} <- Integer.parse(right),
-             true <- first >= min and last <= max and first <= last do
-          {:ok, first, last}
-        else
-          _ -> {:error, :invalid_range}
-        end
-    end
-  end
-
-  defp cron_matches?(datetime, spec) do
-    day_matches = MapSet.member?(spec.day, datetime.day)
-    dow_matches = MapSet.member?(spec.dow, rem(Date.day_of_week(DateTime.to_date(datetime)), 7))
-
-    day_or_dow =
-      cond do
-        spec.day_any and spec.dow_any -> true
-        spec.day_any -> dow_matches
-        spec.dow_any -> day_matches
-        true -> day_matches or dow_matches
-      end
-
-    MapSet.member?(spec.minute, datetime.minute) and
-      MapSet.member?(spec.hour, datetime.hour) and
-      MapSet.member?(spec.month, datetime.month) and
-      day_or_dow
-  end
-
   defp parse_datetime(%DateTime{} = datetime), do: DateTime.truncate(datetime, :millisecond)
 
   defp parse_datetime(value) when is_binary(value) do
@@ -511,6 +388,7 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
   defp parse_datetime(_value), do: nil
 
   defp iso_or_nil(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
+
   defp iso_or_nil(_value), do: nil
 
   defp event_type_matches(expected, actual) when is_list(expected), do: actual in expected
@@ -519,6 +397,7 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
     do: to_string(expected || "") == to_string(actual || "")
 
   defp filter_value_matches?(_actual, nil), do: true
+
   defp filter_value_matches?(actual, expected) when is_list(expected), do: actual in expected
 
   defp filter_value_matches?(actual, %{"prefix" => prefix}) when is_binary(actual),
@@ -541,7 +420,9 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
   defp valid_name?(value), do: is_binary(value) and value =~ ~r/^[a-zA-Z0-9_.:-]{1,160}$/
 
   defp bool(value) when is_boolean(value), do: value
+
   defp bool(value) when is_binary(value), do: String.downcase(value) in ["1", "true", "yes", "on"]
+
   defp bool(_value), do: false
 
   defp positive_int(value, _default) when is_integer(value) and value > 0, do: value
@@ -569,6 +450,7 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
     do: MirrorNeuron.Manifest.to_map(manifest)
 
   defp manifest_map(map) when is_map(map), do: stringify(map)
+
   defp manifest_map(_other), do: %{}
 
   defp stringify(map) when is_map(map) do
@@ -579,6 +461,7 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
   end
 
   defp stringify(list) when is_list(list), do: Enum.map(list, &stringify/1)
+
   defp stringify(value), do: value
 
   defp drop_empty(map) do
@@ -587,6 +470,8 @@ defmodule MirrorNeuron.Runtime.SchedulePolicy do
   end
 
   defp add_error(errors, true, message), do: [message | errors]
+
   defp add_error(errors, _false, _message), do: errors
+
   defp add_errors(errors, messages), do: Enum.reduce(messages, errors, &[&1 | &2])
 end

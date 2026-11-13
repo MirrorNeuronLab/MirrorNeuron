@@ -11,6 +11,7 @@ defmodule MirrorNeuron.Cluster.FederationClientTest do
     assert FederationClient.request_timeout(:sync_lite_llm_gateway) == 120_000
     assert FederationClient.request_timeout(:remove_lite_llm_gateway_route) == 120_000
     assert FederationClient.request_timeout(:query_job_response) == 60_000
+    assert FederationClient.request_timeout(:archive_job) == 300_000
     assert FederationClient.request_timeout(:delete_job) == 300_000
     assert FederationClient.request_timeout(:delete_run) == 300_000
     assert FederationClient.request_timeout(:get_job_response_turn) == 15_000

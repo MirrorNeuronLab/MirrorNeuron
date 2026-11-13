@@ -36,4 +36,5 @@ Application.put_env(
 )
 
 Code.require_file("support/runtime_case.exs", __DIR__)
+Code.require_file("support/scheduler_case.ex", __DIR__)
 ExUnit.start()

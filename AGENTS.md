@@ -29,7 +29,10 @@ Important paths:
 - `lib/mirror_neuron/manifest.ex`, `job_bundle.ex`, `bundle/`: executable
   manifest and bundle loading.
 - `lib/mirror_neuron/runtime/`: job lifecycle, delivery, workflow ledger,
-  backpressure, deployment, scheduling, recovery, and reliability.
+  backpressure, deployment, recovery, and reliability.
+- `lib/mirror_neuron/scheduler/`: placement planning, resource admission and
+  queueing, timed/event schedules, occurrence fencing, and service windows.
+  Existing `MirrorNeuron.Runtime` admission/schedule module names remain stable.
 - `lib/mirror_neuron/builtins/`: generic routing/execution/step boundaries.
 - `lib/mirror_neuron/agent_templates/`: generic agent process templates.
 - `lib/mirror_neuron/persistence/`, `redis/`: durable state, snapshots,
@@ -83,6 +86,8 @@ Important paths:
   `tests/unit/manifest_test.exs`, `blueprint_validation_test.exs`.
 - Lifecycle/delivery: `runtime/job_coordinator.ex`, `job_runner.ex`,
   `agent_worker.ex`, `delivery.ex`, `workflow_ledger.ex` and matching unit tests.
+- Scheduling: `scheduler/scheduler.ex`, `scheduler/placement/`,
+  `scheduler/admission/`, `scheduler/schedules/`, and `tests/unit/scheduler/`.
 - Persistence/recovery: `persistence/`, `runtime/local_recovery.ex`,
   `recovery_safety.ex`, backup/recovery tests.
 - Cluster: `cluster/`, `distributed_registry.ex`, `rpc.ex`, cluster tests.

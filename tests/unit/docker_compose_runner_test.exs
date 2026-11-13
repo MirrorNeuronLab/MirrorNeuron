@@ -120,6 +120,27 @@ defmodule MirrorNeuron.Runner.DockerComposeTest do
     assert Jason.decode!(project_json)["project_name"] == "mn-compose-runner"
   end
 
+  test "activation preserves the prepared definition identity across the native boundary" do
+    config = %{
+      "mn_docker_compose" => %{"project_name" => "mn-compose-runner"},
+      "environment" => %{
+        "MN_JOB_ID" => "stable-job",
+        "MN_STORAGE_SUBMISSION_ID" => "job-definition-submission"
+      },
+      "node_admission_generation" => 7
+    }
+
+    assert {:error, _} =
+             DockerCompose.run(%{}, config, job_id: "physical-run", agent_id: "listener")
+
+    assert_receive {:prepare, request}
+    assert request.submission_id == "job-definition-submission"
+    manifest = Jason.decode!(request.manifest_json)
+    assert get_in(manifest, ["metadata", "mn_identity", "job_id"]) == "stable-job"
+    assert get_in(manifest, ["metadata", "node_admission", "run_id"]) == "physical-run"
+    assert get_in(manifest, ["metadata", "node_admission", "reservation_generation"]) == 7
+  end
+
   test "event callback return values do not terminate the Compose runner" do
     config = %{
       "mn_docker_compose" => %{"project_name" => "mn-compose-runner"},
@@ -296,6 +317,8 @@ defmodule MirrorNeuron.Runner.DockerComposeTest do
     assert receipt["state"] == "failed"
     assert receipt["reason"] == "native_compose_prepare_failed"
     refute Jason.encode!(receipt) =~ "private-native-diagnostic"
-    refute_received {:cleanup, _}
+    assert_receive {:cleanup, request}
+    assert [project] = request.projects_json
+    assert Jason.decode!(project)["project_name"] == "mn-compose-runner"
   end
 end

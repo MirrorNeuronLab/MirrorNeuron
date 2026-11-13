@@ -5,7 +5,7 @@ defmodule MirrorNeuron.Runtime.JobCleanup do
 
   alias MirrorNeuron.Cluster.NodeAdapter
   alias MirrorNeuron.Runner
-  alias MirrorNeuron.Runtime.RunnerResources
+  alias MirrorNeuron.Runtime.{NodeAdmission, RunnerResources}
   alias MirrorNeuron.SafeAccess
 
   @cleanup_timeout_ms 15_000
@@ -41,6 +41,33 @@ defmodule MirrorNeuron.Runtime.JobCleanup do
       end
 
     cleanup(job_id, job, agents, resources)
+  end
+
+  # Archive retains the Run record, unlike deletion. Complete its terminal
+  # cleanup and release its reservation before acknowledging replacement capacity.
+  def retire_terminal_runs(runs) do
+    Enum.reduce_while(runs, :ok, fn run, :ok ->
+      run_id = run["run_id"] || run["job_id"]
+
+      result =
+        if run["status"] in ["completed", "failed", "cancelled"] do
+          with :ok <- cleanup_sandboxes(run_id, run, []),
+               :ok <- cleanup_runtime_resources(run_id, run, []),
+               :ok <-
+                 cleanup(run_id, run, [], [
+                   {NodeAdmission, :retire, "run reservation", [run_id]}
+                 ]) do
+            :ok
+          end
+        else
+          {:error, :job_is_not_terminal}
+        end
+
+      case result do
+        :ok -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
   end
 
   defp cleanup(job_id, job, agents, resources) do

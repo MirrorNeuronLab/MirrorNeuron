@@ -273,8 +273,9 @@ defmodule MirrorNeuron.Cluster.FederationClient do
 
   def request_timeout(:query_job_response, _request), do: @job_response_timeout
 
-  def request_timeout(function, _request) when function in [:delete_job, :delete_run],
-    do: @destructive_job_timeout
+  def request_timeout(function, _request)
+      when function in [:archive_job, :delete_job, :delete_run],
+      do: @destructive_job_timeout
 
   def request_timeout(_function, _request), do: @timeout
 

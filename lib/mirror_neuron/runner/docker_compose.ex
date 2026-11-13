@@ -38,12 +38,23 @@ defmodule MirrorNeuron.Runner.DockerCompose do
   def run(_payload, config, opts) when is_map(config) do
     lifecycle = ServiceLifecycle.new(config, opts) |> ServiceLifecycle.publish("starting", "")
 
-    with {:ok, project} <- prepare_project(config, opts),
-         :ok <- emit(opts, "docker_compose_ready", %{"project_name" => project["project_name"]}) do
+    with {:ok, project} <- project_record(config) do
       cleanup_marker = {__MODULE__, :cleanup_complete, make_ref()}
 
       try do
-        {run_result, lifecycle} = await_project(project, opts, lifecycle)
+        {run_result, lifecycle} =
+          case prepare_project(config, opts) do
+            {:ok, prepared} ->
+              :ok =
+                emit(opts, "docker_compose_ready", %{"project_name" => prepared["project_name"]})
+
+              await_project(prepared, opts, lifecycle)
+
+            {:error, _reason} = error ->
+              {error,
+               ServiceLifecycle.publish(lifecycle, "failed", "native_compose_prepare_failed")}
+          end
+
         cleanup_result = cleanup_project(project)
         Process.put(cleanup_marker, true)
 
@@ -59,6 +70,8 @@ defmodule MirrorNeuron.Runner.DockerCompose do
             {:error, "#{inspect(run_reason)}; cleanup also failed: #{inspect(cleanup_reason)}"}
         end
       after
+        # Preparation can create containers before its RPC fails. The persisted
+        # project record owns them even when no successful prepare reply arrives.
         if Process.delete(cleanup_marker) != true do
           _ = cleanup_project(project)
         end
@@ -87,10 +100,15 @@ defmodule MirrorNeuron.Runner.DockerCompose do
 
   defp prepare_project(config, opts) do
     with {:ok, record} <- project_record(config) do
+      environment = Map.get(config, "environment", %{})
+
       request = %PrepareDockerComposeRequest{
         manifest_json:
           Jason.encode!(%{
             "metadata" => %{
+              "mn_identity" => %{
+                "job_id" => environment["MN_JOB_ID"] || Keyword.get(opts, :job_id, "")
+              },
               "node_admission" => %{
                 "run_id" => Keyword.get(opts, :job_id, ""),
                 "reservation_generation" => config["node_admission_generation"]
@@ -105,7 +123,7 @@ defmodule MirrorNeuron.Runner.DockerCompose do
               ]
             }
           }),
-        submission_id: record["project_name"],
+        submission_id: environment["MN_STORAGE_SUBMISSION_ID"] || record["project_name"],
         version: 1
       }
 

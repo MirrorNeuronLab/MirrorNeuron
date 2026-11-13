@@ -1,5 +1,14 @@
 <h1 align="center">MirrorNeuron 🧠</h1>
 
+Archive stops and retires registered definition resources on their recorded
+execution owners before reporting `archived`. Cleanup failure leaves the change
+unconfirmed and retryable; repeated archive reconciles remaining resources.
+Terminal Run cleanup releases admission reservations before archive succeeds;
+Job data, configuration and Run history remain available. Compose activation
+preserves the definition Job/submission identity, and a failed prepare still
+cleans the recorded project. Archive uses the same bounded five-minute owner
+budget as deletion; surface timeouts leave room for that receipt.
+
 ## Workflow preparation progress
 
 Active preparation is reported as `mn.preparation.v1` receipts in

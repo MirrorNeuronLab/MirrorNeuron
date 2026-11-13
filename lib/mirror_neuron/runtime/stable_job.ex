@@ -268,18 +268,21 @@ defmodule MirrorNeuron.Runtime.StableJob do
       with {:ok, definition} <- get(job_id),
            :ok <- ensure_mutable(definition),
            :ok <- ensure_revision(definition, Keyword.get(opts, :expected_revision)) do
-        if definition["status"] == "archived" do
-          {:ok, definition}
-        else
-          with :ok <- ensure_no_active_runs(definition),
-               :ok <- JobResponse.stop(definition, force: true),
-               {:ok, archived} <-
-                 RedisStore.persist_job_definition(
-                   job_id,
-                   definition |> Map.put("status", "archived") |> increment_revision()
-                 ),
-               :ok <- pause_job_schedules(job_id) do
-            {:ok, archived}
+        with :ok <- ensure_no_active_runs(definition),
+             :ok <- pause_job_schedules(job_id),
+             :ok <- JobResponse.stop(definition, force: true),
+             {:ok, runs} <- list_runs(job_id),
+             :ok <- MirrorNeuron.Runtime.JobCleanup.retire_terminal_runs(runs),
+             :ok <- cleanup_definition_native_resources(job_id, definition) do
+          # A repeated archive also reconciles resources left by an interrupted
+          # cleanup. Preserve history and acknowledge only the owner's receipt.
+          if definition["status"] == "archived" do
+            {:ok, definition}
+          else
+            RedisStore.persist_job_definition(
+              job_id,
+              definition |> Map.put("status", "archived") |> increment_revision()
+            )
           end
         end
       end
@@ -1467,8 +1470,12 @@ defmodule MirrorNeuron.Runtime.StableJob do
     }
   end
 
-  defp cleanup_definition_native_resources(job_id, _definition),
-    do: RunnerResources.cleanup_native_resources(job_id)
+  defp cleanup_definition_native_resources(job_id, definition) do
+    with :ok <- RunnerResources.cleanup_retired_native_resources(definition, %{}),
+         :ok <- RunnerResources.cleanup_native_resources(job_id) do
+      :ok
+    end
+  end
 
   defp maybe_put_resource_cleanup_errors(definition, []), do: definition
 
