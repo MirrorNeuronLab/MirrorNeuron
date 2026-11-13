@@ -8,6 +8,7 @@ defmodule MirrorNeuron.MixProject do
       elixir: "~> 1.16",
       start_permanent: Mix.env() == :prod,
       test_paths: ["tests"],
+      test_ignore_filters: [~r{^tests/support/}],
       deps: deps()
     ]
   end

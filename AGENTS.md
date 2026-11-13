@@ -5,7 +5,7 @@ apply only to `MirrorNeuron` Core.
 
 ## Start Here
 
-1. Read `SPEC.md`, then the relevant parts of `README.md`.
+1. Read `SPEC.md`, then the relevant parts of `README.md` and `CODE_LAYOUT.md`.
 2. Read the touched module, adjacent modules, and the closest unit/E2E tests.
 3. Check `git status` and preserve unrelated work.
 4. Confirm the change belongs in Core. Product-specific agents, Python
@@ -26,20 +26,23 @@ Important paths:
 
 - `lib/mirror_neuron.ex`: public runtime/control facade.
 - `lib/mirror_neuron/application.ex`: OTP startup and supervision.
-- `lib/mirror_neuron/manifest.ex`, `job_bundle.ex`, `bundle/`: executable
-  manifest and bundle loading.
+- `lib/mirror_neuron/manifest.ex`, `manifest/`, `validation/`, `job_bundle.ex`,
+  `bundle/`: executable manifest validation and bundle loading.
 - `lib/mirror_neuron/runtime/`: job lifecycle, delivery, workflow ledger,
   backpressure, deployment, recovery, and reliability.
 - `lib/mirror_neuron/scheduler/`: placement planning, resource admission and
-  queueing, timed/event schedules, occurrence fencing, and service windows.
-  Existing `MirrorNeuron.Runtime` admission/schedule module names remain stable.
+  queueing, timed/event schedules, occurrence fencing, service windows, resource
+  specifications, and executor lease pools. Existing public module names remain
+  stable even when their files move into this directory.
 - `lib/mirror_neuron/builtins/`: generic routing/execution/step boundaries.
 - `lib/mirror_neuron/agent_templates/`: generic agent process templates.
 - `lib/mirror_neuron/persistence/`, `redis/`: durable state, snapshots,
   retention, and Redis HA.
 - `lib/mirror_neuron/cluster/`: membership, leadership, draining, and repair.
+- `lib/mirror_neuron/model_services/`, `monitor/`: model service discovery,
+  requests, and bounded diagnostic projections.
 - `lib/mirror_neuron/runner/`, `sandbox/`, `execution/`: host, Docker,
-  OpenShell, sandbox, upload, and lease boundaries.
+  OpenShell, sandbox, upload, and native ownership boundaries.
 - `lib/mirror_neuron/artifacts/`: job artifacts and shared storage.
 - `lib/mirror_neuron_grpc/`, `proto/`: public gRPC handlers/contracts.
 - `config/`: defaults and runtime environment validation.
@@ -82,17 +85,19 @@ Important paths:
 
 ## Where to Start
 
-- Manifest/bundle: `manifest.ex`, `job_bundle.ex`, `bundle/`,
-  `tests/unit/manifest_test.exs`, `blueprint_validation_test.exs`.
-- Lifecycle/delivery: `runtime/job_coordinator.ex`, `job_runner.ex`,
-  `agent_worker.ex`, `delivery.ex`, `workflow_ledger.ex` and matching unit tests.
+- Manifest/bundle: `manifest/`, `validation/`, `job_bundle.ex`, `bundle/`,
+  `tests/unit/manifest/`, and `tests/unit/validation/`.
+- Lifecycle/delivery: `runtime/job/`, `runtime/agent/`, `runtime/delivery/`,
+  `runtime/workflow/`, and matching tests under `tests/unit/runtime/` and
+  `tests/e2e/runtime/`.
 - Scheduling: `scheduler/scheduler.ex`, `scheduler/placement/`,
-  `scheduler/admission/`, `scheduler/schedules/`, and `tests/unit/scheduler/`.
-- Persistence/recovery: `persistence/`, `runtime/local_recovery.ex`,
-  `recovery_safety.ex`, backup/recovery tests.
+  `scheduler/admission/`, `scheduler/schedules/`, `scheduler/resources/`,
+  `scheduler/execution_pools/`, and `tests/unit/scheduler/`.
+- Persistence/recovery: `persistence/`, `runtime/recovery/`, and matching
+  persistence, backup, and recovery tests.
 - Cluster: `cluster/`, `distributed_registry.ex`, `rpc.ex`, cluster tests.
-- Runners/sandbox: `runner/`, `sandbox/`, `execution/lease_manager.ex`, runner
-  and cleanup tests.
+- Runners/sandbox: `runner/`, `sandbox/`, `execution/`,
+  `scheduler/execution_pools/`, and runner and cleanup tests.
 - gRPC: `lib/mirror_neuron_grpc/`, `proto/`, API/gRPC handler tests. Update proto
   sources and regenerate bindings together when the wire contract changes.
 
@@ -112,11 +117,12 @@ Run:
 mix format --check-formatted
 mix test
 mix compile --warnings-as-errors
-find scripts -name '*.sh' -print0 | xargs -0 -n1 bash -n
+rg --files scripts -g '*.sh' -0 | xargs -0 -n1 bash -n
 ```
 
 Redis-backed and live cluster/OpenShell tests may need external services; keep
 ordinary unit tests deterministic and report unexercised integrations.
+See `CODE_LAYOUT.md` for isolated Redis, Python SDK, and durable flow test setup.
 
 ## Issue-Fixing Policy
 

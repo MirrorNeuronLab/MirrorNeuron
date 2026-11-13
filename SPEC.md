@@ -40,6 +40,18 @@ Only current runtime contracts are supported. Admission snapshots require schema
 
 Backward compatibility and automatic migration of obsolete state are unsupported.
 
+Malformed manifest containers, resource entries, input rules, and dynamic workflow
+patches produce validation errors before execution. Invalid regular expressions
+and values that cannot be represented as JSON must not crash validation or become
+empty objects. Bounded diagnostic strings preserve UTF-8 boundaries. Unknown
+runner event names remain strings rather than creating runtime atoms.
+
+Persistence success requires every required Redis transaction result to succeed,
+including retention writes. A recovery evaluation must persist its running state
+before dispatch. Readiness requires a running deployment at the deadline;
+an unfinished start is not readiness. Federation registry mutations serialize
+per registry file with distinct lock ownership for each calling process.
+
 ## Job timeouts
 
 Workflow step limits use asynchronous inspection at their soft deadline (300
@@ -740,8 +752,12 @@ outcomes for inspection. Static and existing dynamic-region workflows preserve
 their current execution semantics. Deploy this runtime together with the SDK
 child-workflow compiler; no compatibility execution fallback is provided.
 
-Validation: `mix test tests/unit/child_workflow_test.exs
- tests/unit/dynamic_workflow_test.exs tests/unit/workflow_ledger_test.exs --no-start`.
+Validation:
+
+```bash
+mix test --no-start tests/unit/runtime/workflow/child_workflow_test.exs \
+  tests/unit/runtime/workflow/dynamic tests/unit/runtime/workflow/ledger
+```
 
 ## Retired working-index lifecycle
 
@@ -928,7 +944,7 @@ and require an explicit new run. Cleanup runs only after commit; failure leaves
 a durable warning and is retried independently. The guarantee is owner-node
 storage durability, without requiring another node's availability.
 
-Deterministic acceptance coverage: `tests/unit/open_shell_artifact_handoff_test.exs`
+Deterministic acceptance coverage: `tests/e2e/runner/open_shell/handoff/`
 uses the actual runner and both blueprint bindings; `tests/handoff/test_store.py`
 exercises crash publication, fencing, conflicts, corruption, quotas and replication.
 
@@ -1247,7 +1263,7 @@ observer benchmark:
 
 ```bash
 MN_FLOW_REDIS_URL=redis://127.0.0.1:<isolated-port> mix test --no-start \
-  tests/unit/runtime_flows_test.exs
+  tests/e2e/runtime/flows
 ```
 
 End-to-end API/browser and real federated latency must also be

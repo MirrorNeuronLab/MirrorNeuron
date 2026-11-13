@@ -449,7 +449,7 @@ mix deps.get
 mix format --check-formatted
 mix test
 mix compile --warnings-as-errors
-find scripts -name '*.sh' -print0 | xargs -0 -n1 bash -n
+rg --files scripts -g '*.sh' -0 | xargs -0 -n1 bash -n
 ```
 
 Run `mix test --only blueprint_runtime` before testing a full blueprint. The
@@ -473,6 +473,8 @@ scripts/                    Development and release helpers
 ```
 
 Read [AGENTS.md](AGENTS.md) and [SPEC.md](SPEC.md) before changing Core.
+[CODE_LAYOUT.md](CODE_LAYOUT.md) maps the domain modules, stable entry points,
+and matching tests, including isolated Redis and Python SDK test setup.
 Keep domain behavior in blueprints, agents, and skills, and update the canonical
 documentation when a public contract changes. See
 [Contributing](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/contributing.md)
