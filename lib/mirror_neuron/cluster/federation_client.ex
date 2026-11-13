@@ -323,21 +323,20 @@ defmodule MirrorNeuron.Cluster.FederationClient do
   def sync_peer(node_name) do
     # This request uses the existing peer-scoped channel credential. The registry
     # additionally verifies our original credential and coordination-store identity.
-    if File.exists?(
-         Path.join(System.get_env("MN_HOME") || Path.expand("~/.mn"), "node-identity.json")
-       ) do
-      call_cluster(
-        node_name,
-        :register_federated_peer,
-        %Mirrorneuron.Cluster.V1.RegisterFederatedPeerRequest{
-          node_name: to_string(NodeAdapter.self()),
-          peer_info_json:
-            Jason.encode!(MirrorNeuron.Grpc.Handlers.ClusterHandshake.node_advertisement_info()),
-          peer_auth_token: MirrorNeuron.Grpc.Tokens.peer_token(node_name),
-          version: 1
-        }
-      )
-    end
+    # The running node and its registered peer credential establish identity.
+    # Host installation files need not exist inside Core's container. Skipping
+    # this publication would leave healthy peers with their join-time hardware.
+    call_cluster(
+      node_name,
+      :register_federated_peer,
+      %Mirrorneuron.Cluster.V1.RegisterFederatedPeerRequest{
+        node_name: to_string(NodeAdapter.self()),
+        peer_info_json:
+          Jason.encode!(MirrorNeuron.Grpc.Handlers.ClusterHandshake.node_advertisement_info()),
+        peer_auth_token: MirrorNeuron.Grpc.Tokens.peer_token(node_name),
+        version: 1
+      }
+    )
 
     response =
       call(

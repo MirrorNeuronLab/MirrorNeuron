@@ -74,6 +74,11 @@ Resource node projections preserve the native hardware snapshot's optional
 This is measured one-minute load, not a reservation or CPU utilization ratio;
 clients must label it accordingly and avoid treating unknown nodes as idle.
 
+Each federation synchronization publishes the current owner hardware and admission
+snapshot before synchronizing job inventory. This authenticated refresh uses the
+running node identity and existing peer credential; it does not depend on a
+host-side `node-identity.json` file being present inside the Core container.
+
 Child-round plan nodes accept an optional non-empty `label` of at most 1,024 UTF-8 bytes. Core persists it on the child instance and includes it in public topology events; omitted labels retain the template label or instance ID. Labels do not alter task identity, dependencies or execution.
 
 ## Managed model residency

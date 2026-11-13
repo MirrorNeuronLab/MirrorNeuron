@@ -763,6 +763,12 @@ Resource node reports include `cpu_load_average_1m` from the native hardware
 snapshot. Missing samples are null. This is one-minute CPU load, distinct from
 CPU utilization and reserved capacity.
 
+Federation synchronization republishes the owner's current hardware snapshot
+on every successful refresh, including container installations without a host
+`node-identity.json` file. Connected peers therefore observe memory released by
+unloaded models. Native sampling runs every 30 seconds and peer refresh normally
+runs every five seconds.
+
 Run detail (`GetRun`) includes `placement.owner_node`, `placement.node_label`,
 and `placement.reservation`. The reservation reports `state` (`reserved`,
 `queued`, `unreserved`, or `unavailable`), allocation `mode`, and numeric

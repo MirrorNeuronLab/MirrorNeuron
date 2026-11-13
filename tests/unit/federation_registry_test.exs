@@ -177,7 +177,7 @@ defmodule MirrorNeuron.Cluster.FederationRegistryTest do
              FederationRegistry.register("mirror_neuron@peer", shared, "scoped")
   end
 
-  test "peer refresh propagates busy and idle admission through node and resource reports" do
+  test "peer refresh propagates released memory and admission through node and resource reports" do
     alias MirrorNeuron.Cluster.Manager
     alias MirrorNeuron.Execution.LeaseManager
     alias MirrorNeuron.Runtime.NodeAdmissionState
@@ -193,16 +193,30 @@ defmodule MirrorNeuron.Cluster.FederationRegistryTest do
     {:ok, busy, _} =
       NodeAdmissionState.transition(busy, "submit", %{"run_id" => "litigation"})
 
-    for state <- [busy, NodeAdmissionState.new()] do
+    for {state, available} <- [{busy, 31_014}, {NodeAdmissionState.new(), 119_240}] do
       admission =
         state
         |> Map.take(["holder", "queue", "generation", "legacy"])
         |> Map.put("capability", "exclusive_run_v1")
 
+      device = %{
+        "id" => "gpu-shared",
+        "kind" => "gpu",
+        "name" => "NVIDIA GB10",
+        "memory_total_mb" => 124_607,
+        "memory_free_mb" => available
+      }
+
+      hardware = %{
+        "memory" => %{"total_mb" => 124_607, "available_mb" => available},
+        "gpu" => [device],
+        "devices" => [device]
+      }
+
       assert {:ok, _, _} =
                FederationRegistry.register(
                  "mirror_neuron@peer",
-                 Map.put(peer_info(), "admission", admission),
+                 Map.merge(peer_info(), %{"admission" => admission, "hardware" => hardware}),
                  "scoped"
                )
 
@@ -211,6 +225,7 @@ defmodule MirrorNeuron.Cluster.FederationRegistryTest do
 
       node = Enum.find(Manager.nodes(), &(&1.name == "mirror_neuron@peer"))
       assert node.admission == admission
+      assert node.hardware == hardware
       refute node.scheduling_eligible
       assert node.job_owner_eligible
 
@@ -219,6 +234,8 @@ defmodule MirrorNeuron.Cluster.FederationRegistryTest do
         |> Enum.find(&(&1["name"] == "mirror_neuron@peer"))
 
       assert resource["admission"] == admission
+      assert resource["memory_available_gb"] == Float.round(available / 1024, 2)
+      assert resource["gpu_memory_free_mb"] == available
     end
   end
 
