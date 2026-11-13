@@ -1,5 +1,11 @@
 <h1 align="center">MirrorNeuron 🧠</h1>
 
+Retry-safe auxiliary services retain the same run during bounded delivery retries.
+Exhaustion is durably reported before discarding the delivery. The owner commits a failed Run,
+stops its workers and deregisters its services through normal finalization.
+A discarded service command must not leave the Run advertised as running.
+Late exhaustion notifications cannot revive paused or terminal work.
+
 Archive stops and retires registered definition resources on their recorded
 execution owners before reporting `archived`. Cleanup failure leaves the change
 unconfirmed and retryable; repeated archive reconciles remaining resources.

@@ -808,6 +808,34 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
     end
   end
 
+  def handle_info({:agent_delivery_exhausted, _agent_id, _message_id}, %{status: status} = state)
+      when status not in ["pending", "running"],
+      do: {:noreply, state}
+
+  def handle_info({:agent_delivery_exhausted, agent_id, message_id}, state) do
+    if service_auxiliary_retry_safe?(state, agent_id, %{}) do
+      error =
+        ErrorEnvelope.normalize(
+          %{"agent_id" => agent_id, "message_id" => message_id},
+          code: "runtime.service.delivery_exhausted",
+          desc: "Service work exhausted its delivery retry budget.",
+          component: "agent_worker",
+          agent_id: agent_id,
+          retryable: false
+        )
+
+      next_state =
+        finalize_job(state, "failed", %{error: error}, :job_failed, %{
+          agent_id: agent_id,
+          reason: error
+        })
+
+      {:stop, :normal, next_state}
+    else
+      {:noreply, state}
+    end
+  end
+
   def handle_info({:agent_failed, agent_id, reason}, state) do
     if workflow_agent_active?(state, agent_id) do
       handle_workflow_agent_failed(state, agent_id, reason)
@@ -2587,6 +2615,17 @@ defmodule MirrorNeuron.Runtime.JobCoordinator do
          state
        ) do
     handle_info({:agent_completed_run, agent_id, result}, state)
+  end
+
+  defp dispatch_coordinator_report(
+         %{
+           "kind" => "agent_delivery_exhausted",
+           "agent_id" => agent_id,
+           "message_id" => message_id
+         },
+         state
+       ) do
+    handle_info({:agent_delivery_exhausted, agent_id, message_id}, state)
   end
 
   defp dispatch_coordinator_report(report, _state),

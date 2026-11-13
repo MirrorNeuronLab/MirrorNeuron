@@ -298,11 +298,30 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
     }
   end
 
-  defp process_delivery(%{discard_reason: reason} = delivery, state) do
-    MirrorNeuron.Runtime.CommandReceipts.fail(Map.get(delivery, :message, %{}), state, reason)
-    _result = Delivery.dead_letter(state.job_id, state.node.node_id, delivery, reason)
-    forget_delivery_retry(state, delivery)
+  defp process_delivery(%{discard_reason: :attempts_exhausted} = delivery, state) do
+    # Persist the terminal report before discarding the original delivery, so a
+    # coordinator restart cannot lose the transition and leave the Run running.
+    case enqueue_coordinator_report(
+           state,
+           delivery.message,
+           "agent_delivery_exhausted",
+           %{"message_id" => delivery.message_id},
+           "exhausted"
+         ) do
+      :ok ->
+        discard_delivery(delivery, state)
+
+      {:error, _reason} ->
+        schedule_delivery_reclaim(
+          state,
+          Delivery.retry(state.job_id, state.node.node_id, state.delivery_consumer, delivery),
+          delivery
+        )
+    end
   end
+
+  defp process_delivery(%{discard_reason: _reason} = delivery, state),
+    do: discard_delivery(delivery, state)
 
   defp process_delivery(delivery, state) do
     state = forget_delivery_retry(state, delivery)
@@ -394,6 +413,12 @@ defmodule MirrorNeuron.Runtime.AgentWorker do
         send(state.coordinator, {:agent_failed, state.node.node_id, reason})
         schedule_delivery_reclaim(next_state, retry_result, delivery)
     end
+  end
+
+  defp discard_delivery(%{discard_reason: reason} = delivery, state) do
+    MirrorNeuron.Runtime.CommandReceipts.fail(Map.get(delivery, :message, %{}), state, reason)
+    _result = Delivery.dead_letter(state.job_id, state.node.node_id, delivery, reason)
+    forget_delivery_retry(state, delivery)
   end
 
   defp report_delivery_retry(delivery, reason, state) do
