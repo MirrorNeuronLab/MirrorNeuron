@@ -10,19 +10,19 @@ though its implementation now lives under `runtime/job/`.
 
 Paths in this table are relative to `lib/mirror_neuron/`.
 
-| Directory | Responsibility | Entry point |
-| --- | --- | --- |
-| `runtime/control/` | Submission, public control calls, message delivery, cleanup | `runtime/runtime.ex` |
-| `runtime/definition/` | Stable Job definitions, validation, run creation and history | `runtime/definition/stable_job.ex` |
-| `runtime/job/` | Job processes, coordinator lifecycle, topology, finalization | `runtime/job/job_coordinator.ex`, `job_runner.ex` |
-| `runtime/agent/` | Worker processes, invocation, delivery, retries, observations | `runtime/agent/agent_worker.ex` |
-| `runtime/workflow/` | Logical steps, attempts, dependencies, dynamic graphs | `runtime/workflow/workflow_ledger.ex`, `dynamic_workflow.ex` |
-| `runtime/delivery/` | Durable delivery, command receipts, live input, replies | `runtime/delivery/delivery.ex` |
-| `runtime/deployment/` | Rollouts, promotion, readiness, deployment records | `runtime/deployment/deployment_controller.ex` |
-| `runtime/recovery/` | Local recovery, relocation, cancellation, checkpoint retry | `runtime/recovery/local_recovery.ex`, `run_retry.ex` |
-| `runtime/response/` | Response service lifecycle, warmup, queries and admission | `runtime/response/job_response.ex` |
-| `runtime/interaction/` | Interactive requests and deadlines | `runtime/interaction/interactions.ex` |
-| `runtime/observability/` | Events, errors, signals and reliability observations | `runtime/observability/signals.ex`, `error_monitor.ex` |
+| Directory                | Responsibility                                                | Entry point                                                  |
+| ------------------------ | ------------------------------------------------------------- | ------------------------------------------------------------ |
+| `runtime/control/`       | Submission, public control calls, message delivery, cleanup   | `runtime/runtime.ex`                                         |
+| `runtime/definition/`    | Stable Job definitions, validation, run creation and history  | `runtime/definition/stable_job.ex`                           |
+| `runtime/job/`           | Job processes, coordinator lifecycle, topology, finalization  | `runtime/job/job_coordinator.ex`, `job_runner.ex`            |
+| `runtime/agent/`         | Worker processes, invocation, delivery, retries, observations | `runtime/agent/agent_worker.ex`                              |
+| `runtime/workflow/`      | Logical steps, attempts, dependencies, dynamic graphs         | `runtime/workflow/workflow_ledger.ex`, `dynamic_workflow.ex` |
+| `runtime/delivery/`      | Durable delivery, command receipts, live input, replies       | `runtime/delivery/delivery.ex`                               |
+| `runtime/deployment/`    | Rollouts, promotion, readiness, deployment records            | `runtime/deployment/deployment_controller.ex`                |
+| `runtime/recovery/`      | Local recovery, relocation, cancellation, checkpoint retry    | `runtime/recovery/local_recovery.ex`, `run_retry.ex`         |
+| `runtime/response/`      | Response service lifecycle, warmup, queries and admission     | `runtime/response/job_response.ex`                           |
+| `runtime/interaction/`   | Interactive requests and deadlines                            | `runtime/interaction/interactions.ex`                        |
+| `runtime/observability/` | Events, errors, signals and reliability observations          | `runtime/observability/signals.ex`, `error_monitor.ex`       |
 
 The coordinator delegates to `runtime/job/coordinator/` for lifecycle operations.
 The ledger delegates to `runtime/workflow/ledger/` for state transitions and
@@ -34,17 +34,17 @@ Only the owning step boundary completes a logical workflow step.
 
 Scheduling implementation lives in `lib/mirror_neuron/scheduler/`:
 
-| Directory or file | Responsibility |
-| --- | --- |
-| `scheduler.ex` | Public placement entry point (`MirrorNeuron.Scheduler`) |
-| `placement/` | Candidate selection, resource demand, scoring, allocations and recovery placement |
-| `admission/` | Node reservations, resource admission, waiting queues and fencing |
-| `resources/` | Resource requests, inventory, environment projection and validation (`MirrorNeuron.ResourceSpec`) |
+| Directory or file  | Responsibility                                                                                             |
+| ------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `scheduler.ex`     | Public placement entry point (`MirrorNeuron.Scheduler`)                                                    |
+| `placement/`       | Candidate selection, resource demand, scoring, allocations and recovery placement                          |
+| `admission/`       | Node reservations, resource admission, waiting queues and fencing                                          |
+| `resources/`       | Resource requests, inventory, environment projection and validation (`MirrorNeuron.ResourceSpec`)          |
 | `execution_pools/` | Bounded executor pools, lease queues, expiry and caller monitoring (`MirrorNeuron.Execution.LeaseManager`) |
-| `schedules/` | Cron/event dispatch, occurrences, stable Job schedules and service windows |
-| `validation/` | Manifest scheduling policy validation |
-| `grpc/` | Schedule RPCs and run admission responses |
-| `monitoring.ex` | Scheduler diagnostic projection |
+| `schedules/`       | Cron/event dispatch, occurrences, stable Job schedules and service windows                                 |
+| `validation/`      | Manifest scheduling policy validation                                                                      |
+| `grpc/`            | Schedule RPCs and run admission responses                                                                  |
+| `monitoring.ex`    | Scheduler diagnostic projection                                                                            |
 
 The existing `MirrorNeuron.Runtime` admission and schedule module names remain
 valid. Redis schedule persistence remains in the persistence domain. Executor
@@ -53,22 +53,22 @@ contracts; this layout does not add a GPU reservation within a Job.
 
 ## Definitions, persistence and adapters
 
-| Directory | Responsibility | Stable entry point |
-| --- | --- | --- |
-| `manifest/` | Loading, shape validation, topology, workflow, completion and response declarations | `MirrorNeuron.Manifest` |
-| `validation/` | Blueprint input rules, resource requirements, reports and redaction | `MirrorNeuron.BlueprintValidation` |
-| `persistence/redis_store/` | Domain records, indexes, retention, Redis transport and result validation | `MirrorNeuron.Persistence.RedisStore` |
-| `persistence/delivery_store/` | Atomic enqueue, claims, settlement, invocation journal and receipts | `MirrorNeuron.Persistence.DeliveryStore` |
-| `cluster/reconciliation/` | Recovery evaluations, dispatch, node availability, retry timing | `MirrorNeuron.Cluster.Reconciler` |
-| `cluster/draining/` | Node drain operations and state | `MirrorNeuron.Cluster.NodeDrainer` |
-| `cluster/federation/` | Peer registry storage, tombstones, availability and projections | `MirrorNeuron.Cluster.FederationRegistry` |
-| `cluster/hardware/` | Native snapshots, GPU parsing and hardware advertisement | `MirrorNeuron.Cluster.Hardware` |
-| `model_services/` | Service advertisement, registration, preparation commands and requests | `MirrorNeuron.ModelServices` |
-| `monitor/` | Job/agent views, bounded projections, metrics and control actions | `MirrorNeuron.Monitor` |
-| `runner/host_local/` | Host command preparation, process ownership, streaming and uploads | `MirrorNeuron.Runner.HostLocal` |
-| `runner/docker_worker/` | Container preparation, workspace, execution and output | `MirrorNeuron.Runner.DockerWorker` |
-| `runner/open_shell/` | Sandbox invocation, transport, staging, uploads and policy paths | `MirrorNeuron.Runner.OpenShell` |
-| `builtins/executor/` | Invocation, leases, event decoding, retry and artifact results | `MirrorNeuron.Builtins.Executor` |
+| Directory                     | Responsibility                                                                      | Stable entry point                        |
+| ----------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------- |
+| `manifest/`                   | Loading, shape validation, topology, workflow, completion and response declarations | `MirrorNeuron.Manifest`                   |
+| `validation/`                 | Blueprint input rules, resource requirements, reports and redaction                 | `MirrorNeuron.BlueprintValidation`        |
+| `persistence/redis_store/`    | Domain records, indexes, retention, Redis transport and result validation           | `MirrorNeuron.Persistence.RedisStore`     |
+| `persistence/delivery_store/` | Atomic enqueue, claims, settlement, invocation journal and receipts                 | `MirrorNeuron.Persistence.DeliveryStore`  |
+| `cluster/reconciliation/`     | Recovery evaluations, dispatch, node availability, retry timing                     | `MirrorNeuron.Cluster.Reconciler`         |
+| `cluster/draining/`           | Node drain operations and state                                                     | `MirrorNeuron.Cluster.NodeDrainer`        |
+| `cluster/federation/`         | Peer registry storage, tombstones, availability and projections                     | `MirrorNeuron.Cluster.FederationRegistry` |
+| `cluster/hardware/`           | Native snapshots, GPU parsing and hardware advertisement                            | `MirrorNeuron.Cluster.Hardware`           |
+| `model_services/`             | Service advertisement, registration, preparation commands and requests              | `MirrorNeuron.ModelServices`              |
+| `monitor/`                    | Job/agent views, bounded projections, metrics and control actions                   | `MirrorNeuron.Monitor`                    |
+| `runner/host_local/`          | Host command preparation, process ownership, streaming and uploads                  | `MirrorNeuron.Runner.HostLocal`           |
+| `runner/docker_worker/`       | Container preparation, workspace, execution and output                              | `MirrorNeuron.Runner.DockerWorker`        |
+| `runner/open_shell/`          | Sandbox invocation, transport, staging, uploads and policy paths                    | `MirrorNeuron.Runner.OpenShell`           |
+| `builtins/executor/`          | Invocation, leases, event decoding, retry and artifact results                      | `MirrorNeuron.Builtins.Executor`          |
 
 The paths above are relative to `lib/mirror_neuron/`. Job gRPC operations live in
 `lib/mirror_neuron_grpc/handlers/job/`, behind the existing
