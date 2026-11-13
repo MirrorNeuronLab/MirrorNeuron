@@ -68,12 +68,34 @@ defmodule MirrorNeuron.RunnerNamespaceTest do
     end
   end
 
-  test "only a prepared Compose project can start another serving generation after a stop" do
-    config = %{"runner_module" => "MirrorNeuron.Runner.DockerCompose"}
-    refute MirrorNeuron.Runner.resumable_after_stop?(config)
+  test "implicit OpenShell selection uses the same control adapter" do
+    config = %{
+      "environment" => %{"MN_WORKFLOW_STEP_HANDLER" => "mn_sdk.integrations.block_auxiliary"}
+    }
 
-    assert MirrorNeuron.Runner.resumable_after_stop?(
-             Map.put(config, "mn_docker_compose", %{"project_name" => "owned-project"})
-           )
+    assert MirrorNeuron.Runner.control_profile(config) ==
+             MirrorNeuron.Runner.control_profile(
+               Map.put(config, "runner_module", "MirrorNeuron.Runner.OpenShell")
+             )
+
+    assert MirrorNeuron.Runner.control_profile(config).readiness == :reported
+    refute MirrorNeuron.Runner.resumable_after_stop?(config)
+  end
+
+  test "all process adapters share monitored-service control semantics" do
+    for name <- ["HostLocal", "DockerWorker", "OpenShell"] do
+      config = %{
+        "runner_module" => "MirrorNeuron.Runner." <> name,
+        "environment" => %{"MN_WORKFLOW_STEP_HANDLER" => "mn_sdk.integrations.block_auxiliary"}
+      }
+
+      assert MirrorNeuron.Runner.resumable_after_stop?(config) == (name != "OpenShell")
+      assert MirrorNeuron.Runner.control_profile(config).readiness == :reported
+      refute MirrorNeuron.Runner.resumable_after_stop?(Map.delete(config, "environment"))
+    end
+
+    assert MirrorNeuron.Runner.control_profile(%{
+             "runner_module" => "MirrorNeuron.Runner.DockerCompose"
+           }).readiness == :reported
   end
 end

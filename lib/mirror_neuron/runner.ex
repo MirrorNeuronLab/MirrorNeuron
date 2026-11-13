@@ -20,8 +20,13 @@ defmodule MirrorNeuron.Runner do
   @callback stop_commands(String.t(), :all | [String.t()]) :: :ok | {:error, term()}
   @callback prepared_key(map(), transition()) :: term() | nil
   @callback stop_prepared(map()) :: :ok | {:error, term()}
-  @callback resumable_after_stop?(map()) :: boolean()
-  @optional_callbacks prepared_key: 2, stop_prepared: 1, resumable_after_stop?: 1
+  @callback control_profile(map()) :: %{
+              restart_after_stop: boolean(),
+              readiness: :reported | :invocation
+            }
+  @optional_callbacks prepared_key: 2,
+                      stop_prepared: 1,
+                      control_profile: 1
 
   def adapters, do: Enum.map(@adapters, &elem(&1, 0))
 
@@ -92,15 +97,17 @@ defmodule MirrorNeuron.Runner do
     end
   end
 
-  def resumable_after_stop?(config) do
-    adapter = prepared_adapter(config)
+  def control_profile(config) do
+    adapter =
+      prepared_adapter(config) ||
+        if(is_nil(SafeAccess.map_get(config, "runner_module")), do: OpenShell)
 
-    not is_nil(adapter) and Code.ensure_loaded?(adapter) and
-      function_exported?(adapter, :resumable_after_stop?, 1) and
-      function_exported?(adapter, :stop_prepared, 1) and
-      function_exported?(adapter, :prepared_key, 2) and
-      not is_nil(adapter.prepared_key(config, :pause)) and adapter.resumable_after_stop?(config)
+    if adapter && Code.ensure_loaded?(adapter) && function_exported?(adapter, :control_profile, 1),
+      do: adapter.control_profile(config),
+      else: %{restart_after_stop: false, readiness: :invocation}
   end
+
+  def resumable_after_stop?(config), do: control_profile(config).restart_after_stop
 
   defp prepared_adapter(config) do
     case SafeAccess.map_get(config, "runner_module") do

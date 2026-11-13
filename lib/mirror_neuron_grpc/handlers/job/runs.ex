@@ -3,7 +3,6 @@ defmodule MirrorNeuron.Grpc.Handlers.Job.Runs do
 
   alias MirrorNeuron.Grpc.Handlers.Job.Encoding
   alias MirrorNeuron.Grpc.JobProjection
-  alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Grpc.Handlers.Job.Remote
   alias MirrorNeuron.Grpc.Handlers.RunAdmission
   alias MirrorNeuron.Grpc.Handlers.Support
@@ -99,43 +98,18 @@ defmodule MirrorNeuron.Grpc.Handlers.Job.Runs do
     end
   end
 
-  def pause_run(request, stream),
-    do: route_run_control(request, :pause_run, &MirrorNeuron.pause/1, stream)
+  def pause_run(request, stream), do: route_run_control(request, :pause_run, "pause", stream)
+  def resume_run(request, stream), do: route_run_control(request, :resume_run, "resume", stream)
+  def cancel_run(request, stream), do: route_run_control(request, :cancel_run, "cancel", stream)
 
-  def resume_run(request, stream),
-    do: route_run_control(request, :resume_run, &resume_paused_run/1, stream)
+  def get_run_control(request, stream) do
+    case Remote.remote_run_owner(request.run_id) do
+      nil ->
+        Encoding.respond(MirrorNeuron.Runtime.RunControl.get(request.run_id, request.request_id))
 
-  defp resume_paused_run(run_id) do
-    case RedisStore.fetch_job(run_id) do
-      {:ok, %{"status" => "failed"}} ->
-        {:error,
-         {:run_retry_blocked,
-          "This run failed. Use mn run retry #{run_id} --dry-run to check recovery."}}
-
-      {:ok, %{"stable_job_id" => job_id}} when is_binary(job_id) ->
-        MirrorNeuron.Runtime.StableJob.with_start_gate(job_id, fn ->
-          MirrorNeuron.resume(run_id)
-        end)
-
-      _ ->
-        MirrorNeuron.resume(run_id)
+      owner ->
+        Remote.forward_call(owner, :get_run_control, request, stream)
     end
-  end
-
-  def cancel_run(request, stream) do
-    cancel =
-      if request.queued_only do
-        fn id ->
-          case MirrorNeuron.Runtime.NodeAdmission.cancel(id) do
-            :ok -> {:ok, "cancelled"}
-            error -> error
-          end
-        end
-      else
-        &MirrorNeuron.cancel/1
-      end
-
-    route_run_control(request, :cancel_run, cancel, stream)
   end
 
   def delete_run(request, stream) do
@@ -151,18 +125,20 @@ defmodule MirrorNeuron.Grpc.Handlers.Job.Runs do
     end
   end
 
-  defp control_run(run_id, operation) do
-    case operation.(run_id) do
-      {:ok, status} -> Encoding.response(%{"run_id" => run_id, "status" => status})
-      :ok -> Encoding.response(%{"run_id" => run_id, "status" => "accepted"})
-      error -> Encoding.respond(error)
-    end
-  end
-
-  defp route_run_control(request, function, operation, stream) do
+  defp route_run_control(request, function, action, stream) do
     case Remote.remote_run_owner(request.run_id) do
-      nil -> control_run(request.run_id, operation)
-      owner -> Remote.forward_call(owner, function, request, stream)
+      nil ->
+        Encoding.respond(
+          MirrorNeuron.Runtime.RunControl.submit(
+            request.run_id,
+            action,
+            request.request_id,
+            request.queued_only
+          )
+        )
+
+      owner ->
+        Remote.forward_call(owner, function, request, stream)
     end
   end
 end

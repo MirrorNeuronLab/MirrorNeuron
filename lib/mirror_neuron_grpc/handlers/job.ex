@@ -22,6 +22,7 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
   defdelegate start_run(request, stream), to: Runs
   defdelegate list_runs(request, stream), to: Runs
   defdelegate get_run(request, stream), to: Runs
+  defdelegate get_run_control(request, stream), to: Runs
   defdelegate pause_run(request, stream), to: Runs
   defdelegate resume_run(request, stream), to: Runs
   defdelegate plan_run_retry(request, stream), to: Retry

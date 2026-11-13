@@ -17,6 +17,7 @@ service JobService {
   rpc StartRun (StartRunRequest) returns (JsonResponse);
   rpc ListRuns (JobRequest) returns (JsonResponse);
   rpc GetRun (RunRequest) returns (JsonResponse);
+  rpc GetRunControl (RunRequest) returns (JsonResponse);
   rpc PauseRun (RunRequest) returns (JsonResponse);
   rpc ResumeRun (RunRequest) returns (JsonResponse);
   rpc PlanRunRetry (PlanRunRetryRequest) returns (JsonResponse);
@@ -100,6 +101,8 @@ message RunRequest {
   // CancelRun only: reject if the queued request has already been admitted.
   bool queued_only = 3;
   string admission_policy = 4;
+  // Stable lifecycle command identity, also used by GetRunControl.
+  string request_id = 5;
 }
 
 message PlanRunRetryRequest {

@@ -65,8 +65,7 @@ defmodule MirrorNeuron.BlueprintRuntimeTest do
 
     assert %{"state" => "queued"} = claim(run(waiting))
     control = %RunRequest{run_id: first["run_id"]}
-    assert %{"status" => pause} = Job.pause_run(control, nil) |> unpack()
-    assert pause in ["paused", "pause_pending"]
+    assert %{"status" => "completed"} = Job.pause_run(control, nil) |> unpack() |> await_control()
     await_event(control.run_id, :job_paused)
     paused = run(alpha)
     assert paused["status"] == "paused"
@@ -74,7 +73,9 @@ defmodule MirrorNeuron.BlueprintRuntimeTest do
     assert %{"status" => "runnable_now"} = check(alpha, control.run_id)
     assert run(waiting)["status"] == "queued"
 
-    assert %{"status" => "resumed"} = Job.resume_run(control, nil) |> unpack()
+    assert %{"status" => "completed"} =
+             Job.resume_run(control, nil) |> unpack() |> await_control()
+
     await_event(control.run_id, :job_resumed)
     resumed = run(alpha)
     assert resumed["status"] == "running"
@@ -83,8 +84,9 @@ defmodule MirrorNeuron.BlueprintRuntimeTest do
     assert {:ok, retained} = NodeAdmission.snapshot()
     assert generations(retained) == generations(held)
 
-    assert %{"status" => result} = Job.cancel_run(control, nil) |> unpack()
-    assert result in ["cancelled", "cancellation_pending"]
+    assert %{"status" => "completed"} =
+             Job.cancel_run(control, nil) |> unpack() |> await_control()
+
     # No explicit reconcile or second start. The owner's wake/dispatch path must work.
     await_event(waiting_id, :job_running, @handoff_timeout)
     await_event(waiting_id, :agent_message_received)
@@ -102,11 +104,12 @@ defmodule MirrorNeuron.BlueprintRuntimeTest do
 
     # A late queue-only cancel cannot kill the newly running execution.
     stale =
-      assert_raise GRPC.RPCError, fn ->
-        Job.cancel_run(%RunRequest{run_id: waiting_id, queued_only: true}, nil)
-      end
+      Job.cancel_run(%RunRequest{run_id: waiting_id, queued_only: true}, nil)
+      |> unpack()
+      |> await_control()
 
-    assert stale.status == GRPC.Status.failed_precondition()
+    assert stale["status"] == "failed"
+    assert stale["error"]["code"] in ["run_not_queued", "run_already_admitted"]
     assert run(waiting)["status"] == "running"
     assert {:ok, [%{"run_id" => ^waiting_id}]} = MirrorNeuron.list_runs(waiting)
   end
@@ -235,7 +238,9 @@ defmodule MirrorNeuron.BlueprintRuntimeTest do
                System.monotonic_time(:millisecond) + 8_000
              )
 
-    assert %{"run_id" => ^id, "status" => "cancelled"} = Job.cancel_run(request, nil) |> unpack()
+    assert %{"run_id" => ^id, "status" => "completed"} =
+             Job.cancel_run(request, nil) |> unpack() |> await_control()
+
     assert {:error, _} = MirrorNeuron.get_schedule(queued["admission"]["queue_id"])
 
     assert {:ok, [%{"run_id" => ^id, "status" => "cancelled"}]} =
@@ -371,6 +376,21 @@ defmodule MirrorNeuron.BlueprintRuntimeTest do
              MirrorNeuron.job_details(id, compact: true)
 
     record
+  end
+
+  defp await_control(receipt, deadline \\ nil) do
+    deadline = deadline || System.monotonic_time(:millisecond) + 5_000
+
+    if receipt["status"] in ["completed", "failed", "superseded"] do
+      receipt
+    else
+      assert System.monotonic_time(:millisecond) < deadline,
+             "control did not settle: #{inspect(receipt)}"
+
+      Process.sleep(10)
+      request = %RunRequest{run_id: receipt["run_id"], request_id: receipt["request_id"]}
+      Job.get_run_control(request, nil) |> unpack() |> await_control(deadline)
+    end
   end
 
   defp unpack(response), do: Jason.decode!(response.result_json)

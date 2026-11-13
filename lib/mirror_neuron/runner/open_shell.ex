@@ -1,5 +1,11 @@
 defmodule MirrorNeuron.Runner.OpenShell do
   @behaviour MirrorNeuron.Runner
+  @impl true
+  def control_profile(config) do
+    profile = MirrorNeuron.Runner.ControlProfile.sdk(config)
+    %{profile | restart_after_stop: false}
+  end
+
   @moduledoc "OpenShell runner selection and stable staging/transport entrypoints."
 
   alias MirrorNeuron.Runner.OpenShell.Invocations

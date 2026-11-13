@@ -48,6 +48,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator.Bootstrap do
       result: nil,
       pause_cleanup_task: nil,
       pause_cleanup_status: nil,
+      lifecycle: MirrorNeuron.Runtime.RunLifecycle.new(runtime_topology.nodes),
+      run_control: interrupted_control(existing_job),
       result_ref: nil,
       workflow_state_ref: nil,
       submitted_at: submitted_at,
@@ -135,6 +137,11 @@ defmodule MirrorNeuron.Runtime.JobCoordinator.Bootstrap do
       {:error, reason} -> {:stop, reason}
     end
   end
+
+  defp interrupted_control(%{"run_control" => %{} = control}),
+    do: Map.put(control, "error", "runtime_restarted")
+
+  defp interrupted_control(_), do: nil
 
   def handle_continue(:recover, state) do
     handle_continue(:bootstrap, state)

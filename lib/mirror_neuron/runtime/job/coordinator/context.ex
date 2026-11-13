@@ -61,6 +61,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator.Context do
     |> Map.merge(%{
       "MN_JOB_ID" => Keyword.get(state.opts, :stable_job_id) || state.job_id,
       "MN_RUN_ID" => run_id,
+      "MN_CONTROL_GENERATION" => state.lifecycle["generation"],
       "MN_ATTEMPT_ID" => "#{run_id}:#{state.attempt}",
       "MN_JOB_DATA_DIR" => Keyword.get(state.opts, :job_data_dir),
       "MN_JOB_DATA_ACCESS" => Keyword.get(state.opts, :job_data_access),

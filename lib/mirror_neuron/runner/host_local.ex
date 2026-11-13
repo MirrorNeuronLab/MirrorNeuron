@@ -1,5 +1,7 @@
 defmodule MirrorNeuron.Runner.HostLocal do
   @behaviour MirrorNeuron.Runner
+  @impl true
+  defdelegate control_profile(config), to: MirrorNeuron.Runner.ControlProfile, as: :sdk
   @moduledoc "Host-local invocation lifecycle and runner adapter contract."
 
   alias MirrorNeuron.Runner.HostLocal.Command

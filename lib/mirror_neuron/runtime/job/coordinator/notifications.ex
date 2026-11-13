@@ -79,6 +79,8 @@ defmodule MirrorNeuron.Runtime.JobCoordinator.Notifications do
   def handle_info({:coordinator_delivery_poll, _stale_token}, state), do: {:noreply, state}
 
   def handle_info({:agent_event, agent_id, event_type, payload}, state) do
+    state = MirrorNeuron.Runtime.RunLifecycle.observe(state, agent_id, event_type, payload)
+
     {workflow_state, workflow_events, workflow_actions} =
       WorkflowLedger.on_agent_event(state.workflow_state, agent_id, event_type, payload)
 

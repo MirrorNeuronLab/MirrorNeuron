@@ -113,7 +113,26 @@ defmodule MirrorNeuron.Runtime.JobCoordinator.Finalization do
         Logger.warning("failed to publish shared run completion: #{inspect(reason)}")
     end
 
-    _ = Runtime.cleanup_job_sandboxes(next_state.job_id)
+    cleanup = Runtime.cleanup_job_sandboxes(next_state.job_id)
+
+    next_state =
+      if next_state.run_control do
+        control =
+          case cleanup do
+            :ok -> Map.put(next_state.run_control, "cleanup", "complete")
+            _ -> Map.put(next_state.run_control, "error", "stop_cleanup_failed")
+          end
+
+        next = %{next_state | run_control: control}
+
+        case RedisStore.persist_terminal_job(next.job_id, %{"run_control" => control}) do
+          {:ok, _} -> next
+          {:error, reason} -> exit({:shutdown, {:control_persistence_failed, reason}})
+        end
+      else
+        next_state
+      end
+
     EventBus.dispatch_persisted(state.job_id, event)
     MirrorNeuron.Runtime.CommandReceipts.settle_run_async(state.job_id)
     MirrorNeuron.Runtime.Signals.finish_run_async(state.job_id, status)

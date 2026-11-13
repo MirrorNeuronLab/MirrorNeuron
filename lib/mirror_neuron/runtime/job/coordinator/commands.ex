@@ -65,6 +65,18 @@ defmodule MirrorNeuron.Runtime.JobCoordinator.Commands do
   def handle_call({:workflow_budget, _attrs}, _from, state),
     do: {:reply, {:error, "workflow budget owner is not running"}, state}
 
+  def handle_call({:run_control, action, request_id}, from, state)
+      when action in [:pause, :resume, :cancel] do
+    control = %{"request_id" => request_id, "action" => Atom.to_string(action)}
+    next = Map.put(state, :run_control, control)
+
+    with {:ok, _} <- RedisStore.persist_job(state.job_id, Snapshots.job_snapshot(next)) do
+      handle_call(action, from, next)
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
   def handle_call(:pause, _from, %{status: "running"} = state) do
     state = state |> Policy.cancel_policy_timers() |> RecoveryTasks.cancel_recovery_tasks()
     EventBus.publish(state.job_id, %{type: :job_pausing, timestamp: Runtime.timestamp()})
@@ -117,6 +129,15 @@ defmodule MirrorNeuron.Runtime.JobCoordinator.Commands do
     do: {:reply, {:error, :retry_pause_cleanup}, state}
 
   def handle_call(:resume, _from, %{status: "paused"} = state) do
+    generation = get_in(state, [:run_control, "request_id"])
+
+    state =
+      Map.put(
+        state,
+        :lifecycle,
+        MirrorNeuron.Runtime.RunLifecycle.new(state.runtime_nodes, generation)
+      )
+
     case Pause.restore_paused_workflow_agents(state) do
       {:ok, resumable_state} ->
         {workflow_state, workflow_events} =
@@ -126,15 +147,16 @@ defmodule MirrorNeuron.Runtime.JobCoordinator.Commands do
           resumable_state
           | status: "running",
             pause_cleanup_status: nil,
-            workflow_state: workflow_state
+            workflow_state: workflow_state,
+            recovery_fields: Map.take(resumable_state.recovery_fields, ["restore_provenance"])
         }
 
-        Processes.broadcast_agent_control(running_state, :resume)
+        case RedisStore.persist_job(running_state.job_id, Snapshots.job_snapshot(running_state)) do
+          {:ok, _} -> :ok
+          {:error, reason} -> exit({:shutdown, {:resume_persistence_failed, reason}})
+        end
 
-        Snapshots.persist_durable_job_snapshot(
-          running_state,
-          Snapshots.job_snapshot(running_state)
-        )
+        Processes.broadcast_agent_control(running_state, :resume)
 
         EventBus.publish(state.job_id, %{type: :job_resumed, timestamp: Runtime.timestamp()})
         Workflow.publish_workflow_events(running_state, workflow_events)
@@ -146,7 +168,15 @@ defmodule MirrorNeuron.Runtime.JobCoordinator.Commands do
   end
 
   def handle_call(:resume, _from, %{status: "running"} = state) do
-    {:reply, {:ok, "resumed"}, state}
+    next =
+      if state.run_control,
+        do: put_in(state.run_control["generation"], state.lifecycle["generation"]),
+        else: state
+
+    case RedisStore.persist_job(next.job_id, Snapshots.job_snapshot(next)) do
+      {:ok, _} -> {:reply, {:ok, "resumed"}, next}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
   end
 
   def handle_call(:resume, _from, state), do: {:reply, {:error, "job is not paused"}, state}

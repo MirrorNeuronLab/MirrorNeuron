@@ -17,7 +17,7 @@ defmodule MirrorNeuron.Runner.DockerCompose do
   def stop_commands(_job_id, _agents), do: :ok
 
   @impl true
-  def resumable_after_stop?(config), do: match?({:ok, _}, project_record(config))
+  def control_profile(_config), do: MirrorNeuron.Runner.ControlProfile.service()
 
   @impl true
   def prepared_key(config, _transition) do

@@ -19,7 +19,7 @@ defmodule MirrorNeuron.Grpc.JobProjection do
     graph_id job_name status type job_type workflow_id attempt attempt_id
     data_generation job_data_access owner_node submitted_at started_at updated_at
     completed_at cancelled_at result_ref workflow_state_ref manifest_ref running_time
-    admission delivery_version
+    admission delivery_version lifecycle run_control pause_cleanup_status
   )
 
   def summary(definition) when is_map(definition) do
@@ -71,6 +71,13 @@ defmodule MirrorNeuron.Grpc.JobProjection do
     record
     |> run(run_id)
     |> Map.put("placement", MirrorNeuron.Grpc.RunPlacement.read(record, run_id))
+    |> Map.put(
+      "controls",
+      case MirrorNeuron.Persistence.RunControlStore.list(run_id) do
+        {:ok, receipts} -> Enum.take(receipts, -16)
+        _ -> []
+      end
+    )
   end
 
   defp projection_revision(record),

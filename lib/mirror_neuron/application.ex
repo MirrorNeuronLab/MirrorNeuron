@@ -64,6 +64,10 @@ defmodule MirrorNeuron.Application do
               MirrorNeuron.ServiceMonitor,
               MirrorNeuron.Bundle.Manager,
               MirrorNeuron.Runtime.LocalRecovery,
+              {Registry, keys: :unique, name: MirrorNeuron.Runtime.RunControl.Registry},
+              {DynamicSupervisor,
+               strategy: :one_for_one, name: MirrorNeuron.Runtime.RunControl.Supervisor},
+              MirrorNeuron.Runtime.RunControl.Reconciler,
               MirrorNeuron.Runtime.NodeAdmission,
               MirrorNeuron.Runtime.JobRelocationReconciler,
               MirrorNeuron.Bundle.Scanner

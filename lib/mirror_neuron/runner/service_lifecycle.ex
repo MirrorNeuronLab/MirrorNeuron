@@ -15,6 +15,7 @@ defmodule MirrorNeuron.Runner.ServiceLifecycle do
       "service_id" => text(Keyword.get(opts, :agent_id)),
       "attempt_id" => text(environment["MN_WORKFLOW_ATTEMPT_ID"] || generation),
       "generation" => generation,
+      "control_generation" => text(environment["MN_CONTROL_GENERATION"]),
       "sequence" => 0
     }
 

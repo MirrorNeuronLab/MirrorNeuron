@@ -183,6 +183,11 @@ defmodule MirrorNeuron.Grpc.Handlers.Support do
   defp runtime_error_status({:run_retry_blocked, _}), do: GRPC.Status.failed_precondition()
   defp runtime_error_status({:invalid_run_retry, _}), do: GRPC.Status.invalid_argument()
 
+  defp runtime_error_status(:invalid_run_control), do: GRPC.Status.invalid_argument()
+  defp runtime_error_status({:run_control, "conflict"}), do: GRPC.Status.already_exists()
+  defp runtime_error_status({:run_control, "full"}), do: GRPC.Status.resource_exhausted()
+  defp runtime_error_status({:run_control, "missing"}), do: GRPC.Status.not_found()
+
   defp runtime_error_status(:invalid_job_update), do: GRPC.Status.invalid_argument()
 
   defp runtime_error_status({:job_call_timeout, _job_id, _timeout_ms}),

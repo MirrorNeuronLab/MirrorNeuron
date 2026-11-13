@@ -29,8 +29,27 @@ defmodule MirrorNeuron.Runtime.JobControl do
     end
   end
 
-  defp resume_unblocked_job(job_id) do
-    case JobCalls.call_job(job_id, :resume) do
+  def resume_controlled_job(job_id, request_id) do
+    resume = fn ->
+      if cancellation_blocked?(job_id),
+        do: {:error, {:job_cancelling, job_id}},
+        else: resume_unblocked_job(job_id, {:run_control, :resume, request_id})
+    end
+
+    case RedisStore.fetch_job(job_id) do
+      {:ok, %{"status" => "failed"}} ->
+        {:error, :run_retry_blocked}
+
+      {:ok, %{"stable_job_id" => stable_id}} when is_binary(stable_id) ->
+        MirrorNeuron.Runtime.StableJob.with_start_gate(stable_id, resume)
+
+      _ ->
+        resume.()
+    end
+  end
+
+  defp resume_unblocked_job(job_id, command \\ :resume) do
+    case JobCalls.call_job(job_id, command) do
       {:error, reason} = error ->
         if job_not_running_error?(reason) do
           recovery_opts =
@@ -41,10 +60,10 @@ defmodule MirrorNeuron.Runtime.JobControl do
 
           case LocalRecovery.recover_job(job_id, recovery_opts) do
             {:ok, %{action: action}} when action in [:started, :already_running] ->
-              resume_recovered_job(job_id)
+              resume_recovered_job(job_id, command)
 
             {:ok, %{action: :paused_for_review}} ->
-              resume_recovered_job(job_id)
+              resume_recovered_job(job_id, command)
 
             {:ok, %{action: :skipped, reason: _skip_reason}} ->
               {:error, reason}
@@ -120,8 +139,8 @@ defmodule MirrorNeuron.Runtime.JobControl do
     end
   end
 
-  defp resume_recovered_job(job_id) do
-    case JobCalls.call_job(job_id, :resume) do
+  defp resume_recovered_job(job_id, command) do
+    case JobCalls.call_job(job_id, command) do
       {:ok, "resumed"} ->
         {:ok, "resumed"}
 

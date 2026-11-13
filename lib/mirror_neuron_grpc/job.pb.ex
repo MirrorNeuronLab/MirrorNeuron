@@ -157,6 +157,7 @@ defmodule Mirrorneuron.Job.V1.RunRequest do
   field(:version, 2, type: :uint32)
   field(:queued_only, 3, type: :bool, json_name: "queuedOnly")
   field(:admission_policy, 4, type: :string, json_name: "admissionPolicy")
+  field(:request_id, 5, type: :string, json_name: "requestId")
 end
 
 defmodule Mirrorneuron.Job.V1.PlanRunRetryRequest do
@@ -379,6 +380,8 @@ defmodule Mirrorneuron.Job.V1.JobService.Service do
   rpc(:ListRuns, Mirrorneuron.Job.V1.JobRequest, Mirrorneuron.Job.V1.JsonResponse)
 
   rpc(:GetRun, Mirrorneuron.Job.V1.RunRequest, Mirrorneuron.Job.V1.JsonResponse)
+
+  rpc(:GetRunControl, Mirrorneuron.Job.V1.RunRequest, Mirrorneuron.Job.V1.JsonResponse)
 
   rpc(:PauseRun, Mirrorneuron.Job.V1.RunRequest, Mirrorneuron.Job.V1.JsonResponse)
 

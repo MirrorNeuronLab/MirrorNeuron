@@ -17,7 +17,7 @@ defmodule MirrorNeuron.RuntimeTest.SlowServiceStop do
   def run(payload, config, opts),
     do: MirrorNeuron.RuntimeTest.LongSleepRunner.run(payload, config, opts)
 
-  def resumable_after_stop?(_config), do: true
+  def control_profile(_config), do: %{restart_after_stop: true, readiness: :invocation}
   def prepared_key(_config, :pause), do: :test_project
   def prepared_key(_config, _transition), do: nil
 

@@ -1,5 +1,7 @@
 defmodule MirrorNeuron.Runner.DockerWorker do
   @behaviour MirrorNeuron.Runner
+  @impl true
+  defdelegate control_profile(config), to: MirrorNeuron.Runner.ControlProfile, as: :sdk
   @moduledoc "Docker worker invocation lifecycle and prepared-resource adapter contract."
 
   alias MirrorNeuron.Config

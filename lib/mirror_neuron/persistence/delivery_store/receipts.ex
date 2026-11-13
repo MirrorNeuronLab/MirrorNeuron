@@ -46,7 +46,7 @@ defmodule MirrorNeuron.Persistence.DeliveryStore.Receipts do
 
   @doc false
   def protected_retention_key?(job_id, candidate) do
-    Enum.any?(["signals", "command", "commands", "checkpoint"], fn part ->
+    Enum.any?(["signals", "command", "commands", "checkpoint", "run_controls"], fn part ->
       prefix = RedisStore.storage_key(["job", job_id, part])
       candidate == prefix or String.starts_with?(candidate, prefix <> ":")
     end)
