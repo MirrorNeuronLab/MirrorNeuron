@@ -833,3 +833,11 @@ blueprint preparation and native execution services belong to `mirrorneuron-runt
 (`mn_runtime`), while CLI/API use the same SDK connection locally and remotely.
 Runtime-only installations need no application surface. See the
 [role and connection contract](../mn-deploy/docs/installation-roles.md).
+
+DockerWorker binds its ordinary SDK and model-control Core target together with
+the execution owner's Core credential for each invocation. Saved submitter
+addresses and credentials cannot override that binding, and administrator or
+surface-control credentials are not forwarded to workers. The target uses the
+owner's Docker host bridge and advertised gRPC port, or the owner's explicit
+`MN_RUNTIME_MODEL_CONTROL_TARGET`. Credential rotation and existing Job definitions
+therefore take effect on the next invocation, without a blueprint workaround.
