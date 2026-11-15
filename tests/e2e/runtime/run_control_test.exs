@@ -24,6 +24,16 @@ defmodule MirrorNeuron.RuntimeTest.ControlledService do
       :ready ->
         serve(MirrorNeuron.Runner.ServiceLifecycle.publish(lifecycle, "serving", ""))
 
+      :fail_command ->
+        _ =
+          MirrorNeuron.Runner.ServiceLifecycle.publish(
+            lifecycle,
+            "failed",
+            "dependency_unavailable"
+          )
+
+        {:error, %{"error" => "Required dependency is unavailable.", "exit_code" => 1}}
+
       :fail ->
         serve(MirrorNeuron.Runner.ServiceLifecycle.publish(lifecycle, "failed", "test_failure"))
     end
@@ -41,7 +51,7 @@ defmodule MirrorNeuron.Runtime.RunControlTest do
     :ok
   end
 
-  defp service do
+  defp service(options \\ []) do
     manifest = %{
       "manifest_version" => "1.0",
       "graph_id" => "uniform_control",
@@ -64,17 +74,19 @@ defmodule MirrorNeuron.Runtime.RunControlTest do
     {:ok, run} = run_manifest(manifest, await: false)
     cleanup_job_on_exit(run)
     assert_receive {:service_started, process, receipt}, 5_000
-    send(process, :ready)
+    if Keyword.get(options, :ready, true), do: send(process, :ready)
 
-    wait_until(
-      fn ->
-        {:ok, state} = RedisStore.fetch_job(run)
-        MirrorNeuron.Runtime.RunLifecycle.ready?(state["lifecycle"])
-      end,
-      5_000
-    )
+    if Keyword.get(options, :ready, true),
+      do:
+        wait_until(
+          fn ->
+            {:ok, state} = RedisStore.fetch_job(run)
+            MirrorNeuron.Runtime.RunLifecycle.ready?(state["lifecycle"])
+          end,
+          5_000
+        )
 
-    {run, receipt}
+    {run, receipt, process}
   end
 
   defp await_control(run, id, status) do
@@ -84,7 +96,7 @@ defmodule MirrorNeuron.Runtime.RunControlTest do
   end
 
   test "pause then resume waits for physical cleanup and generation-specific readiness" do
-    {run, old_receipt} = service()
+    {run, old_receipt, _} = service()
     assert {:ok, _} = RunControl.submit(run, "pause", "pause-1")
     assert_receive {:service_stopping, cleanup}, 5_000
     assert {:ok, _} = RunControl.submit(run, "resume", "resume-1")
@@ -107,7 +119,7 @@ defmodule MirrorNeuron.Runtime.RunControlTest do
   end
 
   test "stop supersedes readiness wait and confirms cleanup" do
-    {run, _} = service()
+    {run, _, _} = service()
     {:ok, _} = RunControl.submit(run, "pause", "pause")
     assert_receive {:service_stopping, cleanup}, 5_000
     send(cleanup, {:stop_result, :ok})
@@ -125,7 +137,7 @@ defmodule MirrorNeuron.Runtime.RunControlTest do
   end
 
   test "driver restart observes the original effect without dispatching another service" do
-    {run, _} = service()
+    {run, _, _} = service()
     {:ok, _} = RunControl.submit(run, "pause", "pause")
     assert_receive {:service_stopping, cleanup}, 5_000
     send(cleanup, {:stop_result, :ok})
@@ -140,7 +152,7 @@ defmodule MirrorNeuron.Runtime.RunControlTest do
   end
 
   test "failed readiness becomes a terminal command receipt" do
-    {run, _} = service()
+    {run, _, _} = service()
     {:ok, _} = RunControl.submit(run, "pause", "pause")
     assert_receive {:service_stopping, cleanup}, 5_000
     send(cleanup, {:stop_result, :ok})
@@ -151,8 +163,42 @@ defmodule MirrorNeuron.Runtime.RunControlTest do
     assert await_control(run, "resume", "failed")["error"]["code"] == "service_readiness_failed"
   end
 
+  for phase <- [:startup, :serving, :resume] do
+    @phase phase
+    test "required service command failure during #{@phase} finalizes the run without replay" do
+      {run, _, original} = service(ready: @phase != :startup)
+
+      process =
+        if @phase == :resume do
+          {:ok, _} = RunControl.submit(run, "pause", "pause")
+          assert_receive {:service_stopping, cleanup}, 5_000
+          send(cleanup, {:stop_result, :ok})
+          await_control(run, "pause", "completed")
+          {:ok, _} = RunControl.submit(run, "resume", "resume")
+          assert_receive {:service_started, resumed, _}, 5_000
+          resumed
+        else
+          original
+        end
+
+      send(process, :fail_command)
+      assert {:ok, failed} = MirrorNeuron.wait_for_job(run, 5_000)
+      assert failed["status"] == "failed"
+      assert failed["attempt"] == 1
+      assert get_in(failed, ["result", "agent_id"]) == "service"
+      assert get_in(failed, ["lifecycle", "services", "service", "state"]) == "failed"
+      assert {:ok, []} = MirrorNeuron.ServiceRegistry.list(job_id: run, passing_only: false)
+      assert {:ok, events} = MirrorNeuron.events(run)
+      assert Enum.any?(events, &(&1["type"] == "job_failed"))
+      refute Enum.any?(events, &(&1["type"] == "job_clean_restart_scheduled"))
+      if @phase == :resume, do: await_control(run, "resume", "failed")
+      assert {:ok, %{action: :skipped}} = MirrorNeuron.Runtime.LocalRecovery.recover_job(run)
+      refute_receive {:service_started, _, _}
+    end
+  end
+
   test "journal claims are atomic and terminal receipts are monotonic" do
-    {run, _} = service()
+    {run, _, _} = service()
     assert {:ok, _} = RunControlStore.enqueue(run, "pause", "atomic", false)
 
     results =
@@ -168,7 +214,7 @@ defmodule MirrorNeuron.Runtime.RunControlTest do
   end
 
   test "recent history rotation retains request idempotency" do
-    {run, _} = service()
+    {run, _, _} = service()
 
     for index <- 1..130 do
       id = "saved-#{index}"
@@ -183,8 +229,8 @@ defmodule MirrorNeuron.Runtime.RunControlTest do
   end
 
   test "a failed pause blocks resume without blocking another run" do
-    {first, _} = service()
-    {second, _} = service()
+    {first, _, _} = service()
+    {second, _, _} = service()
     {:ok, _} = RunControl.submit(first, "pause", "first-pause")
     assert_receive {:service_stopping, cleanup}, 5_000
     {:ok, _} = RunControl.submit(first, "resume", "first-resume")
@@ -197,7 +243,7 @@ defmodule MirrorNeuron.Runtime.RunControlTest do
   end
 
   test "control input is validated before entering the journal" do
-    {run, _} = service()
+    {run, _, _} = service()
     assert {:error, :invalid_run_control} = RunControl.submit(run, "resume", "guard", true)
 
     assert {:error, :invalid_run_control} =

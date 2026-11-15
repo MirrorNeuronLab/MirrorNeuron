@@ -6,6 +6,13 @@ stops its workers and deregisters its services through normal finalization.
 A discarded service command must not leave the Run advertised as running.
 Late exhaustion notifications cannot revive paused or terminal work.
 
+A service command that returns a failure without explicit `safe_to_retry: true`
+finalizes its Run as failed through the same cleanup and persistence boundary.
+This applies during startup, serving and resume, including auxiliary services
+outside the workflow ledger. A known command failure must not become an automatic
+whole-run clean restart. Process/node loss retains the existing recovery policy;
+retry-safe command failures retain their bounded durable delivery retries.
+
 Archive pauses schedules and durably cancels every active Run under the Job
 start gate, including runs whose coordinator is no longer present. It waits for
 terminal cancellation and retires registered definition resources on their recorded

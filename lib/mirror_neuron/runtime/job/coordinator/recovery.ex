@@ -4,6 +4,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator.Recovery do
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
   alias MirrorNeuron.Runtime.EventBus
+  alias MirrorNeuron.Runtime.JobCoordinator.Finalization
   alias MirrorNeuron.Runtime.JobCoordinator.Pause
   alias MirrorNeuron.Runtime.JobCoordinator.Policy
   alias MirrorNeuron.Runtime.JobCoordinator.Processes
@@ -16,21 +17,38 @@ defmodule MirrorNeuron.Runtime.JobCoordinator.Recovery do
   alias MirrorNeuron.Runtime.LifecyclePolicy
 
   def handle_runtime_agent_failed(state, agent_id, reason) do
-    if service_auxiliary_retry_safe?(state, agent_id, reason) do
-      EventBus.publish(state.job_id, %{
-        type: :service_agent_failed,
-        agent_id: agent_id,
-        reason: Values.stringify(reason),
-        timestamp: Runtime.timestamp()
-      })
+    cond do
+      service_auxiliary_retry_safe?(state, agent_id, reason) ->
+        EventBus.publish(state.job_id, %{
+          type: :service_agent_failed,
+          agent_id: agent_id,
+          reason: Values.stringify(reason),
+          timestamp: Runtime.timestamp()
+        })
 
-      # AgentWorker already returned the failed delivery to its durable retry
-      # queue. Keep that healthy owner alive so it can reclaim the command after
-      # the short delivery backoff; replacing it would strand the lease until the
-      # stale-delivery timeout and still must not replay the workflow.
-      {:noreply, state}
-    else
-      restart_clean_attempt(state, {:agent_failed, agent_id, reason})
+        # AgentWorker already returned the failed delivery to its durable retry
+        # queue. Keep that healthy owner alive so it can reclaim the command after
+        # the short delivery backoff; replacing it would strand the lease until the
+        # stale-delivery timeout and still must not replay the workflow.
+        {:noreply, state}
+
+      Topology.job_type(state) == "service" and is_map(reason) ->
+        # A returned command failure is a known outcome, not a lost coordinator.
+        # Without retry permission, a clean attempt would replay the failed
+        # service forever while advertising a running Run and resetting budgets.
+        failed =
+          Finalization.finalize_job(
+            state,
+            "failed",
+            %{agent_id: agent_id, error: reason},
+            :job_failed,
+            %{agent_id: agent_id, reason: reason}
+          )
+
+        {:stop, :normal, failed}
+
+      true ->
+        restart_clean_attempt(state, {:agent_failed, agent_id, reason})
     end
   end
 
