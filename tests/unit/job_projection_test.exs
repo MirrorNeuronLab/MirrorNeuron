@@ -3,6 +3,30 @@ defmodule MirrorNeuron.Grpc.JobProjectionTest do
 
   alias MirrorNeuron.Grpc.JobProjection
 
+  test "run projections expose manifest blueprint identity independently of graph and run IDs" do
+    for status <- ~w(pending running paused completed cancelled) do
+      record = %{
+        "job_id" => "run_co-3ec70d6e",
+        "stable_job_id" => "job_co-80c6315f",
+        "graph_id" => "camera-workflow",
+        "status" => status,
+        "manifest" => %{"metadata" => %{"blueprint_id" => "cctv_operator"}}
+      }
+
+      [run] = JobProjection.runs([record])
+      assert run["blueprint_id"] == "cctv_operator"
+      assert run["job_id"] == "job_co-80c6315f"
+      assert run["run_id"] == "run_co-3ec70d6e"
+      assert JobProjection.run(record, "explicit-run")["blueprint_id"] == "cctv_operator"
+      refute Map.has_key?(run, "manifest")
+    end
+  end
+
+  test "runs without explicit blueprint metadata use the same graph identity as their Job" do
+    assert JobProjection.run(%{"job_id" => "run-1", "graph_id" => "workflow"})["blueprint_id"] ==
+             "workflow"
+  end
+
   test "job detail exposes only the installed public MCP contract before a run" do
     declaration = %{
       "profile" => "mn.mcp.supervision.v1",

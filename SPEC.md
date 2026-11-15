@@ -6,7 +6,9 @@ stops its workers and deregisters its services through normal finalization.
 A discarded service command must not leave the Run advertised as running.
 Late exhaustion notifications cannot revive paused or terminal work.
 
-Archive stops and retires registered definition resources on their recorded
+Archive pauses schedules and durably cancels every active Run under the Job
+start gate, including runs whose coordinator is no longer present. It waits for
+terminal cancellation and retires registered definition resources on their recorded
 execution owners before reporting `archived`. Cleanup failure leaves the change
 unconfirmed and retryable; repeated archive reconciles remaining resources.
 Terminal Run cleanup releases admission reservations before archive succeeds;
@@ -14,6 +16,11 @@ Job data, configuration and Run history remain available. Compose activation
 preserves the definition Job/submission identity, and a failed prepare still
 cleans the recorded project. Archive uses the same bounded five-minute owner
 budget as deletion; surface timeouts leave room for that receipt.
+
+Public Run list and detail projections expose `blueprint_id` from the retained
+manifest metadata, or its graph identity when no explicit blueprint is declared,
+matching Job identity rules. This applies to retained runs without rewriting
+history and does not expose the manifest.
 
 ## Workflow preparation progress
 

@@ -61,6 +61,10 @@ defmodule MirrorNeuron.Grpc.JobProjection do
     |> Map.put("retry", retry_summary(record))
     |> Map.put("job_id", stable_job_id)
     |> Map.put("run_id", resolved_run_id)
+    |> Map.put(
+      "blueprint_id",
+      get_in(record, ["manifest", "metadata", "blueprint_id"]) || record["graph_id"]
+    )
     |> put_admission(record, resolved_run_id)
     |> put_run_data_ref(record)
     |> Map.put_new("attempt_id", "#{resolved_run_id}:#{Map.get(record, "attempt", 1)}")

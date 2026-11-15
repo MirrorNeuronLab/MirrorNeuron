@@ -105,10 +105,10 @@ defmodule MirrorNeuron.Runtime.StableJob.Lifecycle do
       with {:ok, definition} <- Queries.get(job_id),
            :ok <- Records.ensure_mutable(definition),
            :ok <- Records.ensure_revision(definition, Keyword.get(opts, :expected_revision)) do
-        with :ok <- DataAccess.ensure_no_active_runs(definition),
-             :ok <- Schedules.pause_job_schedules(job_id),
+        with :ok <- Schedules.pause_job_schedules(job_id),
              :ok <- JobResponse.stop(definition, force: true),
-             {:ok, runs} <- Queries.list_runs(job_id),
+             {:ok, runs} <- RunCleanup.stop_runs_for_archive(definition),
+             :ok <- DataAccess.ensure_no_active_runs(definition),
              :ok <- MirrorNeuron.Runtime.JobCleanup.retire_terminal_runs(runs),
              :ok <- cleanup_definition_native_resources(job_id, definition) do
           # A repeated archive also reconciles resources left by an interrupted

@@ -3,10 +3,42 @@ defmodule MirrorNeuron.Runtime.StableJob.RunCleanup do
 
   alias MirrorNeuron.Runtime.StableJob.DataAccess
   alias MirrorNeuron.Runtime.StableJob.Records
+  alias MirrorNeuron.Runtime.StableJob.Queries
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime
 
   @terminal_statuses ["completed", "failed", "cancelled"]
+
+  # Archive owns shutdown under the definition's start gate. Durable cancellation
+  # also fences orphaned coordinators; an accepted stop alone is not completion.
+  # Leave time within the five-minute archive budget for definition cleanup.
+  def stop_runs_for_archive(definition, timeout_ms \\ 240_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+
+    with {:ok, runs} <- Queries.list_runs(definition["job_id"]),
+         active <- Enum.reject(runs, &(&1["status"] in @terminal_statuses)),
+         :ok <- each_run(active, &MirrorNeuron.cancel/1),
+         :ok <-
+           each_run(active, fn run_id ->
+             Runtime.await_completion(
+               run_id,
+               max(0, deadline - System.monotonic_time(:millisecond))
+             )
+           end) do
+      Queries.list_runs(definition["job_id"])
+    end
+  end
+
+  defp each_run(runs, action) do
+    Enum.reduce_while(runs, :ok, fn run, :ok ->
+      run_id = run["run_id"]
+
+      case action.(run_id) do
+        {:ok, _} -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, {:run_cleanup_failed, run_id, reason}}}
+      end
+    end)
+  end
 
   def empty_replacement do
     %{
