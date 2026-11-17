@@ -7,6 +7,48 @@ defmodule MirrorNeuron.Cluster.FederationRegistryTest.PeersTest do
   alias MirrorNeuron.FederationRegistryCase.CoordinationStoreStub
   alias MirrorNeuron.FederationRegistryCase.NodeStateStoreStub
 
+  test "late refreshes and probes cannot resurrect a removed member; explicit rejoin can" do
+    name = "mirror_neuron@peer"
+    assert {:ok, _, "registered"} = FederationRegistry.register(name, peer_info(), "scoped")
+
+    assert {:ok, _, "already_registered"} =
+             FederationRegistry.register(name, peer_info(), "scoped", refresh_only: true)
+
+    assert {:ok, "removed"} = FederationRegistry.remove(name)
+
+    assert {:error, :peer_not_found} =
+             FederationRegistry.register(name, peer_info(), "scoped", refresh_only: true)
+
+    assert {:error, :peer_not_found} = FederationRegistry.mark_available(name)
+    assert {:error, :peer_not_found} = FederationRegistry.mark_unavailable(name)
+    assert FederationRegistry.list() == []
+    assert {:ok, %{"operator_disconnect" => true}} = NodeStateStoreStub.fetch_node_state(name)
+    assert {:ok, "not_found"} = FederationRegistry.remove(name)
+
+    assert {:ok, _, "registered"} = FederationRegistry.register(name, peer_info(), "scoped")
+    assert {:ok, %{"operator_disconnect" => false}} = NodeStateStoreStub.fetch_node_state(name)
+  end
+
+  test "a refresh for an unknown peer cannot register it" do
+    assert {:error, :peer_not_found} =
+             FederationRegistry.register("mirror_neuron@peer", peer_info(), "scoped",
+               refresh_only: true
+             )
+
+    assert FederationRegistry.list() == []
+  end
+
+  test "a failed registry write does not publish a successful disconnect", %{home: home} do
+    name = "mirror_neuron@peer"
+    assert {:ok, _, _} = FederationRegistry.register(name, peer_info(), "scoped")
+    # The atomic replacement cannot be written, while the committed file and
+    # its node projection remain readable for a later retry.
+    File.mkdir_p!(Path.join([home, "federation", "peers.json.tmp"]))
+    assert {:error, _} = FederationRegistry.remove(name)
+    assert {:ok, _} = FederationRegistry.fetch(name)
+    assert {:ok, %{"operator_disconnect" => false}} = NodeStateStoreStub.fetch_node_state(name)
+  end
+
   test "registration is idempotent, private, and persistently unlocks a worker", %{home: home} do
     credential = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 

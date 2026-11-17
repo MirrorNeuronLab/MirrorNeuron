@@ -334,6 +334,7 @@ defmodule MirrorNeuron.Cluster.FederationClient do
         peer_info_json:
           Jason.encode!(MirrorNeuron.Grpc.Handlers.ClusterHandshake.node_advertisement_info()),
         peer_auth_token: MirrorNeuron.Grpc.Tokens.peer_token(node_name),
+        refresh_only: true,
         version: 1
       }
     )

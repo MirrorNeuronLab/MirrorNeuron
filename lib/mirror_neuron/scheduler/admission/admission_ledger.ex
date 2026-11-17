@@ -35,7 +35,7 @@ defmodule MirrorNeuron.Runtime.AdmissionLedger do
   end
 
   def mutate(operation, attrs, witness \\ nil) do
-    result = mutate(operation, attrs, witness, 50)
+    result = with_membership_gate(fn -> mutate(operation, attrs, witness, 50) end)
 
     case result do
       {:error, reason}
@@ -69,6 +69,13 @@ defmodule MirrorNeuron.Runtime.AdmissionLedger do
     end
 
     result
+  end
+
+  # Node removal checks idleness and changes reciprocal membership under the
+  # same owner-local gate as admission. A new reservation cannot slip between
+  # the check and detach; process death releases the gate without stale state.
+  def with_membership_gate(callback) do
+    :global.trans({{__MODULE__, NodeAdmission.node_name()}, self()}, callback, [node()])
   end
 
   defp mutate(_op, _attrs, _witness, 0), do: {:error, :node_admission_busy}

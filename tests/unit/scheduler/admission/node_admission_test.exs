@@ -276,7 +276,7 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
     assert {:ok, ^state} = NodeAdmission.snapshot()
   end
 
-  test "competing Jobs cannot both spend the last GPU slice, even when both saw it free" do
+  test "competing Jobs cannot both spend the last GPU slice under the membership gate" do
     MirrorNeuron.Cluster.Hardware.update_snapshot(MirrorNeuron.RuntimeCase.gpu_hardware())
 
     profile = %{
@@ -314,14 +314,19 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
       for id <- ["second", "third"] do
         Task.async(fn ->
           Store.stop_before_next_compare(parent)
+          send(parent, {:contender_started, self()})
           {:ok, receipt} = submit.(id)
           {id, receipt}
         end)
       end
 
+    assert_receive {:contender_started, _}, 5_000
+    assert_receive {:contender_started, _}, 5_000
     assert_receive {:before_compare, caller1, version}, 5_000
-    assert_receive {:before_compare, caller2, ^version}, 5_000
+    refute_receive {:before_compare, _, _}, 100
     send(caller1, :commit)
+    assert_receive {:before_compare, caller2, next_version}, 5_000
+    assert next_version > version
     send(caller2, :commit)
 
     {started, queued} =
@@ -339,6 +344,48 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
     assert {:error, :node_requests_active} = NodeAdmission.retire("first")
     assert {:ok, %{"state" => "queued", "queue_id" => ^queue_id}} = submit.(waiter)
     assert {:ok, ^state} = NodeAdmission.snapshot()
+  end
+
+  test "removal fences new reservations until reciprocal detach finishes" do
+    parent = self()
+
+    removal =
+      Task.async(fn ->
+        MirrorNeuron.Grpc.RuntimeMembership.detach(
+          peers: fn -> [%{"node_name" => "peer@test"}] end,
+          disconnect: fn _, _ ->
+            send(parent, :disconnecting)
+
+            receive do
+              :finish -> :ok
+            after
+              5_000 -> {:error, :timeout}
+            end
+          end
+        )
+      end)
+
+    assert_receive :disconnecting, 5_000
+
+    arrival =
+      Task.async(fn ->
+        send(parent, :submitting)
+        result = NodeAdmission.submit(job("after-removal"))
+        send(parent, :admitted)
+        result
+      end)
+
+    try do
+      assert_receive :submitting
+      refute_receive :admitted, 100
+      assert {:ok, %{"reservations" => reservations}} = NodeAdmission.snapshot()
+      assert reservations == %{}
+    after
+      send(removal.pid, :finish)
+    end
+
+    assert Task.await(removal).status == 200
+    assert {:ok, %{"state" => "preparing"}} = Task.await(arrival)
   end
 
   test "a stale discovery cannot reconstruct a cancelled or reassigned Run ahead of a new arrival" do

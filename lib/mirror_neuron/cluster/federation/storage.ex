@@ -3,13 +3,13 @@ defmodule MirrorNeuron.Cluster.FederationRegistry.Storage do
 
   @registry_version 1
 
-  def update_registry(callback) do
+  def update_registry(callback, after_commit \\ fn value, status -> {:ok, value, status} end) do
     :global.trans({{MirrorNeuron.Cluster.FederationRegistry, registry_path()}, self()}, fn ->
       peers = read_registry()
 
       case callback.(peers) do
         {:ok, updated, value, status} ->
-          with :ok <- write_registry(updated), do: {:ok, value, status}
+          with :ok <- write_registry(updated), do: after_commit.(value, status)
 
         error ->
           error

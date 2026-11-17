@@ -73,4 +73,47 @@ defmodule MirrorNeuron.Cluster.FederationRegistry.StorageTest do
     assert Bitwise.band(File.stat!(Path.join([home, "federation", "peers.json"])).mode, 0o777) ==
              0o600
   end
+
+  test "projection publication finishes before a later removal can commit" do
+    parent = self()
+
+    publication =
+      Task.async(fn ->
+        Storage.update_registry(
+          fn peers -> {:ok, Map.put(peers, "peer", %{}), nil, "saved"} end,
+          fn _, _ ->
+            send(parent, :publishing)
+
+            receive do
+              :finish -> :ok
+            after
+              2_000 -> raise "publication barrier timed out"
+            end
+          end
+        )
+      end)
+
+    assert_receive :publishing
+
+    removal =
+      Task.async(fn ->
+        send(parent, :removal_started)
+
+        Storage.update_registry(fn peers ->
+          send(parent, :removing)
+          {:ok, Map.delete(peers, "peer"), nil, "removed"}
+        end)
+      end)
+
+    try do
+      assert_receive :removal_started
+      refute_receive :removing, 100
+    after
+      send(publication.pid, :finish)
+      Task.await(publication)
+      Task.await(removal)
+    end
+
+    assert Storage.read_registry() == %{}
+  end
 end

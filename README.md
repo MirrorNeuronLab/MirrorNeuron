@@ -1,5 +1,13 @@
 <h1 align="center">MirrorNeuron 🧠</h1>
 
+Node removal through CLI or REST succeeds for an idle node without a separate
+manual drain. Active reservations, queued/deferred work and native requests
+block removal; jobs and runtime processes remain intact. Reciprocal removal
+must be acknowledged before success. Periodic federation advertisements only
+refresh existing members, and membership/state updates serialize together so a
+removed node stays absent through refresh and restart. Explicit node addition
+joins it again. Upgrade Core on both computers and the SDK together.
+
 Retry-safe auxiliary services retain the same run during bounded delivery retries.
 Exhaustion is durably reported before discarding the delivery. The owner commits a failed Run,
 stops its workers and deregisters its services through normal finalization.

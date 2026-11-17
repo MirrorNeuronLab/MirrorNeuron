@@ -560,6 +560,22 @@ lower configured concurrency limit remains authoritative.
 
 ## Cluster and Resources
 
+Runtime node removal checks the owner's authoritative admission ledger and
+active-run records. An idle node needs no prior manual drain. The owner-local
+admission mutation gate holds through reciprocal detach, preventing a new
+reservation from racing the idle check. Busy, paused, queued/deferred work and
+native requests fail closed without cancellation or membership changes. Removal
+preserves runtime processes, durable definitions and Run history. Every peer
+must acknowledge removal; unconfirmed responses remain errors.
+
+`RegisterFederatedPeerRequest.refresh_only` distinguishes periodic advertisements
+from explicit joins. Refresh requires an existing matching registration under
+the registry mutation lock. Registration, availability and removal publish their
+node projections under that same lock; delayed refreshes/probes cannot restore
+removed members. The optional wire field preserves explicit registration's
+existing default. All participating Cores must be upgraded to send refresh-only
+advertisements; the SDK protobuf bindings are regenerated from the same source.
+
 Core uses OTP distribution, `libcluster`, and Horde-based runtime coordination
 for clustered operation. Membership, leader/control forwarding, node state,
 draining, reconciliation, and network-only nodes are explicit. A control-node

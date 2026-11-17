@@ -26,60 +26,40 @@ defmodule MirrorNeuron.Cluster.FederationRegistry.Availability do
     end
   end
 
-  def mark_unavailable(node_name) do
-    result =
-      with {:ok, _peer} <- Peers.fetch(node_name) do
-        Storage.update_registry(fn peers ->
-          peer = Map.fetch!(peers, node_name)
-          saved = Map.put(peer, "peer_available", false)
-          {:ok, Map.put(peers, node_name, saved), saved, "offline"}
-        end)
+  def mark_unavailable(node_name), do: mark_availability(node_name, false)
+  def mark_available(node_name), do: mark_availability(node_name, true)
+
+  defp mark_availability(node_name, available) do
+    Storage.update_registry(
+      fn peers ->
+        case Map.fetch(peers, node_name) do
+          {:ok, peer} ->
+            saved = Map.put(peer, "peer_available", available)
+
+            {:ok, Map.put(peers, node_name, saved), saved,
+             if(available, do: "online", else: "offline")}
+
+          :error ->
+            {:error, :peer_not_found}
+        end
+      end,
+      fn saved, status ->
+        # The registry and its node projection share the mutation lock. A late
+        # probe cannot overwrite a completed removal with a healthy node row.
+        with {:ok, _} <-
+               mark_peer_state(node_name, if(available, do: "healthy", else: "unavailable"), %{
+                 "connection_mode" => "federated",
+                 "operator_disconnect" => false,
+                 "scheduling_eligible" => false,
+                 "job_owner_eligible" => true,
+                 "peer_available" => available
+               }),
+             :ok <- set_projection_owner_available(node_name, available),
+             :ok <- if(available, do: :ok, else: mark_projections_stale(node_name)) do
+          {:ok, saved, status}
+        end
       end
-
-    if match?({:ok, _, _}, result) do
-      _ = set_projection_owner_available(node_name, false)
-      _ = mark_projections_stale(node_name)
-
-      state_result =
-        mark_peer_state(node_name, "unavailable", %{
-          "connection_mode" => "federated",
-          "operator_disconnect" => false,
-          "scheduling_eligible" => false,
-          "job_owner_eligible" => true,
-          "peer_available" => false
-        })
-
-      if match?({:ok, _}, state_result), do: result, else: state_result
-    else
-      result
-    end
-  end
-
-  def mark_available(node_name) do
-    result =
-      with {:ok, _peer} <- Peers.fetch(node_name) do
-        Storage.update_registry(fn peers ->
-          peer = Map.fetch!(peers, node_name)
-          saved = Map.put(peer, "peer_available", true)
-          {:ok, Map.put(peers, node_name, saved), saved, "online"}
-        end)
-      end
-
-    if match?({:ok, _, _}, result) do
-      state_result =
-        mark_peer_state(node_name, "healthy", %{
-          "connection_mode" => "federated",
-          "operator_disconnect" => false,
-          "scheduling_eligible" => false,
-          "job_owner_eligible" => true,
-          "peer_available" => true
-        })
-
-      _ = set_projection_owner_available(node_name, true)
-      if match?({:ok, _}, state_result), do: result, else: state_result
-    else
-      result
-    end
+    )
   end
 
   defp set_projection_owner_available(node_name, available) do

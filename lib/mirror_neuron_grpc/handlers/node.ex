@@ -22,10 +22,14 @@ defmodule MirrorNeuron.Grpc.Handlers.Node do
   def register_federated_peer(request, _stream) do
     with {:ok, peer_info} <- decode_peer_info(request.peer_info_json),
          {:ok, peer, status} <-
-           FederationRegistry.register(request.node_name, peer_info, request.peer_auth_token) do
-      _ = disconnect_peer(request.node_name)
-      _ = confirm_join_claim(request.node_name)
-      maybe_start_local_leader()
+           FederationRegistry.register(request.node_name, peer_info, request.peer_auth_token,
+             refresh_only: request.refresh_only
+           ) do
+      unless request.refresh_only do
+        _ = disconnect_peer(request.node_name)
+        _ = confirm_join_claim(request.node_name)
+        maybe_start_local_leader()
+      end
 
       %RegisterFederatedPeerResponse{
         node_name: request.node_name,
@@ -147,6 +151,12 @@ defmodule MirrorNeuron.Grpc.Handlers.Node do
     raise GRPC.RPCError,
       status: GRPC.Status.failed_precondition(),
       message: "federated peers must use distinct coordination stores"
+  end
+
+  defp raise_federation_error!(:peer_not_found) do
+    raise GRPC.RPCError,
+      status: GRPC.Status.not_found(),
+      message: "federated peer was removed; explicitly join it again"
   end
 
   defp raise_federation_error!(reason) do

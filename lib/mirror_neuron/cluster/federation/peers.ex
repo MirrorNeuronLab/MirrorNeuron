@@ -6,7 +6,9 @@ defmodule MirrorNeuron.Cluster.FederationRegistry.Peers do
   alias MirrorNeuron.Cluster.FederationRegistry.Storage
   alias MirrorNeuron.Cluster.FederationRegistry.Values
 
-  def register(node_name, peer_info, peer_auth_token)
+  def register(node_name, peer_info, peer_auth_token, opts \\ [])
+
+  def register(node_name, peer_info, peer_auth_token, opts)
       when is_binary(node_name) and is_map(peer_info) and is_binary(peer_auth_token) do
     node_name = String.trim(node_name)
     token = String.trim(peer_auth_token)
@@ -24,24 +26,26 @@ defmodule MirrorNeuron.Cluster.FederationRegistry.Peers do
         |> Map.put("peer_auth_token", token)
         |> Map.put("registered_at", Values.timestamp())
 
-      Storage.update_registry(fn peers ->
-        case Map.get(peers, node_name) do
-          nil -> {:ok, Map.put(peers, node_name, peer), peer, "registered"}
-          existing -> register_existing(peers, node_name, existing, peer)
-        end
-      end)
-      |> case do
-        {:ok, saved, status} ->
-          :ok = advertise_peer(saved)
-          {:ok, public_peer(saved), status}
+      Storage.update_registry(
+        fn peers ->
+          case Map.get(peers, node_name) do
+            nil ->
+              if Keyword.get(opts, :refresh_only, false),
+                do: {:error, :peer_not_found},
+                else: {:ok, Map.put(peers, node_name, peer), peer, "registered"}
 
-        error ->
-          error
-      end
+            existing ->
+              register_existing(peers, node_name, existing, peer)
+          end
+        end,
+        fn saved, status ->
+          with :ok <- advertise_peer(saved), do: {:ok, public_peer(saved), status}
+        end
+      )
     end
   end
 
-  def register(_node_name, _peer_info, _peer_auth_token), do: {:error, :invalid_peer}
+  def register(_node_name, _peer_info, _peer_auth_token, _opts), do: {:error, :invalid_peer}
 
   def fetch(node_name) do
     case Map.fetch(Storage.read_registry(), to_string(node_name)) do
@@ -66,32 +70,28 @@ defmodule MirrorNeuron.Cluster.FederationRegistry.Peers do
   def remove(node_name) do
     node_name = to_string(node_name) |> String.trim()
 
-    result =
-      Storage.update_registry(fn peers ->
+    Storage.update_registry(
+      fn peers ->
         if Map.has_key?(peers, node_name) do
           {:ok, Map.delete(peers, node_name), nil, "removed"}
         else
           {:ok, peers, nil, "not_found"}
         end
-      end)
-
-    _ =
-      Availability.mark_peer_state(node_name, "disconnected", %{
-        "connection_mode" => "federated",
-        "operator_disconnect" => true,
-        "scheduling_eligible" => false,
-        "job_owner_eligible" => false,
-        "peer_available" => false
-      })
-
-    case result do
-      {:ok, _peer, status} ->
-        _ = Values.projection_store().delete_federation_projections(node_name)
-        {:ok, status}
-
-      error ->
-        error
-    end
+      end,
+      fn _peer, status ->
+        with {:ok, _} <-
+               Availability.mark_peer_state(node_name, "disconnected", %{
+                 "connection_mode" => "federated",
+                 "operator_disconnect" => true,
+                 "scheduling_eligible" => false,
+                 "job_owner_eligible" => false,
+                 "peer_available" => false
+               }),
+             :ok <- Values.projection_store().delete_federation_projections(node_name) do
+          {:ok, status}
+        end
+      end
+    )
   end
 
   defp register_existing(peers, node_name, existing, peer) do

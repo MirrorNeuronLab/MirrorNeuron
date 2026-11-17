@@ -295,6 +295,7 @@ defmodule Mirrorneuron.Cluster.V1.RegisterFederatedPeerRequest do
   field(:peer_info_json, 2, type: :string, json_name: "peerInfoJson")
   field(:peer_auth_token, 3, type: :string, json_name: "peerAuthToken")
   field(:version, 4, type: :uint32)
+  field(:refresh_only, 5, type: :bool, json_name: "refreshOnly")
 end
 
 defmodule Mirrorneuron.Cluster.V1.RegisterFederatedPeerResponse do

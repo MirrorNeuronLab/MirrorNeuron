@@ -7,6 +7,7 @@ defmodule MirrorNeuron.Cluster.FederationRegistry do
   alias MirrorNeuron.Cluster.FederationRegistry.Tombstones
 
   defdelegate register(node_name, peer_info, peer_auth_token), to: Peers
+  defdelegate register(node_name, peer_info, peer_auth_token, opts), to: Peers
   defdelegate fetch(node_name), to: Peers
   defdelegate public_fetch(node_name), to: Peers
   defdelegate list(), to: Peers
