@@ -106,7 +106,18 @@ defmodule MirrorNeuron.Manifest.ResponseService do
         _value -> %{}
       end
 
-    declared_arguments = Map.get(declared_tool, "arguments")
+    declared_arguments =
+      case declared_tool["inputSchema"] do
+        %{"properties" => properties} -> properties
+        _ -> declared_tool["arguments"]
+      end
+
+    required_arguments =
+      case declared_tool["inputSchema"] do
+        %{"properties" => _} = schema -> Map.get(schema, "required", [])
+        _ when is_map(declared_arguments) -> Map.keys(declared_arguments)
+        _ -> []
+      end
 
     valid =
       MapSet.new(Map.keys(preflight)) == expected and
@@ -117,7 +128,9 @@ defmodule MirrorNeuron.Manifest.ResponseService do
         ) and
         Values.nonempty_string?(tool_name) and declared_tool["effect"] == "read" and
         is_map(arguments) and is_map(declared_arguments) and
-        MapSet.new(Map.keys(arguments)) == MapSet.new(Map.keys(declared_arguments)) and
+        is_list(required_arguments) and
+        Enum.all?(required_arguments, &Map.has_key?(arguments, &1)) and
+        Enum.all?(Map.keys(arguments), &Map.has_key?(declared_arguments, &1)) and
         is_map(required_result) and map_size(required_result) > 0 and
         Enum.all?(required_result, fn {key, value} ->
           Values.nonempty_string?(key) and safe_preflight_scalar?(value)
@@ -133,12 +146,32 @@ defmodule MirrorNeuron.Manifest.ResponseService do
 
   defp validate_response_agent_tools(tools, user?) do
     Enum.flat_map(tools, fn {name, specification} ->
-      allowed = if user?, do: ~w(arguments effect description), else: ~w(arguments description)
+      typed_schema? =
+        user? and is_map(specification) and Map.has_key?(specification, "inputSchema")
 
-      arguments =
-        if is_map(specification) and is_map(specification["arguments"]),
-          do: specification["arguments"],
-          else: nil
+      allowed =
+        cond do
+          typed_schema? -> ~w(inputSchema effect description request_id_argument)
+          user? -> ~w(arguments effect description)
+          true -> ~w(arguments description)
+        end
+
+      argument_errors =
+        if typed_schema? do
+          if ResponseAgentSpec.valid_tool_schema?(specification),
+            do: [],
+            else: [
+              "response_service.agent tool #{name} has an invalid inputSchema or request ID binding"
+            ]
+        else
+          case specification do
+            %{"arguments" => arguments} when is_map(arguments) ->
+              validate_response_agent_arguments(arguments)
+
+            _ ->
+              ["response_service.agent tool declarations have invalid arguments"]
+          end
+        end
 
       []
       |> Values.maybe_add_error(
@@ -146,8 +179,7 @@ defmodule MirrorNeuron.Manifest.ResponseService do
         "response_service.agent tool names must be non-empty strings"
       )
       |> Values.maybe_add_error(
-        not is_map(specification) or Map.keys(specification) -- allowed != [] or
-          is_nil(arguments),
+        not is_map(specification) or Map.keys(specification) -- allowed != [],
         "response_service.agent tool declarations have invalid fields"
       )
       |> Values.maybe_add_error(
@@ -160,7 +192,7 @@ defmodule MirrorNeuron.Manifest.ResponseService do
           not valid_tool_description?(specification["description"]),
         "response_service.agent tool descriptions must be non-empty strings of at most 1200 characters"
       )
-      |> Values.add_errors(validate_response_agent_arguments(arguments || %{}))
+      |> Values.add_errors(argument_errors)
     end)
   end
 

@@ -43,6 +43,44 @@ defmodule MirrorNeuron.Runtime.ResponseAgentSpec do
 
   def valid_argument_schema?(_schema), do: false
 
+  def valid_tool_schema?(
+        %{
+          "inputSchema" =>
+            %{
+              "type" => "object",
+              "additionalProperties" => false,
+              "properties" => properties
+            } = schema
+        } = tool
+      )
+      when is_map(properties) do
+    required = Map.get(schema, "required", [])
+
+    is_list(required) and Enum.all?(required, &Map.has_key?(properties, &1)) and
+      Enum.all?(Map.keys(properties), &(is_binary(&1) and &1 != "")) and
+      valid_schema_binding?(tool, properties) and
+      case Jason.encode(schema) do
+        {:ok, encoded} -> byte_size(encoded) <= 12 * 1024
+        {:error, _reason} -> false
+      end
+  end
+
+  def valid_tool_schema?(_tool), do: false
+
+  defp valid_schema_binding?(tool, properties) do
+    case Map.fetch(tool, "request_id_argument") do
+      :error ->
+        true
+
+      {:ok, target} when is_binary(target) and target != "" ->
+        match?(%{"type" => "string"}, properties["request_id"]) and
+          (target == "request_id" or not Map.has_key?(properties, target))
+
+      _ ->
+        false
+    end
+  end
+
   def valid_operation_keys?(keys) do
     required = MapSet.new(~w(id_field poll_tool poll_argument poll_interval_ms timeout_seconds))
     actual = MapSet.new(keys)

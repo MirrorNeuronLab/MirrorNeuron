@@ -84,6 +84,37 @@ defmodule MirrorNeuron.ManifestMCPProjectionTest do
     end
   end
 
+  test "preserves a blueprint user-tool schema with a bounded goals array" do
+    path = ["response_service", "agent", "tools", "user", "review"]
+
+    tool = %{
+      "effect" => "dispatch",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "properties" => %{
+          "goals" => %{"type" => "array", "items" => %{"type" => "string"}, "maxItems" => 5},
+          "request_id" => %{"type" => "string"}
+        },
+        "required" => ["goals", "request_id"]
+      },
+      "request_id_argument" => "command_id"
+    }
+
+    assert {:ok, loaded} = Manifest.load(put_in(manifest(), path, tool))
+    assert get_in(Manifest.to_map(loaded), path) == tool
+
+    for mutated <- [
+          put_in(tool["inputSchema"]["required"], ["unknown"]),
+          put_in(tool["inputSchema"]["additionalProperties"], true),
+          put_in(tool["inputSchema"]["description"], String.duplicate("x", 12 * 1024)),
+          put_in(tool["request_id_argument"], "goals"),
+          Map.put(tool, "arguments", %{})
+        ] do
+      assert {:error, _} = Manifest.load(put_in(manifest(), path, mutated))
+    end
+  end
+
   defp manifest do
     %{
       "apiVersion" => "mn.workflow/v1",

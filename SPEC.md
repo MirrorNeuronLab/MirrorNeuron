@@ -330,7 +330,11 @@ agent may declare an optional live read preflight for selected effects; the
 preflight must name a declared read tool, match its arguments exactly, and
 require only scalar result fields.
 SDK-derived response declarations retain their bounded UTF-8 manual, standard
-Job activity watch, scalar tool schemas, and fixed operation-poll arguments.
+Job activity watch, blueprint-owned user tool input schemas, and fixed
+operation-poll arguments. User tool schemas are closed JSON objects bounded to
+12 KiB per tool. Core validates their envelope and any request-ID mapping.
+Persisted scalar user tool declarations remain valid. Internal polling arguments
+retain scalar and enum validation.
 Fixed arguments must match the declared poll-tool schema and cannot replace its
 correlation identity. Core validates these existing MCP projections before Job
 creation; the native response engine remains their execution owner.

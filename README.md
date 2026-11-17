@@ -574,8 +574,9 @@ guidance without changing effects, argument validation, or execution authority.
 Deploy this validator with the matching SDK common and job-response packages
 before loading description-bearing blueprint declarations.
 Core also accepts the SDK-derived manual (at most 64 KiB), standard Job activity
-watch, typed scalar arguments, and schema-checked fixed polling arguments.
-These fields retain the existing MCP tool and correlation boundaries.
+watch, bounded blueprint input schemas for user tools, and schema-checked fixed
+polling arguments. Existing scalar tool declarations remain valid. The SDK owns
+validation of individual tool values against the blueprint-authored schema.
 
 Managed desktop Core requires its configured node identity at startup. The CLI
 persists that identity independently of the network address and reports an
