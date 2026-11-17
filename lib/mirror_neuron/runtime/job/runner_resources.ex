@@ -18,8 +18,13 @@ defmodule MirrorNeuron.Runtime.RunnerResources do
 
   @doc false
   def stop_run_workers(run_id) do
-    with {:ok, job} <- RedisStore.fetch_job(run_id) do
-      Runner.stop_prepared(node_configs(job), :finish)
+    missing = "job #{run_id} was not found"
+
+    case RedisStore.fetch_job(run_id) do
+      {:ok, job} -> Runner.stop_prepared(node_configs(job), :finish)
+      # A cleared run still has exact ownership records in the native registry.
+      {:error, ^missing} -> :ok
+      error -> error
     end
   end
 

@@ -21,6 +21,7 @@ defmodule MirrorNeuron.Cluster.FederationRegistry.Peers do
       peer =
         peer_info
         |> Values.stringify_keys()
+        |> Map.delete("peer_available")
         |> Map.put("node_name", node_name)
         |> Map.put("connection_mode", "federated")
         |> Map.put("peer_auth_token", token)
@@ -30,9 +31,12 @@ defmodule MirrorNeuron.Cluster.FederationRegistry.Peers do
         fn peers ->
           case Map.get(peers, node_name) do
             nil ->
-              if Keyword.get(opts, :refresh_only, false),
-                do: {:error, :peer_not_found},
-                else: {:ok, Map.put(peers, node_name, peer), peer, "registered"}
+              if Keyword.get(opts, :refresh_only, false) do
+                {:error, :peer_not_found}
+              else
+                saved = Map.put(peer, "peer_available", true)
+                {:ok, Map.put(peers, node_name, saved), saved, "registered"}
+              end
 
             existing ->
               register_existing(peers, node_name, existing, peer)
@@ -152,14 +156,16 @@ defmodule MirrorNeuron.Cluster.FederationRegistry.Peers do
 
   defp advertise_peer(peer) do
     public = public_peer(peer)
+    available = Map.get(public, "peer_available", true)
+    status = if available, do: "healthy", else: "unavailable"
 
-    case Availability.mark_peer_state(Map.fetch!(public, "node_name"), "healthy", %{
+    case Availability.mark_peer_state(Map.fetch!(public, "node_name"), status, %{
            "connection_mode" => "federated",
            "operator_disconnect" => false,
            "scheduling_eligible" => false,
            "local_scheduler_eligible" => Map.get(public, "scheduling_eligible", true),
            "job_owner_eligible" => true,
-           "peer_available" => true,
+           "peer_available" => available,
            "admission" => Map.get(public, "admission", %{}),
            "grpc_host" => Map.get(public, "grpc_host"),
            "grpc_port" => Map.get(public, "grpc_port"),

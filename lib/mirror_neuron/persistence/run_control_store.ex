@@ -43,9 +43,9 @@ defmodule MirrorNeuron.Persistence.RunControlStore do
       redis.call('SET', old_key, cjson.encode(old), 'EX', 604800)
       redis.call('SADD', KEYS[4], old_key)
     end
-    if item.action == 'cancel' then
+    if item.action == 'cancel' and not item.queued_only then
       for _, old in ipairs(doc.receipts) do
-        if old.status == 'queued' or old.status == 'executing' then
+        if old.action ~= 'cancel' and (old.status == 'queued' or old.status == 'executing') then
           old.status = 'superseded'; old.phase = 'superseded'; old.superseded_by = item.request_id
         end
       end

@@ -369,7 +369,10 @@ defmodule MirrorNeuron do
   # Cancellation intent is written to the shared store before any work is
   # routed. In particular, do not forward this through a control node: an
   # unavailable owner must produce `cancellation_pending` immediately.
-  def cancel(job_id), do: request_durable_cancellation(job_id)
+  def cancel(job_id), do: request_durable_cancellation(job_id, nil)
+
+  @doc false
+  def cancel(job_id, control_id), do: request_durable_cancellation(job_id, control_id)
 
   def cancel_all do
     with {:ok, operation} <- start_operation("cancel_all_jobs"),
@@ -396,32 +399,41 @@ defmodule MirrorNeuron do
     end
   end
 
-  defp request_durable_cancellation(job_id) do
+  defp request_durable_cancellation(job_id, control_id) do
     case RedisStore.fetch_job(job_id) do
       {:ok, %{"status" => status}} when status in ["completed", "failed", "cancelled"] ->
         {:ok, "cancelled"}
 
       {:ok, job} ->
+        request_id = control_id || CancellationStore.request_id()
+
         with {:ok, target_nodes} <- cancellation_target_nodes(job_id, job),
-             {:ok, _request_state, cancellation} <-
-               CancellationStore.request(job_id, target_nodes) do
-          local_node = to_string(Node.self())
-
-          if local_node in Map.get(cancellation, "target_nodes", []) and
-               local_node not in Map.get(cancellation, "acknowledged_nodes", []) do
-            CancellationReconciler.request_local(job_id)
-          else
-            CancellationReconciler.kick()
-          end
-
-          case RedisStore.fetch_job(job_id) do
-            {:ok, %{"status" => "cancelled"}} -> {:ok, "cancelled"}
-            _ -> {:ok, "cancellation_pending"}
-          end
+             {:ok, request_state, cancellation} <-
+               CancellationStore.request(job_id, target_nodes, request_id,
+                 stop_prepared: is_binary(control_id)
+               ) do
+          if request_state == :terminal,
+            do: {:ok, "cancelled"},
+            else: observe_cancellation(job_id, cancellation)
         end
 
       {:error, _reason} = error ->
         error
+    end
+  end
+
+  defp observe_cancellation(job_id, cancellation) do
+    local_node = to_string(Node.self())
+
+    if local_node in CancellationStore.pending_nodes(cancellation) do
+      CancellationReconciler.request_local(job_id)
+    else
+      CancellationReconciler.kick()
+    end
+
+    case RedisStore.fetch_job(job_id) do
+      {:ok, %{"status" => "cancelled"}} -> {:ok, "cancelled"}
+      _ -> {:ok, "cancellation_pending"}
     end
   end
 

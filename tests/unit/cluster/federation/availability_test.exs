@@ -58,4 +58,23 @@ defmodule MirrorNeuron.Cluster.FederationRegistryTest.AvailabilityTest do
     assert FederationRegistry.projection("job-1")["owner_available"] == true
     assert FederationRegistry.projection("job-1")["projection_stale"] == true
   end
+
+  test "an inbound advertisement refresh preserves a failed outbound probe" do
+    name = "mirror_neuron@peer"
+    assert {:ok, _, "registered"} = FederationRegistry.register(name, peer_info(), "scoped")
+    assert {:ok, _, _} = FederationRegistry.mark_unavailable(name)
+
+    refreshed = Map.merge(peer_info(), %{"grpc_port" => 55_099, "peer_available" => true})
+
+    assert {:ok, %{"grpc_port" => 55_099, "peer_available" => false}, "already_registered"} =
+             FederationRegistry.register(name, refreshed, "scoped", refresh_only: true)
+
+    assert {:ok, %{"status" => "unavailable", "peer_available" => false, "grpc_port" => 55_099}} =
+             NodeStateStoreStub.fetch_node_state(name)
+
+    assert {:ok, _, _} = FederationRegistry.mark_available(name)
+
+    assert {:ok, %{"status" => "healthy", "peer_available" => true}} =
+             NodeStateStoreStub.fetch_node_state(name)
+  end
 end

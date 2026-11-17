@@ -8,7 +8,7 @@ defmodule MirrorNeuron.Persistence.CancellationStore do
   # The request, status transition, fencing epoch and lease revocation deliberately
   # live in one Redis script. A coordinator that retained the old lease can no
   # longer overwrite the cancelling record after this returns.
-  def request(job_id, target_nodes, request_id \\ request_id())
+  def request(job_id, target_nodes, request_id \\ request_id(), opts \\ [])
       when is_binary(job_id) and is_list(target_nodes) do
     now = timestamp()
 
@@ -17,6 +17,7 @@ defmodule MirrorNeuron.Persistence.CancellationStore do
       "request_id" => request_id,
       "target_nodes" => Enum.uniq(Enum.reject(target_nodes, &blank?/1)),
       "acknowledged_nodes" => [],
+      "stop_prepared" => Keyword.get(opts, :stop_prepared, false),
       "status" => "pending",
       "requested_at" => now,
       "updated_at" => now,
@@ -35,6 +36,9 @@ defmodule MirrorNeuron.Persistence.CancellationStore do
     end
 
     local job = cjson.decode(encoded_job)
+    if job["status"] == "completed" or job["status"] == "failed" or job["status"] == "cancelled" then
+      return {"terminal", ""}
+    end
     local cancellation = cjson.decode(ARGV[1])
     local job_epoch = tonumber(job["lease_epoch"]) or 0
     local existing_lease = job["lease"]
@@ -115,6 +119,7 @@ defmodule MirrorNeuron.Persistence.CancellationStore do
          ]) do
       {:ok, ["created", encoded]} -> decode_result(:created, encoded)
       {:ok, ["existing", encoded]} -> decode_result(:existing, encoded)
+      {:ok, ["terminal", _]} -> {:ok, :terminal, nil}
       {:ok, ["missing", _]} -> {:error, "job #{job_id} was not found"}
       {:error, _reason} = error -> error
       other -> {:error, "unexpected cancellation request result: #{inspect(other)}"}

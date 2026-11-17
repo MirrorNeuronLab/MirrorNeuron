@@ -607,9 +607,10 @@ excluded. New definition placement can prefer an idle compatible PC over a busy
 peer; only the owner-local atomic claim authorizes execution. Prepared definitions
 retain their existing owner and are not migrated by an inventory refresh.
 Federated peer availability is based on authenticated gRPC reachability probes
-at five-second intervals. Three consecutive failures mark a peer unavailable;
-the first successful probe restores healthy status. Job and run projection
-refresh failures mark cached summaries stale without changing peer availability.
+at five-second intervals. Three consecutive failures mark a peer unavailable.
+The first successful probe restores healthy status. Inbound advertisements
+refresh peer metadata while preserving this local reachability result. Job and
+run projection refresh failures mark cached summaries stale.
 Service discovery aggregates each authenticated federated owner's local
 registry in one hop, preserving the normal service filters without recursively
 forwarding a peer request.
@@ -1151,9 +1152,9 @@ Explicit checkpoint retries reacquire capacity on the same PC or explicitly queu
 Queued retries preserve their checkpoint selection and idempotency receipt;
 dispatch verifies the checkpoint and original inputs again before a new attempt.
 
-Successful `CancelRun(queued_only: true)` returns the target `run_id` and
-the string status `cancelled`. If the Run has started, this control fails
-without stopping it.
+`CancelRun(queued_only: true)` returns a command receipt for the target Run.
+The receipt completes when the queued Run is cancelled. If admission wins the
+race, the receipt fails with `run_already_admitted` and the Run continues.
 
 The node queue is projected as `resource_wait` schedules named `queue_<run_id>`.
 `ListSchedules`, `GetSchedule`, `UpdateSchedule`, and `DeleteSchedule` expose these
@@ -1364,9 +1365,11 @@ Phases distinguish `queued`, `dispatching`, `waiting_for_previous_transition`,
 `superseded`. Pause completes only after owned commands stop. Resume follows
 successful cleanup and completes only after all required services report
 `serving` for the new `control_generation`. Late receipts from an earlier pause/
-resume cannot establish readiness. Stop confirms its cleanup receipt and retains
-the terminal finalization fence. A service failure is a terminal control failure,
-not an indefinite wait for the run's status to become running.
+resume cannot establish readiness. Stop uses the durable cancellation fence.
+The command receipt completes after Core acknowledges owned worker and native
+resource cleanup and drains the run's native requests. A queued-only stop keeps
+the admission race guard and records a failed receipt if the run has started.
+Service readiness failures produce a terminal control receipt.
 
 Runner adapters expose `control_profile/1`: `restart_after_stop` and `readiness`.
 HostLocal and DockerWorker recognize the shared SDK `monitored_service` entrypoint

@@ -1,6 +1,7 @@
 defmodule MirrorNeuron.RuntimeTest.ControlledService do
   def control_profile(_), do: MirrorNeuron.Runner.ControlProfile.service()
   def prepared_key(_, :pause), do: :test_service
+  def prepared_key(%{"stop_on_finish" => true}, :finish), do: :test_service
   def prepared_key(_, _), do: nil
 
   def stop_prepared(_) do
@@ -66,7 +67,11 @@ defmodule MirrorNeuron.Runtime.RunControlTest do
         %{
           "node_id" => "service",
           "agent_type" => "executor",
-          "config" => %{"runner_module" => Service, "output_message_type" => nil}
+          "config" => %{
+            "runner_module" => Service,
+            "output_message_type" => nil,
+            "stop_on_finish" => Keyword.get(options, :stop_on_finish, false)
+          }
         }
       ]
     }
@@ -119,21 +124,34 @@ defmodule MirrorNeuron.Runtime.RunControlTest do
   end
 
   test "stop supersedes readiness wait and confirms cleanup" do
-    {run, _, _} = service()
+    {run, _, _} = service(stop_on_finish: true)
     {:ok, _} = RunControl.submit(run, "pause", "pause")
     assert_receive {:service_stopping, cleanup}, 5_000
     send(cleanup, {:stop_result, :ok})
     await_control(run, "pause", "completed")
     {:ok, _} = RunControl.submit(run, "resume", "resume")
     assert_receive {:service_started, _, _}, 5_000
+    assert {:ok, %{"status" => "queued"}} = RunControl.submit(run, "cancel", "guarded", true)
+    assert {:ok, %{"status" => "executing"}} = RunControl.get(run, "resume")
     {:ok, _} = RunControl.submit(run, "cancel", "stop")
     await_control(run, "resume", "superseded")
+    assert await_control(run, "guarded", "failed")["error"]["code"] == "run_already_admitted"
+    assert_receive {:service_stopping, cleanup}, 5_000
+    assert {:ok, %{"status" => "executing"}} = RunControl.get(run, "stop")
+    send(cleanup, {:stop_result, :ok})
     await_control(run, "stop", "completed")
 
-    assert {:ok, %{"status" => "cancelled", "finalization_id" => fence}} =
-             RedisStore.fetch_job(run)
+    assert {:ok,
+            %{
+              "status" => "cancelled",
+              "cancellation_fence_epoch" => fence,
+              "cancellation" => %{"request_id" => "stop", "status" => "acknowledged"}
+            }} = RedisStore.fetch_job(run)
 
-    assert is_binary(fence) and byte_size(fence) > 0
+    assert is_integer(fence) and fence > 0
+
+    assert {:error, {:cancellation_fenced, _, ^fence}} =
+             RedisStore.persist_job(run, %{"status" => "running"})
   end
 
   test "driver restart observes the original effect without dispatching another service" do

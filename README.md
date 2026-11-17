@@ -289,9 +289,10 @@ while remote summaries may become stale. Federation does not automatically
 migrate an unavailable owner's jobs.
 
 Federated peer status uses an authenticated gRPC reachability check every five
-seconds. Three consecutive failed checks mark a peer unavailable; one successful
-check restores healthy status. Job and run summary refreshes run separately, so
-a refresh failure marks cached summaries stale without changing peer status.
+seconds. Three consecutive failed checks mark a peer unavailable. One successful
+check restores healthy status. Inbound advertisements preserve the receiving
+Core's reachability result. Failed Job and Run refreshes mark cached summaries
+stale.
 
 Model routing follows the same owner boundary:
 
@@ -913,9 +914,11 @@ Phases distinguish `queued`, `dispatching`, `waiting_for_previous_transition`,
 `superseded`. Pause completes only after owned commands stop. Resume follows
 successful cleanup and completes only after all required services report
 `serving` for the new `control_generation`. Late receipts from an earlier pause/
-resume cannot establish readiness. Stop confirms its cleanup receipt and retains
-the terminal finalization fence. A service failure is a terminal control failure,
-not an indefinite wait for the run's status to become running.
+resume cannot establish readiness. Stop uses the durable cancellation fence.
+The command receipt completes after Core acknowledges owned worker and native
+resource cleanup and drains the run's native requests. A queued-only stop keeps
+the admission race guard and records a failed receipt if the run has started.
+Service readiness failures produce a terminal control receipt.
 
 Runner adapters expose `control_profile/1`: `restart_after_stop` and `readiness`.
 HostLocal and DockerWorker recognize the shared SDK `monitored_service` entrypoint

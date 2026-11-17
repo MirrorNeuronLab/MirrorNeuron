@@ -2,7 +2,7 @@ defmodule MirrorNeuron.Runtime.RunControl.Driver do
   @moduledoc "One observer per run; journal claims prevent replay after transport/process loss."
   use GenServer, restart: :transient
   alias MirrorNeuron.Persistence.{RedisStore, RunControlStore}
-  alias MirrorNeuron.Runtime.{EventBus, JobCalls, JobControl, RunLifecycle}
+  alias MirrorNeuron.Runtime.{EventBus, JobCalls, JobControl, NodeAdmission, RunLifecycle}
 
   def start_link(run_id),
     do:
@@ -90,6 +90,10 @@ defmodule MirrorNeuron.Runtime.RunControl.Driver do
     lifecycle = run["lifecycle"] || %{}
     matching = proof["request_id"] == receipt["request_id"]
 
+    cancellation =
+      if receipt["action"] == "cancel" and not receipt["queued_only"],
+        do: get_in(run, ["cancellation", "status"])
+
     cond do
       matching and proof["error"] ->
         fail_and_advance(state, receipt, proof["error"])
@@ -108,6 +112,9 @@ defmodule MirrorNeuron.Runtime.RunControl.Driver do
       matching and receipt["action"] == "cancel" and proof["cleanup"] == "complete" ->
         complete(state, receipt)
 
+      cancellation == "acknowledged" ->
+        complete(state, receipt)
+
       run["status"] in ~w(failed completed cancelled) and
           not (matching and receipt["action"] == "cancel" and run["status"] == "cancelled") ->
         fail_and_advance(state, receipt, "run_terminated")
@@ -122,7 +129,8 @@ defmodule MirrorNeuron.Runtime.RunControl.Driver do
       expired?(receipt) ->
         fail_and_advance(state, receipt, "control_wait_expired")
 
-      not matching and System.system_time(:millisecond) - receipt["dispatched_at_ms"] > 30_000 ->
+      not matching and cancellation != "pending" and
+          System.system_time(:millisecond) - receipt["dispatched_at_ms"] > 30_000 ->
         fail_and_advance(state, receipt, "control_outcome_unconfirmed")
 
       true ->
@@ -164,25 +172,29 @@ defmodule MirrorNeuron.Runtime.RunControl.Driver do
     end
   end
 
-  defp execute(run_id, %{"queued_only" => true, "action" => "cancel"}) do
+  defp execute(run_id, %{"queued_only" => true, "action" => "cancel", "request_id" => id}) do
     # Admission owns the atomic queued-only guard.
-    {:queued_cancelled, MirrorNeuron.Runtime.NodeAdmission.cancel(run_id)}
+    {:queued_cancelled, NodeAdmission.cancel(run_id, 0, id)}
   end
 
-  defp execute(run_id, receipt) do
-    action = %{"pause" => :pause, "resume" => :resume, "cancel" => :cancel}[receipt["action"]]
-
-    case {action, RedisStore.fetch_job(run_id)} do
-      {:cancel, {:ok, %{"status" => "queued"}}} ->
-        {:queued_cancelled, MirrorNeuron.Runtime.NodeAdmission.cancel(run_id)}
-
-      {:resume, _} ->
-        JobControl.resume_controlled_job(run_id, receipt["request_id"])
+  defp execute(run_id, %{"action" => "cancel", "request_id" => id}) do
+    case RedisStore.fetch_job(run_id) do
+      {:ok, %{"status" => "queued"}} ->
+        case NodeAdmission.cancel(run_id, 0, id) do
+          {:error, :run_already_admitted} -> MirrorNeuron.cancel(run_id, id)
+          result -> {:queued_cancelled, result}
+        end
 
       _ ->
-        JobCalls.call_job(run_id, {:run_control, action, receipt["request_id"]})
+        MirrorNeuron.cancel(run_id, id)
     end
   end
+
+  defp execute(run_id, %{"action" => "resume", "request_id" => id}),
+    do: JobControl.resume_controlled_job(run_id, id)
+
+  defp execute(run_id, %{"action" => "pause", "request_id" => id}),
+    do: JobCalls.call_job(run_id, {:run_control, :pause, id})
 
   defp complete(state, receipt) do
     RunControlStore.update(state.run_id, receipt["request_id"], %{

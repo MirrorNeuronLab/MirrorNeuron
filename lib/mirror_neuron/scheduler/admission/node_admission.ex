@@ -276,11 +276,24 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
   defdelegate check(manifest, run_id \\ nil), to: MirrorNeuron.Scheduler.Admission.Inspection
   defdelegate decorate(receipt), to: MirrorNeuron.Scheduler.Admission.Inspection
 
-  def cancel(run_id, expected_revision \\ 0) do
+  def cancel(run_id, expected_revision \\ 0, request_id \\ nil) do
+    updates = %{"status" => "cancelled"}
+
+    updates =
+      if request_id do
+        Map.put(updates, "run_control", %{
+          "action" => "cancel",
+          "request_id" => request_id,
+          "cleanup" => "complete"
+        })
+      else
+        updates
+      end
+
     MirrorNeuron.Runtime.StableJob.with_start_gate(gate_id(run_id), fn ->
       with :ok <- queue_revision(run_id, expected_revision),
            {:ok, %{"status" => "queued"}} <- store().fetch_job(run_id),
-           {:ok, _} <- store().persist_terminal_job(run_id, %{"status" => "cancelled"}),
+           {:ok, _} <- store().persist_terminal_job(run_id, updates),
            {:ok, _} <- mutate("cancel", %{"run_id" => run_id, "before_start" => true}) do
         _ = QueueReconciliation.sync_schedule(run_id)
         wake()

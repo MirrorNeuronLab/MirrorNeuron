@@ -9,7 +9,7 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
   alias MirrorNeuron.Runner
   alias MirrorNeuron.Runtime.RunnerResources
   alias MirrorNeuron.Runtime
-  alias MirrorNeuron.Runtime.EventBus
+  alias MirrorNeuron.Runtime.{CommandReceipts, EventBus, QueueReconciliation, Signals}
   alias MirrorNeuron.ServiceRegistry
 
   @scan_interval_ms 2_000
@@ -37,7 +37,9 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
   end
 
   def reconcile_now(job_id) when is_binary(job_id) do
-    reconcile_cancellation(job_id, to_string(Node.self()))
+    with {:ok, cancellation} <- CancellationStore.fetch(job_id) do
+      reconcile_cancellation(cancellation, to_string(Node.self()))
+    end
   end
 
   @impl true
@@ -53,7 +55,7 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
     with {:ok, request} <- CancellationStore.fetch(job_id),
          true <-
            node_name in request["target_nodes"] and node_name not in request["acknowledged_nodes"] do
-      reconcile_cancellation(job_id, node_name)
+      reconcile_cancellation(request, node_name)
     end
 
     {:reply, :ok, state}
@@ -77,14 +79,14 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
 
     case CancellationStore.list_pending_for_node(local_node) do
       {:ok, cancellations} ->
-        Enum.each(cancellations, &reconcile_cancellation(&1["job_id"], local_node))
+        Enum.each(cancellations, &reconcile_cancellation(&1, local_node))
 
       {:error, reason} ->
         Logger.warning("could not scan durable cancellations: #{inspect(reason)}")
     end
   end
 
-  defp reconcile_cancellation(job_id, local_node) do
+  defp reconcile_cancellation(%{"job_id" => job_id} = pending, local_node) do
     # A stale coordinator is allowed to receive the cancellation and stop, but
     # cannot persist a write after the request fence has advanced.
     try do
@@ -92,18 +94,24 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
       # particular, after a Core restart there may be no
       # HostLocal process to terminate, but persisted DockerWorker containers
       # and DockerCompose projects must still be brought down.
-      with {:ok, _native_cleanup} <-
-             RunnerResources.cleanup_native_resources_with_result(job_id),
+      with :ok <- stop_local_job(job_id),
            :ok <- Runner.stop_commands(job_id, :all),
-           :ok <- stop_local_job(job_id),
-           :ok <- ServiceRegistry.deregister_job(job_id) do
+           :ok <- ServiceRegistry.deregister_job(job_id),
+           :ok <- stop_prepared_workers(pending),
+           :ok <- RunnerResources.cleanup_native_resources(job_id),
+           :ok <- QueueReconciliation.drain_requests(job_id) do
         case CancellationStore.acknowledge(job_id, local_node) do
-          {:ok, :completed, _cancellation} ->
+          {:ok, :completed, cancellation} ->
             EventBus.publish_if_job_exists(job_id, %{
               type: :job_cancelled,
               reason: "durable cluster cancellation acknowledged",
               timestamp: Runtime.timestamp()
             })
+
+            if is_nil(cancellation["public_cleared_at"]) do
+              CommandReceipts.settle_run_async(job_id)
+              Signals.finish_run_async(job_id, "cancelled")
+            end
 
             :ok
 
@@ -125,6 +133,9 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
             )
         end
       else
+        {:error, :node_requests_active} ->
+          :ok
+
         {:error, reason} ->
           Logger.warning(
             "durable cancellation cleanup is incomplete for #{job_id}; acknowledgement will retry: #{inspect(reason)}"
@@ -142,6 +153,14 @@ defmodule MirrorNeuron.Runtime.CancellationReconciler do
         )
     end
   end
+
+  # An ordered stop leaves the definition in place. Its prepared services may
+  # be active even though their registry records are owned by the definition.
+  # The deletion path retires resources through the exact registry selectors.
+  defp stop_prepared_workers(%{"job_id" => job_id, "stop_prepared" => true}),
+    do: RunnerResources.stop_run_workers(job_id)
+
+  defp stop_prepared_workers(_), do: :ok
 
   defp stop_local_job(job_id) do
     Runtime.terminate_local_job(job_id)

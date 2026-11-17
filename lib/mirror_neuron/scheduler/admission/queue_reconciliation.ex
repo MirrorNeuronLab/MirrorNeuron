@@ -221,6 +221,13 @@ defmodule MirrorNeuron.Runtime.QueueReconciliation do
       missing = "job #{holder["run_id"]} was not found"
 
       case store().fetch_job(holder["run_id"]) do
+        {:ok,
+         %{
+           "status" => "cancelled",
+           "cancellation" => %{"status" => "acknowledged", "stop_prepared" => true}
+         }} ->
+          release_stopped_holder(holder)
+
         {:ok, %{"status" => status} = job} when status in @terminal ->
           unless recovering?(job) do
             case JobCleanup.cleanup_sandboxes(holder["run_id"], job, []) do
@@ -255,7 +262,7 @@ defmodule MirrorNeuron.Runtime.QueueReconciliation do
   defp release_stopped_holder(holder) do
     claim = Map.take(holder, ["run_id", "generation"])
 
-    with :ok <- drain_terminal_requests(holder), {:ok, _} <- mutate("release", claim) do
+    with :ok <- drain_requests(holder["run_id"]), {:ok, _} <- mutate("release", claim) do
       wake()
     else
       _ -> mutate("cleanup_pending", claim)
@@ -282,9 +289,9 @@ defmodule MirrorNeuron.Runtime.QueueReconciliation do
   # Workers have stopped and model unload/reference cleanup succeeded before this
   # proof is requested. A live native reader still prevents release. Lost tokens
   # after a native restart can be retired only at this terminal cleanup boundary.
-  defp drain_terminal_requests(holder) do
+  def drain_requests(run_id) do
     with {:ok, state} <- snapshot() do
-      tokens = for {token, run} <- state["requests"], run == holder["run_id"], do: token
+      tokens = for {token, ^run_id} <- state["requests"], do: token
 
       if tokens == [] do
         :ok
@@ -292,7 +299,7 @@ defmodule MirrorNeuron.Runtime.QueueReconciliation do
         with {:ok, %{"status" => "drained"}} <-
                MirrorNeuron.ModelServices.native_resource_command(%{
                  "operation" => "drain_terminal_requests",
-                 "run_id" => holder["run_id"],
+                 "run_id" => run_id,
                  "tokens" => tokens
                }) do
           Enum.reduce_while(tokens, :ok, fn token, :ok ->
@@ -301,6 +308,10 @@ defmodule MirrorNeuron.Runtime.QueueReconciliation do
               error -> {:halt, error}
             end
           end)
+        else
+          {:ok, %{"status" => "busy"}} -> {:error, :node_requests_active}
+          {:ok, _} -> {:error, :invalid_native_drain_result}
+          error -> error
         end
       end
     end

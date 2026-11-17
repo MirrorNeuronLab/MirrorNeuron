@@ -66,7 +66,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator.Commands do
     do: {:reply, {:error, "workflow budget owner is not running"}, state}
 
   def handle_call({:run_control, action, request_id}, from, state)
-      when action in [:pause, :resume, :cancel] do
+      when action in [:pause, :resume] do
     control = %{"request_id" => request_id, "action" => Atom.to_string(action)}
     next = Map.put(state, :run_control, control)
 
