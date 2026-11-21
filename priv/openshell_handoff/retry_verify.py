@@ -1,11 +1,30 @@
 """Read-only checkpoint artifact and handoff replay verification for Core."""
 
 import json
-import hashlib
 import sys
 from pathlib import Path
-from files import VERSION, digest, regular, verify, read, safe
+
+from files import VERSION, digest, read, regular, safe, verify
 from store import resolve
+
+
+def _workflow_references(value):
+    """Yield versioned handoff references in workflow traversal order."""
+    if isinstance(value, list):
+        for child in value:
+            yield from _workflow_references(child)
+    elif isinstance(value, dict):
+        if value.get("version") == VERSION:
+            yield value
+            return
+        if set(value) == {"path", "sha256"} or (
+            isinstance(value.get("kind"), str) and isinstance(value.get("path"), str)
+        ):
+            raise ValueError(
+                "unsupported checkpoint artifact reference; require artifact handoff v1"
+            )
+        for child in value.values():
+            yield from _workflow_references(child)
 
 
 def inspect(request):
@@ -42,63 +61,19 @@ def inspect(request):
     for entry in inventory:
         verify(confined(run_roots[entry["run_id"]]), entry)
     captured = {(entry["run_id"], entry["path"]): entry for entry in inventory}
-    total_bytes = sum(entry["size_bytes"] for entry in inventory)
 
-    def remember(root, path, run):
-        nonlocal total_bytes
-        relative = path.relative_to(root).as_posix()
-        path = regular(confined(root), relative)
-        if (run, relative) in captured:
-            return
-        size = path.stat().st_size
-        total_bytes += size
-        if len(captured) >= 10000 or total_bytes > 1000000000:
-            raise ValueError("checkpoint artifact inventory exceeds its bound")
-        sha = hashlib.sha256()
-        with path.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                sha.update(chunk)
-        captured[(run, relative)] = {
-            "run_id": run,
-            "path": relative,
-            "sha256": sha.hexdigest(),
-            "size_bytes": size,
-        }
-
-    # A workflow repeats the same immutable references in inputs, outputs and
-    # delivery history. Verify each complete descriptor once per invocation;
-    # different hashes/metadata and every later invocation remain independent.
+    # Inputs, outputs and delivery history may repeat the same descriptor.
     checked = set()
+    for ref in _workflow_references(request["workflow"]):
+        identity = digest(ref)
+        if identity in checked:
+            continue
+        run = ref["producer"]["run_id"]
+        if run not in run_roots:
+            raise ValueError("cross-run artifact reference")
+        resolve(run_roots[run] / ".handoff", ref)
+        checked.add(identity)
 
-    def references(value):
-        if isinstance(value, dict):
-            handoff = value.get("version") == VERSION
-            if not handoff and (
-                set(value) == {"path", "sha256"}
-                or isinstance(value.get("kind"), str)
-                and isinstance(value.get("path"), str)
-            ):
-                raise ValueError(
-                    "unsupported checkpoint artifact reference; require artifact handoff v1"
-                )
-            identity = digest(value) if handoff else None
-            if identity in checked:
-                return
-            if handoff:
-                run = value["producer"]["run_id"]
-                if run not in run_roots:
-                    raise ValueError("cross-run artifact reference")
-                resolve(run_roots[run] / ".handoff", value)
-            else:
-                for child in value.values():
-                    references(child)
-            if identity is not None:
-                checked.add(identity)
-        elif isinstance(value, list):
-            for child in value:
-                references(child)
-
-    references(request["workflow"])
     safe_steps = []
     for step in request["handoff_steps"]:
         root = run_roots[request["workflow_run_id"]] / ".handoff"

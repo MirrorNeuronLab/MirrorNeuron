@@ -1,12 +1,13 @@
 """Fail-closed replay admission for durable Core handoff receipts."""
 
+import hashlib
 import sys
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "priv/openshell_handoff"))
-from files import digest, write  # noqa: E402
+from files import VERSION, digest, write  # noqa: E402
 from retry_verify import inspect  # noqa: E402
 
 
@@ -79,31 +80,54 @@ def test_legacy_request_digest_cannot_authorize_checkpoint_replay(admission):
         inspect(value)
 
 
+@pytest.fixture
+def committed_report(admission):
+    _, state, _, root = admission
+    folder = root / "commits" / state["commit_id"]
+    path = folder / "outputs" / "report.json"
+    path.parent.mkdir(parents=True)
+    content = b"saved"
+    path.write_bytes(content)
+    ref = {
+        "type": "artifact_ref",
+        "version": VERSION,
+        "producer": state["producer"],
+        "commit_id": state["commit_id"],
+        "kind": "report",
+        "path": path.name,
+        "sha256": hashlib.sha256(content).hexdigest(),
+        "size_bytes": len(content),
+    }
+    write(
+        folder / "receipt.json",
+        {
+            "version": VERSION,
+            "producer": state["producer"],
+            "commit_id": state["commit_id"],
+            "request_hash": state["request_hash"],
+            "execution": {"exit_code": 0},
+            "references": [ref],
+        },
+    )
+    return ref, path
+
+
 def test_repeated_descriptors_are_verified_once_without_reusing_checks_across_calls(
-    admission, monkeypatch
+    admission, committed_report, monkeypatch
 ):
-    import hashlib
     import retry_verify
 
-    value, _, _, root = admission
-    run = root.parent
-    path = run / "report.json"
-    path.write_text("saved")
-    ref = {
-        "kind": "report",
-        "path": "report.json",
-        "sha256": hashlib.sha256(b"saved").hexdigest(),
-        "size_bytes": 5,
-    }
+    value, _, _, _ = admission
+    ref, path = committed_report
     value.update(workflow={"repeated": [ref] * 2000}, handoff_steps=[])
     calls = []
-    original = retry_verify.verify
+    original = retry_verify.resolve
 
     def counted(*args):
         calls.append(args)
         return original(*args)
 
-    monkeypatch.setattr(retry_verify, "verify", counted)
+    monkeypatch.setattr(retry_verify, "resolve", counted)
     assert inspect(value)["safe_handoff_steps"] == []
     assert len(calls) == 1
     path.write_text("other")
@@ -111,17 +135,25 @@ def test_repeated_descriptors_are_verified_once_without_reusing_checks_across_ca
         inspect(value)
 
 
-def test_reference_deduplication_does_not_ignore_conflicting_hashes(admission):
-    import hashlib
-
-    value, _, _, root = admission
-    (root.parent / "report.json").write_text("saved")
-    ref = {
-        "kind": "report",
-        "path": "report.json",
-        "sha256": hashlib.sha256(b"saved").hexdigest(),
-        "size_bytes": 5,
-    }
+def test_reference_deduplication_does_not_ignore_conflicting_hashes(
+    admission, committed_report
+):
+    value, _, _, _ = admission
+    ref, _ = committed_report
     value.update(workflow=[ref, {**ref, "sha256": "0" * 64}], handoff_steps=[])
-    with pytest.raises(ValueError, match="checksum mismatch"):
+    with pytest.raises(ValueError, match="no matching commit receipt"):
+        inspect(value)
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        {"kind": "report", "path": "report.json"},
+        {"path": "report.json", "sha256": "0" * 64},
+    ],
+)
+def test_unversioned_workflow_references_are_rejected(admission, ref):
+    value, _, _, _ = admission
+    value.update(workflow={"outputs": [ref]}, handoff_steps=[])
+    with pytest.raises(ValueError, match="require artifact handoff v1"):
         inspect(value)
