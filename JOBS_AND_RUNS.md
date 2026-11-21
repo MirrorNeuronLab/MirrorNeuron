@@ -197,8 +197,19 @@ Upgrade the generated SDK bindings and API/CLI adapters with Core.
 
 A prepared stable Job with `mcp.mailbox` owns its inbox on its data owner.
 The authenticated `JobMailbox` RPC lists, delivers and acknowledges messages
-while collaborators are running or stopped. Delivery serializes against both
-Job definitions and atomically updates the recipient's persistent Job data.
+while collaborators are running or stopped. A send routes to the recipient's owner. For co-located Jobs it takes both local
+definition gates in stable order. Across computers the recipient requests the
+authorized message from the sender's owner, which checks its current roster
+and original assignment under its own gate. The recipient verifies its own
+current group scope under its gate and atomically updates its persistent inbox.
+A retry with the same request ID can recover the receipt after a lost reply.
+Inbox reads and acknowledgements use the recipient's owner. SDK evidence reads
+use `read_mailbox_attachment` with an addressed `message_id`, `field` and byte
+`offset`. Core resolves the producer and content reference from the stored
+message, verifies the producing Job and run, and returns up to 1 MiB per read.
+An inbox owner authenticates to the producing computer using its federation
+credential. The reader checks the length and SHA-256 of the complete file.
+
 A managed group accepts assignments from its manager and correlates specialist
 results with the original assignment. A changed membership or goal scopes
 future exchanges separately. Resetting or deleting Job data removes the inbox.

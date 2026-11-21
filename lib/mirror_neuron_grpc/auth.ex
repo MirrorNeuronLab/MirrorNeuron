@@ -5,7 +5,7 @@ defmodule MirrorNeuron.Grpc.Auth do
 
   def authorize_runtime!(stream, allow_peer \\ false) do
     unless authorized?(stream, MirrorNeuron.Grpc.Tokens.runtime_control_token()) or
-             (allow_peer and runtime_peer_authorized?(stream)) do
+             (allow_peer and registered_peer_authorized?(stream)) do
       raise GRPC.RPCError,
         status: GRPC.Status.unauthenticated(),
         message: "A runtime control credential is required"
@@ -38,6 +38,16 @@ defmodule MirrorNeuron.Grpc.Auth do
 
   def authorized?(_stream, _expected_token), do: false
 
+  def authorize_federation_peer!(stream) do
+    unless federation_hop(stream) == 1 and registered_peer_authorized?(stream) do
+      raise GRPC.RPCError,
+        status: GRPC.Status.unauthenticated(),
+        message: "A connected peer credential is required"
+    end
+
+    :ok
+  end
+
   def federation_hop(stream) do
     stream
     |> metadata()
@@ -67,7 +77,7 @@ defmodule MirrorNeuron.Grpc.Auth do
       |> Enum.any?(&MirrorNeuron.Grpc.Tokens.secure_compare(&1, expected))
   end
 
-  defp runtime_peer_authorized?(stream) do
+  defp registered_peer_authorized?(stream) do
     peer_name =
       stream |> metadata() |> Map.get("x-mn-federation-peer") |> header_values() |> List.first()
 

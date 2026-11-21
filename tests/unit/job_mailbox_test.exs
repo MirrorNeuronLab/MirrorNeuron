@@ -115,7 +115,79 @@ defmodule MirrorNeuron.Runtime.JobMailboxTest do
     invalid = put_in(jobs, ["mgr", "manifest", "mcp", "mailbox", "peersKey"], nil)
     assert {:error, :mailbox_group_mismatch} = list(invalid, "mgr", %{})
     foreign = put_in(jobs, ["spec", "owner_node"], "other@node")
-    assert {:error, :mailbox_group_mismatch} = send_message(foreign, "mgr", note)
+
+    assert {:error, {:job_data_owner_unavailable, "other@node"}} =
+             send_message(foreign, "mgr", note)
+  end
+
+  test "mailbox groups accept old, new and unspecified placement on prepared Jobs", %{jobs: jobs} do
+    args = %{"recipient_job_id" => "spec", "request_id" => "mixed", "subject" => "Review"}
+    updated = put_in(jobs, ~w(mgr manifest mcp mailbox sameRuntime), false)
+    assert {:ok, receipt} = send_message(updated, "mgr", args)
+    updated = update_in(updated, ~w(spec manifest mcp mailbox), &Map.delete(&1, "sameRuntime"))
+    assert {:ok, ^receipt} = send_message(updated, "mgr", args)
+    malformed = put_in(updated, ~w(spec manifest mcp mailbox sameRuntime), "false")
+    assert {:error, :mailbox_group_mismatch} = send_message(malformed, "mgr", args)
+  end
+
+  @tag :tmp_dir
+  test "serves bounded evidence only from the producing Job's bound run directory", %{
+    tmp_dir: root
+  } do
+    alias MirrorNeuron.Runtime.JobMailbox.Attachment
+    env = "MN_RUNTIME_SHARED_STORAGE_ROOT"
+    previous = System.get_env(env)
+    System.put_env(env, root)
+
+    on_exit(fn ->
+      if previous, do: System.put_env(env, previous), else: System.delete_env(env)
+    end)
+
+    record = %{
+      "stable_job_id" => "mgr",
+      "workflow_run_id" => "logical",
+      "manifest" => %{"metadata" => %{"mn_storage" => %{"submission_id" => "submission"}}}
+    }
+
+    lookup = fn "physical" -> {:ok, record} end
+
+    directory =
+      Path.join([
+        root,
+        "submissions",
+        "submission",
+        "outputs",
+        "runs",
+        "logical",
+        "collaboration"
+      ])
+
+    File.mkdir_p!(directory)
+    bytes = String.duplicate("x", 1_048_576) <> "tail"
+    digest = :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
+    file = Path.join(directory, digest <> ".json")
+    File.write!(file, bytes)
+    ref = %{"run_id" => "physical", "sha256" => digest, "size_bytes" => byte_size(bytes)}
+
+    assert {:ok, %{"offset" => 0, "data" => first}} = Attachment.read_chunk("mgr", ref, 0, lookup)
+    assert byte_size(Base.decode64!(first)) == 1_048_576
+
+    assert {:ok, %{"offset" => 1_048_576, "data" => tail}} =
+             Attachment.read_chunk("mgr", ref, 1_048_576, lookup)
+
+    assert Base.decode64!(tail) == "tail"
+    assert {:error, :invalid_mailbox_request} = Attachment.read_chunk("spec", ref, 0, lookup)
+
+    assert {:error, :invalid_mailbox_request} =
+             Attachment.read_chunk("mgr", ref, byte_size(bytes), lookup)
+
+    assert {:error, :mailbox_unavailable} =
+             Attachment.read_chunk("mgr", %{ref | "size_bytes" => 1}, 0, lookup)
+
+    # Replacing an artifact with a link must not open another file of the same size.
+    File.rename!(file, file <> ".other")
+    File.ln_s!(file <> ".other", file)
+    assert {:error, :mailbox_unavailable} = Attachment.read_chunk("mgr", ref, 0, lookup)
   end
 
   test "a full inbox preserves pending work and reuses only acknowledged slots", %{jobs: jobs} do

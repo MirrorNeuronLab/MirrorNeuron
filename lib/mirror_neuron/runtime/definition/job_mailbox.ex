@@ -1,15 +1,15 @@
 defmodule MirrorNeuron.Runtime.JobMailbox do
   @moduledoc "Addressed, asynchronous communication between mutually configured stable Jobs."
   alias MirrorNeuron.JobData
-  alias MirrorNeuron.Runtime.JobMailbox.Storage
+  alias MirrorNeuron.Runtime.JobMailbox.{Attachment, Storage}
   alias MirrorNeuron.Runtime.StableJob.{Records, StartGate}
 
-  def call(job, tool, args) when is_map(args) do
+  def call(job, tool, args, peer_lookup \\ &MirrorNeuron.get_job/1) when is_map(args) do
     ids = if tool == "send_mailbox_message", do: [job, args["recipient_job_id"]], else: [job]
 
     if Enum.all?(ids, &(JobData.validate_id(&1) == :ok)) do
       # Acquire both definition/data gates in the same order for opposite-direction sends.
-      operation = fn -> execute(job, tool, args, &MirrorNeuron.get_job/1) end
+      operation = fn -> execute(job, tool, args, &MirrorNeuron.get_job/1, peer_lookup) end
 
       ids
       |> Enum.uniq()
@@ -23,10 +23,46 @@ defmodule MirrorNeuron.Runtime.JobMailbox do
     end
   end
 
-  def execute(job, tool, args, lookup) do
-    with {:ok, definition} <- lookup.(job),
-         :ok <- Records.ensure_owner_node(definition),
-         {:ok, group} <- group(definition, lookup) do
+  # A remote recipient requests this envelope directly from the sender's owner.
+  # Release the sender gate before the recipient takes its own data gate.
+  def prepare_for_peer(job, args, peer_lookup) do
+    StartGate.with_start_gate(job, fn ->
+      with {:ok, from} <- owned_group(job, &MirrorNeuron.get_job/1, peer_lookup),
+           do: prepare_message(from, args)
+    end)
+  end
+
+  def deliver_from_peer(job, message, peer_lookup) do
+    StartGate.with_start_gate(job, fn ->
+      with {:ok, to} <- owned_group(job, &MirrorNeuron.get_job/1, peer_lookup),
+           do: deliver(to, message)
+    end)
+  end
+
+  def attachment_source(job, args, peer_lookup) do
+    StartGate.with_start_gate(job, fn ->
+      with %{"message_id" => id, "field" => field, "offset" => offset} when map_size(args) == 3 <-
+             args,
+           true <-
+             valid_id?(id) and field in ~w(attachment assignment_attachment) and
+               is_integer(offset) and offset >= 0,
+           {:ok, group} <- owned_group(job, &MirrorNeuron.get_job/1, peer_lookup),
+           {:ok, row} <- Storage.get(job, group.scope, id),
+           ref when is_map(ref) <- row[field],
+           true <- Attachment.valid?(ref) and offset < ref["size_bytes"] do
+        source = if field == "assignment_attachment", do: job, else: row["sender_job_id"]
+        {:ok, {source, ref}}
+      else
+        {:error, _reason} = error -> error
+        _ -> {:error, :invalid_mailbox_request}
+      end
+    end)
+  end
+
+  def execute(job, tool, args, lookup, peer_lookup \\ nil) do
+    peer_lookup = peer_lookup || lookup
+
+    with {:ok, group} <- owned_group(job, lookup, peer_lookup) do
       case {tool, args} do
         {"list_mailbox_messages", _} ->
           Storage.list(job, group.scope, args)
@@ -40,12 +76,20 @@ defmodule MirrorNeuron.Runtime.JobMailbox do
           end
 
         {"send_mailbox_message", _} ->
-          send_message(group, args, lookup)
+          with {:ok, message} <- prepare_message(group, args),
+               {:ok, to} <- owned_group(args["recipient_job_id"], lookup, peer_lookup),
+               do: deliver(to, message)
 
         _ ->
           {:error, :invalid_mailbox_request}
       end
     end
+  end
+
+  defp owned_group(job, lookup, peer_lookup) do
+    with {:ok, definition} <- lookup.(job),
+         :ok <- Records.ensure_owner_node(definition),
+         do: group(definition, peer_lookup)
   end
 
   defp group(%{"manifest" => %{"mcp" => %{"mailbox" => c}}} = job, lookup) when is_map(c) do
@@ -83,7 +127,6 @@ defmodule MirrorNeuron.Runtime.JobMailbox do
        %{
          job: elem(own, 0),
          blueprint: elem(own, 1),
-         owner: job["owner_node"],
          id: group,
          scope: scope,
          members: members,
@@ -121,7 +164,7 @@ defmodule MirrorNeuron.Runtime.JobMailbox do
       Enum.map(~w(goalKey groupKey commonGoalKey peersKey), &c[&1]) ++
         if(Map.has_key?(c, "legacyPeerKey"), do: [c["legacyPeerKey"]], else: [])
 
-    c["schema"] == "mn.collaboration.group.v1" and c["sameRuntime"] == true and
+    c["schema"] == "mn.collaboration.group.v1" and is_boolean(Map.get(c, "sameRuntime", false)) and
       c["topology"] == "group" and c["maxMembers"] in 2..16 and
       valid_id?(c["protocol"]) and valid_id?(c["goalId"]) and
       (is_nil(c["managerBlueprintId"]) or valid_id?(c["managerBlueprintId"])) and
@@ -139,7 +182,7 @@ defmodule MirrorNeuron.Runtime.JobMailbox do
 
   defp peer?(_), do: false
 
-  defp send_message(from, args, lookup) do
+  defp prepare_message(from, args) do
     target = args["recipient_job_id"]
     kind = Map.get(args, "kind", "note")
 
@@ -149,18 +192,14 @@ defmodule MirrorNeuron.Runtime.JobMailbox do
          true <-
            valid_id?(args["request_id"]) and byte_size(args["request_id"]) <= 128 and
              bounded?(args["subject"], 200) and
-             bounded?(Map.get(args, "text", ""), 2000, true) and attachment?(args["attachment"]),
+             bounded?(Map.get(args, "text", ""), 2000, true) and
+             (is_nil(args["attachment"]) or Attachment.valid?(args["attachment"])),
          true <-
            kind in ~w(note assignment result) and (kind == "note" or is_map(args["attachment"])),
          :ok <-
-           permit(
-             not is_nil(from.scope) and target != from.job and
-               List.keymember?(from.members, target, 0)
-           ),
-         {:ok, definition} <- lookup.(target),
-         {:ok, to} <- group(definition, lookup),
-         :ok <- permit(to.scope == from.scope and to.owner == from.owner),
-         {:ok, correlation} <- correlation(kind, from, to, args["reply_to"]) do
+           permit(not is_nil(from.scope) and target != from.job),
+         {_job, target_role} <- List.keyfind(from.members, target, 0),
+         {:ok, correlation} <- correlation(kind, from, target, target_role, args["reply_to"]) do
       id =
         if kind == "result",
           do: hash({from.scope, from.job, :result, args["reply_to"]}),
@@ -178,38 +217,41 @@ defmodule MirrorNeuron.Runtime.JobMailbox do
           "recipient_job_id" => target
         })
 
-      Storage.deliver(target, Map.merge(message, correlation))
+      {:ok, Map.merge(message, correlation)}
     else
       false -> {:error, :invalid_mailbox_request}
+      nil -> {:error, :mailbox_group_mismatch}
       error -> error
     end
   end
 
-  defp correlation("note", _, _, nil), do: {:ok, %{}}
+  defp deliver(to, message) do
+    with :ok <-
+           permit(
+             is_binary(to.scope) and to.job == message["recipient_job_id"] and
+               to.scope == message["scope"] and
+               {message["sender_job_id"], message["sender_blueprint_id"]} in to.members
+           ),
+         do: Storage.deliver(to.job, message)
+  end
 
-  defp correlation("assignment", from, to, nil) do
-    with :ok <- permit(from.manager == from.blueprint and to.blueprint != from.manager),
+  defp correlation("note", _, _, _, nil), do: {:ok, %{}}
+
+  defp correlation("assignment", from, _target, target_role, nil) do
+    with :ok <- permit(from.manager == from.blueprint and target_role != from.manager),
          do: {:ok, %{}}
   end
 
-  defp correlation("result", from, to, reply) when is_binary(reply) do
-    with :ok <- permit(to.manager == to.blueprint),
+  defp correlation("result", from, target, target_role, reply) when is_binary(reply) do
+    with :ok <- permit(from.manager == target_role),
          {:ok, original} <- Storage.get(from.job, from.scope, reply),
-         :ok <- permit(original["kind"] == "assignment" and original["sender_job_id"] == to.job) do
+         :ok <- permit(original["kind"] == "assignment" and original["sender_job_id"] == target) do
       {:ok, %{"assignment_attachment" => original["attachment"]}}
     end
   end
 
-  defp correlation(_, _, _, _), do: {:error, :invalid_mailbox_request}
+  defp correlation(_, _, _, _, _), do: {:error, :invalid_mailbox_request}
 
-  defp attachment?(nil), do: true
-
-  defp attachment?(%{"run_id" => run, "sha256" => digest, "size_bytes" => size} = ref),
-    do:
-      map_size(ref) == 3 and JobData.validate_id(run) == :ok and is_binary(digest) and
-        Regex.match?(~r/\A[a-f0-9]{64}\z/, digest) and is_integer(size) and size in 1..67_108_864
-
-  defp attachment?(_), do: false
   defp valid_id?(id), do: is_binary(id) and Regex.match?(~r/\A[a-zA-Z0-9_.-]{1,160}\z/, id)
 
   defp bounded?(s, max, empty \\ false),

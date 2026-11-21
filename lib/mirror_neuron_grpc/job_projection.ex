@@ -120,28 +120,11 @@ defmodule MirrorNeuron.Grpc.JobProjection do
   defp retry_summary(_), do: nil
 
   defp put_run_data_ref(projected, record) do
-    submission_id = get_in(record, ["manifest", "metadata", "mn_storage", "submission_id"])
-    # Active records omit the heavy ledger. Older terminal records retain the
-    # same authoritative identity in their ledger instead of this scalar.
-    workflow_run_id = record["workflow_run_id"] || get_in(record, ["workflow_state", "run_id"])
-
-    if safe_component?(submission_id, 220) and safe_component?(workflow_run_id, 128) do
-      Map.put(projected, "run_data_ref", %{
-        "storage" => "syncthing",
-        "submission_id" => submission_id,
-        "run_id" => workflow_run_id
-      })
-    else
-      projected
+    case MirrorNeuron.Artifacts.SharedStorage.run_data_ref(record) do
+      nil -> projected
+      ref -> Map.put(projected, "run_data_ref", ref)
     end
   end
-
-  defp safe_component?(value, limit) when is_binary(value),
-    do:
-      byte_size(value) <= limit and value not in [".", ".."] and
-        Regex.match?(~r/\A[A-Za-z0-9_.-]+\z/, value)
-
-  defp safe_component?(_value, _limit), do: false
 
   def runs(records) when is_list(records), do: Enum.map(records, &run/1)
 

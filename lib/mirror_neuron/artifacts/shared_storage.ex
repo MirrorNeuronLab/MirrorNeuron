@@ -17,6 +17,29 @@ defmodule MirrorNeuron.Artifacts.SharedStorage do
     "submission_path" => :submission_path
   }
 
+  @doc false
+  def run_data_ref(record) do
+    submission_id = get_in(record, ["manifest", "metadata", "mn_storage", "submission_id"])
+    # Active records omit the heavy ledger. Older terminal records retain the
+    # same authoritative identity in their ledger instead of this scalar.
+    workflow_run_id = record["workflow_run_id"] || get_in(record, ["workflow_state", "run_id"])
+
+    if safe_component?(submission_id, 220) and safe_component?(workflow_run_id, 128) do
+      %{
+        "storage" => "syncthing",
+        "submission_id" => submission_id,
+        "run_id" => workflow_run_id
+      }
+    end
+  end
+
+  defp safe_component?(value, limit) when is_binary(value),
+    do:
+      byte_size(value) <= limit and value not in [".", ".."] and
+        Regex.match?(~r/\A[A-Za-z0-9_.-]+\z/, value)
+
+  defp safe_component?(_value, _limit), do: false
+
   def root do
     MirrorNeuron.Config.optional_string(
       "MN_RUNTIME_SHARED_STORAGE_ROOT",

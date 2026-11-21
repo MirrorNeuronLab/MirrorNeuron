@@ -714,7 +714,7 @@ not part of this service. Runtime environment code must
 not interpret `MN_JOB_ID` as a run identity; it uses `MN_RUN_ID` and
 `MN_ATTEMPT_ID` explicitly. Opted-in Jobs use the owner-routed `JobMailbox`
 operation for durable notes, assignments and results between configured peers.
-Delivery works while either Job is stopped. See `JOBS_AND_RUNS.md` for the
+Delivery works across connected runtime computers while either Job is stopped. See `JOBS_AND_RUNS.md` for the
 complete contract.
 
 ## Acceptance
