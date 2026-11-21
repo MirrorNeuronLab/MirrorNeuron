@@ -9,6 +9,7 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
     DeleteJobRequest,
     DeleteRunRequest,
     GetJobResponseTurnRequest,
+    JobMailboxRequest,
     JobRequest,
     JobRelocationRequest,
     RunAdmissionRequest,
@@ -30,6 +31,7 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
 
   @rpc_cases [
     {:CreateJob, :create_job, CreateJobRequest},
+    {:JobMailbox, :job_mailbox, JobMailboxRequest},
     {:GetJob, :get_job, JobRequest},
     {:ListJobs, :list_jobs, ListJobsRequest},
     {:UpdateJob, :update_job, UpdateJobRequest},
@@ -70,6 +72,7 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
 
     for function <- [
           :create_job,
+          :job_mailbox,
           :get_job,
           :list_jobs,
           :update_job,
@@ -142,9 +145,9 @@ defmodule MirrorNeuron.Grpc.CommandHubTest do
              "mirrorneuron.job.v1.JobService"
 
     assert Enum.map(Mirrorneuron.Job.V1.JobService.Service.__rpc_calls__(), &elem(&1, 0)) ==
-             Enum.map(Enum.take(@rpc_cases, 7), &elem(&1, 0)) ++
+             Enum.map(Enum.take(@rpc_cases, 8), &elem(&1, 0)) ++
                [:ExportJobBackup, :RestoreJobBackup] ++
-               Enum.map(Enum.drop(@rpc_cases, 7), &elem(&1, 0))
+               Enum.map(Enum.drop(@rpc_cases, 8), &elem(&1, 0))
 
     runtime = Mirrorneuron.Runtime.V1.RuntimeControlService.Service
     assert runtime.__meta__(:name) == "mirrorneuron.runtime.v1.RuntimeControlService"

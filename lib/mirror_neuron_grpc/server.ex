@@ -3,6 +3,7 @@ defmodule MirrorNeuron.Grpc.JobServer do
 
   for {function, command} <- [
         create_job: :CreateJob,
+        job_mailbox: :JobMailbox,
         get_job: :GetJob,
         list_jobs: :ListJobs,
         update_job: :UpdateJob,

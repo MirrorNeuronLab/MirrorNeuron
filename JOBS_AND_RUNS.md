@@ -192,3 +192,13 @@ The file protocol bounds chunks to 1 MiB, entries to 100,000 and uncompressed
 content to 128 GiB; path, symlink, duplicate, inventory and checksum failures reject
 restore. Earlier internal `mn.backup.v2` snapshots are not accepted by these RPCs.
 Upgrade the generated SDK bindings and API/CLI adapters with Core.
+
+## Collaboration mailboxes
+
+A prepared stable Job with `mcp.mailbox` owns its inbox on its data owner.
+The authenticated `JobMailbox` RPC lists, delivers and acknowledges messages
+while collaborators are running or stopped. Delivery serializes against both
+Job definitions and atomically updates the recipient's persistent Job data.
+A managed group accepts assignments from its manager and correlates specialist
+results with the original assignment. A changed membership or goal scopes
+future exchanges separately. Resetting or deleting Job data removes the inbox.

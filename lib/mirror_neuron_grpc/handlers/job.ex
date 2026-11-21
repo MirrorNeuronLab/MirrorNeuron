@@ -12,6 +12,7 @@ defmodule MirrorNeuron.Grpc.Handlers.Job do
 
   defdelegate relocate_job(request, stream), to: Relocation
   defdelegate create_job(request, stream), to: Definitions
+  defdelegate job_mailbox(request, stream), to: MirrorNeuron.Grpc.Handlers.Job.Mailbox
   defdelegate get_job(request, stream), to: Definitions
   defdelegate list_jobs(request, stream), to: Definitions
   defdelegate update_job(request, stream), to: Definitions

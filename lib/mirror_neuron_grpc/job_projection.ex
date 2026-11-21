@@ -184,7 +184,7 @@ defmodule MirrorNeuron.Grpc.JobProjection do
     case get_in(definition, ["manifest", "mcp"]) do
       %{"profile" => "mn.mcp.supervision.v1"} = declaration ->
         Map.put(projected, "mcp", Map.take(declaration, ~w(
-          profile manual manual_content manual_sha256 tools service preflight activity blueprint
+          profile manual manual_content manual_sha256 tools service preflight activity blueprint mailbox
         )))
 
       _ ->

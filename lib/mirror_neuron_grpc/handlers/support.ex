@@ -188,6 +188,12 @@ defmodule MirrorNeuron.Grpc.Handlers.Support do
   defp runtime_error_status({:run_control, "full"}), do: GRPC.Status.resource_exhausted()
   defp runtime_error_status({:run_control, "missing"}), do: GRPC.Status.not_found()
 
+  defp runtime_error_status(:invalid_mailbox_request), do: GRPC.Status.invalid_argument()
+  defp runtime_error_status(:mailbox_group_mismatch), do: GRPC.Status.failed_precondition()
+  defp runtime_error_status(:mailbox_request_conflict), do: GRPC.Status.failed_precondition()
+  defp runtime_error_status(:mailbox_full), do: GRPC.Status.resource_exhausted()
+  defp runtime_error_status(:mailbox_unavailable), do: GRPC.Status.unavailable()
+  defp runtime_error_status(:mailbox_message_not_found), do: GRPC.Status.not_found()
   defp runtime_error_status(:invalid_job_update), do: GRPC.Status.invalid_argument()
 
   defp runtime_error_status({:job_call_timeout, _job_id, _timeout_ms}),

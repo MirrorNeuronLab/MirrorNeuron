@@ -89,6 +89,7 @@ defmodule MirrorNeuron.Grpc.CommandPolicy do
 
   @network_only_denied MapSet.new([
                          {:job, :CreateJob},
+                         {:job, :JobMailbox},
                          {:job, :GetJob},
                          {:job, :ListJobs},
                          {:job, :UpdateJob},
@@ -141,6 +142,7 @@ defmodule MirrorNeuron.Grpc.CommandPolicy do
 
   @identity_auth_required MapSet.new([
                             {:job, :CreateJob},
+                            {:job, :JobMailbox},
                             {:job, :GetJob},
                             {:job, :ListJobs},
                             {:job, :UpdateJob},
@@ -241,6 +243,7 @@ defmodule MirrorNeuron.Grpc.CommandHub do
                      Map.new(
                        [
                          :CreateJob,
+                         :JobMailbox,
                          :GetJob,
                          :ListJobs,
                          :UpdateJob,

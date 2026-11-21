@@ -35,6 +35,20 @@ defmodule Mirrorneuron.Job.V1.CreateJobRequest do
   field(:owner_node, 8, type: :string, json_name: "ownerNode")
 end
 
+defmodule Mirrorneuron.Job.V1.JobMailboxRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "mirrorneuron.job.v1.JobMailboxRequest",
+    protoc_gen_elixir_version: "0.16.0",
+    syntax: :proto3
+
+  field(:job_id, 1, type: :string, json_name: "jobId")
+  field(:tool, 2, type: :string)
+  field(:arguments_json, 3, type: :string, json_name: "argumentsJson")
+  field(:version, 4, type: :uint32)
+end
+
 defmodule Mirrorneuron.Job.V1.JobRequest do
   @moduledoc false
 
@@ -342,6 +356,8 @@ defmodule Mirrorneuron.Job.V1.JobService.Service do
   use GRPC.Service, name: "mirrorneuron.job.v1.JobService", protoc_gen_elixir_version: "0.16.0"
 
   rpc(:CreateJob, Mirrorneuron.Job.V1.CreateJobRequest, Mirrorneuron.Job.V1.JsonResponse)
+
+  rpc(:JobMailbox, Mirrorneuron.Job.V1.JobMailboxRequest, Mirrorneuron.Job.V1.JsonResponse)
 
   rpc(:GetJob, Mirrorneuron.Job.V1.JobRequest, Mirrorneuron.Job.V1.JsonResponse)
 
