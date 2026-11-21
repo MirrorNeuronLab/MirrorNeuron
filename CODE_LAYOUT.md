@@ -6,6 +6,11 @@ supervisor child ID, wire message, or persisted record. For example,
 `MirrorNeuron.Runtime.JobCoordinator` still owns the coordinator GenServer even
 though its implementation now lives under `runtime/job/`.
 
+Directly under `lib/mirror_neuron/`, `application.ex` starts the OTP tree,
+`config.ex` loads configuration, `manifest.ex` exposes manifest operations,
+and `safe_access.ex` provides shared map access. Feature entry points live
+with their implementations in the directories below.
+
 ## Runtime domains
 
 Paths in this table are relative to `lib/mirror_neuron/`.
@@ -53,22 +58,32 @@ contracts; this layout does not add a GPU reservation within a Job.
 
 ## Definitions, persistence and adapters
 
-| Directory                     | Responsibility                                                                      | Stable entry point                        |
-| ----------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------- |
-| `manifest/`                   | Loading, shape validation, topology, workflow, completion and response declarations | `MirrorNeuron.Manifest`                   |
-| `validation/`                 | Blueprint input rules, resource requirements, reports and redaction                 | `MirrorNeuron.BlueprintValidation`        |
-| `persistence/redis_store/`    | Domain records, indexes, retention, Redis transport and result validation           | `MirrorNeuron.Persistence.RedisStore`     |
-| `persistence/delivery_store/` | Atomic enqueue, claims, settlement, invocation journal and receipts                 | `MirrorNeuron.Persistence.DeliveryStore`  |
-| `cluster/reconciliation/`     | Recovery evaluations, dispatch, node availability, retry timing                     | `MirrorNeuron.Cluster.Reconciler`         |
-| `cluster/draining/`           | Node drain operations and state                                                     | `MirrorNeuron.Cluster.NodeDrainer`        |
-| `cluster/federation/`         | Peer registry storage, tombstones, availability and projections                     | `MirrorNeuron.Cluster.FederationRegistry` |
-| `cluster/hardware/`           | Native snapshots, GPU parsing and hardware advertisement                            | `MirrorNeuron.Cluster.Hardware`           |
-| `model_services/`             | Service advertisement, registration, preparation commands and requests              | `MirrorNeuron.ModelServices`              |
-| `monitor/`                    | Job/agent views, bounded projections, metrics and control actions                   | `MirrorNeuron.Monitor`                    |
-| `runner/host_local/`          | Host command preparation, process ownership, streaming and uploads                  | `MirrorNeuron.Runner.HostLocal`           |
-| `runner/docker_worker/`       | Container preparation, workspace, execution and output                              | `MirrorNeuron.Runner.DockerWorker`        |
-| `runner/open_shell/`          | Sandbox invocation, transport, staging, uploads and policy paths                    | `MirrorNeuron.Runner.OpenShell`           |
-| `builtins/executor/`          | Invocation, leases, event decoding, retry and artifact results                      | `MirrorNeuron.Builtins.Executor`          |
+| Directory                     | Responsibility                                                                      | Stable entry point                                         |
+| ----------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `manifest/`                   | Loading, shape validation, topology, workflow, completion and response declarations | `MirrorNeuron.Manifest`                                    |
+| `agent_templates/`            | Agent template behaviour, registration and built-in templates                       | `MirrorNeuron.AgentTemplates`                              |
+| `artifacts/`                  | Job data, artifact storage and publication                                          | `MirrorNeuron.JobData`                                     |
+| `backup/`                     | Durable Job backups and restoration                                                 | `MirrorNeuron.JobBackup`                                   |
+| `bundle/`                     | Job bundle assembly, validation and loading                                         | `MirrorNeuron.JobBundle`                                   |
+| `cluster/`                    | Distributed registration and remote calls                                           | `MirrorNeuron.DistributedRegistry`, `MirrorNeuron.RPC`     |
+| `execution/`                  | Native SDK calls and execution profiles                                             | `MirrorNeuron.NativeSdkClient`                             |
+| `operations/`                 | Asynchronous operations, supervision and recovery                                   | `MirrorNeuron.Operations`                                  |
+| `redis/`                      | Redis connection configuration and Sentinel discovery                               | `MirrorNeuron.Redis`                                       |
+| `services/`                   | Declarations, discovery, preflight and periodic health checks                       | `MirrorNeuron.ServiceSpec`, `MirrorNeuron.ServiceRegistry` |
+| `services/checks/`            | HTTP, TCP and gRPC probes and redaction of check output                             | `MirrorNeuron.ServiceCheck`                                |
+| `validation/`                 | Blueprint input rules, resource requirements, reports and redaction                 | `MirrorNeuron.BlueprintValidation`                         |
+| `persistence/redis_store/`    | Domain records, indexes, retention, Redis transport and result validation           | `MirrorNeuron.Persistence.RedisStore`                      |
+| `persistence/delivery_store/` | Atomic enqueue, claims, settlement, invocation journal and receipts                 | `MirrorNeuron.Persistence.DeliveryStore`                   |
+| `cluster/reconciliation/`     | Recovery evaluations, dispatch, node availability, retry timing                     | `MirrorNeuron.Cluster.Reconciler`                          |
+| `cluster/draining/`           | Node drain operations and state                                                     | `MirrorNeuron.Cluster.NodeDrainer`                         |
+| `cluster/federation/`         | Peer registry storage, tombstones, availability and projections                     | `MirrorNeuron.Cluster.FederationRegistry`                  |
+| `cluster/hardware/`           | Native snapshots, GPU parsing and hardware advertisement                            | `MirrorNeuron.Cluster.Hardware`                            |
+| `model_services/`             | Service advertisement, registration, preparation commands and requests              | `MirrorNeuron.ModelServices`                               |
+| `monitor/`                    | Job/agent views, bounded projections, metrics and control actions                   | `MirrorNeuron.Monitor`                                     |
+| `runner/host_local/`          | Host command preparation, process ownership, streaming and uploads                  | `MirrorNeuron.Runner.HostLocal`                            |
+| `runner/docker_worker/`       | Container preparation, workspace, execution and output                              | `MirrorNeuron.Runner.DockerWorker`                         |
+| `runner/open_shell/`          | Sandbox invocation, transport, staging, uploads and policy paths                    | `MirrorNeuron.Runner.OpenShell`                            |
+| `builtins/executor/`          | Invocation, leases, event decoding, retry and artifact results                      | `MirrorNeuron.Builtins.Executor`                           |
 
 The paths above are relative to `lib/mirror_neuron/`. Job gRPC operations live in
 `lib/mirror_neuron_grpc/handlers/job/`, behind the existing

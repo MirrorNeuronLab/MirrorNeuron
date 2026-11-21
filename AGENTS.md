@@ -26,8 +26,8 @@ Important paths:
 
 - `lib/mirror_neuron.ex`: public runtime/control facade.
 - `lib/mirror_neuron/application.ex`: OTP startup and supervision.
-- `lib/mirror_neuron/manifest.ex`, `manifest/`, `validation/`, `job_bundle.ex`,
-  `bundle/`: executable manifest validation and bundle loading.
+- Executable manifest validation and bundle loading live in
+  `lib/mirror_neuron/manifest.ex`, `manifest/`, `validation/`, and `bundle/`.
 - `lib/mirror_neuron/runtime/`: job lifecycle, delivery, workflow ledger,
   backpressure, deployment, recovery, and reliability.
 - `lib/mirror_neuron/scheduler/`: placement planning, resource admission and
@@ -39,6 +39,8 @@ Important paths:
 - `lib/mirror_neuron/persistence/`, `redis/`: durable state, snapshots,
   retention, and Redis HA.
 - `lib/mirror_neuron/cluster/`: membership, leadership, draining, and repair.
+- Service declarations, health checks, preflight and discovery live in
+  `lib/mirror_neuron/services/`, with matching tests in `tests/unit/services/`.
 - `lib/mirror_neuron/model_services/`, `monitor/`: model service discovery,
   requests, and bounded diagnostic projections.
 - `lib/mirror_neuron/runner/`, `sandbox/`, `execution/`: host, Docker,
@@ -85,8 +87,8 @@ Important paths:
 
 ## Where to Start
 
-- Manifest/bundle: `manifest/`, `validation/`, `job_bundle.ex`, `bundle/`,
-  `tests/unit/manifest/`, and `tests/unit/validation/`.
+- For manifests and bundles, start in `manifest/`, `validation/`, or
+  `bundle/job_bundle.ex` and the matching directories under `tests/unit/`.
 - Lifecycle/delivery: `runtime/job/`, `runtime/agent/`, `runtime/delivery/`,
   `runtime/workflow/`, and matching tests under `tests/unit/runtime/` and
   `tests/e2e/runtime/`.
@@ -95,7 +97,8 @@ Important paths:
   `scheduler/execution_pools/`, and `tests/unit/scheduler/`.
 - Persistence/recovery: `persistence/`, `runtime/recovery/`, and matching
   persistence, backup, and recovery tests.
-- Cluster: `cluster/`, `distributed_registry.ex`, `rpc.ex`, cluster tests.
+- Distributed registration and remote calls live in
+  `cluster/distributed_registry.ex` and `cluster/rpc.ex`.
 - Runners/sandbox: `runner/`, `sandbox/`, `execution/`,
   `scheduler/execution_pools/`, and runner and cleanup tests.
 - gRPC: `lib/mirror_neuron_grpc/`, `proto/`, API/gRPC handler tests. Update proto
