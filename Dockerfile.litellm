@@ -1,0 +1,11 @@
+ARG CORE_IMAGE=mirror-neuron-core:latest
+FROM ${CORE_IMAGE}
+
+RUN python3 -m pip install --no-cache-dir --break-system-packages \
+    "litellm[proxy]==1.108.4" \
+    "fastapi>=0.136.3,<0.140"
+
+COPY tests/gateway/test_streaming_usage.py /tmp/test_streaming_usage.py
+RUN python3 -m pip check \
+    && LITELLM_LOCAL_MODEL_COST_MAP=True python3 /tmp/test_streaming_usage.py \
+    && rm /tmp/test_streaming_usage.py

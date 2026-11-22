@@ -757,6 +757,10 @@ runs the installed library against loopback-only synthetic streams with both
 empty and non-empty choices; an upstream source change fails the build and
 requires review. Rebuild the Core/gateway image to deploy this correction.
 
+The separate gateway image built from `Dockerfile.litellm` pins LiteLLM 1.108.4
+and tests the upstream streaming usage normalization. An authenticated proxy
+can enable context-window escalation in a LiteLLM complexity-router entry.
+
 OpenShell relays structured SDK activity live for both artifact-handoff and legacy
 workers. Explicit workflow heartbeat controls remain authoritative. The step
 timeout triggers asynchronous inspection for both fixed and child tasks;

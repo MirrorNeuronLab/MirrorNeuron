@@ -308,6 +308,12 @@ The build verifies the upstream source hash and exercises real streaming
 parsing against a local synthetic server. Rebuild the gateway image after
 upgrading Core source; source sync alone does not change its installed library.
 
+`Dockerfile.litellm` builds a gateway image with LiteLLM 1.108.4, which supports
+context-window escalation in configured complexity routers. It uses the existing
+Core image as its base and runs the same streaming usage tests. Configure a
+master key and gateway client credentials before switching the live proxy to
+this image.
+
 See [Federation architecture](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/cluster_architecture.md)
 and [Model runtime](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/model-runtime.md).
 
