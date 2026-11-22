@@ -127,17 +127,19 @@ defmodule MirrorNeuron.Cluster.FederationMonitor do
   end
 
   defp finish_task(state, name, kind, result) do
-    if Enum.any?(state.registry.list(), &(&1["node_name"] == name)) do
+    if registration = Enum.find(state.registry.list(), &(&1["node_name"] == name)) do
       now = System.monotonic_time(:millisecond)
       peer = Map.get(state.peers, name, initial_peer(now))
+      registered_available = registration["peer_available"]
 
       case {kind, result} do
         {:probe, :ok} ->
+          # Reconcile the registry when it diverges from the last confirmed update.
           available =
-            if peer.available == true do
+            if peer.available == true and registered_available == true do
               true
             else
-              mark_result_ok?(state.registry.mark_available(name))
+              if mark_result_ok?(state.registry.mark_available(name)), do: true, else: :unknown
             end
 
           put_in(state.peers[name], %{
@@ -152,10 +154,11 @@ defmodule MirrorNeuron.Cluster.FederationMonitor do
           log_failure(name, :get_federated_peer, error, failures, peer.last_success)
 
           available =
-            if failures >= @failed_probes_allowed and peer.available != false do
+            if failures >= @failed_probes_allowed and
+                 (peer.available != false or registered_available != false) do
               if mark_result_ok?(state.registry.mark_unavailable(name)),
                 do: false,
-                else: peer.available
+                else: :unknown
             else
               peer.available
             end

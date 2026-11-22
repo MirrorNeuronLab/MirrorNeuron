@@ -4,29 +4,43 @@ defmodule MirrorNeuron.Cluster.FederationMonitorTest do
   alias MirrorNeuron.Cluster.FederationMonitor
 
   defmodule RegistryStub do
-    def list, do: [%{"node_name" => "mirror_neuron@peer"}]
+    use Agent
 
-    def mark_available(name) do
-      send(:persistent_term.get({__MODULE__, :test}), {:marked_available, name})
-      :ok
+    def start_link(test_pid) do
+      Agent.start_link(fn -> {test_pid, true} end, name: __MODULE__)
     end
 
-    def mark_unavailable(name) do
-      send(:persistent_term.get({__MODULE__, :test}), {:marked_unavailable, name})
-      :ok
+    def list do
+      Agent.get(__MODULE__, fn {_test_pid, available} ->
+        [%{"node_name" => "mirror_neuron@peer", "peer_available" => available}]
+      end)
     end
+
+    def put_availability(available) do
+      Agent.update(__MODULE__, fn {test_pid, _} -> {test_pid, available} end)
+    end
+
+    def mark_available(name), do: mark_availability(true, {:marked_available, name})
+    def mark_unavailable(name), do: mark_availability(false, {:marked_unavailable, name})
 
     def mark_projections_stale(name) do
-      send(:persistent_term.get({__MODULE__, :test}), {:projections_stale, name})
+      notify_test({:projections_stale, name})
+    end
+
+    defp mark_availability(available, message) do
+      put_availability(available)
+      notify_test(message)
+    end
+
+    defp notify_test(message) do
+      send(Agent.get(__MODULE__, &elem(&1, 0)), message)
       :ok
     end
   end
 
   setup do
-    :persistent_term.put({RegistryStub, :test}, self())
+    start_supervised!({RegistryStub, self()})
     supervisor = start_supervised!({Task.Supervisor, name: FederationMonitorTestTasks})
-
-    on_exit(fn -> :persistent_term.erase({RegistryStub, :test}) end)
 
     {:ok, supervisor: supervisor}
   end
@@ -35,7 +49,7 @@ defmodule MirrorNeuron.Cluster.FederationMonitorTest do
     supervisor: supervisor
   } do
     test_pid = self()
-    outcomes = start_supervised!({Agent, fn -> [:timeout, :timeout, :timeout, :ok] end})
+    outcomes = start_supervised!({Agent, fn -> [:timeout, :timeout, :timeout, :timeout, :ok] end})
 
     probe = fn _name ->
       result = Agent.get_and_update(outcomes, fn [head | tail] -> {head, tail} end)
@@ -56,10 +70,30 @@ defmodule MirrorNeuron.Cluster.FederationMonitorTest do
     end
 
     assert_receive {:marked_unavailable, "mirror_neuron@peer"}
+
+    RegistryStub.put_availability(true)
+    send(monitor, :sync)
+    assert_receive {:probe_result, :timeout}
+    assert_receive {:marked_unavailable, "mirror_neuron@peer"}
+
     send(monitor, :sync)
     assert_receive {:probe_result, :ok}
     assert_receive {:marked_available, "mirror_neuron@peer"}
     await_failures(monitor, 0)
+  end
+
+  test "a successful probe repairs a stale unavailable registry entry", %{
+    supervisor: supervisor
+  } do
+    monitor = start_monitor(supervisor, fn _ -> :ok end, fn _ -> {:ok, %{}} end)
+
+    send(monitor, :sync)
+    assert_receive {:marked_available, "mirror_neuron@peer"}
+
+    RegistryStub.put_availability(false)
+    send(monitor, :sync)
+    assert_receive {:marked_available, "mirror_neuron@peer"}
+    assert [%{"peer_available" => true}] = RegistryStub.list()
   end
 
   test "sync failure stales projections without changing availability", %{supervisor: supervisor} do
