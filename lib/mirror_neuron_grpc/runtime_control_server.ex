@@ -166,7 +166,8 @@ defmodule MirrorNeuron.Grpc.RuntimeControlServer do
   end
 
   defp with_channel(target, callback) do
-    channel = GRPC.Stub.connect(target, timeout: 5_000) |> unwrap!()
+    options = MirrorNeuron.Grpc.SharedResponse.client_options(timeout: 5_000)
+    channel = GRPC.Stub.connect(target, options) |> unwrap!()
 
     try do
       callback.(channel)

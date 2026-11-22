@@ -37,6 +37,14 @@ manifest metadata, or its graph identity when no explicit blueprint is declared,
 matching Job identity rules. This applies to retained runs without rewriting
 history and does not expose the manifest.
 
+## Shared-file gRPC responses
+
+Core and SDK peers with a shared Syncthing root negotiate automatic file
+delivery for individual protobuf replies over 4 MiB, including stream frames.
+The receiver verifies and decrypts the replicated file, then decodes the
+ordinary service reply. Older clients retain inline delivery. See the wire
+format and retention rules in [SPEC.md](SPEC.md#shared-file-grpc-responses).
+
 ## Workflow preparation progress
 
 Active preparation is reported as `mn.preparation.v1` receipts in

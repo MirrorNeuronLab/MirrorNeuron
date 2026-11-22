@@ -5,7 +5,9 @@ defmodule MirrorNeuron.NativeSdkClient do
   # the caller returns exhausts the host relay's sockets during supervision.
   # Never retry a command here: its effects may already have committed.
   def call(target, request, timeout, rpc, transport \\ GRPC.Stub) do
-    with {:ok, channel} <- transport.connect(target, timeout: timeout) do
+    options = MirrorNeuron.Grpc.SharedResponse.client_options(timeout: timeout)
+
+    with {:ok, channel} <- transport.connect(target, options) do
       try do
         rpc.(channel, request, timeout: timeout)
       after

@@ -20,7 +20,8 @@ defmodule MirrorNeuron.NativeSdkClientTest do
       end
 
       assert NativeSdkClient.call("native", :request, 1234, rpc, Transport) == result
-      assert_receive {:connect, "native", [timeout: 1234]}
+      assert_receive {:connect, "native", connection_opts}
+      assert connection_opts[:timeout] == 1234
       assert_receive {:rpc, channel, [timeout: 1234]}
       assert_receive {:disconnect, ^channel}
       refute_receive {:connect, _, _}, 0
@@ -38,7 +39,8 @@ defmodule MirrorNeuron.NativeSdkClientTest do
       NativeSdkClient.call("native", :request, 100, rpc, Transport)
     end
 
-    assert_receive {:connect, "native", [timeout: 100]}
+    assert_receive {:connect, "native", connection_opts}
+    assert connection_opts[:timeout] == 100
     assert_receive {:rpc, channel}
     assert_receive {:disconnect, ^channel}
     refute_receive {:rpc, _}, 0

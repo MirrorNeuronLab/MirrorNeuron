@@ -505,14 +505,17 @@ defmodule MirrorNeuron.Cluster.FederationClient do
   defp connect(target, peer, timeout \\ @timeout) do
     token = Map.get(peer, "peer_auth_token", "")
 
-    GRPC.Stub.connect(target,
-      timeout: timeout,
-      headers: [
-        {"authorization", "Bearer #{token}"},
-        {"x-mn-federation-peer", to_string(NodeAdapter.self())},
-        {"x-mn-federation-hop", "1"}
-      ]
-    )
+    opts =
+      MirrorNeuron.Grpc.SharedResponse.client_options(
+        timeout: timeout,
+        headers: [
+          {"authorization", "Bearer #{token}"},
+          {"x-mn-federation-peer", to_string(NodeAdapter.self())},
+          {"x-mn-federation-hop", "1"}
+        ]
+      )
+
+    GRPC.Stub.connect(target, opts)
   end
 
   def probe_peer(node_name) when is_binary(node_name) do

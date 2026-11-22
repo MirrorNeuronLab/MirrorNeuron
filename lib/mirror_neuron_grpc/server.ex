@@ -120,6 +120,7 @@ defmodule MirrorNeuron.Grpc.Endpoint do
   use GRPC.Endpoint
 
   intercept(GRPC.Server.Interceptors.Logger)
+  intercept(MirrorNeuron.Grpc.SharedResponse)
 
   run(MirrorNeuron.Grpc.JobServer)
   run(MirrorNeuron.Grpc.ClusterServer)

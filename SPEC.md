@@ -202,6 +202,28 @@ must not be used to decide which ports, devices, or capacity are available.
 Exact function and RPC definitions are authoritative. Changes to these surfaces
 are compatibility-sensitive.
 
+### Shared-file gRPC responses
+
+Core, the native runtime and their clients negotiate this response-only format
+with `x-mn-shared-response: v1`. The limit is the serialized size of each
+protobuf message, including streaming frames. Messages up to and including
+4,194,304 bytes are inline. Older clients continue receiving ordinary protobuf.
+
+An oversized message produces a 78-byte frame containing the six bytes
+`00 4d 4e 47 52 01`, an unsigned 64-bit big-endian plaintext length, a
+32-byte SHA-256 digest and a random 32-byte AES key, in that order. A protobuf
+message cannot begin with field zero. The corresponding file at the shared
+root is `grpc-response-v1-<lowercase hex digest>.bin`. It contains a 12-byte
+nonce, AES-256-GCM ciphertext, and a 16-byte tag. The protobuf descriptor's
+full name is the authenticated additional data. The digest covers the complete
+file. Each publisher atomically renames a complete ciphertext file before sending
+the reference. Paths and keys of other artifacts are never accepted as locators.
+
+Readers allow up to 60 seconds for Syncthing replication and verify the file
+before decoding. A missing or corrupt file fails delivery of the completed RPC.
+Multiple readers can retrieve the same reference. Published files older than
+24 hours are eligible for hourly cleanup on subsequent publications.
+
 ## Runtime Model
 
 A stable job definition owns a validated bundle, resolved configuration,
