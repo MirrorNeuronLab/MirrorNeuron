@@ -1,6 +1,7 @@
 defmodule MirrorNeuron.Grpc.RuntimeControlRoute do
   @moduledoc false
   alias MirrorNeuron.Cluster.{FederatedJobRouting, FederationRegistry, NodeAdapter}
+
   @job_integrations ~w(create_job_backup list_job_skills add_job_skill set_job_skill list_job_integrations
     add_job_slack connect_job_slack control_job_slack deliver_job_slack enabled_job_skill_files)
 

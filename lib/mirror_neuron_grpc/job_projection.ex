@@ -42,7 +42,10 @@ defmodule MirrorNeuron.Grpc.JobProjection do
     |> put_preparation_source(definition)
     |> put_third_party_dependencies(definition)
     |> put_native_resource_ownership(definition)
-    |> Map.put("workflow_definition", JobWorkflowProjection.from_definition(definition, include_skill_lock))
+    |> Map.put(
+      "workflow_definition",
+      JobWorkflowProjection.from_definition(definition, include_skill_lock)
+    )
     |> compact_bundle_ref()
   end
 
@@ -169,9 +172,13 @@ defmodule MirrorNeuron.Grpc.JobProjection do
   defp put_additional_integrations(projected, definition) do
     case get_in(definition, ["manifest", "metadata", "mn_job_integrations"]) do
       list when is_list(list) ->
-        providers = Enum.filter(list, &(is_binary(&1) and String.match?(&1, ~r/^[a-z0-9]+(-[a-z0-9]+)*$/)))
+        providers =
+          Enum.filter(list, &(is_binary(&1) and String.match?(&1, ~r/^[a-z0-9]+(-[a-z0-9]+)*$/)))
+
         Map.put(projected, "additional_integrations", Enum.uniq(providers))
-      _ -> projected
+
+      _ ->
+        projected
     end
   end
 
@@ -183,9 +190,11 @@ defmodule MirrorNeuron.Grpc.JobProjection do
   end
 
   defp put_third_party_dependencies(projected, definition) do
-    records = for record <- get_in(definition, ["manifest", "skill_dependencies"]) || [],
-                  is_map(record) and record["type"] in ["npm", "agent_skill"],
-                  do: Map.take(record, ~w(type source name version repo ref integrations))
+    records =
+      for record <- get_in(definition, ["manifest", "skill_dependencies"]) || [],
+          is_map(record) and record["type"] in ["npm", "agent_skill"],
+          do: Map.take(record, ~w(type source name version repo ref integrations))
+
     if records == [], do: projected, else: Map.put(projected, "third_party_dependencies", records)
   end
 
