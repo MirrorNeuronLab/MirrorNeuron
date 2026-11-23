@@ -7,27 +7,35 @@ defmodule MirrorNeuron.Grpc.JobWorkflowProjection do
   @binding_fields ~w(id role working_on model uses alias display_name label name)
   @worker_fields ~w(id node_id role working_on model uses alias display_name label name)
 
-  def from_definition(%{"manifest" => manifest}) when is_map(manifest) do
+  def from_definition(definition, include_skill_lock \\ false)
+
+  def from_definition(%{"manifest" => manifest}, include_skill_lock) when is_map(manifest) do
     workflow = manifest["workflow"]
     runtime = manifest["runtime"]
 
-    if is_map(workflow) do
-      bindings = if is_map(runtime), do: runtime["bindings"], else: nil
+    projected =
+      if is_map(workflow) do
+        bindings = if is_map(runtime), do: runtime["bindings"], else: nil
 
-      %{
-        "workflow" =>
-          Map.take(workflow, @workflow_fields)
-          |> put_service_lifecycle(workflow["service_lifecycle"])
-          |> Map.put("steps", project_list(workflow["steps"], @step_fields))
-          |> Map.put("edges", project_list(workflow["edges"], @edge_fields)),
-        "runtime" => %{"bindings" => project_bindings(bindings)}
-      }
-    else
-      %{"workflow" => %{"steps" => [], "edges" => []}, "runtime" => %{"bindings" => %{}}}
+        %{
+          "workflow" =>
+            Map.take(workflow, @workflow_fields)
+            |> put_service_lifecycle(workflow["service_lifecycle"])
+            |> Map.put("steps", project_list(workflow["steps"], @step_fields))
+            |> Map.put("edges", project_list(workflow["edges"], @edge_fields)),
+          "runtime" => %{"bindings" => project_bindings(bindings)}
+        }
+      else
+        %{"workflow" => %{"steps" => [], "edges" => []}, "runtime" => %{"bindings" => %{}}}
+      end
+
+    case get_in(manifest, ["metadata", "mn_third_party"]) do
+      %{} = lock when include_skill_lock -> Map.put(projected, "third_party_lock", lock)
+      _ -> projected
     end
   end
 
-  def from_definition(_definition),
+  def from_definition(_definition, _include_skill_lock),
     do: %{"workflow" => %{"steps" => [], "edges" => []}, "runtime" => %{"bindings" => %{}}}
 
   defp put_service_lifecycle(workflow, %{"schema_version" => "mn.service.workflow.v1"} = value) do

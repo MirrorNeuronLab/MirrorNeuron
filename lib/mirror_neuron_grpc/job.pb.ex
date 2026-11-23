@@ -62,6 +62,7 @@ defmodule Mirrorneuron.Job.V1.JobRequest do
   field(:expected_revision, 3, type: :uint64, json_name: "expectedRevision")
   field(:page_size, 4, type: :uint32, json_name: "pageSize")
   field(:page_token, 5, type: :string, json_name: "pageToken")
+  field(:include_skill_lock, 6, type: :bool, json_name: "includeSkillLock")
 end
 
 defmodule Mirrorneuron.Job.V1.ListJobsRequest do

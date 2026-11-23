@@ -1,6 +1,8 @@
 defmodule MirrorNeuron.Grpc.RuntimeControlRoute do
   @moduledoc false
-  alias MirrorNeuron.Cluster.{FederationRegistry, NodeAdapter}
+  alias MirrorNeuron.Cluster.{FederatedJobRouting, FederationRegistry, NodeAdapter}
+  @job_integrations ~w(create_job_backup list_job_skills add_job_skill set_job_skill list_job_integrations
+    add_job_slack connect_job_slack control_job_slack deliver_job_slack enabled_job_skill_files)
 
   # Only Core membership selects physical endpoints and peer credentials.
   # Python owners supply a node identity, never an arbitrary forwarding URL.
@@ -9,6 +11,15 @@ defmodule MirrorNeuron.Grpc.RuntimeControlRoute do
       {owner, arguments} = Map.pop(arguments, "_owner_node")
       {hop, arguments} = Map.pop(arguments, "_runtime_hop", 0)
       local = to_string(NodeAdapter.self())
+
+      owner =
+        if request.action in @job_integrations or
+             (request.action == "mcp.supervision" and
+                arguments["method"] == "enabled_skill_bundles") do
+          job_owner(arguments["job_id"], owner, local)
+        else
+          owner
+        end
 
       cond do
         is_nil(owner) or owner == local ->
@@ -49,6 +60,30 @@ defmodule MirrorNeuron.Grpc.RuntimeControlRoute do
           message: "Runtime arguments must be an object"
     end
   end
+
+  defp job_owner(job_id, supplied, local) when is_binary(job_id) do
+    owner =
+      case MirrorNeuron.get_job(job_id) do
+        {:ok, definition} -> definition["owner_node"] || local
+        _ -> FederatedJobRouting.job_owner(job_id)
+      end
+
+    cond do
+      is_nil(owner) ->
+        raise GRPC.RPCError, status: GRPC.Status.not_found(), message: "Job unavailable"
+
+      supplied && supplied != owner ->
+        raise GRPC.RPCError,
+          status: GRPC.Status.failed_precondition(),
+          message: "Job owner changed"
+
+      true ->
+        owner
+    end
+  end
+
+  defp job_owner(_, _, _),
+    do: raise(GRPC.RPCError, status: GRPC.Status.invalid_argument(), message: "Missing job ID")
 
   defp unavailable! do
     raise GRPC.RPCError,

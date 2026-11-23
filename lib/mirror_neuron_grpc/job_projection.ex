@@ -30,7 +30,7 @@ defmodule MirrorNeuron.Grpc.JobProjection do
     |> compact_bundle_ref()
   end
 
-  def detail(definition) when is_map(definition) do
+  def detail(definition, include_skill_lock \\ false) when is_map(definition) do
     definition
     |> Map.take(@detail_fields)
     |> put_definition_type(definition)
@@ -38,8 +38,11 @@ defmodule MirrorNeuron.Grpc.JobProjection do
     |> put_recent_run_ids(definition)
     |> put_response_service(definition)
     |> put_mcp(definition)
+    |> put_additional_integrations(definition)
+    |> put_preparation_source(definition)
+    |> put_third_party_dependencies(definition)
     |> put_native_resource_ownership(definition)
-    |> Map.put("workflow_definition", JobWorkflowProjection.from_definition(definition))
+    |> Map.put("workflow_definition", JobWorkflowProjection.from_definition(definition, include_skill_lock))
     |> compact_bundle_ref()
   end
 
@@ -161,6 +164,29 @@ defmodule MirrorNeuron.Grpc.JobProjection do
 
   defp put_response_service(projected, definition) do
     Map.put(projected, "response_service", JobResponse.status(definition))
+  end
+
+  defp put_additional_integrations(projected, definition) do
+    case get_in(definition, ["manifest", "metadata", "mn_job_integrations"]) do
+      list when is_list(list) ->
+        providers = Enum.filter(list, &(is_binary(&1) and String.match?(&1, ~r/^[a-z0-9]+(-[a-z0-9]+)*$/)))
+        Map.put(projected, "additional_integrations", Enum.uniq(providers))
+      _ -> projected
+    end
+  end
+
+  defp put_preparation_source(projected, definition) do
+    case get_in(definition, ["manifest", "metadata", "mn_uploaded_bundle"]) do
+      id when is_binary(id) -> Map.put(projected, "source_bundle_id", id)
+      _ -> projected
+    end
+  end
+
+  defp put_third_party_dependencies(projected, definition) do
+    records = for record <- get_in(definition, ["manifest", "skill_dependencies"]) || [],
+                  is_map(record) and record["type"] in ["npm", "agent_skill"],
+                  do: Map.take(record, ~w(type source name version repo ref integrations))
+    if records == [], do: projected, else: Map.put(projected, "third_party_dependencies", records)
   end
 
   defp put_mcp(projected, definition) do

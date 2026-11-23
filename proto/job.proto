@@ -60,6 +60,7 @@ message JobRequest {
   uint64 expected_revision = 3;
   uint32 page_size = 4;
   string page_token = 5;
+  bool include_skill_lock = 6;
 }
 
 message ListJobsRequest {

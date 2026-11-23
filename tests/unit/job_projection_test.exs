@@ -3,6 +3,22 @@ defmodule MirrorNeuron.Grpc.JobProjectionTest do
 
   alias MirrorNeuron.Grpc.JobProjection
 
+  test "only explicit definition reads include locked third-party files" do
+    record = %{"type" => "agent_skill", "name" => "example", "integrations" => ["slack"]}
+    lock = %{"agent_skills" => %{"example" => %{"files" => %{"SKILL.md" => "private bundle"}}}}
+
+    definition = %{
+      "manifest" => %{"skill_dependencies" => [record], "metadata" => %{"mn_third_party" => lock}}
+    }
+
+    detail = JobProjection.detail(definition)
+    assert detail["third_party_dependencies"] == [record]
+    refute Map.has_key?(detail["workflow_definition"], "third_party_lock")
+
+    assert JobProjection.detail(definition, true)["workflow_definition"]["third_party_lock"] ==
+             lock
+  end
+
   test "run projections expose manifest blueprint identity independently of graph and run IDs" do
     for status <- ~w(pending running paused completed cancelled) do
       record = %{

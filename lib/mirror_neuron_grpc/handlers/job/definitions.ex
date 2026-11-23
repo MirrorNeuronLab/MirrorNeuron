@@ -46,7 +46,7 @@ defmodule MirrorNeuron.Grpc.Handlers.Job.Definitions do
         Remote.forward_call(owner, :get_job, request, stream)
 
       {:ok, definition} ->
-        Encoding.response(JobProjection.detail(definition))
+        Encoding.response(JobProjection.detail(definition, request.include_skill_lock))
 
       _error ->
         if MirrorNeuron.Grpc.Auth.federation_hop(stream) > 0 do
