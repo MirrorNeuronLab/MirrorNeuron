@@ -10,16 +10,22 @@ defmodule MirrorNeuron.Runtime.JobMailbox.Storage do
     acknowledged = Map.get(args, "include_acknowledged", false)
     kind = args["kind"]
     reply = args["reply_to"]
+    message_id = args["message_id"]
 
-    with true <- Map.keys(args) -- ~w(limit after include_acknowledged kind reply_to) == [],
+    with true <-
+           Map.keys(args) -- ~w(limit after include_acknowledged kind reply_to message_id) == [],
          true <- is_integer(limit) and limit in 1..50 and is_integer(after_seq) and after_seq >= 0,
          true <- is_boolean(acknowledged) and kind in [nil, "assignment", "result", "note"],
          true <- is_nil(reply) or is_binary(reply),
+         true <-
+           is_nil(message_id) or
+             (is_binary(message_id) and Regex.match?(~r/\A[a-f0-9]{64}\z/, message_id)),
          {:ok, _, rows} <- load(job) do
       page =
         rows
         |> Stream.filter(fn row ->
           row["scope"] == scope and row["sequence"] > after_seq and
+            (is_nil(message_id) or row["id"] == message_id) and
             (acknowledged or row["status"] == "queued") and
             (is_nil(kind) or row["kind"] == kind) and (is_nil(reply) or row["reply_to"] == reply)
         end)

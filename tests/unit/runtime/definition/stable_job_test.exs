@@ -37,6 +37,7 @@ defmodule MirrorNeuron.Runtime.StableJobTest do
                        "job_data_access" => "read_write",
                        "environment" => %{
                          "MN_RUN_ID" => previous_run_id,
+                         "MN_MAILBOX_ASSIGNMENT_ID" => "blueprint-value",
                          "MN_RUN_DIR" => "/runs/#{previous_run_id}",
                          "MN_STORAGE_SUBMISSION_ID" => "definition-#{previous_run_id}",
                          "docker_worker_container_name" => "worker-#{previous_run_id}",
@@ -76,6 +77,21 @@ defmodule MirrorNeuron.Runtime.StableJobTest do
     [node] = get_in(prepared_map, ["flow", "nodes"])
     environment = get_in(node, ["config", "environment"])
     config = Jason.decode!(environment["MN_BLUEPRINT_CONFIG_JSON"])
+
+    refute Map.has_key?(environment, "MN_MAILBOX_ASSIGNMENT_ID")
+
+    assignment_id = String.duplicate("a", 64)
+
+    assert {:ok, assigned} =
+             StableJob.prepare_run_manifest(
+               manifest,
+               definition,
+               "assigned-run",
+               "/job-data/stable-job",
+               "read", mailbox_assignment_id: assignment_id)
+
+    assert [assigned_node] = assigned.nodes
+    assert assigned_node.config["environment"]["MN_MAILBOX_ASSIGNMENT_ID"] == assignment_id
 
     assert get_in(prepared_map, ["metadata", "job_id"]) == "stable-job"
     assert get_in(prepared_map, ["metadata", "run_id"]) == "run-2"

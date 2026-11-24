@@ -1418,3 +1418,5 @@ nodes. Pre-journal MCP transition records have no correlated completion proof;
 they resolve to `control_receipt_unavailable` and require a fresh explicit action.
 They are never inferred successful from a later run status or automatically
 replayed.
+
+A prepared mailbox manager with `mcp.blueprint.coworker_type` set to `suite` starts the recipient of each authorized assignment. The recipient owner commits the message before starting its Job. The message ID keys a durable start request and binds the new run to that assignment. Resource admission may queue the run. Retried sends reuse the same start receipt.

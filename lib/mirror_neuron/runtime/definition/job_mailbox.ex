@@ -1,7 +1,7 @@
 defmodule MirrorNeuron.Runtime.JobMailbox do
   @moduledoc "Addressed, asynchronous communication between mutually configured stable Jobs."
   alias MirrorNeuron.JobData
-  alias MirrorNeuron.Runtime.JobMailbox.{Attachment, Storage}
+  alias MirrorNeuron.Runtime.JobMailbox.{Attachment, Storage, SuiteAssignment}
   alias MirrorNeuron.Runtime.StableJob.{Records, StartGate}
 
   def call(job, tool, args, peer_lookup \\ &MirrorNeuron.get_job/1) when is_map(args) do
@@ -18,6 +18,7 @@ defmodule MirrorNeuron.Runtime.JobMailbox do
         fn -> StartGate.with_start_gate(id, inner) end
       end)
       |> then(& &1.())
+      |> SuiteAssignment.start_delivered()
     else
       {:error, :invalid_mailbox_request}
     end
@@ -37,6 +38,7 @@ defmodule MirrorNeuron.Runtime.JobMailbox do
       with {:ok, to} <- owned_group(job, &MirrorNeuron.get_job/1, peer_lookup),
            do: deliver(to, message)
     end)
+    |> SuiteAssignment.start_delivered()
   end
 
   def attachment_source(job, args, peer_lookup) do
@@ -130,7 +132,8 @@ defmodule MirrorNeuron.Runtime.JobMailbox do
          id: group,
          scope: scope,
          members: members,
-         manager: manager
+         manager: manager,
+         suite: get_in(job, ~w(manifest mcp blueprint coworker_type)) == "suite"
        }}
     else
       _ -> {:error, :mailbox_group_mismatch}
@@ -232,14 +235,19 @@ defmodule MirrorNeuron.Runtime.JobMailbox do
                to.scope == message["scope"] and
                {message["sender_job_id"], message["sender_blueprint_id"]} in to.members
            ),
-         do: Storage.deliver(to.job, message)
+         {:ok, receipt} <- Storage.deliver(to.job, Map.delete(message, "launch_member")) do
+      if message["launch_member"] == true and receipt["kind"] == "assignment" and
+           receipt["status"] == "queued" and receipt["sender_blueprint_id"] == to.manager,
+         do: {:suite_assignment, receipt},
+         else: {:ok, receipt}
+    end
   end
 
   defp correlation("note", _, _, _, nil), do: {:ok, %{}}
 
   defp correlation("assignment", from, _target, target_role, nil) do
     with :ok <- permit(from.manager == from.blueprint and target_role != from.manager),
-         do: {:ok, %{}}
+         do: {:ok, if(from.suite, do: %{"launch_member" => true}, else: %{})}
   end
 
   defp correlation("result", from, target, target_role, reply) when is_binary(reply) do

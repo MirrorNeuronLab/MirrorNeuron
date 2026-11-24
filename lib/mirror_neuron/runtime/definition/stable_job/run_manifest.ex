@@ -88,6 +88,11 @@ defmodule MirrorNeuron.Runtime.StableJob.RunManifest do
           Map.get(config, "environment", %{})
           |> merge_runtime_configuration(definition, run_id, protected_input_paths)
           |> Map.merge(Map.put(environment, "MN_JOB_DATA_ACCESS", requested_access))
+          |> Map.delete("MN_MAILBOX_ASSIGNMENT_ID")
+          |> Values.maybe_put(
+            "MN_MAILBOX_ASSIGNMENT_ID",
+            Keyword.get(opts, :mailbox_assignment_id)
+          )
 
         %{node | config: Map.put(config, "environment", env)}
       end)

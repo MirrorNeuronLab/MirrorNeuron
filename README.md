@@ -949,3 +949,5 @@ nodes. Pre-journal MCP transition records have no correlated completion proof;
 they resolve to `control_receipt_unavailable` and require a fresh explicit action.
 They are never inferred successful from a later run status or automatically
 replayed.
+
+When a suite coordinator sends a mailbox assignment, the recipient owner starts its prepared Job for that message. The normal resource queue applies. Supervisors can inspect the assignment in the inbox and the resulting execution in run history.

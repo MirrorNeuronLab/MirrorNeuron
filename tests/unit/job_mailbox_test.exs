@@ -237,6 +237,45 @@ defmodule MirrorNeuron.Runtime.JobMailboxTest do
     assert {:error, :mailbox_group_mismatch} = send_message(changed, "mgr", note)
   end
 
+  test "only a delivered suite assignment launches its addressed member", %{jobs: jobs} do
+    alias MirrorNeuron.Runtime.JobMailbox.SuiteAssignment
+    jobs = put_in(jobs, ~w(mgr manifest mcp blueprint), %{"coworker_type" => "suite"})
+
+    task = %{
+      "recipient_job_id" => "spec",
+      "request_id" => "one",
+      "kind" => "assignment",
+      "subject" => "Check input",
+      "attachment" => ref("mgr-run")
+    }
+
+    assert {:suite_assignment, row} = send_message(jobs, "mgr", task)
+    assert {:suite_assignment, ^row} = send_message(jobs, "mgr", task)
+
+    launch = fn job, id ->
+      send(self(), {:launch, job, id})
+      {:ok, %{}}
+    end
+
+    assert {:ok, ^row} = SuiteAssignment.start_delivered({:suite_assignment, row}, launch)
+    id = row["id"]
+    assert_received {:launch, "spec", ^id}
+    assert {:ok, %{"items" => [^row]}} = list(jobs, "spec", %{"message_id" => id})
+
+    assert {:ok, %{"items" => []}} =
+             list(jobs, "spec", %{"message_id" => String.duplicate("0", 64)})
+
+    assert {:ok, _} = ack(jobs, "spec", id)
+    assert {:ok, %{"status" => "acknowledged"}} = send_message(jobs, "mgr", task)
+    note = Map.merge(task, %{"kind" => "note", "request_id" => "note"})
+    assert {:ok, _} = send_message(jobs, "mgr", note) |> SuiteAssignment.start_delivered(launch)
+
+    assert {:error, :invalid_mailbox_request} =
+             send_message(jobs, "mgr", Map.put(note, "launch_member", true))
+
+    refute_received {:launch, _, _}
+  end
+
   test "only a manager assigns and results bind to its original request", %{jobs: jobs} do
     task = %{
       "recipient_job_id" => "mgr",
