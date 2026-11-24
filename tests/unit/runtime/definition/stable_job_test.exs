@@ -88,7 +88,9 @@ defmodule MirrorNeuron.Runtime.StableJobTest do
                definition,
                "assigned-run",
                "/job-data/stable-job",
-               "read", mailbox_assignment_id: assignment_id)
+               "read",
+               mailbox_assignment_id: assignment_id
+             )
 
     assert [assigned_node] = assigned.nodes
     assert assigned_node.config["environment"]["MN_MAILBOX_ASSIGNMENT_ID"] == assignment_id
