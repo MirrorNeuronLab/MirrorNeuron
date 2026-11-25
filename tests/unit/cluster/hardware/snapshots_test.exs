@@ -26,6 +26,36 @@ defmodule MirrorNeuron.Cluster.Hardware.SnapshotsTest do
     assert "cuda" in Hardware.info().capabilities
   end
 
+  test "only Core attests Wasmtime across initial and refreshed native reports" do
+    keys = ~w(MN_WASMTIME_BIN MN_WASMTIME_HOST_BIN MN_NODE_HARDWARE_JSON)
+    old = Map.take(System.get_env(), keys)
+
+    on_exit(fn ->
+      Enum.each(keys, &System.delete_env/1)
+      System.put_env(old)
+    end)
+
+    executable = System.find_executable("sh")
+    assert is_binary(executable)
+    System.put_env("MN_WASMTIME_BIN", executable)
+    System.put_env("MN_WASMTIME_HOST_BIN", executable)
+    System.put_env("MN_NODE_HARDWARE_JSON", ~s({"runtime_drivers":["host_local"]}))
+    Hardware.clear_snapshot()
+    assert Hardware.info().runtime_drivers == ["host_local", "wasmtime"]
+
+    Hardware.update_snapshot(%{"runtime_drivers" => ["docker_worker"]})
+    assert Hardware.info().runtime_drivers == ["docker_worker", "wasmtime"]
+
+    Hardware.update_snapshot(%{"runtime_drivers" => ["docker_worker", "wasmtime"]})
+    assert Hardware.info().runtime_drivers == ["docker_worker", "wasmtime"]
+
+    for key <- ~w(MN_WASMTIME_BIN MN_WASMTIME_HOST_BIN) do
+      System.put_env(key, "/missing-mn-test/wasmtime")
+      assert Hardware.info().runtime_drivers == ["docker_worker"]
+      System.put_env(key, executable)
+    end
+  end
+
   test "stale telemetry withdraws free CPU memory and device memory" do
     snapshot = %{
       memory: %{total_mb: 64, available_mb: 42},

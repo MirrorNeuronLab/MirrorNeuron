@@ -15,7 +15,10 @@ defmodule MirrorNeuron.Cluster.Hardware.Snapshots do
   def clear_snapshot, do: :persistent_term.erase({MirrorNeuron.Cluster.Hardware, :snapshot})
 
   def info do
-    snapshot_info()
+    hardware = snapshot_info()
+
+    hardware
+    |> Map.put(:runtime_drivers, Advertisement.with_executor_drivers(hardware[:runtime_drivers]))
     |> Map.update(
       :capabilities,
       ["resource_admission_v2"],

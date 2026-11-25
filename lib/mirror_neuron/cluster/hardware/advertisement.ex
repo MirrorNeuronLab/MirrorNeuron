@@ -114,11 +114,17 @@ defmodule MirrorNeuron.Cluster.Hardware.Advertisement do
 
     drivers =
       ["host_local"] ++
-        configured ++ openshell_driver() ++ docker_worker_driver() ++ wasmtime_driver()
+        configured ++ openshell_driver() ++ docker_worker_driver()
 
     drivers
     |> Enum.reject(&(&1 == ""))
     |> Enum.uniq()
+  end
+
+  # Wasmtime executes inside Core. The native SDK can only attest host drivers.
+  def with_executor_drivers(drivers) do
+    host = Enum.filter(List.wrap(drivers), &(is_binary(&1) and String.downcase(&1) != "wasmtime"))
+    host ++ wasmtime_driver()
   end
 
   defp wasmtime_driver do

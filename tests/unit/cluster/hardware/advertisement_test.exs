@@ -95,7 +95,7 @@ defmodule MirrorNeuron.Cluster.HardwareTest.AdvertisementTest do
     assert hardware.cpu.logical_processors == 16
     assert hardware.memory.total_mb == 65_536
     assert hardware.host_paths == ["/srv/mn"]
-    assert hardware.runtime_drivers == ["host_local", "docker_worker"]
+    assert hardware.runtime_drivers -- ["wasmtime"] == ["host_local", "docker_worker"]
     assert "sdk-advertised" in hardware.capabilities
   end
 

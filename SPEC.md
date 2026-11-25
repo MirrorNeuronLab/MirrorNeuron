@@ -1441,6 +1441,10 @@ output carries the executor result and a trap fails the attempt. The runtime
 limits each linear memory to 256 MiB. A step deadline can reach 900 seconds,
 or 86,400 seconds when the step has the human approval request capability.
 
+The node advertises the Wasmtime driver when Core can locate both executables.
+Native hardware snapshots supply host drivers, CPU and GPU telemetry. Refreshing
+a snapshot preserves Core's own executable check for Wasmtime.
+
 Pure commands use the Wasmtime CLI (`MN_WASMTIME_BIN`). A step declaring
 `wasm_capabilities` uses the Wasmtime embedder (`MN_WASMTIME_HOST_BIN`).
 Core authorizes each WIT host operation for the current run and the step's
