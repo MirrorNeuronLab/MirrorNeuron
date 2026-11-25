@@ -315,11 +315,7 @@ def deliver(request):
                     {"code": "optional_artifact_delivery_failed", "artifact_id": name}
                 )
                 failed.add(name)
-    delivered = {
-        name: ref
-        for name, ref in refs.items()
-        if name not in failed
-    }
+    delivered = {name: ref for name, ref in refs.items() if name not in failed}
     for root in sorted(directories):
         record_outputs(root, delivered)
     return {"warnings": warnings}
