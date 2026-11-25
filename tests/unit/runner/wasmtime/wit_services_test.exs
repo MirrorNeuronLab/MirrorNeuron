@@ -33,6 +33,35 @@ defmodule MirrorNeuron.Runner.WitServicesTest do
 
   defp call(key, args), do: WitServices.call("execution", "workflow", key, args, %{})
 
+  test "the model RPC has time to prepare weights within the WASI step" do
+    key = :native_sdk_grpc_job_response_client
+    old_client = Application.get_env(:mirror_neuron, key)
+    old_target = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
+    old_timeout = System.get_env("MN_NATIVE_SDK_GRPC_TIMEOUT_MS")
+
+    on_exit(fn ->
+      restore_env(key, old_client)
+      restore_system_env("MN_NATIVE_SDK_GRPC_TARGET", old_target)
+      restore_system_env("MN_NATIVE_SDK_GRPC_TIMEOUT_MS", old_timeout)
+    end)
+
+    System.put_env("MN_NATIVE_SDK_GRPC_TARGET", "127.0.0.1:55052")
+    System.delete_env("MN_NATIVE_SDK_GRPC_TIMEOUT_MS")
+
+    Application.put_env(:mirror_neuron, key, fn _, request, timeout ->
+      assert Jason.decode!(request.resource_json)["scope"] == %{
+               "job_id" => "definition",
+               "execution_id" => "execution",
+               "runtime_run_id" => "workflow"
+             }
+
+      assert timeout == :timer.minutes(15)
+      {:ok, %Mirrorneuron.Cluster.V1.SetResourceResponse{resource_json: ~s({"value":{}})}}
+    end)
+
+    assert {:ok, "{}"} = call("model.generate-json", ["Return JSON.", "{}", "{}"])
+  end
+
   test "copies only hash-verified inputs for this physical run", %{root: root, record: record} do
     prefix = "runtime/mn_local_inputs"
     base = prefix <> "/software_sources"

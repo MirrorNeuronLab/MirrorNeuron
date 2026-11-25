@@ -3,6 +3,7 @@
 use serde_json::{Value, json};
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
+use std::process::ExitCode;
 use std::time::Duration;
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store, StoreContextMut, StoreLimits, StoreLimitsBuilder};
@@ -41,6 +42,10 @@ impl Host {
             return (Err("Service request exceeds its byte limit".into()),);
         }
         let exchange = || -> anyhow::Result<Reply> {
+            // Core bounds model preparation and inference with the step deadline.
+            // Other run services retain their short response timeout.
+            let timeout = (service != "model").then_some(Duration::from_secs(100));
+            self.broker.set_read_timeout(timeout)?;
             self.broker.write_all(&(data.len() as u32).to_be_bytes())?;
             self.broker.write_all(data.as_bytes())?;
             let mut head = [0; 4];
@@ -128,7 +133,7 @@ fn link_services(linker: &mut Linker<Host>) -> wasmtime::Result<()> {
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> wasmtime::Result<()> {
+async fn main() -> wasmtime::Result<ExitCode> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.len() != 3 {
         wasmtime::bail!("Expected component, private job directory, and run-service socket");
@@ -153,7 +158,6 @@ async fn main() -> wasmtime::Result<()> {
         .allow_ip_name_lookup(false);
     builder.preopened_dir(&args[1], "/job", FsPerms::ReadWrite)?;
     let broker = UnixStream::connect(&args[2])?;
-    broker.set_read_timeout(Some(Duration::from_secs(100)))?;
     broker.set_write_timeout(Some(Duration::from_secs(15)))?;
     let limits = StoreLimitsBuilder::new()
         .memory_size(256 * 1024 * 1024)
@@ -176,8 +180,10 @@ async fn main() -> wasmtime::Result<()> {
     let status = store
         .run_concurrent(async move |store| command.wasi_cli_run().call_run(store).await)
         .await??;
-    if status.is_err() {
-        wasmtime::bail!("WASI command failed");
-    }
-    Ok(())
+    // The guest already wrote its diagnostic to stderr. Let Core report it.
+    Ok(if status.is_ok() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
 }

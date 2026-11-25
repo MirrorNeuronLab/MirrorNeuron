@@ -1449,5 +1449,7 @@ Pure commands use the Wasmtime CLI (`MN_WASMTIME_BIN`). A step declaring
 Core authorizes each WIT host operation for the current run and the step's
 explicit grants. The host may provide durable artifacts, model calls, human
 review and mailbox services. Core schedules children from validated plan data.
+The WIT model call can prepare weights within the step deadline. The SDK starts
+its inference timeout once the model is ready.
 
 A Wasmtime command reports progress with agent beacons bound to its executor process. Core accounts for the full output stream against its byte budget and routes SDK data results separately from truncated diagnostic text. The workflow graph owns event and completion authority.

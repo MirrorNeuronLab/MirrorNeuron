@@ -9,6 +9,9 @@ defmodule MirrorNeuron.Sandbox.Wasmtime do
   @max_output 1_048_576
   @max_seconds 900
 
+  @doc false
+  def max_compute_seconds, do: @max_seconds
+
   def validate(config) do
     case config["wasm_component"] do
       path when is_binary(path) ->

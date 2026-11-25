@@ -67,6 +67,33 @@ defmodule MirrorNeuron.Runner.WasmtimeTest do
   if System.find_executable(System.get_env("MN_WASMTIME_BIN") || "wasmtime") &&
        System.find_executable(System.get_env("MN_WASI_RUSTC") || "rustc") &&
        System.get_env("MN_WASI_INTEGRATION") == "1" do
+    if System.find_executable(System.get_env("MN_WASMTIME_HOST_BIN") || "mn-wasmtime-runner") do
+      test "the embedder preserves the guest's failure message", %{base: base, opts: opts} do
+        source = Path.join(base, "guest_error.rs")
+
+        File.write!(source, """
+        fn main() -> std::process::ExitCode {
+            eprintln!("Model request failed");
+            std::process::ExitCode::FAILURE
+        }
+        """)
+
+        {_, 0} =
+          System.cmd(System.get_env("MN_WASI_RUSTC") || "rustc", [
+            "--target",
+            "wasm32-wasip3",
+            source,
+            "-o",
+            Path.join(base, "worker.wasm")
+          ])
+
+        config = %{"wasm_component" => "worker.wasm", "wasm_capabilities" => []}
+
+        assert {:error, %{"exit_code" => 1, "stderr" => "Model request failed"}} =
+                 Wasmtime.run(%{}, config, opts)
+      end
+    end
+
     test "executes a real WASI 0.3 command and propagates errors", %{base: base, opts: opts} do
       source = Path.join(base, "worker.rs")
 

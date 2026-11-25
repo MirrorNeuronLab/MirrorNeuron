@@ -4,6 +4,7 @@ defmodule MirrorNeuron.Sandbox.WitServices do
   alias MirrorNeuron.ModelServices.Commands
   alias MirrorNeuron.Runtime.Interactions
   alias MirrorNeuron.Runner.HostLocal.Context
+  alias MirrorNeuron.Sandbox.Wasmtime
   alias MirrorNeuron.Sandbox.WitArtifacts, as: Artifacts
 
   def dispatch(config, opts, message) do
@@ -26,7 +27,7 @@ defmodule MirrorNeuron.Sandbox.WitServices do
           __MODULE__,
           :call,
           [execution, workflow, key, args, model],
-          100_000
+          if(key == "model.generate-json", do: model_timeout_ms() + 5_000, else: 100_000)
         )
       end
     end
@@ -149,7 +150,7 @@ defmodule MirrorNeuron.Sandbox.WitServices do
                "input" => input,
                "schema" => spec
              },
-             95_000
+             model_timeout_ms()
            ) do
       {:ok, Jason.encode!(value)}
     else
@@ -206,6 +207,10 @@ defmodule MirrorNeuron.Sandbox.WitServices do
   end
 
   defp perform(_, _, _, _, _), do: {:error, :invalid_service_request}
+
+  # First use may prepare model weights before the SDK starts its inference timer.
+  # The runner still enforces the deadline of the enclosing step.
+  defp model_timeout_ms, do: :timer.seconds(Wasmtime.max_compute_seconds())
 
   defp chunks(_, _, _, size, size, parts),
     do: {:ok, parts |> Enum.reverse() |> IO.iodata_to_binary()}
