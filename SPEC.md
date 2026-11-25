@@ -1429,7 +1429,7 @@ A prepared mailbox manager with `mcp.blueprint.coworker_type` set to `suite` sta
 ### Wasmtime
 
 An executor with `runner_module` set to `MirrorNeuron.Runner.Wasmtime` runs the
-WASI 0.3 command in its `wasm_component` bundle payload under normal Core
+WASI Preview 2 or WASI 0.3 command in its `wasm_component` bundle payload under normal Core
 admission, cancellation and deadline handling. The component receives its
 mapped step inputs (or the child work packet), invocation identity and declared
 configuration inside a private `/job` directory. A relative `wasm_inputs`
@@ -1451,5 +1451,15 @@ explicit grants. The host may provide durable artifacts, model calls, human
 review and mailbox services. Core schedules children from validated plan data.
 The WIT model call can prepare weights within the step deadline. The SDK starts
 its inference timeout once the model is ready.
+
+A command that links a native skill declares both the digest-pinned component in
+`wit_skills` and the step grant `skill.<skill-name>.<method>`. The linker accepts
+the versioned `mirror-neuron:native/<skill-name>@1.0.0` interface. The broker
+binds the call to the current Job and run and dispatches it to the invoking
+node's native SDK. Its private socket and per-method grants also apply to WASI
+Preview 2 commands. Files from another block cross the boundary through verified
+handoff receipts. Binary verification exposes the digest and byte-count check
+without returning the contents. Typed JSON commits retain the artifact kind
+consumed by downstream Python workers.
 
 A Wasmtime command reports progress with agent beacons bound to its executor process. Core accounts for the full output stream against its byte budget and routes SDK data results separately from truncated diagnostic text. The workflow graph owns event and completion authority.

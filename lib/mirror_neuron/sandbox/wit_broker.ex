@@ -1,15 +1,21 @@
 defmodule MirrorNeuron.Sandbox.WitBroker do
   @moduledoc "Private framed channel between the native Wasmtime linker and the current invocation."
   @budget 16 * 1024 * 1024
-  @grants ~w(artifacts.read artifacts.commit artifacts.static-report artifacts.publish approvals.request approvals.status model.generate-json mailbox.send mailbox.list mailbox.attachment mailbox.acknowledge)
+  @grants ~w(artifacts.import-block artifacts.read artifacts.verify artifacts.commit artifacts.commit-json artifacts.static-report artifacts.publish approvals.request approvals.status model.generate-json mailbox.send mailbox.list mailbox.attachment mailbox.acknowledge)
+  @skill_grant ~r/\Askill\.[a-z]+(?:-[a-z]+)*\.[a-z]+(?:-[a-z]+)*\z/
 
   def validate(grants) when is_list(grants) do
-    if Enum.all?(grants, &(&1 in @grants)) and Enum.uniq(grants) == grants,
+    if Enum.all?(grants, &valid_grant?/1) and Enum.uniq(grants) == grants,
       do: :ok,
       else: {:error, "Invalid WIT host capability grants"}
   end
 
   def validate(_), do: {:error, "WIT host capabilities must be a list"}
+
+  defp valid_grant?(grant) when is_binary(grant) and byte_size(grant) <= 134,
+    do: grant in @grants or Regex.match?(@skill_grant, grant)
+
+  defp valid_grant?(_), do: false
 
   def with_socket(grants, dispatch, callback) do
     # A system temporary directory also keeps the sockaddr below sun_path's limit.

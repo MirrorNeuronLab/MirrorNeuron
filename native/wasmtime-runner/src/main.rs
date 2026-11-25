@@ -7,8 +7,11 @@ use std::process::ExitCode;
 use std::time::Duration;
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store, StoreContextMut, StoreLimits, StoreLimitsBuilder};
-use wasmtime_wasi::p3::bindings::Command;
+use wasmtime_wasi::p2::bindings::Command as CommandP2;
+use wasmtime_wasi::p3::bindings::Command as CommandP3;
 use wasmtime_wasi::{FsPerms, WasiCtx, WasiCtxView, WasiView};
+
+mod native_skills;
 
 const FRAME_LIMIT: usize = 16 * 1024 * 1024;
 
@@ -44,7 +47,8 @@ impl Host {
         let exchange = || -> anyhow::Result<Reply> {
             // Core bounds model preparation and inference with the step deadline.
             // Other run services retain their short response timeout.
-            let timeout = (service != "model").then_some(Duration::from_secs(100));
+            let timeout =
+                (!matches!(service, "model" | "skill")).then_some(Duration::from_secs(100));
             self.broker.set_read_timeout(timeout)?;
             self.broker.write_all(&(data.len() as u32).to_be_bytes())?;
             self.broker.write_all(data.as_bytes())?;
@@ -71,6 +75,13 @@ impl Host {
 fn link_services(linker: &mut Linker<Host>) -> wasmtime::Result<()> {
     let mut artifacts = linker.instance("mirror-neuron:run/artifacts@1.0.0")?;
     artifacts.func_wrap(
+        "import-block",
+        |mut s: StoreContextMut<Host>, (bundle,): (String,)| {
+            Ok(s.data_mut()
+                .request("artifacts", "import-block", json!([bundle])))
+        },
+    )?;
+    artifacts.func_wrap(
         "static-report",
         |mut s: StoreContextMut<Host>, (path, hash, title): (String, String, String)| {
             Ok(s.data_mut()
@@ -95,6 +106,20 @@ fn link_services(linker: &mut Linker<Host>) -> wasmtime::Result<()> {
         |mut s: StoreContextMut<Host>, (path, kind, content): (String, String, String)| {
             Ok(s.data_mut()
                 .request("artifacts", "commit", json!([path, kind, content])))
+        },
+    )?;
+    artifacts.func_wrap(
+        "verify",
+        |mut s: StoreContextMut<Host>, (path, hash, size): (String, String, u64)| {
+            Ok(s.data_mut()
+                .request("artifacts", "verify", json!([path, hash, size])))
+        },
+    )?;
+    artifacts.func_wrap(
+        "commit-json",
+        |mut s: StoreContextMut<Host>, (path, kind, content): (String, String, String)| {
+            Ok(s.data_mut()
+                .request("artifacts", "commit-json", json!([path, kind, content])))
         },
     )?;
     linker
@@ -147,8 +172,12 @@ async fn main() -> wasmtime::Result<ExitCode> {
     let engine = Engine::new(&config)?;
     let component = Component::from_binary(&engine, &bytes)?;
     let mut linker = Linker::new(&engine);
+    // A Preview 3 worker can import a Python skill built against Preview 2.
+    // Both use this invocation's WasiCtx, file preopen and network policy.
+    wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
     wasmtime_wasi::p3::add_to_linker(&mut linker)?;
     link_services(&mut linker)?;
+    native_skills::link(&engine, &component, &mut linker)?;
     let mut builder = WasiCtx::builder();
     builder
         .inherit_stdout()
@@ -176,10 +205,19 @@ async fn main() -> wasmtime::Result<ExitCode> {
         },
     );
     store.limiter(|state| &mut state.limits);
-    let command = Command::instantiate_async(&mut store, &component, &linker).await?;
-    let status = store
-        .run_concurrent(async move |store| command.wasi_cli_run().call_run(store).await)
-        .await??;
+    let command_type = component.component_type();
+    let preview3 = command_type
+        .exports(&engine)
+        .any(|(name, _)| name.starts_with("wasi:cli/run@0.3."));
+    let status = if preview3 {
+        let command = CommandP3::instantiate_async(&mut store, &component, &linker).await?;
+        store
+            .run_concurrent(async move |store| command.wasi_cli_run().call_run(store).await)
+            .await??
+    } else {
+        let command = CommandP2::instantiate_async(&mut store, &component, &linker).await?;
+        command.wasi_cli_run().call_run(&mut store).await?
+    };
     // The guest already wrote its diagnostic to stderr. Let Core report it.
     Ok(if status.is_ok() {
         ExitCode::SUCCESS

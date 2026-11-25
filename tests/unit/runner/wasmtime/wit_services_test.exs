@@ -62,6 +62,101 @@ defmodule MirrorNeuron.Runner.WitServicesTest do
     assert {:ok, "{}"} = call("model.generate-json", ["Return JSON.", "{}", "{}"])
   end
 
+  test "native skill dispatch binds the executor, pinned dependency and method grant", %{
+    record: record
+  } do
+    assert :ok = WitBroker.validate(["skill.temporal-graph.ingest-scan"])
+    assert {:error, _} = WitBroker.validate(["skill.temporal-graph.*"])
+
+    binding = %{executor: node(), skills: ["temporal_graph_skill"], access: "read_write"}
+
+    request = fn native ->
+      WitServices.call(
+        "execution",
+        "workflow",
+        "skill.temporal-graph.ingest-scan",
+        ["{}"],
+        %{},
+        native
+      )
+    end
+
+    assert {:error, :invalid_native_skill_request} = request.(binding)
+
+    dep = %{
+      "name" => "temporal_graph_skill",
+      "source" => "payload",
+      "type" => "wit",
+      "version" => "1.0.0",
+      "sha256" => WitArtifacts.digest("component")
+    }
+
+    record =
+      record
+      |> put_in(["manifest", "skill_dependencies"], [dep])
+      |> Map.put("job_data_access", "read")
+
+    assert {:ok, _} = RedisStore.persist_job("execution", record)
+    assert {:error, :invalid_native_skill_request} = request.(%{binding | skills: []})
+
+    key = :native_sdk_grpc_job_response_client
+    original = Application.get_env(:mirror_neuron, key)
+    target = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
+
+    on_exit(fn ->
+      restore_env(key, original)
+      restore_system_env("MN_NATIVE_SDK_GRPC_TARGET", target)
+    end)
+
+    System.put_env("MN_NATIVE_SDK_GRPC_TARGET", "127.0.0.1:55052")
+
+    Application.put_env(:mirror_neuron, key, fn _, rpc, _ ->
+      payload = Jason.decode!(rpc.resource_json)
+
+      assert payload["scope"] == %{
+               "job_id" => "definition",
+               "execution_id" => "execution",
+               "runtime_run_id" => "workflow"
+             }
+
+      assert payload["run_data_ref"]["submission_id"] == "sub"
+      assert payload["arguments"] == %{}
+      assert payload["job_data_write"] == false
+      assert payload["skill"] == "temporal-graph" and payload["operation"] == "ingest-scan"
+      {:ok, %Mirrorneuron.Cluster.V1.SetResourceResponse{resource_json: ~s({"value":42})}}
+    end)
+
+    assert {:ok, "42"} = request.(binding)
+
+    for {source, result} <- [
+          {"skill", {:ok, "42"}},
+          {"unknown", {:error, :invalid_native_skill_request}}
+        ] do
+      updated = put_in(record, ["manifest", "skill_dependencies"], [%{dep | "source" => source}])
+      assert {:ok, _} = RedisStore.persist_job("execution", updated)
+      assert request.(binding) == result
+    end
+  end
+
+  test "preserves domain JSON reference kinds and verifies binary inputs", %{root: root} do
+    assert {:ok, ref} =
+             call("artifacts.commit-json", ["evidence/result.json", "block_result", "{}"])
+
+    assert ref["kind"] == "block_result" and ref["version"] == "mn.committed_json/v1"
+
+    assert {:error, _} =
+             call("artifacts.commit-json", ["evidence/bad.json", "block_result", "bad json"])
+
+    bytes = <<0, 255, 42>>
+    dir = Path.join([root, "submissions/sub/outputs/runs/workflow"])
+    File.write!(Path.join(dir, "blob.bin"), bytes)
+    hash = WitArtifacts.digest(bytes)
+    assert {:ok, "verified"} = call("artifacts.verify", ["blob.bin", hash, 3])
+    assert {:error, _} = call("artifacts.verify", ["blob.bin", hash, 2])
+    assert {:error, _} = call("artifacts.verify", ["blob.bin", String.duplicate("0", 64), 3])
+    assert {:error, _} = call("artifacts.verify", ["../blob.bin", hash, 3])
+  end
+
   test "copies only hash-verified inputs for this physical run", %{root: root, record: record} do
     prefix = "runtime/mn_local_inputs"
     base = prefix <> "/software_sources"

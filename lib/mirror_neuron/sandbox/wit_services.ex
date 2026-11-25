@@ -18,22 +18,38 @@ defmodule MirrorNeuron.Sandbox.WitServices do
         ~w(MN_LLM_MODEL MN_LLM_PROVIDER MN_LLM_BACKEND MN_LLM_CONTEXT_SIZE MN_BLUEPRINT_FAKE_LLM)
       )
 
+    native = %{
+      skills: config["wit_skills"] || [],
+      executor: node(),
+      access: get_in(config, ["environment", "MN_JOB_DATA_ACCESS"])
+    }
+
     fn key, args ->
       if coordinator == node() do
-        call(execution, workflow, key, args, model)
+        call(execution, workflow, key, args, model, native)
       else
         :rpc.call(
           coordinator,
           __MODULE__,
           :call,
-          [execution, workflow, key, args, model],
-          if(key == "model.generate-json", do: model_timeout_ms() + 5_000, else: 100_000)
+          [execution, workflow, key, args, model, native],
+          if(key == "model.generate-json" or String.starts_with?(key, "skill."),
+            do: model_timeout_ms() + 5_000,
+            else: 100_000
+          )
         )
       end
     end
   end
 
-  def call(execution, workflow, key, args, model) do
+  def call(
+        execution,
+        workflow,
+        key,
+        args,
+        model,
+        native \\ %{skills: [], executor: nil, access: nil}
+      ) do
     with {:ok, record} <- MirrorNeuron.inspect_job(execution),
          %{"submission_id" => submission, "run_id" => ^workflow} <-
            SharedStorage.run_data_ref(record),
@@ -45,6 +61,24 @@ defmodule MirrorNeuron.Sandbox.WitServices do
       scope = %{"job_id" => job, "execution_id" => execution, "runtime_run_id" => workflow}
 
       case {key, args} do
+        {"artifacts.import-block", [input]}
+        when is_binary(input) and byte_size(input) <= 2_000_000 ->
+          with {:ok, bundle} when is_map(bundle) <- Jason.decode(input),
+               command = %{
+                 "kind" => "wit_block_handoff",
+                 "run_data_ref" => SharedStorage.run_data_ref(record),
+                 "bundle" => bundle
+               },
+               {:ok, %{"value" => ref}} <- Commands.job_response_command(command, 90_000) do
+            Jason.encode(ref)
+          else
+            _ -> {:error, :invalid_block_handoff}
+          end
+
+        {"skill." <> operation, [input]}
+        when is_binary(input) and byte_size(input) <= 2_000_000 ->
+          MirrorNeuron.Sandbox.WitNativeSkills.call(record, scope, operation, input, native)
+
         {"artifacts.publish", [refs]} when is_binary(refs) and byte_size(refs) <= 2_000_000 ->
           with {:ok, files} when is_map(files) <- Jason.decode(refs) do
             storage = get_in(record, ["manifest", "metadata", "mn_storage"])
@@ -72,6 +106,15 @@ defmodule MirrorNeuron.Sandbox.WitServices do
   end
 
   defp perform("artifacts.read", [path, hash], _, dir, _), do: Artifacts.read(dir, path, hash)
+
+  defp perform("artifacts.verify", [path, hash, size], _, dir, _),
+    do: Artifacts.verify(dir, path, hash, size)
+
+  defp perform("artifacts.commit-json", [path, kind, content], _, dir, _)
+       when is_binary(kind) and byte_size(kind) in 1..64 do
+    with {:ok, ref} <- Artifacts.commit(dir, path, "json", content),
+         do: {:ok, Map.put(ref, "kind", kind)}
+  end
 
   defp perform("artifacts.commit", [path, kind, content], _, dir, _),
     do: Artifacts.commit(dir, path, kind, content)

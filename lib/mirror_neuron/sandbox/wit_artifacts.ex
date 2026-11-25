@@ -18,6 +18,35 @@ defmodule MirrorNeuron.Sandbox.WitArtifacts do
     end
   end
 
+  def verify(root, name, hash, size)
+      when is_binary(hash) and is_integer(size) and size in 0..67_108_864 do
+    with {:ok, path} <- safe_path(root, name, false),
+         {:ok, %{type: :regular, size: ^size}} <- File.lstat(path),
+         {:ok, {^size, digest}} <- File.open(path, [:read, :binary], &hash_file(&1, size)),
+         true <- hash == digest do
+      {:ok, "verified"}
+    else
+      _ -> {:error, :artifact_integrity_error}
+    end
+  end
+
+  def verify(_, _, _, _), do: {:error, :invalid_artifact}
+
+  defp hash_file(io, limit) do
+    {count, state} =
+      io
+      |> IO.binstream(65_536)
+      |> Enum.reduce_while({0, :crypto.hash_init(:sha256)}, fn chunk, {count, state} ->
+        total = count + byte_size(chunk)
+
+        if total > limit,
+          do: {:halt, {total, state}},
+          else: {:cont, {total, :crypto.hash_update(state, chunk)}}
+      end)
+
+    {count, state |> :crypto.hash_final() |> Base.encode16(case: :lower)}
+  end
+
   def commit(root, name, kind, content)
       when is_binary(kind) and byte_size(kind) in 1..64 and is_binary(content) and
              byte_size(content) <= @max do
