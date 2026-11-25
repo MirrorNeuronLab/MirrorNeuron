@@ -34,17 +34,18 @@ defmodule MirrorNeuron.Scheduler.AdmissionProblem do
     case result do
       {:error, :insufficient_resources} ->
         for {key, code, scale, unit} <- [
-              {"memory_mb", "MN_RESOURCE_EXHAUSTED", 1024, "GiB"},
+              {"memory_mb", "MN_MEMORY_REQUIREMENT_UNMET", 1024, "GiB"},
               {"cpu_cores", "MN_CPU_REQUIREMENT_UNMET", 1, "cores"},
               {"disk_mb", "MN_DISK_UNAVAILABLE", 1024, "GiB"},
               {"gpu_count", "MN_GPU_REQUIREMENT_UNMET", 1, "devices"}
             ],
             required = demand["resources"][key] || 0,
-            available = max((node["capacity"][key] || 0) - (used["resources"][key] || 0), 0),
+            held = if(key in ["cpu_cores", "memory_mb"], do: 0, else: used["resources"][key] || 0),
+            available = max((node["capacity"][key] || 0) - held, 0),
             required > available do
-          # Busy CPU/GPU reservations are capacity failures, not missing hardware.
+          # A held GPU can become available after its owner finishes.
           code =
-            if key in ["cpu_cores", "gpu_count"] and required <= (node["capacity"][key] || 0),
+            if key == "gpu_count" and required <= (node["capacity"][key] || 0),
               do: "MN_RESOURCE_EXHAUSTED",
               else: code
 

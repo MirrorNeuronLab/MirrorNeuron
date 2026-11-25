@@ -108,7 +108,10 @@ defmodule MirrorNeuron.Runtime.AdmissionLedger do
           state["queue"] != [] or state["deferred"] != []
 
         "request_acquire" ->
-          attrs["run_id"] == "" and not Map.has_key?(state["requests"], attrs["token"])
+          (attrs["run_id"] == "" or
+             get_in(state, ["reservations", attrs["run_id"], "request", "shared_default_model"]) ==
+               true) and
+            not Map.has_key?(state["requests"], attrs["token"])
 
         op when op in ["submit", "submit_now"] ->
           NodeAdmissionState.receipt(state, attrs["run_id"])["state"] == "unreserved"

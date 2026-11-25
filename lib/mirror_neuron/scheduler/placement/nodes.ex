@@ -26,13 +26,6 @@ defmodule MirrorNeuron.Scheduler.Placement.Nodes do
     if Keyword.get(opts, :exclusive_run, false) and
          not Keyword.get(opts, :require_live_capacity, false) do
       Enum.map(nodes, fn node ->
-        total = Values.number_value(get_in(node, ["hardware", "memory", "total_mb"]))
-
-        capacity =
-          if total,
-            do: Map.put(node["capacity"], "memory_mb", total * Resource.limit_ratio(:memory)),
-            else: node["capacity"]
-
         devices =
           Enum.map(node["devices"], fn device ->
             if is_number(device["memory_total_mb"]),
@@ -40,26 +33,10 @@ defmodule MirrorNeuron.Scheduler.Placement.Nodes do
               else: device
           end)
 
-        node |> Map.put("capacity", capacity) |> Map.put("devices", devices)
+        Map.put(node, "devices", devices)
       end)
     else
-      if Keyword.get(opts, :exclusive_run, false) do
-        Enum.map(nodes, fn node ->
-          case Values.number_value(get_in(node, ["hardware", "memory", "available_mb"])) do
-            value when is_number(value) ->
-              put_in(
-                node,
-                ["capacity", "memory_mb"],
-                max(value, 0) * Resource.limit_ratio(:memory)
-              )
-
-            _ ->
-              node
-          end
-        end)
-      else
-        nodes
-      end
+      nodes
     end
   end
 
@@ -303,27 +280,20 @@ defmodule MirrorNeuron.Scheduler.Placement.Nodes do
     gpu = gpu_count(get_in(hardware, ["gpu"]))
 
     %{
-      "cpu_cores" => Float.round(cpu * Resource.limit_ratio(:cpu), 3),
-      "memory_mb" => Float.round(memory * Resource.limit_ratio(:memory), 3),
+      "cpu_cores" => cpu,
+      "memory_mb" => memory,
       "disk_mb" => Float.round(disk * Resource.limit_ratio(:disk), 3),
       "gpu_count" => floor(gpu * Resource.limit_ratio(:gpu))
     }
   end
 
   defp memory_capacity_mb(memory) do
-    available = Values.number_value(Values.map_get(memory, "available_mb"))
-    total = Values.number_value(Values.map_get(memory, "total_mb"))
+    total_bytes = Values.number_value(Values.map_get(memory, "total_bytes"))
 
-    bytes =
-      Values.number_value(Values.map_get(memory, "available_bytes")) ||
-        Values.number_value(Values.map_get(memory, "total_bytes"))
-
-    cond do
-      is_number(available) and available > 0 -> available
-      is_number(total) and total > 0 -> total
-      is_number(bytes) and bytes > 0 -> bytes / (1024 * 1024)
-      true -> 0
-    end
+    Values.number_value(Values.map_get(memory, "total_mb")) ||
+      (total_bytes && total_bytes / (1024 * 1024)) ||
+      Values.number_value(Values.map_get(memory, "available_mb")) ||
+      (Values.number_value(Values.map_get(memory, "available_bytes")) || 0) / (1024 * 1024)
   end
 
   defp disk_capacity_mb(disk) do

@@ -97,7 +97,7 @@ defmodule MirrorNeuron.Runtime.ResourceAllocationTest do
 
   test "unknown telemetry is unavailable and pending reservations cannot be spent twice" do
     cap = put_in(capacity(), ["available", "memory_mb"], nil)
-    assert %{"status" => "unavailable"} = ResourceAllocation.check(request(4096), cap, [])
+    assert %{"status" => "runnable_now"} = ResourceAllocation.check(request(4096), cap, [])
     {:ok, first} = ResourceAllocation.allocate(request(16384), capacity(), [])
 
     cap =
@@ -111,55 +111,18 @@ defmodule MirrorNeuron.Runtime.ResourceAllocationTest do
              ResourceAllocation.check(request(16384), cap, [first])
   end
 
-  test "a CPU-only Job cannot spend host RAM reserved by a unified-memory GPU Job" do
-    cap = unified_capacity()
-    gpu_job = request(8192)
-    cpu_job = request(0, %{"devices" => [], "memory_mb" => 8192})
+  test "cores and installed RAM are shared even when other jobs already use this PC" do
+    cap = unified_capacity() |> put_in(["available", "memory_mb"], 1)
+    cpu = request(0, %{"devices" => [], "cpu_cores" => 8, "memory_mb" => 16384})
+    assert {:ok, held} = ResourceAllocation.allocate(cpu, cap, [])
+    assert %{"status" => "runnable_now"} = ResourceAllocation.check(cpu, cap, [held])
+    assert {:ok, gpu} = ResourceAllocation.allocate(request(8192), cap, [held])
+    assert %{"status" => "runnable_now"} = ResourceAllocation.check(cpu, cap, [gpu])
 
-    for {first, second} <- [{gpu_job, cpu_job}, {cpu_job, gpu_job}] do
-      assert {:ok, held} = ResourceAllocation.allocate(first, cap, [])
-
-      assert %{"status" => "runnable_later", "blockers" => [%{"resource" => "memory_mb"}]} =
-               ResourceAllocation.check(second, cap, [held])
-
-      assert %{"status" => "runnable_now"} = ResourceAllocation.check(second, cap, [])
+    for {key, required} <- [{"cpu_cores", 9}, {"memory_mb", 16385}] do
+      assert %{"status" => "not_runnable", "blockers" => [%{"resource" => ^key}]} =
+               ResourceAllocation.check(Map.put(cpu, key, required), cap, [held])
     end
-
-    # The GPU Job uses 8 GiB for its device and 2 GiB for its workers.
-    {:ok, gpu_claim} = ResourceAllocation.allocate(gpu_job, cap, [])
-
-    assert {:ok, _} =
-             ResourceAllocation.allocate(%{cpu_job | "memory_mb" => 6144}, cap, [gpu_claim])
-  end
-
-  test "unified RAM charges verified shared weights once and keeps them until the last owner exits" do
-    cap = Map.put(unified_capacity(), "shared_model_keys", %{"unified" => ["engine-key"]})
-
-    gpu_job =
-      put_in(request(8192), ["devices", Access.at(0), "models"], [
-        %{"key" => "engine-key", "memory_mb" => 6144}
-      ])
-
-    cpu_job = request(0, %{"devices" => [], "memory_mb" => 2048})
-
-    assert {:ok, first} = ResourceAllocation.allocate(gpu_job, cap, [])
-    assert {:ok, second} = ResourceAllocation.allocate(gpu_job, cap, [first])
-    # 6 GiB shared weights, 2 GiB private GPU memory and 2 GiB host RAM per Job.
-    assert {:ok, _} = ResourceAllocation.allocate(cpu_job, cap, [first, second])
-
-    assert {:error, [%{"resource" => "memory_mb"}]} =
-             ResourceAllocation.allocate(%{cpu_job | "memory_mb" => 2049}, cap, [first, second])
-
-    # Dropping the first owner releases only its private memory. Removing the
-    # native attestation also removes the discount for concurrent owners.
-    assert {:error, [%{"resource" => "memory_mb"}]} =
-             ResourceAllocation.allocate(%{cpu_job | "memory_mb" => 6145}, cap, [second])
-
-    assert {:error, [%{"resource" => "memory_mb"}]} =
-             ResourceAllocation.allocate(cpu_job, Map.delete(cap, "shared_model_keys"), [
-               first,
-               second
-             ])
   end
 
   test "weight sharing requires a matching size regardless of reservation order" do
@@ -173,18 +136,61 @@ defmodule MirrorNeuron.Runtime.ResourceAllocationTest do
 
     {:ok, large} = ResourceAllocation.allocate(with_weights.(3072), cap, [])
     {:ok, small} = ResourceAllocation.allocate(with_weights.(1024), cap, [large])
-    cpu_job = request(0, %{"devices" => [], "memory_mb" => 4097})
 
     for held <- [[large, small], [small, large]] do
-      # Each Job claims 4 GiB of GPU and 2 GiB of host memory. The two
-      # declarations disagree on weight size and cannot discount one another.
-      assert {:error, [%{"resource" => "memory_mb"}]} =
-               ResourceAllocation.allocate(cpu_job, cap, held)
-
       assert {:ok, allocation} = ResourceAllocation.allocate(with_weights.(3072.0), cap, held)
       assert [%{"incremental_memory_mb" => incremental}] = allocation["devices"]
       assert incremental == 1024
     end
+  end
+
+  test "default model requests bind one shared charge while a different GPU model must fit" do
+    cap = unified_capacity()
+    base = request(0, %{"devices" => [], "shared_default_model" => true})
+
+    req =
+      request(8192)
+      |> put_in(["devices", Access.at(0), "models"], [
+        %{"key" => "managed:recipe", "memory_mb" => 8192}
+      ])
+
+    {state, generations} =
+      Enum.reduce(["a", "b"], {NodeAdmissionState.new(), %{}}, fn id, {state, gens} ->
+        {:ok, state, receipt} =
+          NodeAdmissionState.transition(state, "submit_now", entry(id, base, cap))
+
+        {state, Map.put(gens, id, receipt["generation"])}
+      end)
+
+    bind = fn state, id ->
+      NodeAdmissionState.transition(state, "request_acquire", %{
+        "run_id" => id,
+        "token" => "token-" <> id,
+        "generation" => generations[id],
+        "capacity" => cap,
+        "request" => req
+      })
+    end
+
+    assert {:ok, state, _} = bind.(state, "a")
+    assert {:ok, state, receipt} = bind.(state, "b")
+    assert hd(receipt["allocation"]["devices"])["incremental_memory_mb"] == 0
+    assert {:ok, _, ^receipt} = bind.(state, "b")
+
+    assert %{"status" => "runnable_later"} =
+             ResourceAllocation.check(request(8192), cap, NodeAdmissionState.allocations(state))
+  end
+
+  test "automatic ports are reserved across concurrent runs and avoid fixed ports" do
+    req =
+      request(0, %{
+        "devices" => [],
+        "ports" => [%{"label" => "ui", "node_id" => "worker", "port" => "auto"}]
+      })
+
+    assert {:ok, first} = ResourceAllocation.allocate(req, capacity(), [])
+    assert {:ok, second} = ResourceAllocation.allocate(req, capacity(), [first])
+    assert hd(first["ports"])["port"] != hd(second["ports"])["port"]
   end
 
   test "releasing one run preserves another reservation and immediately makes capacity reusable" do

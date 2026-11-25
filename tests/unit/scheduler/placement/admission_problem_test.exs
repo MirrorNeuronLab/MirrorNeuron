@@ -24,19 +24,7 @@ defmodule MirrorNeuron.Scheduler.AdmissionProblemTest do
         fn _, _ -> true end
       )
 
-    assert %{
-             "code" => "MN_RESOURCE_EXHAUSTED",
-             "available" => 2.0,
-             "required" => 4.0,
-             "unit" => "GiB"
-           } = Enum.find(blockers, &(&1["resource"] == "memory_mb"))
-
-    assert %{
-             "code" => "MN_RESOURCE_EXHAUSTED",
-             "available" => 2.0,
-             "required" => 4.0,
-             "unit" => "cores"
-           } = Enum.find(blockers, &(&1["resource"] == "cpu_cores"))
+    refute Enum.any?(blockers, &(&1["resource"] in ["memory_mb", "cpu_cores"]))
 
     assert %{"code" => "MN_RESOURCE_EXHAUSTED", "available" => +0.0, "unit" => "devices"} =
              Enum.find(blockers, &(&1["resource"] == "gpu_count"))

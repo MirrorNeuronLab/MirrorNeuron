@@ -44,7 +44,7 @@ defmodule MirrorNeuron.Scheduler.Placement.SystemWorkloadsTest do
             "node_id" => "first",
             "agent_type" => "executor",
             "role" => "root",
-            "resources" => %{"cpu_cores" => 3, "memory_mb" => 512}
+            "resources" => %{"cpu_cores" => 5, "memory_mb" => 512}
           },
           %{
             "node_id" => "second",

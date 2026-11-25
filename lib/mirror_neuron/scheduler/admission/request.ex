@@ -6,14 +6,33 @@ defmodule MirrorNeuron.Scheduler.Admission.Request do
 
   def request(manifest) do
     policies = field(manifest, "policies") || %{}
-    profile = field(policies, "resource_allocation") || %{"mode" => "exclusive_node"}
 
     specs =
       manifest_nodes(manifest)
       |> Enum.map(fn node -> ResourceSpec.normalize_request(field(node, "resources") || %{}) end)
 
     requirements = worker_requirements(manifest, specs)
-    ports = Enum.flat_map(specs, & &1["ports"])
+    declared = field(policies, "resource_allocation")
+    blueprint_id = field(field(manifest, "metadata"), "blueprint_id")
+
+    profile =
+      cond do
+        is_map(declared) -> Map.delete(declared, "legacy_gpu_pool")
+        not is_nil(declared) -> declared
+        is_binary(blueprint_id) -> blueprint_profile(manifest, specs, requirements)
+        true -> %{"mode" => "exclusive_node"}
+      end
+
+    ports =
+      Enum.zip(manifest_nodes(manifest), specs)
+      |> Enum.flat_map(fn {node, spec} ->
+        Enum.map(spec["ports"], fn port ->
+          if port["port"] == "auto",
+            do: Map.put(port, "node_id", field(node, "node_id")),
+            else: port
+        end)
+      end)
+
     volumes = Enum.flat_map(specs, & &1["volumes"])
 
     profile =
@@ -23,7 +42,7 @@ defmodule MirrorNeuron.Scheduler.Admission.Request do
           Map.put(
             acc,
             key,
-            max(number(acc[key]), Enum.sum(Enum.map(specs, &(&1["resources"][key] || 0))))
+            max(number(acc[key]), worker_floor(specs, key))
           )
         end)
       else
@@ -32,6 +51,7 @@ defmodule MirrorNeuron.Scheduler.Admission.Request do
 
     with true <- is_map(profile),
          mode when mode in ["shared", "exclusive_node"] <- profile["mode"],
+         true <- is_boolean(Map.get(profile, "shared_default_model", false)),
          true <- Enum.all?(@scalars, &valid_number?(profile[&1] || 0)),
          true <-
            mode != "shared" or
@@ -39,10 +59,10 @@ defmodule MirrorNeuron.Scheduler.Admission.Request do
          devices when is_list(devices) and length(devices) <= 64 <-
            Map.get(profile, "devices", []),
          true <- Enum.all?(devices, &valid_device?/1),
-         true <- mode != "shared" or Enum.all?(ports, &is_integer(&1["port"])),
          true <- mode != "shared" or budget_covers_workers?(profile, specs, manifest) do
       {:ok,
-       Map.merge(Map.take(profile, @scalars), %{
+       Map.merge(Map.take(profile, ["shared_default_model" | @scalars]), %{
+         "legacy_gpu_pool" => is_nil(declared) and profile["legacy_gpu_pool"] == true,
          "mode" => mode,
          "devices" => devices,
          "ports" => ports,
@@ -54,8 +74,26 @@ defmodule MirrorNeuron.Scheduler.Admission.Request do
     end
   end
 
+  # Older blueprints specified hardware floors but had no model declaration.
+  # Preserve GPU coverage for those packages without excluding CPU-only work.
+  defp blueprint_profile(manifest, specs, requirements) do
+    hardware = field(manifest, "requirements")
+    floor = fn kind, key -> number(field(field(hardware, kind), key)) end
+    gpu = requirements != [] or docker_gpu?(manifest)
+
+    %{
+      "mode" => "shared",
+      "cpu_cores" => Enum.max([1, floor.("cpu", "min_cores"), worker_floor(specs, "cpu_cores")]),
+      "memory_mb" =>
+        Enum.max([1, 1024 * floor.("memory", "min_gb"), worker_floor(specs, "memory_mb")]),
+      "disk_mb" => max(1024 * floor.("disk", "min_gb"), worker_floor(specs, "disk_mb")),
+      "shared_default_model" => not gpu,
+      "legacy_gpu_pool" => gpu
+    }
+  end
+
   defp worker_requirements(manifest, specs) do
-    devices = Enum.flat_map(specs, & &1["devices"])
+    devices = Enum.flat_map(specs, &ResourceSpec.scheduling_devices/1)
     gpu = HardwareRequirements.gpu_requirement(field(manifest, "requirements") || %{})
 
     if gpu && gpu["enforcement"] in ["hard", "required"],
@@ -66,20 +104,28 @@ defmodule MirrorNeuron.Scheduler.Admission.Request do
   defp budget_covers_workers?(profile, specs, manifest) do
     scalars_fit =
       Enum.all?(@scalars, fn key ->
-        (profile[key] || 0) >= Enum.sum(Enum.map(specs, &(&1["resources"][key] || 0)))
+        (profile[key] || 0) >= worker_floor(specs, key)
       end)
 
     gpu_count = Enum.sum(Enum.map(profile["devices"] || [], &(&1["count"] || 1)))
     node_gpu_count = Enum.max([0 | Enum.map(specs, &(&1["resources"]["gpu_count"] || 0))])
 
-    docker_gpu =
-      Enum.any?(manifest_nodes(manifest), fn node ->
-        config = field(node, "config") || %{}
-        value = field(field(config, "docker") || %{}, "gpus") || field(config, "gpus")
-        value not in [nil, false, "", "none", 0]
-      end)
+    scalars_fit and
+      (profile["legacy_gpu_pool"] == true or
+         (gpu_count >= node_gpu_count and (not docker_gpu?(manifest) or gpu_count > 0)))
+  end
 
-    scalars_fit and gpu_count >= node_gpu_count and (not docker_gpu or gpu_count > 0)
+  defp docker_gpu?(manifest) do
+    Enum.any?(manifest_nodes(manifest), fn node ->
+      config = field(node, "config") || %{}
+      value = field(field(config, "docker") || %{}, "gpus") || field(config, "gpus")
+      value not in [nil, false, "", "none", 0]
+    end)
+  end
+
+  defp worker_floor(specs, key) do
+    values = Enum.map(specs, &(&1["resources"][key] || 0))
+    if key == "disk_mb", do: Enum.sum(values), else: Enum.max([0 | values])
   end
 
   defp manifest_nodes(manifest) do

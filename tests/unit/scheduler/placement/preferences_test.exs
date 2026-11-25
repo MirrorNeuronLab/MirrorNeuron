@@ -73,7 +73,7 @@ defmodule MirrorNeuron.Scheduler.Placement.PreferencesTest do
            ] = plan["placements"]
   end
 
-  test "missing or exhausted preferred node hint falls back to automatic placement" do
+  test "missing preferred nodes fall back and occupied CPU capacity stays shareable" do
     {:ok, manifest} =
       load_manifest(%{
         "manifest_version" => "1.0",
@@ -140,7 +140,7 @@ defmodule MirrorNeuron.Scheduler.Placement.PreferencesTest do
         "policies" => %{"recovery_mode" => "local_restart"}
       })
 
-    assert {:ok, exhausted_plan} =
+    assert {:ok, shared_plan} =
              Scheduler.plan(preferred_small_manifest,
                nodes: [small_node(), large_node()],
                jobs: busy_jobs
@@ -149,11 +149,11 @@ defmodule MirrorNeuron.Scheduler.Placement.PreferencesTest do
     assert [
              %{
                "agent_id" => "worker",
-               "node" => "large@lab",
+               "node" => "small@lab",
                "preferred_node" => "small@lab",
-               "preferred_node_status" => "fallback"
+               "preferred_node_status" => "honored"
              }
-           ] = exhausted_plan["placements"]
+           ] = shared_plan["placements"]
   end
 
   test "valid per-agent hints skip whole-job co-location and place agents separately" do

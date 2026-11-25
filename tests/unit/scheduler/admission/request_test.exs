@@ -24,23 +24,40 @@ defmodule MirrorNeuron.Scheduler.Admission.RequestTest do
     }
   end
 
-  test "one declared GPU covers multiple workers in the same run while CPU and RAM sum" do
+  test "one declared GPU covers multiple workers in the same run and shared CPU and RAM need only cover the largest worker" do
     assert {:ok, request} = ResourceAllocation.request(manifest())
     assert request["cpu_cores"] == 2
     assert request["memory_mb"] == 2048
     assert [%{"count" => 1}] = request["devices"]
 
-    for {key, value} <- [{"cpu_cores", 1}, {"memory_mb", 1024}] do
+    for {key, value} <- [{"cpu_cores", 0.5}, {"memory_mb", 512}] do
       undersized = put_in(manifest(), ["policies", "resource_allocation", key], value)
       assert {:error, :invalid_resource_allocation} = ResourceAllocation.request(undersized)
     end
   end
 
+  test "a previously saved blueprint shares the host and preserves its GPU needs" do
+    job =
+      manifest() |> Map.delete("policies") |> Map.put("metadata", %{"blueprint_id" => "camera"})
+
+    assert {:ok, %{"mode" => "shared", "legacy_gpu_pool" => true}} =
+             ResourceAllocation.request(job)
+
+    job =
+      job
+      |> put_in(["flow", "nodes"], [])
+      |> Map.put("requirements", %{"memory" => %{"min_gb" => 4}})
+
+    assert {:ok,
+            %{"memory_mb" => 4096, "legacy_gpu_pool" => false, "shared_default_model" => true}} =
+             ResourceAllocation.request(job)
+  end
+
   test "an exclusive run derives its resource floor from the workers" do
     assert {:ok, request} = ResourceAllocation.request(Map.delete(manifest(), "policies"))
     assert request["mode"] == "exclusive_node"
-    assert request["cpu_cores"] == 2
-    assert request["memory_mb"] == 2048
+    assert request["cpu_cores"] == 1
+    assert request["memory_mb"] == 1024
   end
 
   for {key, value} <- [

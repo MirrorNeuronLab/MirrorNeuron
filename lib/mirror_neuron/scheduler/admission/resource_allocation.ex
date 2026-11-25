@@ -2,6 +2,7 @@ defmodule MirrorNeuron.Runtime.ResourceAllocation do
   @moduledoc "Pure admission accounting for one physical computer."
 
   alias MirrorNeuron.{HardwareRequirements, ResourceSpec}
+  alias MirrorNeuron.Scheduler.Placement.{Allocation, Usage}
 
   @scalars ~w(cpu_cores memory_mb disk_mb)
 
@@ -14,8 +15,8 @@ defmodule MirrorNeuron.Runtime.ResourceAllocation do
 
     %{
       "resources" => %{
-        "cpu_cores" => number(field(cpu, "logical_processors")) * ratio(limits, "cpu"),
-        "memory_mb" => number(field(memory, "total_mb")) * ratio(limits, "memory"),
+        "cpu_cores" => number(field(cpu, "logical_processors")),
+        "memory_mb" => number(field(memory, "total_mb")),
         "disk_mb" => number(field(disk, "total_mb")) * ratio(limits, "disk")
       },
       "available" => %{
@@ -82,17 +83,17 @@ defmodule MirrorNeuron.Runtime.ResourceAllocation do
         end
 
       true ->
-        with :ok <- fit_exclusive_resources(request, reservations),
+        with {:ok, ports} <- fit_ports(request, reservations),
+             :ok <- fit_volumes(request, reservations),
              :ok <- fit_scalars(request, capacity, reservations, live?),
-             {:ok, devices} <- fit_devices(request["devices"], capacity, reservations, live?),
-             true <- requirements_fit?(request["requirements"] || [], devices),
-             :ok <- fit_unified_memory(request, devices, capacity, reservations, live?) do
+             {:ok, devices} <- allocate_devices(request, capacity, reservations, live?),
+             true <- requirements_fit?(request["requirements"] || [], devices) do
           {:ok,
            %{
              "mode" => "shared",
              "resources" => Map.new(@scalars, &{&1, request[&1] || 0}),
              "devices" => devices,
-             "ports" => request["ports"] || [],
+             "ports" => ports,
              "volumes" => request["volumes"] || []
            }}
         else
@@ -101,6 +102,23 @@ defmodule MirrorNeuron.Runtime.ResourceAllocation do
         end
     end
   end
+
+  defp allocate_devices(%{"legacy_gpu_pool" => true} = request, capacity, held, live?) do
+    # Unprofiled GPU blueprints historically had access to the whole GPU pool.
+    # Pin those devices while other co-workers keep using the machine's CPU/RAM.
+    devices = Enum.map(capacity["devices"], &%{"ids" => [&1["id"]], "sharing" => "exclusive"})
+
+    with true <- devices != [],
+         :ok <- fit_exclusive_device_floor(request, capacity, live?) do
+      fit_devices(devices, capacity, held, live?)
+    else
+      false -> {:error, [blocker("MN_GPU_REQUIREMENT_UNMET", "gpu_type")]}
+      error -> error
+    end
+  end
+
+  defp allocate_devices(request, capacity, held, live?),
+    do: fit_devices(request["devices"], capacity, held, live?)
 
   defp fit_exclusive_device_floor(request, capacity, live?) do
     Enum.reduce_while(request["requirements"] || [], :ok, fn needed, :ok ->
@@ -111,14 +129,18 @@ defmodule MirrorNeuron.Runtime.ResourceAllocation do
     end)
   end
 
-  defp fit_exclusive_resources(request, reservations) do
-    port_key = fn port ->
-      protocol = if port["protocol"] in [nil, "http", "grpc"], do: "tcp", else: port["protocol"]
-      {protocol, port["port"]}
-    end
+  defp fit_ports(request, reservations) do
+    held = reservations |> Enum.flat_map(&(&1["ports"] || [])) |> MapSet.new(&Usage.port_key/1)
+    # Fixed ports take precedence over automatic picks within this reservation.
+    ports = Enum.sort_by(request["ports"] || [], &(&1["port"] == "auto"))
 
-    held_ports = reservations |> Enum.flat_map(&(&1["ports"] || [])) |> MapSet.new(port_key)
-    port_conflict = Enum.any?(request["ports"] || [], &MapSet.member?(held_ports, port_key.(&1)))
+    case Allocation.allocate_ports(%{"ports" => ports}, %{"ports" => held}) do
+      {:ok, allocated} -> {:ok, allocated}
+      {:error, _} -> {:error, [blocker("MN_RESOURCE_EXHAUSTED", "port")]}
+    end
+  end
+
+  defp fit_volumes(request, reservations) do
     held_volumes = Enum.flat_map(reservations, &(&1["volumes"] || []))
 
     volume_conflict =
@@ -135,26 +157,16 @@ defmodule MirrorNeuron.Runtime.ResourceAllocation do
         end)
       end)
 
-    cond do
-      port_conflict -> {:error, [blocker("MN_RESOURCE_EXHAUSTED", "port")]}
-      volume_conflict -> {:error, [blocker("MN_RESOURCE_EXHAUSTED", "writable_volume")]}
-      true -> :ok
-    end
+    if volume_conflict,
+      do: {:error, [blocker("MN_RESOURCE_EXHAUSTED", "writable_volume")]},
+      else: :ok
   end
 
   defp fit_scalars(request, capacity, reservations, live?) do
     blockers =
       Enum.flat_map(@scalars, fn key ->
         required = request[key] || 0
-        reserved = Enum.sum(Enum.map(reservations, &(get_in(&1, ["resources", key]) || 0)))
-        budget = max(capacity["resources"][key] - reserved, 0)
-        pending = max(reserved - managed_usage(capacity, key), 0)
-        reported = capacity["available"][key]
-
-        available =
-          if live? and key != "cpu_cores" and required > 0,
-            do: if(is_number(reported), do: min(budget, max(reported - pending, 0)), else: nil),
-            else: budget
+        available = scalar_capacity(key, capacity, reservations, live? and required > 0)
 
         cond do
           is_nil(available) -> [blocker("MN_SCHEDULING_UNAVAILABLE", key)]
@@ -166,7 +178,38 @@ defmodule MirrorNeuron.Runtime.ResourceAllocation do
     if blockers == [], do: :ok, else: {:error, blockers}
   end
 
+  defp scalar_capacity(key, capacity, _, _) when key in ["cpu_cores", "memory_mb"],
+    do: capacity["resources"][key]
+
+  defp scalar_capacity(key, capacity, reservations, live?) do
+    reserved = Enum.sum(Enum.map(reservations, &(get_in(&1, ["resources", key]) || 0)))
+    budget = max(capacity["resources"][key] - reserved, 0)
+    pending = max(reserved - managed_usage(capacity, key), 0)
+    reported = capacity["available"][key]
+
+    if live?,
+      do: if(is_number(reported), do: min(budget, max(reported - pending, 0))),
+      else: budget
+  end
+
   defp fit_devices(requests, capacity, reservations, live?) do
+    # A native first-use claim pins one managed engine per physical device.
+    # Concurrent callers of that same recipe can join its serialized cold load.
+    keys =
+      Enum.reduce(reservations, capacity["shared_model_keys"] || %{}, fn held, acc ->
+        case held["default_model_key"] do
+          "managed:" <> _ = key ->
+            Enum.reduce(held["devices"], acc, fn device, map ->
+              Map.update(map, device["id"], [key], &[key | &1])
+            end)
+
+          _ ->
+            acc
+        end
+      end)
+
+    capacity = Map.put(capacity, "shared_model_keys", keys)
+
     Enum.reduce_while(requests, {:ok, []}, fn request, {:ok, allocated} ->
       candidates =
         capacity["devices"]
@@ -263,40 +306,6 @@ defmodule MirrorNeuron.Runtime.ResourceAllocation do
       else: blocker("MN_SCHEDULING_UNAVAILABLE", "gpu_memory_free_mb")
   end
 
-  defp fit_unified_memory(request, devices, capacity, reservations, live?) do
-    additional =
-      Enum.sum(for device <- devices, unified?(device), do: device["incremental_memory_mb"])
-
-    reserved = reserved_unified_memory(reservations, capacity)
-
-    if additional + reserved > 0 do
-      # Unified GPU slices already held by other Jobs use host RAM even when
-      # the incoming request is CPU-only. Keep those bytes on the held side
-      # of the live-telemetry calculation.
-      fit_scalars(
-        Map.put(request, "memory_mb", (request["memory_mb"] || 0) + additional),
-        capacity,
-        [%{"resources" => %{"memory_mb" => reserved}} | reservations],
-        live?
-      )
-    else
-      :ok
-    end
-  end
-
-  defp unified?(device),
-    do: Enum.any?(device["capabilities"] || [], &(&1 in ["unified-memory", "unified_memory"]))
-
-  defp reserved_unified_memory(reservations, capacity) do
-    reservations
-    |> Enum.flat_map(&(&1["devices"] || []))
-    |> Enum.filter(&unified?/1)
-    |> Enum.group_by(& &1["id"])
-    |> Enum.reduce(0, fn {_id, [device | _] = claims}, total ->
-      total + reserved_device_memory(claims, verified_keys(capacity, device))
-    end)
-  end
-
   defp requirements_fit?(requirements, devices) do
     Enum.all?(requirements, fn requirement ->
       Enum.count(devices, &eligible?(&1, requirement)) >= (requirement["count"] || 1)
@@ -369,7 +378,8 @@ defmodule MirrorNeuron.Runtime.ResourceAllocation do
   defp measurement(key, available, required) do
     {unit, scale, code} =
       case key do
-        "cpu_cores" -> {"cores", 1, "MN_RESOURCE_EXHAUSTED"}
+        "cpu_cores" -> {"cores", 1, "MN_CPU_REQUIREMENT_UNMET"}
+        "memory_mb" -> {"GiB", 1024, "MN_MEMORY_REQUIREMENT_UNMET"}
         "gpu_memory_free_mb" -> {"GiB", 1024, "MN_GPU_MEMORY_UNAVAILABLE"}
         "disk_mb" -> {"GiB", 1024, "MN_DISK_UNAVAILABLE"}
         _ -> {"GiB", 1024, "MN_RESOURCE_EXHAUSTED"}

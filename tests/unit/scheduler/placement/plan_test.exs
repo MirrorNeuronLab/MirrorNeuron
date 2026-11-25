@@ -115,7 +115,7 @@ defmodule MirrorNeuron.Scheduler.Placement.PlanTest do
     assert [%{"agent_id" => "worker", "node" => "large@lab"}] = plan["placements"]
   end
 
-  test "availability distinguishes busy resources from impossible requirements" do
+  test "running and paused jobs share cores and RAM while hardware requirements still apply" do
     {:ok, manifest} =
       load_manifest(%{
         "manifest_version" => "1.0",
@@ -148,12 +148,12 @@ defmodule MirrorNeuron.Scheduler.Placement.PlanTest do
       }
     ]
 
-    assert {:blocked, %{"status" => "runnable_later"}} =
+    assert {:ok, _plan} =
              Scheduler.availability(manifest, nodes: [small_node()], jobs: busy_jobs)
 
     paused_jobs = Enum.map(busy_jobs, &Map.put(&1, "status", "paused"))
 
-    assert {:blocked, %{"status" => "runnable_later"}} =
+    assert {:ok, _plan} =
              Scheduler.availability(manifest, nodes: [small_node()], jobs: paused_jobs)
 
     impossible = %{manifest | nodes: [%{hd(manifest.nodes) | resources: %{"gpu_count" => 1}}]}

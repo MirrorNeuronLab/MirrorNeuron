@@ -13,10 +13,15 @@ defmodule MirrorNeuron.Scheduler.Placement.Allocation do
     used_resources = Usage.normalize_usage(used)["resources"]
 
     Enum.all?(@resource_keys, fn key ->
+      requested = Map.get(ask, key, 0)
+      held = Map.get(used_resources, key, 0)
+
       required =
-        if key == "gpu_count" and Map.get(used, "share_devices", false),
-          do: max(Map.get(used_resources, key, 0), Map.get(ask, key, 0)),
-          else: Map.get(used_resources, key, 0) + Map.get(ask, key, 0)
+        cond do
+          key in ["cpu_cores", "memory_mb"] -> requested
+          key == "gpu_count" and Map.get(used, "share_devices", false) -> max(held, requested)
+          true -> held + requested
+        end
 
       required <= Map.get(capacity, key, 0)
     end)
@@ -62,7 +67,7 @@ defmodule MirrorNeuron.Scheduler.Placement.Allocation do
 
   defp allocate_runtime_driver(_node, _resource_request), do: {:ok, nil}
 
-  defp allocate_ports(%{"ports" => ports}, used) when is_list(ports) do
+  def allocate_ports(%{"ports" => ports}, used) when is_list(ports) do
     Enum.reduce_while(ports, {:ok, [], used["ports"]}, fn request, {:ok, allocated, reserved} ->
       case allocate_port(request, reserved) do
         {:ok, resolved, key} ->
@@ -78,7 +83,7 @@ defmodule MirrorNeuron.Scheduler.Placement.Allocation do
     end
   end
 
-  defp allocate_ports(_resource_request, _used), do: {:ok, []}
+  def allocate_ports(_resource_request, _used), do: {:ok, []}
 
   defp allocate_port(%{"port" => "auto"} = request, reserved) do
     case Enum.find(auto_port_range(), fn port ->

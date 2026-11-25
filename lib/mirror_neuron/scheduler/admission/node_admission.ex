@@ -148,11 +148,30 @@ defmodule MirrorNeuron.Runtime.NodeAdmission do
             config
           end
 
-        %{node | config: config}
+        resources = pin_ports(node.resources, node.node_id, allocation)
+        %{node | config: config, resources: resources}
       end)
 
     %{manifest | policies: policies, metadata: metadata, nodes: nodes}
   end
+
+  defp pin_ports(%{"ports" => ports} = resources, id, %{"ports" => allocated}) do
+    resolved = Map.new(for p <- allocated, p["node_id"] == id, do: {p["label"], p["port"]})
+
+    Map.put(
+      resources,
+      "ports",
+      Enum.map(ports, fn
+        %{"port" => "auto", "label" => label} = p ->
+          Map.put(p, "port", Map.fetch!(resolved, label))
+
+        p ->
+          p
+      end)
+    )
+  end
+
+  defp pin_ports(resources, _, _), do: resources
 
   def retry(job, manifest, request, callback) do
     if get_in(job, ["manifest", "metadata", "node_admission"]) do

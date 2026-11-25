@@ -35,8 +35,11 @@ mix test tests/unit/scheduler tests/e2e/schedule_occurrence_store_test.exs tests
 
 ## Peak budgets
 
-Missing profiles preserve whole-PC exclusivity. Opt in through executable
-`policies.resource_allocation` (canonical blueprints: `execution.json.policies`):
+Blueprints share the machine's installed CPU cores and RAM. A blueprint with an
+older undeclared GPU workload retains exclusive access to the GPU pool. Raw jobs
+without a blueprint identity or resource profile retain whole-PC exclusivity.
+Blueprint authors can declare a model in `manifest.json` and describe additional
+resource requirements in `execution.json.policies.resource_allocation`.
 
 ```json
 {
@@ -53,14 +56,12 @@ The GPU minimum describes compatible hardware; the reservation describes the
 run's peak use on it. Requests can constrain device IDs, GPU model names, API
 versions and capabilities. `sharing: exclusive` reserves a whole selected GPU;
 CPU work can use the remaining PC capacity. `mode: exclusive_node` reserves the PC.
-Shared budgets cover declared worker CPU/RAM/disk/GPU needs. Include concurrent
-workers, weights, contexts/KV caches and scratch memory. These are scheduling
+Shared budgets cover declared worker CPU/RAM/disk/GPU needs. CPU and RAM are per-worker machine minimums. Every run can use the same cores and installed RAM. GPU budgets include weights, contexts/KV caches and scratch memory. These are scheduling
 budgets, not hardware isolation. Measure the configured workload and revise its
 budget when models, context limits or concurrency change.
 
 Smallest compatible GPUs are selected first. Shared GPUs retain the larger of
-512 MiB and 10% headroom. Unified-memory GPU reservations also consume host RAM
-for CPU-only admission checks. Verified shared weights count once on that
+512 MiB and 10% headroom. Unified GPU reservations consume the shared device budget. Verified shared weights count once on that
 device and remain charged while any Run holds them.
 Stale native telemetry cannot authorize a start. Unattributed live use is charged
 conservatively together with pending reservations. Shared weights are discounted
@@ -72,8 +73,7 @@ Running workers cannot be reassigned. Shared managed-model requests must fit the
 run's reserved memory and single physical GPU. Multi-GPU engine binding is not
 attested, so those managed-model requests require an exclusive profile.
 
-Ports and overlapping writable host volumes remain exclusive. Shared profiles
-currently require explicit ports. Prepared workers and model services must honor
+Ports and overlapping writable host volumes remain exclusive. Core assigns and pins automatic ports when it admits a shared run. Prepared workers and model services must honor
 the profile's device and concurrency contract.
 
 ## Queueing and reclamation

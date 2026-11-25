@@ -445,8 +445,8 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionTest do
       )
     end
 
-    Store.set_policy({:ok, %{"cpu" => 25}})
-    assert {:error, {:resource_requirement_unmet, _}} = submit.("over-limit")
+    Store.set_policy({:ok, %{"cpu" => 25, "memory" => 25}})
+    assert {:ok, %{"state" => "preparing"}} = submit.("shared-host")
     Store.set_policy({:error, :not_found})
     assert {:ok, %{"state" => "preparing"}} = submit.("held")
     {:ok, before} = NodeAdmission.snapshot()

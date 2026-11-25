@@ -1140,8 +1140,7 @@ zero resources. The projection excludes device/model identities, volume paths,
 request tokens and cleanup capabilities. List projections do not read claims.
 
 The owner Core admits compatible runs against declared CPU, RAM, disk and GPU
-budgets. Missing profiles preserve whole-PC exclusivity; shared profiles must
-cover their workers and peak model use. GPU constraints select compatible devices,
+budgets. CPU and RAM are machine minimums shared by concurrent co-workers. GPU reservations and disk capacity are accounted across runs. Blueprints without a profile share CPU and RAM. Existing unprofiled GPU blueprints retain their GPU pool. Raw jobs without a profile retain whole-PC exclusivity. Shared profiles must cover their workers and peak model use. GPU constraints select compatible devices,
 including per-device shared or exclusive reservations. Native attestation is
 required before resident shared weights reduce a reservation. The executable
 policy, headroom and unified-memory accounting are defined in

@@ -41,7 +41,7 @@ defmodule MirrorNeuron.Scheduler.Placement.GroupTest do
   end
 
   test "a group cannot partially fit when a later worker exhausts capacity or repeats a port" do
-    for second <- [demand("b", 3, 9001), demand("b", 1, 9000)] do
+    for second <- [demand("b", 5, 9001), demand("b", 1, 9000)] do
       assert :error =
                Group.group_node_plan(
                  inventory_node(),

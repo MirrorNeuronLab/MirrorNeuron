@@ -210,8 +210,14 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionState do
         {:error, :stale_node_reservation}
 
       held != nil ->
-        {:ok, put_in(state, ["requests", token], id),
-         acquired(token, (held || %{})["allocation"])}
+        with {:ok, allocation} <- default_model_allocation(state, held, attrs) do
+          next =
+            state
+            |> put_in(["reservations", id, "allocation"], allocation)
+            |> put_in(["requests", token], id)
+
+          {:ok, next, acquired(token, allocation)}
+        end
 
       true ->
         {:error, :node_reserved}
@@ -269,6 +275,62 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionState do
       _ -> {:error, :node_reserved}
     end
   end
+
+  # The native model service resolves the concrete recipe. Pin its charge to
+  # the parent Run so request release and retries cannot free it prematurely.
+  defp default_model_allocation(
+         state,
+         %{"request" => %{"shared_default_model" => true}} = held,
+         %{
+           "request" =>
+             %{"devices" => [%{"models" => [%{"key" => "managed:" <> _ = key}]}]} = model
+         } = attrs
+       ) do
+    allocation = held["allocation"]
+
+    cond do
+      allocation["default_model_key"] == key ->
+        {:ok, allocation}
+
+      allocation["default_model_key"] != nil ->
+        {:error, :default_model_changed}
+
+      allocation["devices"] != [] ->
+        {:error, :invalid_resource_allocation}
+
+      true ->
+        others =
+          state["reservations"]
+          |> Map.delete(held["run_id"])
+          |> Map.values()
+          |> Enum.map(& &1["allocation"])
+
+        cap = capacity(attrs)
+        # CPU inference checks installed RAM and needs no device.
+        model =
+          if cap["devices"] == [],
+            do: Map.put(model, "devices", []),
+            else: Map.put(model, "memory_mb", 1)
+
+        case ResourceAllocation.allocate(model, cap, others) do
+          {:ok, bound} ->
+            resources =
+              Map.update!(allocation["resources"], "memory_mb", &max(&1, model["memory_mb"]))
+
+            {:ok,
+             Map.merge(allocation, %{
+               "default_model_key" => key,
+               "devices" => bound["devices"],
+               "resources" => resources
+             })}
+
+          {:error, _} ->
+            {:error, :node_reserved}
+        end
+    end
+  end
+
+  defp default_model_allocation(_, held, _), do: {:ok, held["allocation"]}
 
   defp acquired(token, allocation),
     do: %{"status" => "acquired", "token" => token, "allocation" => allocation}

@@ -193,11 +193,13 @@ defmodule MirrorNeuron.BlueprintRuntimeTest do
     end
   end
 
+  @tag :mock_gpu
   test "a due batch occurrence queues once and can be cancelled without touching the holder",
        %{id: prefix} do
-    holder = prepare(prefix <> "holder", 4)
-    scheduled = prepare(prefix <> "scheduled", 2)
-    later = prepare(prefix <> "later", 2)
+    gpu = [%{"driver" => "cuda", "sharing" => "exclusive"}]
+    holder = prepare(prefix <> "holder", 4, devices: gpu)
+    scheduled = prepare(prefix <> "scheduled", 2, devices: gpu)
+    later = prepare(prefix <> "later", 2, devices: gpu)
     %{"run_id" => holder_id} = start(holder)
     await_event(holder_id, :job_running)
     {:ok, held} = NodeAdmission.snapshot()
