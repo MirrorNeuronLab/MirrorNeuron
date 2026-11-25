@@ -33,6 +33,27 @@ defmodule MirrorNeuron.Runner.WasmtimeTest do
     assert reason =~ "component binary" or reason =~ "executable unavailable"
   end
 
+  test "creates the configured temporary root on the first invocation", %{base: base, opts: opts} do
+    root = Path.join([base, "fresh", "runtime"])
+    vars = ["MN_TEMP_DIR", "MN_WASMTIME_BIN"]
+    previous = Map.take(System.get_env(), vars)
+
+    on_exit(fn ->
+      Enum.each(vars, &System.delete_env/1)
+      System.put_env(previous)
+    end)
+
+    System.put_env("MN_TEMP_DIR", root)
+    # An invalid component reaches header validation without executing this binary.
+    System.put_env("MN_WASMTIME_BIN", System.find_executable("elixir"))
+    File.write!(Path.join(base, "worker.wasm"), "invalid component")
+
+    assert {:error, "expected a WebAssembly component binary"} =
+             Wasmtime.run(%{}, %{"wasm_component" => "worker.wasm"}, opts)
+
+    assert File.ls!(root) == []
+  end
+
   test "checks configuration bindings before starting a guest" do
     for fields <- [[], %{"review" => []}, %{"review" => ["review", 1]}] do
       assert {:error, _} =

@@ -317,13 +317,16 @@ defmodule MirrorNeuron.Sandbox.Wasmtime do
   end
 
   defp workspace do
+    root = MirrorNeuron.Config.string("MN_TEMP_DIR", :temp_dir)
+
     dir =
       Path.join(
-        MirrorNeuron.Config.string("MN_TEMP_DIR", :temp_dir),
+        root,
         "mn-wasmtime-" <> Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
       )
 
-    with :ok <- File.mkdir(dir) do
+    with :ok <- File.mkdir_p(root),
+         :ok <- File.mkdir(dir) do
       case File.chmod(dir, 0o700) do
         :ok ->
           {:ok, dir}
