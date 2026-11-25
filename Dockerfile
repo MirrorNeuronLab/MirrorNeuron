@@ -2,10 +2,16 @@
 # stages use Bookworm and pinned multi-architecture digests.
 ARG PYTHON_IMAGE=python:3.12.14-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e
 ARG ELIXIR_IMAGE=hexpm/elixir:1.18.4-erlang-28.3-debian-bookworm-20260610-slim@sha256:00153b7780e105e742099378fca72d35c21825890d721a838b8a0a1432bdcb1a
+FROM rust:1.100.0-slim-bookworm AS wasmtime-host
+WORKDIR /build
+COPY native/wasmtime-runner ./
+RUN cargo build --locked --release
+
 FROM ${PYTHON_IMAGE} AS python-runtime
 FROM ${ELIXIR_IMAGE}
 
 COPY --from=python-runtime /usr/local/ /usr/local/
+COPY --from=wasmtime-host /build/target/release/mn-wasmtime-runner /usr/local/bin/
 ENV PATH="/usr/local/bin:${PATH}"
 
 ARG CORE_RELEASE_TAG=""
@@ -32,6 +38,7 @@ RUN apt-get update && apt-get install -y \
     libgdbm6 \
     libgdbm-compat4 \
     liblzma5 \
+    xz-utils \
     libncursesw6 \
     libreadline8 \
     libsqlite3-0 \
@@ -65,6 +72,22 @@ COPY tests/gateway/test_streaming_usage.py /tmp/test_streaming_usage.py
 RUN python3 /tmp/install_litellm_usage_fix.py \
     && LITELLM_LOCAL_MODEL_COST_MAP=True python3 /tmp/test_streaming_usage.py \
     && rm /tmp/install_litellm_usage_fix.py /tmp/test_streaming_usage.py
+
+# WASI 0.3 execution on the Core node.
+ARG WASMTIME_VERSION=51.0.0
+RUN set -eu; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) arch=x86_64; digest=a18020674fac4107f329bc9ed720ea9c88e4b30a61e8a527787bcce051123d32 ;; \
+      arm64) arch=aarch64; digest=a263f34aefad1b24ba4d9ca635ddfea415f4acfe3f3f1bb6d4525c34fc6a7397 ;; \
+      *) exit 1 ;; \
+    esac; \
+    archive="wasmtime-v${WASMTIME_VERSION}-${arch}-linux"; \
+    curl --fail --silent --show-error --location --retry 3 \
+      "https://github.com/bytecodealliance/wasmtime/releases/download/v${WASMTIME_VERSION}/${archive}.tar.xz" -o /tmp/wasmtime.tar.xz; \
+    echo "${digest}  /tmp/wasmtime.tar.xz" | sha256sum -c -; \
+    tar -xJf /tmp/wasmtime.tar.xz -C /usr/local/bin --strip-components=1 "${archive}/wasmtime"; \
+    rm /tmp/wasmtime.tar.xz; \
+    wasmtime --version
 
 ARG DOCKER_CLI_VERSION=29.2.1
 RUN set -eux; \

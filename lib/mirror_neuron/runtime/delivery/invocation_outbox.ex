@@ -133,10 +133,7 @@ defmodule MirrorNeuron.Runtime.InvocationOutbox do
 
     with {:ok, {^expected, sequence, local_state, actions, _saved}} <- decode(encoded),
          true <- is_integer(sequence) do
-      current = if sequence <= state.processed_messages, do: state.local_state, else: local_state
-
-      {:checkpointed, current, actions, max(sequence, state.processed_messages),
-       command_result(local_state)}
+      {:checkpointed, local_state, actions, sequence, command_result(local_state)}
     else
       _ -> {:error, :outbox_identity_mismatch, state.local_state}
     end

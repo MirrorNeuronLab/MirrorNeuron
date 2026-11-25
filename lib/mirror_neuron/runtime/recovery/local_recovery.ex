@@ -59,13 +59,15 @@ defmodule MirrorNeuron.Runtime.LocalRecovery do
   end
 
   defp run_periodic_scan(state) do
+    repair_pending? = state.repair_indexes_on_next_scan and Scan.repair_recovery_indexes() != :ok
+
     _ =
       Scan.recover_unfinished_jobs(
         reason: "startup_or_periodic_scan",
-        repair_indexes?: state.repair_indexes_on_next_scan
+        repair_indexes?: false
       )
 
-    %{state | repair_indexes_on_next_scan: false}
+    %{state | repair_indexes_on_next_scan: repair_pending?}
   end
 
   @impl true

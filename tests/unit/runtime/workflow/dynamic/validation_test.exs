@@ -67,6 +67,28 @@ defmodule MirrorNeuron.Runtime.DynamicWorkflow.ValidationTest do
     assert event.reason =~ "fixed exit reachable"
   end
 
+  test "a reachable fixed exit does not admit instances missing either side of the path" do
+    {state, _} = running_state("replace_path") |> start_controller()
+    patch = replace_path_patch("patch-1", "followup", 0)
+    [add_step, incoming, outgoing] = patch["operations"]
+
+    for edge <- [incoming, outgoing] do
+      assert {:error, ^state, event} =
+               apply_patch(state, %{patch | "operations" => [add_step, edge]})
+
+      assert event.reason ==
+               "every replace_path instance must remain on a controller-to-exit path"
+    end
+  end
+
+  test "checkpoint fanout rejects an instance disconnected from the controller" do
+    {state, _} = running_state("checkpoint_fanout") |> start_controller()
+    patch = service_patch()
+    [add_step, _edge] = patch["operations"]
+    assert {:error, ^state, event} = apply_patch(state, %{patch | "operations" => [add_step]})
+    assert event.reason == "every checkpoint_fanout instance must be controller-reachable"
+  end
+
   test "recovery preserves patch deduplication and rejects changed replay content" do
     {state, _} = running_state("replace_path") |> start_controller()
     patch = replace_path_patch("patch-1", "followup", 0)

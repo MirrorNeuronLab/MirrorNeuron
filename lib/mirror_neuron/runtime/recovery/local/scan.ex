@@ -10,7 +10,7 @@ defmodule MirrorNeuron.Runtime.LocalRecovery.Scan do
 
   def recover_unfinished_jobs(opts \\ []) do
     if Keyword.get(opts, :repair_indexes?, true) do
-      maybe_repair_recovery_indexes()
+      repair_recovery_indexes()
     end
 
     with {:ok, jobs} <- RedisStore.list_job_summaries() do
@@ -52,7 +52,8 @@ defmodule MirrorNeuron.Runtime.LocalRecovery.Scan do
 
   defp fetch_and_recover_job(job, opts), do: Recovery.recover_job_map(job, opts)
 
-  defp maybe_repair_recovery_indexes do
+  @doc false
+  def repair_recovery_indexes do
     case RedisStore.repair_recovery_indexes() do
       {:ok, result} ->
         if recovery_index_repairs(result) > 0 do
@@ -63,7 +64,7 @@ defmodule MirrorNeuron.Runtime.LocalRecovery.Scan do
 
       {:error, reason} ->
         Logger.warning("failed to repair MirrorNeuron recovery indexes: #{inspect(reason)}")
-        :ok
+        {:error, reason}
     end
   end
 

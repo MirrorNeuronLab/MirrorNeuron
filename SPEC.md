@@ -562,6 +562,8 @@ stable operator-owned state: they do not create a new recovery evaluation or
 republish the same pause event on each scan.
 Periodic local recovery makes the same decision from compact job summaries and
 also skips jobs whose runner is live before loading their full state.
+If Redis reports a failure during startup index repair, the next periodic scan
+retries the repair so retained runs can be rediscovered.
 Compact monitoring reads separately persisted agent projections containing only
 liveness, queue pressure, error, lease, and sandbox fields; local agent state,
 inflight payloads, pending payload copies, and recovery encodings are never
@@ -1273,6 +1275,10 @@ Deferral preserves the execution retry budget. Completed v2 invocations journal
 state and output actions before attempting downstream delivery. Replay resumes
 those actions under the original message/attempt/epoch fences and restores the
 latest agent checkpoint, so older output retries cannot roll state backward.
+Conditional outputs use the producing invocation's recorded state to select their
+routes, even when a later command has advanced the worker checkpoint. Recovery
+after loss of the run owner follows the clean-attempt policy in
+[Lifecycle and Persistence](#lifecycle-and-persistence).
 Checkpoints over 1 MiB use staged artifacts (up to 64 MiB encoded); local state
 must be serializable and cannot contain live PIDs, references, or functions.
 An executing journal whose result was never confirmed requires reconciliation;
@@ -1420,3 +1426,25 @@ They are never inferred successful from a later run status or automatically
 replayed.
 
 A prepared mailbox manager with `mcp.blueprint.coworker_type` set to `suite` starts the recipient of each authorized assignment. The recipient owner commits the message before starting its Job. The message ID keys a durable start request and binds the new run to that assignment. Resource admission may queue the run. Retried sends reuse the same start receipt.
+
+### Wasmtime
+
+An executor with `runner_module` set to `MirrorNeuron.Runner.Wasmtime` runs the
+WASI 0.3 command in its `wasm_component` bundle payload under normal Core
+admission, cancellation and deadline handling. The component receives its
+mapped step inputs (or the child work packet), invocation identity and declared
+configuration inside a private `/job` directory. A relative `wasm_inputs`
+may name a staged submission input or a bundle payload. Core verifies the
+declared size and digest of each submission input before copying it into
+`/job/inputs`. Each invocation receives a fresh filesystem view. Standard
+output carries the executor result and a trap fails the attempt. The runtime
+limits each linear memory to 256 MiB. A step deadline can reach 900 seconds,
+or 86,400 seconds when the step has the human approval request capability.
+
+Pure commands use the Wasmtime CLI (`MN_WASMTIME_BIN`). A step declaring
+`wasm_capabilities` uses the Wasmtime embedder (`MN_WASMTIME_HOST_BIN`).
+Core authorizes each WIT host operation for the current run and the step's
+explicit grants. The host may provide durable artifacts, model calls, human
+review and mailbox services. Core schedules children from validated plan data.
+
+A Wasmtime command reports progress with agent beacons bound to its executor process. Core accounts for the full output stream against its byte budget and routes SDK data results separately from truncated diagnostic text. The workflow graph owns event and completion authority.

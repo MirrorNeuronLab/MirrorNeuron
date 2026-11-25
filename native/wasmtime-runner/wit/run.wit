@@ -1,0 +1,33 @@
+package mirror-neuron:run@1.0.0;
+
+/// All paths and identities are relative to the current admitted execution.
+interface artifacts {
+    read: func(path: string, sha256: option<string>) -> result<string, string>;
+    commit: func(path: string, kind: string, content: string) -> result<string, string>;
+    static-report: func(path: string, sha256: string, title: string) -> result<string, string>;
+    publish: func(files-json: string) -> result<string, string>;
+}
+
+interface model {
+    generate-json: func(system-prompt: string, input-json: string, schema-json: string) -> result<string, string>;
+}
+
+/// Only the human interaction authority may submit a decision.
+interface approvals {
+    request: func(request-json: string) -> result<string, string>;
+    status: func(request-id: string) -> result<string, string>;
+}
+
+interface mailbox {
+    %list: func(filters-json: string) -> result<string, string>;
+    send: func(message-json: string) -> result<string, string>;
+    attachment: func(message-id: string, field: string) -> result<string, string>;
+    acknowledge: func(message-id: string) -> result<string, string>;
+}
+
+world worker {
+    import artifacts;
+    import model;
+    import approvals;
+    import mailbox;
+}

@@ -3,14 +3,32 @@ defmodule MirrorNeuron.Runtime.FlowsTest.InvocationReplayTest do
 
   @moduletag skip: is_nil(System.get_env("MN_FLOW_REDIS_URL"))
 
+  alias MirrorNeuron.Message
   alias MirrorNeuron.Persistence.DeliveryStore
   alias MirrorNeuron.Persistence.SignalStore
+  alias MirrorNeuron.Runtime.AgentWorker
   alias MirrorNeuron.Runtime.Delivery
   alias MirrorNeuron.Runtime.InvocationOutbox
 
-  test "outbox survives restart without repeating effects or rolling back newer command state", %{
-    run: run
-  } do
+  defmodule BranchingHandler do
+    use MirrorNeuron.AgentTemplate
+    def init(_node), do: {:ok, %{}}
+
+    def handle_message(message, _state, context) do
+      id = Message.id(message)
+      send(context.coordinator, {:handler_ran, id, self()})
+
+      case id do
+        "route" -> {:ok, %{branch: "original"}, [{:emit, "result", %{}}]}
+        "switch" -> {:ok, %{branch: "later"}, []}
+      end
+    end
+  end
+
+  test "outbox replays the producing invocation's state and actions without repeating its handler",
+       %{
+         run: run
+       } do
     first = message(run, "effect")
     Delivery.enqueue(run, "worker", first)
     {:ok, [delivery]} = Delivery.read(run, "worker", "owner")
@@ -36,7 +54,7 @@ defmodule MirrorNeuron.Runtime.FlowsTest.InvocationReplayTest do
     assert {:ok, recovered} = InvocationOutbox.recover(state)
     assert recovered.local_state == %{value: 1}
 
-    assert {:checkpointed, %{value: 9}, [{:noop}], 2, _} =
+    assert {:checkpointed, %{value: 1}, [{:noop}], 1, _} =
              InvocationOutbox.run(
                first,
                %{recovered | local_state: %{value: 9}, processed_messages: 2},
@@ -62,6 +80,60 @@ defmodule MirrorNeuron.Runtime.FlowsTest.InvocationReplayTest do
 
     assert {:error, :invocation_outcome_unconfirmed, %{}} =
              InvocationOutbox.run(msg, state, fn -> flunk("replayed uncertain effect") end)
+  end
+
+  test "after restart a deferred output follows its recorded branch while the worker keeps newer state",
+       %{run: run} do
+    node = %{
+      node_id: "worker",
+      agent_type: "module",
+      type: "generic",
+      role: "worker",
+      config: %{"module" => BranchingHandler}
+    }
+
+    edges =
+      for target <- ~w(original later) do
+        %{
+          edge_id: target,
+          from_node: "worker",
+          to_node: target,
+          message_type: "result",
+          routing_mode: "first_match",
+          conditions: %{"path" => "state.branch", "value" => target}
+        }
+      end
+
+    runtime = %{delivery_version: 2, backpressure_by_agent: %{"original" => [max_queue_depth: 1]}}
+    worker = fn recovery -> {AgentWorker, {run, node, edges, [], self(), runtime, recovery}} end
+
+    # Hold the output queue full while another command advances the durable checkpoint.
+    blocker = Message.new(run, "source", "original", "occupied", %{})
+    assert {:ok, _} = Delivery.enqueue(run, "original", blocker)
+    assert {:ok, [held]} = Delivery.read(run, "original", "sink")
+    assert {:ok, _} = Delivery.enqueue(run, "worker", message(run, "route"))
+    first = start_supervised!(worker.(%{}))
+    assert_receive {:handler_ran, "route", ^first}, 2_000
+    assert_receive {:agent_event, "worker", :route_selected, %{"to" => "original"}}, 2_000
+
+    assert {:ok, _} =
+             Delivery.enqueue(run, "worker", message(run, "switch"), command_admitted: true)
+
+    GenServer.cast(first, :delivery_available)
+    assert_receive {:agent_event, "worker", :message_acked, %{"message_id" => "switch"}}, 2_000
+    stop_supervised!({:agent_worker, run, "worker"})
+
+    assert :ok = Delivery.ack(run, "original", "sink", held)
+    restarted = start_supervised!(worker.(%{"reclaim_deliveries" => true}))
+    assert_receive {:agent_event, "worker", :message_acked, %{"message_id" => "route"}}, 3_000
+    assert {:ok, [output]} = Delivery.read(run, "original", "sink")
+    assert Message.causation_id(output.message) == "route"
+    assert {:ok, []} = Delivery.read(run, "later", "sink")
+
+    assert %{processed_messages: 2, local_state: %{delegate_state: %{branch: "later"}}} =
+             :sys.get_state(restarted)
+
+    refute_received {:handler_ran, "route", ^restarted}
   end
 
   test "a stopped service grant can be consumed only once by the delivery owner", %{run: run} do

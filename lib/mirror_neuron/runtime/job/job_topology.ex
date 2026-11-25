@@ -126,20 +126,19 @@ defmodule MirrorNeuron.Runtime.JobTopology do
   def downstream_index(edges) do
     direct = Enum.group_by(edges, & &1.from_node, & &1.to_node)
 
-    direct
-    |> Map.keys()
-    |> Enum.into(%{}, fn node_id ->
-      {node_id, downstream_closure(node_id, direct, MapSet.new())}
+    Map.new(direct, fn {node_id, children} ->
+      {node_id, downstream_closure(children, direct, MapSet.new(), [])}
     end)
   end
 
-  defp downstream_closure(node_id, direct, visited) do
-    direct
-    |> Map.get(node_id, [])
-    |> Enum.reject(&MapSet.member?(visited, &1))
-    |> Enum.flat_map(fn child ->
-      [child | downstream_closure(child, direct, MapSet.put(visited, child))]
-    end)
-    |> Enum.uniq()
+  defp downstream_closure([], _direct, _seen, reversed), do: Enum.reverse(reversed)
+
+  defp downstream_closure([node | rest], direct, seen, reversed) do
+    if MapSet.member?(seen, node) do
+      downstream_closure(rest, direct, seen, reversed)
+    else
+      next = Map.get(direct, node, []) ++ rest
+      downstream_closure(next, direct, MapSet.put(seen, node), [node | reversed])
+    end
   end
 end

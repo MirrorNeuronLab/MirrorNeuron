@@ -78,16 +78,21 @@ defmodule MirrorNeuron.Runtime.AgentWorker.Invocation do
            state.module.handle_message(message, state.local_state, context)
            |> workflow_handler_result(workflow, state.node.node_id)
          end) do
-      {:checkpointed, new_local_state, actions, sequence, response} ->
-        next_state =
-          %{
-            state
-            | local_state: new_local_state,
-              processed_messages: sequence,
-              inflight_message: nil
-          }
+      {:checkpointed, local_state, actions, sequence, response} ->
+        recorded = %{
+          state
+          | local_state: local_state,
+            processed_messages: sequence,
+            inflight_message: nil
+        }
 
-        case Actions.execute_actions(actions, message, next_state) do
+        # A newer command may have committed while these outputs waited for capacity.
+        next_state =
+          if sequence > state.processed_messages,
+            do: recorded,
+            else: %{state | inflight_message: nil}
+
+        case Actions.execute_actions(actions, message, recorded) do
           :ok ->
             case Reports.maybe_report_workflow_message(state, message, workflow, "acked") do
               :ok ->

@@ -112,11 +112,20 @@ defmodule MirrorNeuron.Cluster.Hardware.Advertisement do
       |> Config.list(:node_runtime_drivers)
       |> Enum.map(&String.downcase/1)
 
-    drivers = ["host_local"] ++ configured ++ openshell_driver() ++ docker_worker_driver()
+    drivers =
+      ["host_local"] ++
+        configured ++ openshell_driver() ++ docker_worker_driver() ++ wasmtime_driver()
 
     drivers
     |> Enum.reject(&(&1 == ""))
     |> Enum.uniq()
+  end
+
+  defp wasmtime_driver do
+    if System.find_executable(System.get_env("MN_WASMTIME_BIN") || "wasmtime") &&
+         System.find_executable(System.get_env("MN_WASMTIME_HOST_BIN") || "mn-wasmtime-runner"),
+       do: ["wasmtime"],
+       else: []
   end
 
   defp hardware_capabilities(gpu, devices) do

@@ -83,6 +83,8 @@ defmodule MirrorNeuron.Runner.HostLocal.Execution do
 
     beacon_state =
       Beacons.beacon_state(config, opts, message)
+      |> Map.put(:bounded_output, Keyword.get(opts, :bounded_command_output, false))
+      |> Map.put(:wire_bytes, 0)
       |> Map.put(
         :budget,
         MirrorNeuron.Runner.CommandBudget.new(
@@ -114,6 +116,14 @@ defmodule MirrorNeuron.Runner.HostLocal.Execution do
            end)}
         ]
       )
+
+    beacon_state =
+      if Keyword.get(opts, :wasm_guest, false) do
+        {:os_pid, pid} = Port.info(port, :os_pid)
+        Map.put(beacon_state, :wasm_pid, pid)
+      else
+        beacon_state
+      end
 
     beacon_state = Beacons.emit_runtime_beacon(beacon_state, "started")
 

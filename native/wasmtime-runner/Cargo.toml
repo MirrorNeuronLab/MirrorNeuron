@@ -1,0 +1,13 @@
+[package]
+name = "mn-wasmtime-runner"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+wasmtime = { version = "=51.0.0", default-features = false, features = ["std", "runtime", "cranelift", "component-model-async"] }
+wasmtime-wasi = { version = "=51.0.0", default-features = false, features = ["p3"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+serde_json = "1"
+sha2 = "0.10"
+anyhow = "1"

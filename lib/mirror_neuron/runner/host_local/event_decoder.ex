@@ -57,6 +57,9 @@ defmodule MirrorNeuron.Runner.HostLocal.EventDecoder do
     end
   end
 
+  # WASI commands report progress. Host service events carry separate authority.
+  defp handle_agent_event_line(_line, %{wasm_pid: _} = state), do: {"", state}
+
   defp handle_agent_event_line(line, state) do
     raw_payload =
       line
@@ -123,6 +126,15 @@ defmodule MirrorNeuron.Runner.HostLocal.EventDecoder do
       case Jason.decode(raw_payload) do
         {:ok, payload} when is_map(payload) -> payload
         _ -> %{"message" => raw_payload}
+      end
+
+    decoded =
+      case state do
+        %{wasm_pid: pid} ->
+          decoded |> Map.take(["progress_sequence", "message"]) |> Map.put("pid", pid)
+
+        _ ->
+          decoded
       end
 
     now = Beacons.now_ms()

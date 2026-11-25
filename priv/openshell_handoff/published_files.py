@@ -14,7 +14,7 @@ import tempfile
 
 from files import mkdir, regular, safe, sync_dir, verify
 from store import resolve
-from output_index import record as record_outputs
+from output_index import public_name, record as record_outputs
 
 MAX_FILES = 10000
 MAX_BYTES = 64 * 1024 * 1024
@@ -267,7 +267,30 @@ def deliver(request):
     directories = {run}
     if request.get("output_dir"):
         directories.add(contained(request["output_dir"], run.parent.parent))
-    files = inventory(run, request["publication"], request.get("handoff"))
+    if "committed_files" in request:
+        # Core supplies both roots. Re-read every immutable run receipt before
+        # publishing any file, including when a step is retried.
+        refs = request["committed_files"]
+        if not isinstance(refs, dict) or not 1 <= len(refs) <= MAX_FILES:
+            raise ValueError("invalid WIT publication")
+        files = []
+        total = 0
+        for name, ref in refs.items():
+            public_name(name)
+            common(ref)
+            if ref["path"] != name:
+                raise ValueError("WIT publication path differs from its receipt")
+            total += ref["size_bytes"]
+            if total > MAX_BYTES:
+                raise ValueError("WIT publication exceeds byte limit")
+            source = verify(run, ref)
+            body = source.read_bytes()
+            if hashlib.sha256(body).hexdigest() != ref["sha256"]:
+                raise ValueError("WIT artifact changed during publication")
+            files.append((name, source, body, True, 0o644))
+    else:
+        refs = request["publication"]["files"]
+        files = inventory(run, request["publication"], request.get("handoff"))
     plans = [
         (name, source, body, root, destination(root, name), required, mode)
         for name, source, body, required, mode in files
@@ -294,7 +317,7 @@ def deliver(request):
                 failed.add(name)
     delivered = {
         name: ref
-        for name, ref in request["publication"]["files"].items()
+        for name, ref in refs.items()
         if name not in failed
     }
     for root in sorted(directories):

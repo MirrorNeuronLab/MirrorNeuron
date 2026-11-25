@@ -97,4 +97,21 @@ defmodule MirrorNeuron.Runtime.JobTopologyTest do
 
     assert JobTopology.downstream_index([]) == %{}
   end
+
+  test "repeated splits and joins visit shared downstream workers once in route order" do
+    edges =
+      for i <- 1..24,
+          {from, to} <- [
+            {"join#{i - 1}", "left#{i}"},
+            {"join#{i - 1}", "right#{i}"},
+            {"left#{i}", "join#{i}"},
+            {"right#{i}", "join#{i}"}
+          ] do
+        %{from_node: from, to_node: to}
+      end
+
+    first_branch = Enum.flat_map(1..24, fn i -> ["left#{i}", "join#{i}"] end)
+    right_branches = for i <- 24..1//-1, do: "right#{i}"
+    assert JobTopology.downstream_index(edges)["join0"] == first_branch ++ right_branches
+  end
 end

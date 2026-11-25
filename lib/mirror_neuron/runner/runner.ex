@@ -4,7 +4,7 @@ defmodule MirrorNeuron.Runner do
   the Run, admission fence and durable lifecycle. An adapter translates an
   invocation or cleanup request to operations on its own resources.
   """
-  alias MirrorNeuron.Runner.{DockerCompose, DockerWorker, HostLocal, OpenShell}
+  alias MirrorNeuron.Runner.{DockerCompose, DockerWorker, HostLocal, OpenShell, Wasmtime}
   alias MirrorNeuron.Runtime.NodeAdmission
   alias MirrorNeuron.SafeAccess
 
@@ -12,7 +12,8 @@ defmodule MirrorNeuron.Runner do
     {HostLocal, "host_local"},
     {DockerWorker, "docker_worker"},
     {OpenShell, "openshell"},
-    {DockerCompose, "docker_compose"}
+    {DockerCompose, "docker_compose"},
+    {Wasmtime, "wasmtime"}
   ]
 
   @type transition :: :pause | :finish | :retire

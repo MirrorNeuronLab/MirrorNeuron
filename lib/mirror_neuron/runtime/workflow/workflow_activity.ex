@@ -16,9 +16,9 @@ defmodule MirrorNeuron.Runtime.WorkflowActivity do
         for node <- nodes,
             node.agent_type in ["executor", :executor],
             config = node.config || %{},
-            config["runner_module"] != "MirrorNeuron.Runner.HostLocal" or
+            config["runner_module"] not in ["MirrorNeuron.Runner.HostLocal", "MirrorNeuron.Runner.Wasmtime"] or
               config["beacon_enabled"] != true or config["agent_beacon_required"] != true,
-            do: "activity supervision requires HostLocal workers with required live SDK beacons"
+            do: "activity supervision requires HostLocal or Wasmtime workers with required live agent beacons"
 
       _ ->
         ["workflow.execution.supervision must be activity when supplied"]

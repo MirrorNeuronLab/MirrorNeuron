@@ -26,8 +26,15 @@ defmodule MirrorNeuron.Runner.HostLocal.Stream do
     timeout = receive_timeout(deadline, beacon_state)
 
     receive do
+      {^port, {:data, data}}
+      when beacon_state.bounded_output and
+             beacon_state.wire_bytes + byte_size(data) > max_output_bytes ->
+        HostProcess.terminate(port, process_group?)
+        {:error, "worker output exceeded the configured byte limit"}
+
       {^port, {:data, data}} ->
         now = Beacons.now_ms()
+        beacon_state = %{beacon_state | wire_bytes: beacon_state.wire_bytes + byte_size(data)}
         {clean_data, next_beacon_state} = EventDecoder.filter_beacon_output(data, beacon_state)
         next_beacon_state = Beacons.maybe_emit_runtime_beacon(next_beacon_state, now)
 

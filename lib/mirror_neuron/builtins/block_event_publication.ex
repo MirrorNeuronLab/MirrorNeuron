@@ -39,6 +39,15 @@ defmodule MirrorNeuron.Builtins.BlockEventPublication do
 
   defp output_directory(_, environment), do: environment["MN_JOB_OUTPUT_DIR"]
 
+  def publish_wit(run_dir, output_dir, trusted_root, files) do
+    invoke(%{
+      "run_dir" => run_dir,
+      "output_dir" => output_dir,
+      "trusted_root" => trusted_root,
+      "committed_files" => files
+    })
+  end
+
   defp invoke(request) do
     path =
       Path.join(

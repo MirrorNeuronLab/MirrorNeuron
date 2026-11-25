@@ -33,6 +33,28 @@ defmodule MirrorNeuron.Manifest.LoadingBoundaryTest do
     end
   end
 
+  test "validates disconnected workflow components and preserves edge diagnostics" do
+    steps = for id <- ~w(a b c d), do: %{"id" => id, "run" => "worker"}
+    edges = [%{"from" => "a", "to" => "b"}, %{"from" => "c", "to" => "d"}]
+
+    input =
+      base() |> put_in(["flow", "steps"], steps) |> put_in(["flow", "graph"], %{"edges" => edges})
+
+    assert {:ok, manifest} = Manifest.load(input)
+    malformed = put_in(manifest.flow["graph"]["edges"], [42])
+    assert {:error, ["workflow edge must be an object"]} = Manifest.validate(malformed)
+
+    for {edge, reason} <- [
+          {%{"from" => "d", "to" => "c"}, "workflow graph must be acyclic"},
+          {%{"from" => "c", "to" => "c"}, "workflow edge cannot point from c to itself"},
+          {%{"from" => "c", "to" => "unknown"},
+           "workflow edge references missing to step unknown"}
+        ] do
+      assert {:error, [^reason]} =
+               Manifest.load(put_in(input, ["flow", "graph", "edges"], edges ++ [edge]))
+    end
+  end
+
   test "rejects malformed scheduling policy values" do
     for policies <- [
           %{"scheduler" => []},

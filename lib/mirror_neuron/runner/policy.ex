@@ -21,19 +21,27 @@ defmodule MirrorNeuron.Runner.Policy do
     resources = Map.get(node, :resources) || Map.get(node, "resources") || %{}
     node_id = Map.get(node, :node_id) || Map.get(node, "node_id") || "unknown"
 
-    if openshell_runner?(config) do
-      []
-      |> maybe_error(
-        declared_ports?(resources),
-        "OpenShell node #{node_id} must not declare inbound resources.ports; use BEAM/core messaging or a DockerWorker/HostLocal service agent"
-      )
-      |> maybe_error(
-        declares_forwards?(config),
-        "OpenShell node #{node_id} must not publish or forward host ports"
-      )
-      |> validate_handoff(config, node_id)
-    else
-      []
+    cond do
+      MirrorNeuron.Runner.driver(config) == "wasmtime" ->
+        case MirrorNeuron.Sandbox.Wasmtime.validate(config) do
+          :ok -> []
+          {:error, reason} -> ["#{node_id}: #{reason}"]
+        end
+
+      openshell_runner?(config) ->
+        []
+        |> maybe_error(
+          declared_ports?(resources),
+          "OpenShell node #{node_id} must not declare inbound resources.ports; use BEAM/core messaging or a DockerWorker/HostLocal service agent"
+        )
+        |> maybe_error(
+          declares_forwards?(config),
+          "OpenShell node #{node_id} must not publish or forward host ports"
+        )
+        |> validate_handoff(config, node_id)
+
+      true ->
+        []
     end
   end
 

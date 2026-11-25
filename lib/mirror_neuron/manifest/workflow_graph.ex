@@ -3,13 +3,13 @@ defmodule MirrorNeuron.Manifest.WorkflowGraph do
 
   alias MirrorNeuron.Runtime.DynamicWorkflowSpec
   alias MirrorNeuron.Manifest.Values
+  alias MirrorNeuron.Runtime.WorkflowDigraph
   alias MirrorNeuron.Runtime.WorkflowTrigger
 
   def validate_workflow_flow(errors, manifest) do
     flow = if is_map(manifest.flow), do: manifest.flow, else: %{}
     steps = Map.get(flow, "steps", [])
     graph = if is_map(Map.get(flow, "graph")), do: Map.get(flow, "graph"), else: %{}
-    graph_edges = Map.get(graph, "edges", [])
 
     errors =
       Values.add_errors(
@@ -26,6 +26,11 @@ defmodule MirrorNeuron.Manifest.WorkflowGraph do
       duplicate_ids = step_ids -- Enum.uniq(step_ids)
       valid_ids = MapSet.new(Enum.reject(step_ids, &(&1 == "")))
 
+      {graph_edges, malformed_edges} = Enum.split_with(List.wrap(graph["edges"]), &is_map/1)
+      edges = Enum.map(graph_edges, &{to_string(&1["from"] || ""), to_string(&1["to"] || "")})
+
+      incoming_counts = Enum.frequencies_by(edges, &elem(&1, 1))
+
       step_errors =
         steps
         |> Enum.filter(&is_map/1)
@@ -34,10 +39,7 @@ defmodule MirrorNeuron.Manifest.WorkflowGraph do
 
           case WorkflowTrigger.from_step(step, graph) do
             {:ok, %{"rule" => "quorum_success", "quorum" => quorum}} ->
-              incoming_count =
-                graph_edges
-                |> List.wrap()
-                |> Enum.count(&(is_map(&1) and Map.get(&1, "to") == step_id))
+              incoming_count = Map.get(incoming_counts, step_id, 0)
 
               []
               |> Values.maybe_collect_error(step_id == "", "workflow step id is required")
@@ -55,13 +57,7 @@ defmodule MirrorNeuron.Manifest.WorkflowGraph do
         end)
 
       graph_errors =
-        graph_edges
-        |> List.wrap()
-        |> Enum.filter(&is_map/1)
-        |> Enum.flat_map(fn edge ->
-          from = to_string(Map.get(edge, "from") || "")
-          to = to_string(Map.get(edge, "to") || "")
-
+        Enum.flat_map(edges, fn {from, to} ->
           []
           |> Values.maybe_collect_error(
             not MapSet.member?(valid_ids, from),
@@ -76,10 +72,10 @@ defmodule MirrorNeuron.Manifest.WorkflowGraph do
             "workflow edge cannot point from #{from} to itself"
           )
         end)
+        |> Values.maybe_collect_error(malformed_edges != [], "workflow edge must be an object")
 
       cycle_errors =
-        if graph_errors == [] and
-             workflow_cycle?(MapSet.to_list(valid_ids), List.wrap(graph_edges)) do
+        if graph_errors == [] and WorkflowDigraph.validate(valid_ids, edges) == {:error, :cycle} do
           ["workflow graph must be acyclic"]
         else
           []
@@ -101,42 +97,6 @@ defmodule MirrorNeuron.Manifest.WorkflowGraph do
       |> Values.add_errors(dynamic_errors)
     else
       errors
-    end
-  end
-
-  defp workflow_cycle?(step_ids, edges) do
-    parents = Map.new(step_ids, &{&1, MapSet.new()})
-
-    parents =
-      Enum.reduce(edges, parents, fn edge, acc ->
-        from = to_string(Map.get(edge, "from") || "")
-        to = to_string(Map.get(edge, "to") || "")
-
-        if Map.has_key?(acc, from) and Map.has_key?(acc, to) do
-          Map.update!(acc, to, &MapSet.put(&1, from))
-        else
-          acc
-        end
-      end)
-
-    do_workflow_cycle?(parents, [])
-  end
-
-  defp do_workflow_cycle?(parents, removed) do
-    ready =
-      parents
-      |> Enum.reject(fn {step_id, _parents} -> step_id in removed end)
-      |> Enum.filter(fn {_step_id, dependencies} ->
-        MapSet.subset?(dependencies, MapSet.new(removed))
-      end)
-      |> Enum.map(&elem(&1, 0))
-
-    case ready do
-      [] ->
-        map_size(parents) != length(removed)
-
-      _ ->
-        do_workflow_cycle?(parents, Enum.uniq(removed ++ ready))
     end
   end
 end

@@ -951,3 +951,14 @@ They are never inferred successful from a later run status or automatically
 replayed.
 
 When a suite coordinator sends a mailbox assignment, the recipient owner starts its prepared Job for that message. The normal resource queue applies. Supervisors can inspect the assignment in the inbox and the resulting execution in run history.
+
+### Running a WASI 0.3 worker
+
+Select `MirrorNeuron.Runner.Wasmtime` and set `wasm_component` to a
+bundle-relative component binary built for `wasm32-wasip3`. The Core image
+includes Wasmtime 51 and the run-service embedder. On a native executor,
+install the Wasmtime CLI and build `native/wasmtime-runner` with
+`cargo build --release --locked`. Put both executables on the executor's
+path or set `MN_WASMTIME_BIN` and `MN_WASMTIME_HOST_BIN`. The submission
+host uses `wac` to compose the declared WIT skills. Read mapped inputs from
+`/job/mirror_neuron_input.json` and return a JSON step result on stdout.
