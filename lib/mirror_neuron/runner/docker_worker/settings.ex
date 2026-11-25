@@ -32,8 +32,8 @@ defmodule MirrorNeuron.Runner.DockerWorker.Settings do
     Map.get(config, "docker_bin") ||
       get_in(config, ["docker", "bin"]) ||
       Config.optional_string("MN_DOCKER_BIN", :docker_bin) ||
-      System.find_executable("docker") ||
-      "docker"
+      System.find_executable("podman") ||
+      "podman"
   end
 
   def timeout_ms(config) do

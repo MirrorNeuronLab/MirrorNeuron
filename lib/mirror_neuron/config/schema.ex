@@ -114,7 +114,7 @@ defmodule MirrorNeuron.Config.Schema do
         default: 2_000
       ),
       spec("MN_OPENSHELL_BIN", :openshell_bin, :path, default: "openshell"),
-      spec("MN_DOCKER_BIN", :docker_bin, :path, default: "docker"),
+      spec("MN_DOCKER_BIN", :docker_bin, :path, default: "podman"),
       spec("MN_DOCKER_WORKER_ENABLED", :docker_worker_enabled, :boolean),
       spec("MN_DOCKER_WORKER_NETWORK", :docker_worker_network, :string),
       spec("MN_DOCKER_WORKER_BUILDKIT", :docker_worker_buildkit, :boolean),

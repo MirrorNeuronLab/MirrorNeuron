@@ -137,7 +137,7 @@ defmodule MirrorNeuron.Sandbox.DockerJobSandbox do
     Map.get(config, "docker_bin") ||
       get_in(config, ["docker", "bin"]) ||
       MirrorNeuron.Config.optional_string("MN_DOCKER_BIN", :docker_bin) ||
-      System.find_executable("docker") ||
-      "docker"
+      System.find_executable("podman") ||
+      "podman"
   end
 end

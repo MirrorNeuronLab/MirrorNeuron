@@ -115,10 +115,10 @@ Child-round plan nodes accept an optional non-empty `label` of at most 1,024 UTF
 
 ## Managed model residency
 
-Managed DMR models are retained by physical run identity on the native owner node.
+Managed llama.cpp models are retained by physical run identity on the native owner node.
 Completion, failure, cancellation and deletion release those references. The last
-reference invokes `docker model unload <model>` after active requests drain;
-downloaded weights, configuration and installed-model ownership remain intact.
+reference stops the native model server after active requests drain. The host
+retains the downloaded weights and model configuration.
 Concurrent runs (including runs of the same definition) keep independent
 references. Paused runs retain their models. SDK-managed gateway requests also
 retain the actual serving owner, including fallback routes.
@@ -1339,6 +1339,8 @@ End-to-end API/browser and real federated latency must also be
 measured in the deployment environment.
 
 ## Runner adapters and worker state
+
+Core controls sibling Podman containers with the remote CLI and a mounted Podman API socket. Existing DockerWorker and DockerCompose manifest identifiers select these executors.
 
 `MirrorNeuron.Runner` dispatches native (HostLocal), DockerWorker, OpenShell and DockerCompose invocations under the same Run admission fence. Each adapter owns its command supervision and translates pause, finish and retirement into operations on its prepared resources. A Compose project is identified by its recorded owner and project name. A batch pause retains the Run reservation. A service pause also stops its prepared services. An interrupted stop remains retryable, and terminal cleanup releases model residency only after the owned work stops.
 

@@ -89,20 +89,21 @@ RUN set -eu; \
     rm /tmp/wasmtime.tar.xz; \
     wasmtime --version
 
-ARG DOCKER_CLI_VERSION=29.2.1
-RUN set -eux; \
+# Core controls sibling containers through the node's Podman API socket.
+ARG PODMAN_VERSION=5.6.2
+RUN set -eu; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
-      arm64) docker_target="aarch64" ;; \
-      amd64) docker_target="x86_64" ;; \
-      *) echo "unsupported architecture for Docker CLI: $arch" >&2; exit 1 ;; \
+      amd64) digest=a602b2e0a671f130032bdb2120d02d931d97a400ced1777d3594e49d28d9d50a ;; \
+      arm64) digest=0fd581e3eca585ca248be1ac254e56688b55387d92efe919bb6833b6db3e825b ;; \
+      *) echo "Unsupported Podman architecture: $arch" >&2; exit 1 ;; \
     esac; \
-    curl -fLsS -o /tmp/docker-cli.tgz \
-      "https://download.docker.com/linux/static/stable/${docker_target}/docker-${DOCKER_CLI_VERSION}.tgz"; \
-    tar -xzf /tmp/docker-cli.tgz -C /tmp docker/docker; \
-    install -m 0755 /tmp/docker/docker /usr/local/bin/docker; \
-    rm -rf /tmp/docker /tmp/docker-cli.tgz; \
-    docker --version
+    binary="podman-remote-static-linux_${arch}"; \
+    curl -fsSL --retry 3 "https://github.com/containers/podman/releases/download/v${PODMAN_VERSION}/${binary}.tar.gz" -o /tmp/podman.tgz; \
+    echo "$digest  /tmp/podman.tgz" | sha256sum -c -; \
+    tar -xOzf /tmp/podman.tgz "bin/${binary}" > /usr/local/bin/podman; \
+    chmod 0755 /usr/local/bin/podman; rm /tmp/podman.tgz; podman --version
+ENV CONTAINER_HOST=unix:///run/podman/podman.sock
 
 ARG OPENSHELL_VERSION=v0.0.47
 RUN set -eux; \
