@@ -121,7 +121,7 @@ and source roots before running the suite:
 export MN_TEST_PYTHON=/absolute/path/to/python-environment/bin/python
 export PATH="$(dirname "$MN_TEST_PYTHON"):$PATH"
 mn_sdk_root="$(cd ../mn-python-sdk && pwd)"
-export PYTHONPATH="$mn_sdk_root:$mn_sdk_root/packages/common/src:$mn_sdk_root/packages/blueprint-blocks/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$mn_sdk_root:$mn_sdk_root/packages/common/src:$mn_sdk_root/packages/contracts/src:$mn_sdk_root/packages/blueprint-blocks/src${PYTHONPATH:+:$PYTHONPATH}"
 mix test tests/e2e/runner/open_shell/handoff tests/unit/block_event_runner_test.exs
 ```
 
