@@ -267,6 +267,9 @@ services:
       MN_NODE_DISK_TOTAL_MB: ${MN_NODE_DISK_TOTAL_MB:-}
       MN_NODE_DISK_AVAILABLE_MB: ${MN_NODE_DISK_AVAILABLE_MB:-}
       MN_NODE_HOST_PATHS: ${MN_NODE_HOST_PATHS:-}
+      MN_OPENSHELL_MODE: ${MN_OPENSHELL_MODE:-}
+      OPENSHELL_GATEWAY: ${OPENSHELL_GATEWAY:-}
+      OPENSHELL_GATEWAY_ENDPOINT: ${MN_CORE_OPENSHELL_GATEWAY_ENDPOINT:-}
       MN_NODE_RUNTIME_DRIVERS: ${MN_NODE_RUNTIME_DRIVERS:-}
       MN_NODE_GPU: ${MN_NODE_GPU:-}
       MN_NODE_GPU_COUNT: ${MN_NODE_GPU_COUNT:-}
@@ -330,6 +333,7 @@ services:
       - ${MN_HOST_ARTIFACTS_DIR:-./mn/runs}:/opt/mirror_neuron/.mn/runs
       - ${MN_HOST_SHARED_STORAGE_ROOT:-${MN_SHARED_STORAGE_ROOT:-./mn/shared}}:${MN_RUNTIME_SHARED_STORAGE_ROOT:-${MN_CONTAINER_SHARED_STORAGE_ROOT:-/root/.mn/shared}}
       - ${MN_HOST_SHARED_STORAGE_ROOT:-${MN_SHARED_STORAGE_ROOT:-./mn/shared}}:/opt/mirror_neuron/.mn/shared
+      - ${MN_HOST_STATE_DIR:-${MN_HOST_HOME_DIR:-./mn}}/sandbox-plugins/bin:/opt/mn/sandbox-clients:ro
       - ${MN_HOST_OPENSHELL_CONFIG_DIR:-./openshell-config}:/root/.config/openshell:ro
       - ${MN_HOST_OPENSHELL_CONFIG_DIR:-./openshell-config}:/opt/mirror_neuron/.config/openshell:ro
     networks:

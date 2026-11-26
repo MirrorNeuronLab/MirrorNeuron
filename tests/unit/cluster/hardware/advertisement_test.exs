@@ -108,4 +108,13 @@ defmodule MirrorNeuron.Cluster.HardwareTest.AdvertisementTest do
     System.put_env("MN_DOCKER_WORKER_ENABLED", "0")
     refute "docker_worker" in Hardware.info().runtime_drivers
   end
+
+  test "advertises on-demand OpenShell and honors a disabled node policy" do
+    System.put_env("MN_OPENSHELL_MODE", "lazy")
+    assert "openshell" in Hardware.info().runtime_drivers
+
+    System.put_env("MN_NODE_RUNTIME_DRIVERS", "openshell")
+    System.put_env("MN_OPENSHELL_MODE", "disabled")
+    refute "openshell" in Hardware.info().runtime_drivers
+  end
 end

@@ -1430,7 +1430,7 @@ A prepared mailbox manager with `mcp.blueprint.coworker_type` set to `suite` sta
 
 ### Wasmtime
 
-An executor with `runner_module` set to `MirrorNeuron.Runner.Wasmtime` runs the
+An executor with an omitted sandbox runner or explicit `MirrorNeuron.Runner.Wasmtime` runs the
 WASI Preview 2 or WASI 0.3 command in its `wasm_component` bundle payload under normal Core
 admission, cancellation and deadline handling. The component receives its
 mapped step inputs (or the child work packet), invocation identity and declared

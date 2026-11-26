@@ -89,37 +89,9 @@ RUN set -eu; \
     rm /tmp/wasmtime.tar.xz; \
     wasmtime --version
 
-# Core controls sibling containers through the node's Podman API socket.
-ARG PODMAN_VERSION=5.6.2
-RUN set -eu; \
-    arch="$(dpkg --print-architecture)"; \
-    case "$arch" in \
-      amd64) digest=a602b2e0a671f130032bdb2120d02d931d97a400ced1777d3594e49d28d9d50a ;; \
-      arm64) digest=0fd581e3eca585ca248be1ac254e56688b55387d92efe919bb6833b6db3e825b ;; \
-      *) echo "Unsupported Podman architecture: $arch" >&2; exit 1 ;; \
-    esac; \
-    binary="podman-remote-static-linux_${arch}"; \
-    curl -fsSL --retry 3 "https://github.com/containers/podman/releases/download/v${PODMAN_VERSION}/${binary}.tar.gz" -o /tmp/podman.tgz; \
-    echo "$digest  /tmp/podman.tgz" | sha256sum -c -; \
-    tar -xOzf /tmp/podman.tgz "bin/${binary}" > /usr/local/bin/podman; \
-    chmod 0755 /usr/local/bin/podman; rm /tmp/podman.tgz; podman --version
-ENV CONTAINER_HOST=unix:///run/podman/podman.sock
-
-ARG OPENSHELL_VERSION=v0.0.47
-RUN set -eux; \
-    arch="$(dpkg --print-architecture)"; \
-    case "$arch" in \
-      arm64) openshell_target="aarch64-unknown-linux-musl"; openshell_sha="a6aa05593aa5bd6936bbb87fa3958510c1a6d82ef11b8ed8498e884de50847c0" ;; \
-      amd64) openshell_target="x86_64-unknown-linux-musl"; openshell_sha="75ea23c19c23a931ac34b274f719c60dd20c6f788f2a4551862ec17572d84c17" ;; \
-      *) echo "unsupported architecture for OpenShell: $arch" >&2; exit 1 ;; \
-    esac; \
-    curl -fLsS -o /tmp/openshell.tar.gz \
-      "https://github.com/NVIDIA/OpenShell/releases/download/${OPENSHELL_VERSION}/openshell-${openshell_target}.tar.gz"; \
-    echo "${openshell_sha}  /tmp/openshell.tar.gz" | sha256sum -c -; \
-    tar -xzf /tmp/openshell.tar.gz -C /usr/local/bin openshell; \
-    chmod 0755 /usr/local/bin/openshell; \
-    rm -f /tmp/openshell.tar.gz; \
-    openshell --version
+# The installed runtime exposes first-use clients for optional coworker sandboxes.
+ENV PATH="${PATH}:/opt/mn/sandbox-clients:/root/.mn/sandbox-plugins/bin:/opt/mirror_neuron/.mn/sandbox-plugins/bin" \
+    CONTAINER_HOST=unix:///run/podman/podman.sock
 
 # Install hex and rebar
 RUN mix local.rebar --force && mix local.hex --force

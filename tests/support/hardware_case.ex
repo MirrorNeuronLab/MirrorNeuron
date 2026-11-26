@@ -29,6 +29,7 @@ defmodule MirrorNeuron.HardwareCase do
           "MN_NODE_DISK_TOTAL_MB",
           "MN_NODE_DISK_AVAILABLE_MB",
           "MN_NODE_RUNTIME_DRIVERS",
+          "MN_OPENSHELL_MODE",
           "MN_NODE_HOST_PATHS",
           "MN_DOCKER_WORKER_ENABLED",
           "MN_DOCKER_BIN"

@@ -32,7 +32,7 @@ defmodule MirrorNeuron.Runner do
   def adapters, do: Enum.map(@adapters, &elem(&1, 0))
 
   def driver(config) do
-    case SafeAccess.map_get(config, "runner_module") do
+    case execution_runner(config) do
       name when is_binary(name) or is_atom(name) ->
         name = String.trim_leading(to_string(name), "Elixir.")
 
@@ -46,7 +46,7 @@ defmodule MirrorNeuron.Runner do
   end
 
   def run(payload, config, opts) do
-    with {:ok, adapter} <- resolve(SafeAccess.map_get(config, "runner_module")) do
+    with {:ok, adapter} <- resolve(execution_runner(config)) do
       NodeAdmission.run(config, Keyword.fetch!(opts, :job_id), fn ->
         adapter.run(payload, config, opts)
       end)
@@ -101,7 +101,7 @@ defmodule MirrorNeuron.Runner do
   def control_profile(config) do
     adapter =
       prepared_adapter(config) ||
-        if(is_nil(SafeAccess.map_get(config, "runner_module")), do: OpenShell)
+        if(is_nil(SafeAccess.map_get(config, "runner_module")), do: Wasmtime)
 
     if adapter && Code.ensure_loaded?(adapter) && function_exported?(adapter, :control_profile, 1),
       do: adapter.control_profile(config),
@@ -110,8 +110,19 @@ defmodule MirrorNeuron.Runner do
 
   def resumable_after_stop?(config), do: control_profile(config).restart_after_stop
 
+  # Older prepared OpenShell definitions can carry just their sandbox identity.
+  defp execution_runner(config) do
+    SafeAccess.map_get(config, "runner_module") ||
+      cond do
+        SafeAccess.map_get(config, "wasm_component") -> Wasmtime
+        SafeAccess.map_get(config, "sandbox_name") -> OpenShell
+        SafeAccess.map_get(config, "openshell_sandbox_name") -> OpenShell
+        true -> nil
+      end
+  end
+
   defp prepared_adapter(config) do
-    case SafeAccess.map_get(config, "runner_module") do
+    case execution_runner(config) do
       nil ->
         cond do
           is_map(SafeAccess.map_get(config, "mn_docker_compose")) ->
@@ -134,7 +145,7 @@ defmodule MirrorNeuron.Runner do
     end
   end
 
-  defp resolve(nil), do: {:ok, OpenShell}
+  defp resolve(nil), do: {:ok, Wasmtime}
 
   defp resolve("Elixir." <> name), do: resolve(name)
 

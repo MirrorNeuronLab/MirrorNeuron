@@ -28,6 +28,9 @@ defmodule MirrorNeuron.Runner.WasmtimeTest do
     }
 
     assert "wasmtime" == MirrorNeuron.Runner.driver(config)
+    assert "wasmtime" == MirrorNeuron.Runner.driver(Map.delete(config, "runner_module"))
+    assert is_nil(MirrorNeuron.Runner.driver(%{}))
+    assert "openshell" == MirrorNeuron.Runner.driver(%{"sandbox_name" => "existing-worker"})
     File.write!(Path.join(base, "worker.wasm"), <<127, "ELF", 0, 0, 0, 0>>)
     assert {:error, reason} = Wasmtime.run(%{}, config, opts)
     assert reason =~ "component binary" or reason =~ "executable unavailable"
@@ -124,7 +127,10 @@ defmodule MirrorNeuron.Runner.WasmtimeTest do
         ])
 
       config = %{"wasm_component" => "worker.wasm", "timeout_seconds" => 10}
-      assert {:ok, %{"exit_code" => 0, "stdout" => stdout}} = Wasmtime.run(%{}, config, opts)
+
+      assert {:ok, %{"exit_code" => 0, "stdout" => stdout}} =
+               MirrorNeuron.Runner.run(%{}, config, opts)
+
       assert Jason.decode!(stdout) == %{"value" => 42}
 
       assert {:ok, %{"exit_code" => 0}} =

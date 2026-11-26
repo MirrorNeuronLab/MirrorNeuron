@@ -123,7 +123,14 @@ defmodule MirrorNeuron.Cluster.Hardware.Advertisement do
 
   # Wasmtime executes inside Core. The native SDK can only attest host drivers.
   def with_executor_drivers(drivers) do
-    host = Enum.filter(List.wrap(drivers), &(is_binary(&1) and String.downcase(&1) != "wasmtime"))
+    excluded =
+      if System.get_env("MN_OPENSHELL_MODE") == "disabled",
+        do: ["wasmtime", "openshell"],
+        else: ["wasmtime"]
+
+    host =
+      Enum.filter(List.wrap(drivers), &(is_binary(&1) and String.downcase(&1) not in excluded))
+
     host ++ wasmtime_driver()
   end
 
@@ -160,10 +167,12 @@ defmodule MirrorNeuron.Cluster.Hardware.Advertisement do
   end
 
   defp openshell_driver do
-    if System.get_env("OPENSHELL_GATEWAY") do
-      ["openshell"]
-    else
-      []
+    cond do
+      System.get_env("MN_OPENSHELL_MODE") == "disabled" -> []
+      System.get_env("MN_OPENSHELL_MODE") == "lazy" -> ["openshell"]
+      System.get_env("OPENSHELL_GATEWAY") not in [nil, ""] -> ["openshell"]
+      System.get_env("OPENSHELL_GATEWAY_ENDPOINT") not in [nil, ""] -> ["openshell"]
+      true -> []
     end
   end
 

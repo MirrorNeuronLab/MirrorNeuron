@@ -954,7 +954,7 @@ When a suite coordinator sends a mailbox assignment, the recipient owner starts 
 
 ### Running a WASI 0.3 worker
 
-Select `MirrorNeuron.Runner.Wasmtime` and set `wasm_component` to a
+Wasmtime is the default sandbox. Set `wasm_component` to a
 bundle-relative component binary built for `wasm32-wasip3`. The Core image
 includes Wasmtime 51 and the run-service embedder. On a native executor,
 install the Wasmtime CLI and build `native/wasmtime-runner` with
