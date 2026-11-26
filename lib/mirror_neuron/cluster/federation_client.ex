@@ -263,7 +263,9 @@ defmodule MirrorNeuron.Cluster.FederationClient do
       when function in [:sync_lite_llm_gateway, :remove_lite_llm_gateway_route],
       do: 120_000
 
-  def request_timeout(:create_job, _request), do: @job_definition_timeout
+  def request_timeout(function, _request) when function in [:create_job, :start_run, :retry_run],
+    do: @job_definition_timeout
+
   def request_timeout(:relocate_job, _request), do: 600_000
   def request_timeout(:drain_node, _request), do: 35_000
 

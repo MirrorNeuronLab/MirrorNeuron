@@ -20,6 +20,9 @@ defmodule MirrorNeuron.Cluster.FederationClientTest do
 
   test "allows durable definition persistence through one owner forwarding hop" do
     assert FederationClient.request_timeout(:create_job, %CreateJobRequest{}) == 120_000
+    assert FederationClient.request_timeout(:start_run) == 120_000
+    assert FederationClient.request_timeout(:retry_run) == 120_000
+    assert FederationClient.request_timeout(:plan_run_retry) == 15_000
 
     assert FederationClient.request_timeout(:update_job, %UpdateJobRequest{
              manifest_json: "{}",
