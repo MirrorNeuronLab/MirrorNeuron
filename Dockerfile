@@ -3,9 +3,11 @@
 ARG PYTHON_IMAGE=docker.io/library/python:3.12.14-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e
 ARG ELIXIR_IMAGE=docker.io/hexpm/elixir:1.18.4-erlang-28.3-debian-bookworm-20260610-slim@sha256:00153b7780e105e742099378fca72d35c21825890d721a838b8a0a1432bdcb1a
 FROM docker.io/library/rust:1.100.0-slim-bookworm AS wasmtime-host
+# The default Podman VM can expose several CPUs with only 2 GiB of RAM.
+ARG CARGO_BUILD_JOBS=1
 WORKDIR /build
 COPY native/wasmtime-runner ./
-RUN cargo build --locked --release
+RUN cargo build --locked --release --jobs "$CARGO_BUILD_JOBS"
 
 FROM ${PYTHON_IMAGE} AS python-runtime
 FROM ${ELIXIR_IMAGE}
