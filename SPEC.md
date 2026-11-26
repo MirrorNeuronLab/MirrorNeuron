@@ -697,6 +697,8 @@ process path.
 Its build fails if `python3` does not resolve to Python 3.12. The Elixir and
 Python stages are pinned by Debian release and multi-architecture digest;
 the Python stage supplies CPython independently of Debian's system Python.
+The source build names the registry for every base image, independent of
+Podman's short-name search configuration.
 HostLocal selects Python 3.12 when preparing dependency environments, and
 recognizes `python`, `python3`, and `python3.12` commands and console scripts.
 HostLocal commands receive a loopback `MN_GRPC_TARGET` derived from Core's

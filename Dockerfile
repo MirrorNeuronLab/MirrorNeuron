@@ -1,8 +1,8 @@
 # HostLocal uses the same Python 3.12 as the native SDK, API, and CLI. Both
 # stages use Bookworm and pinned multi-architecture digests.
-ARG PYTHON_IMAGE=python:3.12.14-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e
-ARG ELIXIR_IMAGE=hexpm/elixir:1.18.4-erlang-28.3-debian-bookworm-20260610-slim@sha256:00153b7780e105e742099378fca72d35c21825890d721a838b8a0a1432bdcb1a
-FROM rust:1.100.0-slim-bookworm AS wasmtime-host
+ARG PYTHON_IMAGE=docker.io/library/python:3.12.14-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e
+ARG ELIXIR_IMAGE=docker.io/hexpm/elixir:1.18.4-erlang-28.3-debian-bookworm-20260610-slim@sha256:00153b7780e105e742099378fca72d35c21825890d721a838b8a0a1432bdcb1a
+FROM docker.io/library/rust:1.100.0-slim-bookworm AS wasmtime-host
 WORKDIR /build
 COPY native/wasmtime-runner ./
 RUN cargo build --locked --release
