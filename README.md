@@ -425,7 +425,7 @@ and [CLI reference](https://github.com/MirrorNeuronLab/mn-docs/blob/HEAD/cli.md)
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | **HostLocal**    | Runs trusted worker code directly in the host execution environment.                                                     |
 | **DockerWorker** | Runs prepared commands in Podman containers with the worker's declared image, mounts, environment, and network settings. |
-| **OpenShell** | Runs workers in a sandbox governed by explicit policy, uploads, and network access. |
+| **OpenShell**    | Runs workers in a sandbox governed by explicit policy, uploads, and network access.                                      |
 
 DockerWorker starts a stopped prepared container in place when a run uses it
 after runtime shutdown. It leaves running containers untouched and fails before
