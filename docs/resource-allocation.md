@@ -73,6 +73,12 @@ Running workers cannot be reassigned. Shared managed-model requests must fit the
 run's reserved memory and single physical GPU. Multi-GPU engine binding is not
 attested, so those managed-model requests require an exclusive profile.
 
+Runs with `shared_default_model` can bind their default chat model and the SDK
+knowledge embedding model in either order. Core pins one recipe for each purpose
+until the run releases its reservation. It charges each model on first use and
+checks the remaining capacity on the same device before admitting the second.
+CPU owners reserve enough host memory for both models.
+
 Ports and overlapping writable host volumes remain exclusive. Core assigns and pins automatic ports when it admits a shared run. Prepared workers and model services must honor
 the profile's device and concurrency contract.
 

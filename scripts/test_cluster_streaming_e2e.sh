@@ -22,7 +22,7 @@ PEAK_POSITIONS=""
 CONTENT_ENCODING="gzip"
 # Remote login environment variables must expand on the remote host.
 # shellcheck disable=SC2016
-REMOTE_PATH_PREFIX='export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH";'
+REMOTE_PATH_PREFIX='export PATH="/opt/podman/bin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH";'
 LOCAL_LOG="/tmp/mirror_neuron_mn1_stream_e2e.log"
 REMOTE_LOG="/tmp/mirror_neuron_mn2_stream_e2e.log"
 BUNDLE_ROOT="/tmp/mirror_neuron_cluster_bundles"
@@ -168,51 +168,6 @@ stop_runtime_remote() {
     ssh "$BOX2_IP" "kill $pids >/dev/null 2>&1 || true"
     sleep 1
   fi
-}
-
-ensure_local_docker() {
-  if docker info >/dev/null 2>&1; then
-    return
-  fi
-
-  if command -v open >/dev/null 2>&1; then
-    echo "Starting Docker Desktop on box 1..."
-    open -a Docker >/dev/null 2>&1 || true
-  fi
-
-  local _attempt
-  for _attempt in $(seq 1 60); do
-    if docker info >/dev/null 2>&1; then
-      return
-    fi
-    sleep 2
-  done
-
-  echo "Docker is not ready on box 1. Verify Docker Desktop is running." >&2
-  return 1
-}
-
-ensure_remote_docker() {
-  ssh "$BOX2_IP" "$REMOTE_PATH_PREFIX
-    if docker info >/dev/null 2>&1; then
-      exit 0
-    fi
-
-    if command -v open >/dev/null 2>&1; then
-      echo \"Starting Docker Desktop on box 2...\"
-      open -a Docker >/dev/null 2>&1 || true
-    fi
-
-    for attempt in \$(seq 1 60); do
-      if docker info >/dev/null 2>&1; then
-        exit 0
-      fi
-      sleep 2
-    done
-
-    echo \"Docker is not ready on box 2. Verify Docker Desktop is running.\" >&2
-    exit 1
-  "
 }
 
 ensure_local_gateway() {
@@ -429,8 +384,8 @@ trap cleanup_all EXIT
 
 stop_runtime_local
 stop_runtime_remote
-ensure_local_docker
-ensure_remote_docker
+bash "$ROOT_DIR/scripts/ensure_test_podman.sh"
+ssh "$BOX2_IP" "$REMOTE_PATH_PREFIX bash -s" < "$ROOT_DIR/scripts/ensure_test_podman.sh"
 ensure_local_gateway
 ensure_remote_gateway
 sync_remote_repo

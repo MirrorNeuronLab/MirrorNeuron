@@ -9,7 +9,7 @@ LOCAL_IP="${MN_REDIS_HA_LOCAL_IP:-}"
 REMOTE_IP="${MN_REDIS_HA_REMOTE_IP:-}"
 REDIS_PORT="${MN_REDIS_HA_TEST_REDIS_PORT:-46379}"
 SENTINEL_PORT="${MN_REDIS_HA_TEST_SENTINEL_PORT:-46380}"
-REDIS_IMAGE="${MN_REDIS_TEST_IMAGE:-redis:7}"
+REDIS_IMAGE="${MN_REDIS_TEST_IMAGE:-docker.io/library/redis:7}"
 SSH_OPTS="${MN_REDIS_HA_TEST_SSH_OPTS:--o BatchMode=yes -o ConnectTimeout=10}"
 REMOTE_NETWORK="${MN_REDIS_HA_TEST_REMOTE_NETWORK:-auto}"
 INITIAL_PRIMARY="${MN_REDIS_HA_TEST_INITIAL_PRIMARY:-auto}"
@@ -24,12 +24,12 @@ options:
       --remote-ip <ip>      Remote box IP reachable from the local box. Defaults to --remote-host.
       --redis-port <port>   Host Redis port to expose on both boxes. Defaults to 46379.
       --sentinel-port <p>   Host Sentinel port to expose on both boxes. Defaults to 46380.
-      --redis-image <img>   Docker image. Defaults to redis:7.
-      --remote-network <n>  Remote Docker network mode: auto, host, or bridge. Defaults to auto.
+      --redis-image <img>   OCI image. Defaults to docker.io/library/redis:7.
+      --remote-network <n>  Remote Podman network mode: auto, host, or bridge. Defaults to auto.
       --initial-primary <p> Initial primary: auto, local, or remote. Defaults to auto.
   -h, --help                Show this help.
 
-The test starts Redis + Sentinel in Docker on both boxes, writes through MirrorNeuron,
+The test starts Redis + Sentinel in Podman on both boxes, writes through MirrorNeuron,
 kills the initial primary Redis, waits for Sentinel failover, then verifies a post-failover
 MirrorNeuron write/read succeeds against the promoted replica.
 EOF
@@ -112,9 +112,12 @@ if [ -z "$LOCAL_IP" ]; then
   exit 1
 fi
 
+# SSH does not load the interactive shell's Podman installation paths.
+# shellcheck disable=SC2016
+remote_path='export PATH="$PATH:/opt/podman/bin:/opt/homebrew/bin:/usr/local/bin";'
 ssh_remote() {
   # shellcheck disable=SC2086
-  ssh $SSH_OPTS "$REMOTE_HOST" "$@"
+  ssh $SSH_OPTS "$REMOTE_HOST" "$remote_path $1"
 }
 
 detect_remote_ip() {
@@ -180,11 +183,13 @@ require_bin() {
   }
 }
 
-require_bin docker
+require_bin podman
 require_bin ssh
 require_bin nc
 
-ssh_remote "command -v docker >/dev/null && command -v nc >/dev/null"
+remote_podman="$(ssh_remote 'command -v podman')"
+ssh_remote "command -v nc >/dev/null"
+export MN_TWO_BOX_REMOTE_PODMAN="$remote_podman"
 
 case "$REMOTE_NETWORK" in
 auto | host | bridge) ;;
@@ -203,8 +208,8 @@ auto | local | remote) ;;
 esac
 
 if [ "$REMOTE_NETWORK" = "auto" ]; then
-  remote_docker_os="$(ssh_remote "docker info --format '{{.OSType}}'")"
-  if [ "$remote_docker_os" = "linux" ]; then
+  remote_host_os="$(ssh_remote "uname -s")"
+  if [ "$remote_host_os" = "Linux" ]; then
     REMOTE_NETWORK="host"
   else
     REMOTE_NETWORK="bridge"
@@ -227,8 +232,8 @@ REMOTE_SENTINEL="$RUN_ID-remote-sentinel"
 LOCAL_REDIS_ANNOUNCE_IP="$LOCAL_IP"
 
 cleanup() {
-  docker rm -f "$LOCAL_REDIS" "$LOCAL_SENTINEL" >/dev/null 2>&1 || true
-  ssh_remote "docker rm -f '$REMOTE_REDIS' '$REMOTE_SENTINEL' >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
+  podman rm -f "$LOCAL_REDIS" "$LOCAL_SENTINEL" >/dev/null 2>&1 || true
+  ssh_remote "podman rm -f '$REMOTE_REDIS' '$REMOTE_SENTINEL' >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
 }
 
 trap cleanup EXIT
@@ -239,12 +244,12 @@ echo "  local:  $LOCAL_IP"
 echo "  remote: $REMOTE_IP via $REMOTE_HOST"
 echo "  redis:  $REDIS_PORT"
 echo "  sentinel: $SENTINEL_PORT"
-echo "  remote docker network: $REMOTE_NETWORK"
+echo "  remote podman network: $REMOTE_NETWORK"
 echo "  initial primary: $INITIAL_PRIMARY"
 
 start_local_redis() {
   if [ "$1" = "replica" ]; then
-    docker run -d --name "$LOCAL_REDIS" \
+    podman run -d --name "$LOCAL_REDIS" \
       -p "0.0.0.0:${REDIS_PORT}:6379" \
       "$REDIS_IMAGE" \
       redis-server --port 6379 --save "" --appendonly no \
@@ -253,7 +258,7 @@ start_local_redis() {
       --replica-announce-ip "$LOCAL_REDIS_ANNOUNCE_IP" \
       --replica-announce-port "$REDIS_PORT" >/dev/null
   else
-    docker run -d --name "$LOCAL_REDIS" \
+    podman run -d --name "$LOCAL_REDIS" \
       -p "0.0.0.0:${REDIS_PORT}:6379" \
       "$REDIS_IMAGE" \
       redis-server --port 6379 --save "" --appendonly no \
@@ -278,7 +283,7 @@ start_remote_redis() {
     replica_args="--replicaof '$LOCAL_IP' '$REDIS_PORT'"
   fi
 
-  ssh_remote "docker run -d --name '$REMOTE_REDIS' \
+  ssh_remote "podman run -d --name '$REMOTE_REDIS' \
     $network_args \
     '$REDIS_IMAGE' \
     redis-server --port '$port' --save '' --appendonly no \
@@ -305,14 +310,14 @@ if [ "$INITIAL_PRIMARY" = "local" ]; then
 else
   PRIMARY_IP="$REMOTE_IP"
   PRIMARY_REDIS="$REMOTE_REDIS"
-  LOCAL_REDIS_ANNOUNCE_IP="host.docker.internal"
-  docker rm -f "$LOCAL_REDIS" >/dev/null 2>&1 || true
+  LOCAL_REDIS_ANNOUNCE_IP="host.containers.internal"
+  podman rm -f "$LOCAL_REDIS" >/dev/null 2>&1 || true
   start_remote_redis primary
   start_local_redis replica
 fi
 
-docker run -d --name "$LOCAL_SENTINEL" \
-  --add-host=host.docker.internal:host-gateway \
+podman run -d --name "$LOCAL_SENTINEL" \
+  --add-host=host.containers.internal:host-gateway \
   -p "0.0.0.0:${SENTINEL_PORT}:26379" \
   "$REDIS_IMAGE" \
   sh -c "cat >/tmp/sentinel.conf <<EOF
@@ -332,7 +337,7 @@ redis-server /tmp/sentinel.conf --sentinel" >/dev/null
 
 if [ "$INITIAL_PRIMARY" = "local" ]; then
   if [ "$REMOTE_NETWORK" = "host" ]; then
-    ssh_remote "docker run -d --name '$REMOTE_SENTINEL' \
+    ssh_remote "podman run -d --name '$REMOTE_SENTINEL' \
       --network host \
       '$REDIS_IMAGE' \
       sh -c 'cat >/tmp/sentinel.conf <<EOF
@@ -348,7 +353,7 @@ sentinel parallel-syncs $MASTER_NAME 1
 EOF
 redis-server /tmp/sentinel.conf --sentinel'" >/dev/null
   else
-    ssh_remote "docker run -d --name '$REMOTE_SENTINEL' \
+    ssh_remote "podman run -d --name '$REMOTE_SENTINEL' \
       -p '0.0.0.0:${SENTINEL_PORT}:26379' \
       '$REDIS_IMAGE' \
       sh -c 'cat >/tmp/sentinel.conf <<EOF
@@ -370,7 +375,7 @@ echo "Waiting for replica to become online..."
 for _attempt in {1..60}; do
   if [ "$INITIAL_PRIMARY" = "local" ]; then
     online="$(
-      docker exec "$PRIMARY_REDIS" redis-cli INFO replication 2>/dev/null |
+      podman exec "$PRIMARY_REDIS" redis-cli INFO replication 2>/dev/null |
         awk '/^slave[0-9]+:/ && /state=online/ {count++} END {print count + 0}'
     )"
   else
@@ -380,7 +385,7 @@ for _attempt in {1..60}; do
     fi
 
     online="$(
-      ssh_remote "docker exec '$PRIMARY_REDIS' redis-cli -p '$remote_cli_port' INFO replication 2>/dev/null" |
+      ssh_remote "podman exec '$PRIMARY_REDIS' redis-cli -p '$remote_cli_port' INFO replication 2>/dev/null" |
         awk '/^slave[0-9]+:/ && /state=online/ {count++} END {print count + 0}'
     )"
   fi
@@ -394,7 +399,7 @@ done
 
 if [ "$INITIAL_PRIMARY" = "local" ]; then
   online="$(
-    docker exec "$PRIMARY_REDIS" redis-cli INFO replication |
+    podman exec "$PRIMARY_REDIS" redis-cli INFO replication |
       awk '/^slave[0-9]+:/ && /state=online/ {count++} END {print count + 0}'
   )"
 else
@@ -404,7 +409,7 @@ else
   fi
 
   online="$(
-    ssh_remote "docker exec '$PRIMARY_REDIS' redis-cli -p '$remote_cli_port' INFO replication" |
+    ssh_remote "podman exec '$PRIMARY_REDIS' redis-cli -p '$remote_cli_port' INFO replication" |
       awk '/^slave[0-9]+:/ && /state=online/ {count++} END {print count + 0}'
   )"
 fi
@@ -415,7 +420,7 @@ if [ "${online:-0}" -lt 1 ]; then
 fi
 
 for _attempt in {1..30}; do
-  if docker exec "$LOCAL_SENTINEL" redis-cli -p 26379 SENTINEL get-master-addr-by-name "$MASTER_NAME" >/dev/null 2>&1; then
+  if podman exec "$LOCAL_SENTINEL" redis-cli -p 26379 SENTINEL get-master-addr-by-name "$MASTER_NAME" >/dev/null 2>&1; then
     break
   fi
 
@@ -431,7 +436,7 @@ fi
 export MN_REDIS_SENTINEL_MASTER="$MASTER_NAME"
 export MN_REDIS_URL="redis://${PRIMARY_IP}:${REDIS_PORT}/0"
 if [ "$INITIAL_PRIMARY" = "remote" ]; then
-  export MN_REDIS_SENTINEL_HOST_MAP="host.docker.internal=127.0.0.1"
+  export MN_REDIS_SENTINEL_HOST_MAP="host.containers.internal=127.0.0.1"
 fi
 export MN_REDIS_DB="0"
 export MN_REDIS_NAMESPACE="redis_2box_$RUN_ID"
@@ -469,13 +474,13 @@ case System.fetch_env!("MN_TWO_BOX_INITIAL_PRIMARY") do
         "-o",
         "ConnectTimeout=10",
         System.fetch_env!("MN_TWO_BOX_REMOTE_HOST"),
-        "docker",
+        System.fetch_env!("MN_TWO_BOX_REMOTE_PODMAN"),
         "kill",
         System.fetch_env!("MN_TWO_BOX_REMOTE_REDIS")
       ])
 
   _ ->
-    {_output, 0} = System.cmd("docker", ["kill", System.fetch_env!("MN_TWO_BOX_LOCAL_REDIS")])
+    {_output, 0} = System.cmd("podman", ["kill", System.fetch_env!("MN_TWO_BOX_LOCAL_REDIS")])
 end
 
 Process.sleep(12_000)

@@ -17,7 +17,7 @@ KEEP_CLUSTER_UP="0"
 MODEL="${MN_GEMINI_MODEL:-gemini-2.5-flash-lite}"
 # Remote login environment variables must expand on the remote host.
 # shellcheck disable=SC2016
-REMOTE_PATH_PREFIX='export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH";'
+REMOTE_PATH_PREFIX='export PATH="/opt/podman/bin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH";'
 LOCAL_LOG="/tmp/mirror_neuron_mn1_llm_e2e.log"
 REMOTE_LOG="/tmp/mirror_neuron_mn2_llm_e2e.log"
 BUNDLE_ROOT="/tmp/mirror_neuron_cluster_bundles"
@@ -234,51 +234,6 @@ cleanup_sandboxes_remote() {
   "
 }
 
-ensure_local_docker() {
-  if docker info >/dev/null 2>&1; then
-    return
-  fi
-
-  if command -v open >/dev/null 2>&1; then
-    echo "Starting Docker Desktop on box 1..."
-    open -a Docker >/dev/null 2>&1 || true
-  fi
-
-  local _attempt
-  for _attempt in $(seq 1 60); do
-    if docker info >/dev/null 2>&1; then
-      return
-    fi
-    sleep 2
-  done
-
-  echo "Docker is not ready on box 1. Verify Docker Desktop is running." >&2
-  return 1
-}
-
-ensure_remote_docker() {
-  ssh "$BOX2_IP" "$REMOTE_PATH_PREFIX
-    if docker info >/dev/null 2>&1; then
-      exit 0
-    fi
-
-    if command -v open >/dev/null 2>&1; then
-      echo \"Starting Docker Desktop on box 2...\"
-      open -a Docker >/dev/null 2>&1 || true
-    fi
-
-    for attempt in \$(seq 1 60); do
-      if docker info >/dev/null 2>&1; then
-        exit 0
-      fi
-      sleep 2
-    done
-
-    echo \"Docker is not ready on box 2. Verify Docker Desktop is running.\" >&2
-    exit 1
-  "
-}
-
 ensure_local_gateway() {
   if openshell status >/dev/null 2>&1 && NO_COLOR=1 openshell sandbox list >/dev/null 2>&1; then
     return
@@ -482,8 +437,8 @@ stop_runtime_local
 stop_runtime_remote
 cleanup_sandboxes_local
 cleanup_sandboxes_remote
-ensure_local_docker
-ensure_remote_docker
+bash "$ROOT_DIR/scripts/ensure_test_podman.sh"
+ssh "$BOX2_IP" "$REMOTE_PATH_PREFIX bash -s" < "$ROOT_DIR/scripts/ensure_test_podman.sh"
 ensure_local_gateway
 ensure_remote_gateway
 sync_remote_repo

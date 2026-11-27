@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REDIS_IMAGE="${MN_REDIS_TEST_IMAGE:-redis:7}"
+REDIS_IMAGE="${MN_REDIS_TEST_IMAGE:-docker.io/library/redis:7}"
 RUN_ID="mn-redis-ha-$$-$RANDOM"
 NETWORK="$RUN_ID"
 MASTER_NAME="mn-ha-$RUN_ID"
@@ -37,63 +37,34 @@ S2="${RUN_ID}-sentinel-2"
 S3="${RUN_ID}-sentinel-3"
 
 cleanup() {
-  docker rm -f "$R1" "$R2" "$R3" "$S1" "$S2" "$S3" >/dev/null 2>&1 || true
-  docker network rm "$NETWORK" >/dev/null 2>&1 || true
+  podman rm -f "$R1" "$R2" "$R3" "$S1" "$S2" "$S3" >/dev/null 2>&1 || true
+  podman network rm "$NETWORK" >/dev/null 2>&1 || true
 }
 
 trap cleanup EXIT
 
-docker network create "$NETWORK" >/dev/null
+podman network create "$NETWORK" >/dev/null
 
-# Linux containers cannot reach a host port bound only to loopback. Publish a
-# second listener on this test's private bridge gateway, never on a LAN address.
-HOST_GATEWAY=host-gateway
-if [ "$(uname -s)" = Linux ]; then
-  HOST_GATEWAY="$(docker network inspect "$NETWORK" --format '{{(index .IPAM.Config 0).Gateway}}')"
-fi
-
-port_bindings() {
-  PORT_ARGS=(-p "127.0.0.1:$1:$2")
-  if [ "$HOST_GATEWAY" != host-gateway ]; then
-    PORT_ARGS+=(-p "$HOST_GATEWAY:$1:$2")
-  fi
+# Peers resolve container names on the private network. Core reaches the
+# same announced ports through its loopback-only publications.
+start_redis() {
+  local name="$1" port="$2"
+  shift 2
+  podman run -d --name "$name" --network "$NETWORK" -p "127.0.0.1:$port:$port" \
+    "$REDIS_IMAGE" redis-server --port "$port" --save "" --appendonly no \
+    --replica-announce-ip "$name" --replica-announce-port "$port" "$@" >/dev/null
 }
 
-port_bindings "$R1_PORT" 6379
-
-docker run -d --name "$R1" --network "$NETWORK" \
-  --add-host="host.docker.internal:$HOST_GATEWAY" \
-  "${PORT_ARGS[@]}" \
-  "$REDIS_IMAGE" \
-  redis-server --port 6379 --save "" --appendonly no \
-  --replica-announce-ip host.docker.internal --replica-announce-port "$R1_PORT" >/dev/null
-
-port_bindings "$R2_PORT" 6379
-docker run -d --name "$R2" --network "$NETWORK" \
-  --add-host="host.docker.internal:$HOST_GATEWAY" \
-  "${PORT_ARGS[@]}" \
-  "$REDIS_IMAGE" \
-  redis-server --port 6379 --save "" --appendonly no \
-  --replicaof host.docker.internal "$R1_PORT" \
-  --replica-announce-ip host.docker.internal --replica-announce-port "$R2_PORT" >/dev/null
-
-port_bindings "$R3_PORT" 6379
-docker run -d --name "$R3" --network "$NETWORK" \
-  --add-host="host.docker.internal:$HOST_GATEWAY" \
-  "${PORT_ARGS[@]}" \
-  "$REDIS_IMAGE" \
-  redis-server --port 6379 --save "" --appendonly no \
-  --replicaof host.docker.internal "$R1_PORT" \
-  --replica-announce-ip host.docker.internal --replica-announce-port "$R3_PORT" >/dev/null
+start_redis "$R1" "$R1_PORT"
+start_redis "$R2" "$R2_PORT" --replicaof "$R1" "$R1_PORT"
+start_redis "$R3" "$R3_PORT" --replicaof "$R1" "$R1_PORT"
 
 start_sentinel() {
   local name="$1"
   local port="$2"
 
-  port_bindings "$port" 26379
-  docker run -d --name "$name" --network "$NETWORK" \
-    --add-host="host.docker.internal:$HOST_GATEWAY" \
-    "${PORT_ARGS[@]}" \
+  podman run -d --name "$name" --network "$NETWORK" \
+    -p "127.0.0.1:$port:26379" \
     "$REDIS_IMAGE" \
     sh -c "cat >/tmp/sentinel.conf <<EOF
 port 26379
@@ -101,7 +72,7 @@ bind 0.0.0.0
 protected-mode no
 sentinel resolve-hostnames yes
 sentinel announce-hostnames yes
-sentinel monitor $MASTER_NAME host.docker.internal $R1_PORT 2
+sentinel monitor $MASTER_NAME $R1 $R1_PORT 2
 sentinel down-after-milliseconds $MASTER_NAME 1000
 sentinel failover-timeout $MASTER_NAME 10000
 sentinel parallel-syncs $MASTER_NAME 1
@@ -117,7 +88,7 @@ wait_for_primary() {
   local attempts=40
 
   while [ "$attempts" -gt 0 ]; do
-    if docker exec "$S1" redis-cli -p 26379 SENTINEL get-master-addr-by-name "$MASTER_NAME" >/dev/null 2>&1; then
+    if podman exec "$S1" redis-cli -p 26379 SENTINEL get-master-addr-by-name "$MASTER_NAME" >/dev/null 2>&1; then
       return
     fi
 
@@ -134,7 +105,7 @@ wait_for_replicas() {
 
   while [ "$attempts" -gt 0 ]; do
     local slaves
-    slaves="$(docker exec "$R1" redis-cli INFO replication 2>/dev/null | awk '/^slave[0-9]+:/ && /state=online/ {count++} END {print count + 0}')"
+    slaves="$(podman exec "$R1" redis-cli -p "$R1_PORT" INFO replication 2>/dev/null | awk '/^slave[0-9]+:/ && /state=online/ {count++} END {print count + 0}')"
 
     if [ "${slaves:-0}" -ge 2 ]; then
       return
@@ -154,7 +125,7 @@ wait_for_replicas
 export MN_REDIS_HA_MODE="sentinel"
 export MN_REDIS_SENTINELS="127.0.0.1:${S1_PORT},127.0.0.1:${S2_PORT},127.0.0.1:${S3_PORT}"
 export MN_REDIS_SENTINEL_MASTER="$MASTER_NAME"
-export MN_REDIS_SENTINEL_HOST_MAP="host.docker.internal=127.0.0.1"
+export MN_REDIS_SENTINEL_HOST_MAP="$R1=127.0.0.1,$R2=127.0.0.1,$R3=127.0.0.1"
 export MN_REDIS_URL="redis://127.0.0.1:${R1_PORT}/0"
 export MN_REDIS_DB="0"
 export MN_REDIS_NAMESPACE="$NAMESPACE"
@@ -180,7 +151,7 @@ job_id = "redis-ha-smoke-" <> Integer.to_string(System.unique_integer([:positive
 
 IO.puts("initial_write_ok=#{job_id}")
 
-{_output, 0} = System.cmd("docker", ["kill", System.fetch_env!("MN_REDIS_HA_MASTER_CONTAINER")])
+{_output, 0} = System.cmd("podman", ["kill", System.fetch_env!("MN_REDIS_HA_MASTER_CONTAINER")])
 Process.sleep(12_000)
 
 case RedisStore.persist_job(job_id, %{

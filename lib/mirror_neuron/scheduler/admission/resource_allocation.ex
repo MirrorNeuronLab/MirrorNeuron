@@ -193,19 +193,16 @@ defmodule MirrorNeuron.Runtime.ResourceAllocation do
   end
 
   defp fit_devices(requests, capacity, reservations, live?) do
-    # A native first-use claim pins one managed engine per physical device.
-    # Concurrent callers of that same recipe can join its serialized cold load.
+    # Concurrent callers of each pinned recipe can join its serialized cold load.
     keys =
       Enum.reduce(reservations, capacity["shared_model_keys"] || %{}, fn held, acc ->
-        case held["default_model_key"] do
-          "managed:" <> _ = key ->
-            Enum.reduce(held["devices"], acc, fn device, map ->
-              Map.update(map, device["id"], [key], &[key | &1])
-            end)
+        pinned =
+          for "managed:" <> _ = key <- [held["default_model_key"], held["embedding_model_key"]],
+              do: key
 
-          _ ->
-            acc
-        end
+        Enum.reduce(held["devices"] || [], acc, fn device, map ->
+          Map.update(map, device["id"], pinned, &(pinned ++ &1))
+        end)
       end)
 
     capacity = Map.put(capacity, "shared_model_keys", keys)

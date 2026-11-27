@@ -178,7 +178,12 @@ defmodule MirrorNeuron.ModelServices.Transport do
   @doc false
   def grpc_set_resource(target, request, timeout) do
     with {:ok, response} <-
-           NativeSdkClient.call(target, request, timeout, &ClusterService.Stub.set_resource/3) do
+           NativeSdkClient.call_shared(
+             target,
+             request,
+             timeout,
+             &ClusterService.Stub.set_resource/3
+           ) do
       {:ok, response}
     else
       {:error, %GRPC.RPCError{} = error} ->

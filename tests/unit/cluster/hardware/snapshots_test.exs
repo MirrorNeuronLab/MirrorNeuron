@@ -1,6 +1,8 @@
 defmodule MirrorNeuron.Cluster.Hardware.SnapshotsTest do
   use ExUnit.Case, async: false
   alias MirrorNeuron.Cluster.Hardware
+  alias MirrorNeuron.Cluster.Manager
+  alias MirrorNeuron.Execution.LeaseManager
 
   setup do
     previous = :persistent_term.get({Hardware, :snapshot}, :missing)
@@ -24,6 +26,24 @@ defmodule MirrorNeuron.Cluster.Hardware.SnapshotsTest do
 
     assert %{admission_telemetry_current: true, memory: %{available_mb: 42}} = Hardware.info()
     assert "cuda" in Hardware.info().capabilities
+  end
+
+  test "cluster hardware encodes one native SDK route with the advertised capabilities" do
+    unless Process.whereis(LeaseManager), do: start_supervised!(LeaseManager)
+
+    assert :ok =
+             Hardware.update_snapshot(%{
+               "native_sdk_grpc" => %{"capabilities" => ["custom_hf_model_v1"]},
+               "cpu" => %{"logical_processors" => 4}
+             })
+
+    {_lease_stats, hardware} = Manager.local_info()
+    assert {:ok, encoded} = Jason.encode(hardware, maps: :strict)
+
+    assert %{
+             "native_sdk_grpc" => %{"capabilities" => ["custom_hf_model_v1"]},
+             "cpu" => %{"logical_processors" => 4}
+           } = Jason.decode!(encoded)
   end
 
   test "only Core attests Wasmtime across initial and refreshed native reports" do

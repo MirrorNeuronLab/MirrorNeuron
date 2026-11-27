@@ -107,7 +107,10 @@ defmodule MirrorNeuron.Cluster.Manager do
 
   defp local_hardware_info do
     hardware = MirrorNeuron.Cluster.Hardware.info()
-    Map.put(hardware, "native_sdk_grpc", native_sdk_grpc_node_info(hardware))
+
+    hardware
+    |> Map.delete(:native_sdk_grpc)
+    |> Map.put("native_sdk_grpc", native_sdk_grpc_node_info(hardware))
   end
 
   defp runtime_connected_nodes(_self_node, %{"connection_mode" => "federated"}), do: []

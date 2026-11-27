@@ -132,10 +132,13 @@ source does not update an installed binary runtime.
 
 ## Purpose
 
-Native SDK unary commands close their owned gRPC channel on success, failure,
-or an exception. Connection cleanup never replays a command. A committed Job
-bundle replacement remains committed when retirement of its previous native
-resources fails. Its response reports JSON-safe `resource_cleanup_errors` with
+Native SDK `SetResource` callbacks lease a supervised HTTP/2 channel to the
+configured endpoint. Authentication is per RPC. Each attempt releases its
+lease on return or exception. The pool drains retired channels and closes idle
+channels after five minutes. Other native SDK unary commands close their owned
+channel on return or exception. Connection cleanup never replays a command.
+A committed Job bundle replacement remains committed when retirement of its
+previous native resources fails. Its response reports JSON-safe `resource_cleanup_errors` with
 the exact owned resource identities and `reason: native_resource_cleanup_failed`;
 raw native command diagnostics are excluded. Ownership records remain available
 for the existing cleanup retry path.
@@ -1453,6 +1456,7 @@ Pure commands use the Wasmtime CLI (`MN_WASMTIME_BIN`). A step declaring
 Core authorizes each WIT host operation for the current run and the step's
 explicit grants. The host may provide durable artifacts, model calls, human
 review and mailbox services. Core schedules children from validated plan data.
+Native WIT imports also require the worker to select a versioned, digest-pinned component. SDK interfaces bind to their `mn_sdk_<interface>` package name and payload source. A skill binds to its catalog name, with hyphens in the WIT interface written as underscores in the component name.
 The WIT model call can prepare weights within the step deadline. The SDK starts
 its inference timeout once the model is ready.
 

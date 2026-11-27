@@ -12,6 +12,66 @@ defmodule MirrorNeuron.NativeSdkClientTest do
     def disconnect(channel), do: send(self(), {:disconnect, channel})
   end
 
+  defmodule SharedTransport do
+    def connect({:delayed, owner}, _opts) do
+      send(owner, {:connecting, self()})
+
+      receive do
+        :finish -> {:error, :closed}
+      after
+        1000 -> {:error, :timeout}
+      end
+    end
+
+    def connect(_target, _opts), do: {:ok, self()}
+  end
+
+  test "an expired channel checkout returns a timeout without dispatching" do
+    pool = start_supervised!(MirrorNeuron.Cluster.FederationChannels)
+    rpc = fn _, _, _ -> flunk("must not dispatch after checkout expires") end
+
+    assert {:error, :timeout} =
+             NativeSdkClient.call_shared(
+               {:delayed, self()},
+               :request,
+               10,
+               rpc,
+               pool,
+               SharedTransport
+             )
+
+    assert_receive {:connecting, worker}
+    send(worker, :finish)
+  end
+
+  test "resource callbacks reuse the channel and retire it after a transport failure" do
+    owner = self()
+
+    pool =
+      start_supervised!(
+        {MirrorNeuron.Cluster.FederationChannels,
+         disconnect: fn channel -> send(owner, {:closed, channel}) end}
+      )
+
+    rpc = fn channel, result, _opts ->
+      send(owner, {:called, channel})
+      result
+    end
+
+    call = &NativeSdkClient.call_shared("native", &1, 1000, rpc, pool, SharedTransport)
+    assert {:ok, 1} = call.({:ok, 1})
+    assert_receive {:called, first}
+    assert {:ok, 2} = call.({:ok, 2})
+    assert_receive {:called, ^first}
+    assert {:error, :closed} = call.({:error, :closed})
+    assert_receive {:called, ^first}
+    assert_receive {:closed, ^first}
+    assert {:ok, 3} = call.({:ok, 3})
+    assert_receive {:called, next}
+    refute next == first
+    refute_received {:called, _}
+  end
+
   test "repeated commands release every channel after success or RPC failure" do
     for result <- [{:ok, :committed}, {:error, :timeout}], _ <- 1..200 do
       rpc = fn channel, :request, opts ->

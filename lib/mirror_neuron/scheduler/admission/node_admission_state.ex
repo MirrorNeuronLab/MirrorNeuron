@@ -283,54 +283,90 @@ defmodule MirrorNeuron.Runtime.NodeAdmissionState do
          %{"request" => %{"shared_default_model" => true}} = held,
          %{
            "request" =>
-             %{"devices" => [%{"models" => [%{"key" => "managed:" <> _ = key}]}]} = model
+             %{"devices" => [%{"models" => [%{"key" => "managed:" <> _ = key} = weight]}]} = model
          } = attrs
        ) do
     allocation = held["allocation"]
 
+    slot =
+      if weight["purpose"] == "embedding", do: "embedding_model_key", else: "default_model_key"
+
+    pinned = allocation["default_model_key"] || allocation["embedding_model_key"]
+
     cond do
-      allocation["default_model_key"] == key ->
+      allocation[slot] == key ->
         {:ok, allocation}
 
-      allocation["default_model_key"] != nil ->
+      allocation[slot] != nil ->
         {:error, :default_model_changed}
 
-      allocation["devices"] != [] ->
+      allocation["devices"] != [] and is_nil(pinned) ->
         {:error, :invalid_resource_allocation}
 
+      Map.has_key?(state["requests"], attrs["token"]) ->
+        {:error, :stale_node_reservation}
+
       true ->
-        others =
-          state["reservations"]
-          |> Map.delete(held["run_id"])
-          |> Map.values()
-          |> Enum.map(& &1["allocation"])
-
-        cap = capacity(attrs)
-        # CPU inference checks installed RAM and needs no device.
-        model =
-          if cap["devices"] == [],
-            do: Map.put(model, "devices", []),
-            else: Map.put(model, "memory_mb", 1)
-
-        case ResourceAllocation.allocate(model, cap, others) do
-          {:ok, bound} ->
-            resources =
-              Map.update!(allocation["resources"], "memory_mb", &max(&1, model["memory_mb"]))
-
-            {:ok,
-             Map.merge(allocation, %{
-               "default_model_key" => key,
-               "devices" => bound["devices"],
-               "resources" => resources
-             })}
-
-          {:error, _} ->
-            {:error, :node_reserved}
-        end
+        bind_managed_model(state, allocation, capacity(attrs), model, slot, key)
     end
   end
 
   defp default_model_allocation(_, held, _), do: {:ok, held["allocation"]}
+
+  defp bind_managed_model(state, allocation, cap, model, slot, key) do
+    previous = List.first(allocation["devices"])
+    # Older receipts contain only the primary model and its original reservation.
+    previous_mb =
+      cond do
+        mb = allocation["managed_model_memory_mb"] -> mb
+        previous -> previous["reservation_memory_mb"]
+        allocation["default_model_key"] -> allocation["resources"]["memory_mb"]
+        true -> 0
+      end
+
+    total_mb = previous_mb + model["memory_mb"]
+    cpu? = cap["devices"] == []
+    [device] = model["devices"]
+    device = if previous, do: Map.put(device, "ids", [previous["id"]]), else: device
+
+    request =
+      if cpu?,
+        do: %{model | "devices" => [], "memory_mb" => total_mb},
+        else: %{model | "devices" => [device], "memory_mb" => 1}
+
+    # Include this Run's existing claim. Allocate only the new model against
+    # remaining capacity, then retain both charges through terminal cleanup.
+    reserved = Enum.map(state["reservations"], fn {_, run} -> run["allocation"] end)
+
+    with true <- previous_mb == 0 or cpu? == is_nil(previous),
+         {:ok, bound} <- ResourceAllocation.allocate(request, cap, reserved) do
+      resources =
+        Map.update!(allocation["resources"], "memory_mb", &max(&1, request["memory_mb"]))
+
+      devices = merge_model_devices(previous, bound["devices"])
+
+      {:ok,
+       Map.merge(allocation, %{
+         slot => key,
+         "managed_model_memory_mb" => total_mb,
+         "devices" => devices,
+         "resources" => resources
+       })}
+    else
+      _ -> {:error, :node_reserved}
+    end
+  end
+
+  defp merge_model_devices(nil, devices), do: devices
+
+  defp merge_model_devices(previous, [device]) do
+    [
+      device
+      |> Map.update!("models", &(previous["models"] ++ &1))
+      |> Map.update!("reservation_memory_mb", &(previous["reservation_memory_mb"] + &1))
+      |> Map.update!("incremental_memory_mb", &((previous["incremental_memory_mb"] || 0) + &1))
+    ]
+  end
 
   defp acquired(token, allocation),
     do: %{"status" => "acquired", "token" => token, "allocation" => allocation}

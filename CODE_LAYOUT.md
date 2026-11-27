@@ -133,8 +133,8 @@ MN_FLOW_REDIS_URL="$MN_REDIS_URL" mix test --no-start tests/e2e/runtime/flows
 ```
 
 Do not set `MN_FLOW_REDIS_URL` for an ordinary application-started `mix test` run.
-Real Docker lifecycle tests are opt-in with `MN_TEST_DOCKER_LIFECYCLE=1`; they
-require a running Docker daemon and their configured image. Fake runner tests
+The DockerWorker lifecycle tests use Podman. Set `MN_TEST_DOCKER_LIFECYCLE=1`
+with Podman running and the configured image available. Fake runner tests
 do not establish that a live OpenShell gateway or a multi-machine federation
 works in a deployment environment.
 

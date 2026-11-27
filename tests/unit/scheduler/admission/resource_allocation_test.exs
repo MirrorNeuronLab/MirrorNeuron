@@ -230,6 +230,83 @@ defmodule MirrorNeuron.Runtime.ResourceAllocationTest do
              })
   end
 
+  test "knowledge embeddings and chat bind independently and share only matching weights" do
+    cap = unified_capacity()
+    base = request(0, %{"devices" => [], "shared_default_model" => true})
+
+    bind = fn state, id, generation, token, name, size, purpose ->
+      weight = %{"key" => "managed:" <> name, "memory_mb" => size, "purpose" => purpose}
+      model = put_in(request(size), ["devices", Access.at(0), "models"], [weight])
+
+      NodeAdmissionState.transition(state, "request_acquire", %{
+        "run_id" => id,
+        "generation" => generation,
+        "token" => token,
+        "request" => model,
+        "capacity" => cap
+      })
+    end
+
+    {:ok, s, a} =
+      NodeAdmissionState.transition(NodeAdmissionState.new(), "submit_now", entry("a", base, cap))
+
+    {:ok, s, b} = NodeAdmissionState.transition(s, "submit_now", entry("b", base, cap))
+    {:ok, s, _} = bind.(s, "a", a["generation"], "ae", "embed", 1024, "embedding")
+    {:ok, s, both} = bind.(s, "a", a["generation"], "ac", "chat", 8192, "chat")
+    assert both["allocation"]["embedding_model_key"] == "managed:embed"
+    assert both["allocation"]["default_model_key"] == "managed:chat"
+    assert [%{"id" => "unified", "reservation_memory_mb" => 9216}] = both["allocation"]["devices"]
+    {:ok, s, again} = bind.(s, "a", a["generation"], "ae2", "embed", 1024, "embedding")
+    assert again["allocation"] == both["allocation"]
+
+    assert {:error, :default_model_changed} =
+             bind.(s, "a", a["generation"], "changed", "other", 1024, "embedding")
+
+    assert {:error, :node_reserved} =
+             bind.(s, "b", b["generation"], "too-large", "unrelated", 8192, "chat")
+
+    {:ok, s, _} = bind.(s, "b", b["generation"], "bc", "chat", 8192, "chat")
+    {:ok, _, shared} = bind.(s, "b", b["generation"], "be", "embed", 1024, "embedding")
+
+    assert [%{"reservation_memory_mb" => 9216, "incremental_memory_mb" => 0}] =
+             shared["allocation"]["devices"]
+  end
+
+  test "a CPU owner retains host memory for embeddings and a restored chat reservation" do
+    cap = %{capacity() | "devices" => []}
+    base = request(0, %{"devices" => [], "shared_default_model" => true})
+
+    {:ok, state, run} =
+      NodeAdmissionState.transition(
+        NodeAdmissionState.new(),
+        "submit_now",
+        entry("cpu", base, cap)
+      )
+
+    acquire = fn state, key, purpose, mb ->
+      weight = %{"key" => key, "memory_mb" => mb, "purpose" => purpose}
+
+      claim =
+        request(mb, %{"memory_mb" => mb}) |> put_in(["devices", Access.at(0), "models"], [weight])
+
+      NodeAdmissionState.transition(state, "request_acquire", %{
+        "run_id" => "cpu",
+        "generation" => run["generation"],
+        "token" => key,
+        "request" => claim,
+        "capacity" => cap
+      })
+    end
+
+    {:ok, state, _} = acquire.(state, "managed:chat", "chat", 8192)
+    # A previously persisted primary-only allocation predates the combined charge.
+    {_, state} = pop_in(state, ["reservations", "cpu", "allocation", "managed_model_memory_mb"])
+    assert {:error, :node_reserved} = acquire.(state, "managed:huge", "embedding", 65536)
+    assert {:ok, _, combined} = acquire.(state, "managed:embed", "embedding", 1024)
+    assert combined["allocation"]["resources"]["memory_mb"] == 9216
+    assert combined["allocation"]["devices"] == []
+  end
+
   test "active inference must drain before a reservation is released" do
     {:ok, state, held} =
       NodeAdmissionState.transition(NodeAdmissionState.new(), "submit", entry("a", request(4096)))

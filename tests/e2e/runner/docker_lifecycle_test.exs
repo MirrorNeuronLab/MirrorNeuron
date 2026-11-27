@@ -8,10 +8,10 @@ defmodule MirrorNeuron.Runner.DockerLifecycleTest do
 
   setup_all do
     container = "mn-lifecycle-test-#{System.unique_integer([:positive])}"
-    image = System.get_env("MN_TEST_DOCKER_IMAGE", "python:3.12-slim")
+    image = System.get_env("MN_TEST_DOCKER_IMAGE", "docker.io/library/python:3.12-slim")
 
     {_, 0} =
-      System.cmd("docker", [
+      System.cmd("podman", [
         "run",
         "-d",
         "--name",
@@ -22,7 +22,7 @@ defmodule MirrorNeuron.Runner.DockerLifecycleTest do
         "infinity"
       ])
 
-    on_exit(fn -> System.cmd("docker", ["rm", "-f", container]) end)
+    on_exit(fn -> System.cmd("podman", ["rm", "-f", container]) end)
     {:ok, container: container, image: image}
   end
 
@@ -52,7 +52,7 @@ defmodule MirrorNeuron.Runner.DockerLifecycleTest do
     assert_container_usable(context)
   end
 
-  test "job cleanup waits for in-flight Docker commands to stop", context do
+  test "job cleanup waits for in-flight Podman commands to stop", context do
     {owner, job, pids} = start_command(context, "cancel")
     assert :ok = DockerJobSandbox.cleanup_job_local(job)
 
@@ -122,7 +122,7 @@ defmodule MirrorNeuron.Runner.DockerLifecycleTest do
     """
 
     {_, code} =
-      System.cmd("docker", [
+      System.cmd("podman", [
         "exec",
         context.container,
         "python3",
@@ -135,6 +135,6 @@ defmodule MirrorNeuron.Runner.DockerLifecycleTest do
 
   defp assert_container_usable(context) do
     assert {"resumed\n", 0} =
-             System.cmd("docker", ["exec", context.container, "python3", "-c", "print('resumed')"])
+             System.cmd("podman", ["exec", context.container, "python3", "-c", "print('resumed')"])
   end
 end

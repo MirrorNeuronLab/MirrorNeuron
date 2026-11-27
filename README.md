@@ -45,6 +45,10 @@ The receiver verifies and decrypts the replicated file, then decodes the
 ordinary service reply. Older clients retain inline delivery. See the wire
 format and retention rules in [SPEC.md](SPEC.md#shared-file-grpc-responses).
 
+Core authenticates private model, worker and resource calls to the node's
+configured `MN_NATIVE_SDK_GRPC_TARGET` with its runtime-control credential.
+This applies to inline and shared-file replies.
+
 ## Workflow preparation progress
 
 Active preparation is reported as `mn.preparation.v1` receipts in
@@ -266,8 +270,11 @@ check all downstream queues. This lets prompt and supervision controls remain
 available while analysis or retrieval is busy; it does not grant model capacity
 or bypass authentication, message limits, delivery or lifecycle checks.
 
-Native SDK unary calls release their gRPC connections after each command,
-including failures. If retirement of a previous definition's native resources
+Native SDK resource commands, including WIT callbacks, share a supervised
+HTTP/2 connection to the configured SDK. Each call releases its lease when it
+finishes. The pool retires failed connections and closes idle connections.
+Other native SDK unary calls close their connections after each command.
+If retirement of a previous definition's native resources
 fails after a replacement commits, the replacement response retains its saved
 revision and reports `resource_cleanup_errors`. These bounded records contain
 the owned identities and `native_resource_cleanup_failed`, without raw command

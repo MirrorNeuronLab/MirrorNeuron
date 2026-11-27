@@ -95,6 +95,7 @@ defmodule MirrorNeuron.Application do
       MirrorNeuron.Persistence.ProtectedRedis,
       MirrorNeuron.Persistence.Retention,
       MirrorNeuron.Runtime.InteractionDeadlines,
+      MirrorNeuron.NativeSdkClient,
       {MirrorNeuron.Cluster.FederationChannels, name: MirrorNeuron.Cluster.FederationChannels},
       {Task.Supervisor, name: MirrorNeuron.Runtime.RecoveryTaskSupervisor},
       MirrorNeuron.Operations.Supervisor
