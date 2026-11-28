@@ -4,6 +4,24 @@ defmodule MirrorNeuron.Persistence.RedisStore.EventsTest do
   alias MirrorNeuron.Persistence.RedisStore
   alias MirrorNeuron.Runtime.EventBus
 
+  test "activity cursors survive trimming and migration of existing events", %{namespace: ns} do
+    job_id = "legacy-activity"
+    key = redis_key(ns, ["job", job_id, "events"])
+    {:ok, 2} = Redix.command(MirrorNeuron.Redis.Connection, ["RPUSH", key, "{}", "{}"])
+    activity = &MirrorNeuron.Persistence.RedisStore.Events.activity_page(job_id, &1, 2)
+    assert {:ok, [%{"sequence" => 1}, %{"sequence" => 2}]} = activity.(0)
+    Application.put_env(:mirror_neuron, :event_max_count, 2)
+
+    for n <- 3..5 do
+      assert {:ok, _} = RedisStore.append_event(job_id, %{"type" => "item", "n" => n})
+    end
+
+    assert {:error, :activity_replay_gap} = activity.(2)
+    assert {:ok, [%{"sequence" => 4}, %{"sequence" => 5, "_journal_head" => 5}]} = activity.(3)
+    assert {:ok, []} = activity.(5)
+    assert {:error, :activity_replay_gap} = activity.(6)
+  end
+
   test "a Redis command error inside a trigger transaction reaches the caller", %{
     namespace: namespace
   } do

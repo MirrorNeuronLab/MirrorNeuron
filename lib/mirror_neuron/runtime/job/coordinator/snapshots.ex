@@ -14,7 +14,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator.Snapshots do
     job_map = job_snapshot(state)
 
     if state.status == "running" do
-      persist_job_projection(state, job_map)
+      persist_job_projection(state, Map.put(job_map, :workflow_state, state.workflow_state))
     else
       persist_durable_job_snapshot(state, job_map)
     end
@@ -90,7 +90,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator.Snapshots do
   end
 
   def persist_durable_job_snapshot(state, job_map) do
-    case RedisStore.persist_job(state.job_id, job_map) do
+    case RedisStore.persist_job(state.job_id, job_map, state.workflow_state) do
       {:ok, _job} ->
         :ok
 
@@ -185,7 +185,7 @@ defmodule MirrorNeuron.Runtime.JobCoordinator.Snapshots do
       }
       |> maybe_put_lease(Keyword.get(state.opts, :job_lease))
 
-    case RedisStore.persist_job(state.job_id, job_map) do
+    case RedisStore.persist_job(state.job_id, job_map, state.workflow_state) do
       {:ok, _job} ->
         :ok
 

@@ -451,7 +451,7 @@ stop_runtime_remote
 cleanup_sandboxes_local
 cleanup_sandboxes_remote
 bash "$ROOT_DIR/scripts/ensure_test_podman.sh"
-ssh "$BOX2_IP" "$REMOTE_PATH_PREFIX bash -s" < "$ROOT_DIR/scripts/ensure_test_podman.sh"
+ssh "$BOX2_IP" "$REMOTE_PATH_PREFIX bash -s" <"$ROOT_DIR/scripts/ensure_test_podman.sh"
 ensure_local_gateway
 ensure_remote_gateway
 sync_remote_repo

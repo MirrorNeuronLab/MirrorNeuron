@@ -2,9 +2,15 @@ defmodule MirrorNeuron.Sandbox.WitNativeSkills do
   @moduledoc "Route a selected, pinned WIT component import to the invoking executor's native SDK."
   alias MirrorNeuron.Artifacts.SharedStorage
   alias MirrorNeuron.ModelServices.Commands
-  alias MirrorNeuron.Sandbox.Wasmtime
+  alias MirrorNeuron.Sandbox.{Wasmtime, WitModelWait}
 
-  def call(record, scope, operation, input, %{skills: skills, executor: executor, access: access}) do
+  def call(
+        record,
+        scope,
+        operation,
+        input,
+        %{skills: skills, executor: executor, access: access} = native
+      ) do
     with [skill, method] <- String.split(operation, "."),
          true <- declared?(record, skills, skill),
          {:ok, arguments} when is_map(arguments) <- Jason.decode(input) do
@@ -18,7 +24,11 @@ defmodule MirrorNeuron.Sandbox.WitNativeSkills do
         "arguments" => arguments
       }
 
-      timeout = :timer.seconds(Wasmtime.max_compute_seconds())
+      observation = native[:observation]
+      command = WitModelWait.bind(command, observation)
+
+      timeout =
+        if observation, do: :infinity, else: :timer.seconds(Wasmtime.max_compute_seconds())
 
       response =
         if executor == node(),
@@ -29,12 +39,19 @@ defmodule MirrorNeuron.Sandbox.WitNativeSkills do
               Commands,
               :job_response_command,
               [command, timeout],
-              timeout + 1_000
+              if(observation, do: :infinity, else: timeout + 1_000)
             )
 
       case response do
-        {:ok, %{"value" => value}} -> Jason.encode(value)
-        _ -> {:error, :native_skill_unavailable}
+        {:ok, %{"value" => value}} ->
+          Jason.encode(value)
+
+        {:ok, %{"error" => "embedding_model_unavailable"}}
+        when operation == "workflow-context.query-knowledge" ->
+          {:error, :embedding_model_unavailable}
+
+        _ ->
+          {:error, :native_skill_unavailable}
       end
     else
       _ -> {:error, :invalid_native_skill_request}

@@ -69,6 +69,7 @@ coverage/
 # Build tools
 /target/
 /project/target/
+/native/wasmtime-runner/target/
 /project/project
 /protoc_install/
 /protoc-*.zip

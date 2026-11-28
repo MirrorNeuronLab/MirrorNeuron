@@ -26,6 +26,9 @@ defmodule MirrorNeuron.Grpc.Handlers.Observability do
       local_stream.(request, stream)
     else
       case Map.get(request, :channel, "") do
+        "activity" ->
+          activity_page(request, stream)
+
         channel when channel in ["errors", "responses"] ->
           MirrorNeuron.Grpc.Handlers.SignalStream.stream(request, stream)
 
@@ -39,6 +42,57 @@ defmodule MirrorNeuron.Grpc.Handlers.Observability do
       end
     end
   end
+
+  defp activity_page(request, stream) do
+    if request.follow or request.after_sequence < 0 or request.limit not in 0..500 do
+      raise GRPC.RPCError,
+        status: GRPC.Status.invalid_argument(),
+        message: "invalid activity page"
+    end
+
+    case RedisStore.Events.activity_page(request.job_id, request.after_sequence, request.limit) do
+      {:ok, events} ->
+        for event <- events do
+          metadata =
+            Map.take(
+              event,
+              ~w(type timestamp event_id job_id run_id step_id agent_id level activity_kind sequence _journal_head)
+            )
+
+          payload = (event["payload"] || %{}) |> activity_payload()
+
+          GRPC.Server.send_reply(
+            stream,
+            event_response(Map.merge(metadata, %{"channel" => "events", "payload" => payload}))
+          )
+        end
+
+        stream
+
+      {:error, :activity_replay_gap} ->
+        raise GRPC.RPCError, status: GRPC.Status.out_of_range(), message: "activity_replay_gap"
+
+      {:error, _} ->
+        raise GRPC.RPCError, status: GRPC.Status.unavailable(), message: "activity unavailable"
+    end
+  end
+
+  defp activity_payload(data) when is_map(data) do
+    data
+    |> Map.take(
+      ~w(step_id step agent_id attempt attempt_id preparation_id kind purpose phase
+      status percent current_bytes total_bytes retry_at started_at ended_at items_done items_total)
+    )
+    |> Map.reject(fn
+      {key, value} when key in ~w(current_bytes total_bytes items_done items_total percent) ->
+        not is_number(value)
+
+      {_key, value} ->
+        is_map(value) or is_list(value)
+    end)
+  end
+
+  defp activity_payload(_), do: %{}
 
   defp do_stream_local_events(request, stream) do
     job_id = request.job_id

@@ -13,25 +13,21 @@ defmodule MirrorNeuron.Runner.HostLocal.Execution do
     run_command(command, env, workdir, config, opts, Keyword.get(opts, :message))
   end
 
-  def run_command([command | args], env, workdir, config, opts, message) do
+  def run_command(command, env, workdir, config, opts, message) do
+    with_command(env, workdir, config, opts, message, fn run -> run.(command) end)
+  end
+
+  def with_command(env, workdir, config, opts, message, callback) do
     owner = self()
     result_ref = make_ref()
 
     {runner, monitor_ref} =
       spawn_monitor(fn ->
-        result =
-          execute_command(
-            owner,
-            command,
-            args,
-            env,
-            workdir,
-            config,
-            opts,
-            message
-          )
+        run = fn [command | args] ->
+          execute_command(owner, command, args, env, workdir, config, opts, message)
+        end
 
-        send(owner, {result_ref, result})
+        send(owner, {result_ref, callback.(run)})
       end)
 
     receive do
@@ -83,6 +79,7 @@ defmodule MirrorNeuron.Runner.HostLocal.Execution do
 
     beacon_state =
       Beacons.beacon_state(config, opts, message)
+      |> Map.put(:wit_ref, Keyword.get(opts, :wit_ref))
       |> Map.put(:bounded_output, Keyword.get(opts, :bounded_command_output, false))
       |> Map.put(:wire_bytes, 0)
       |> Map.put(

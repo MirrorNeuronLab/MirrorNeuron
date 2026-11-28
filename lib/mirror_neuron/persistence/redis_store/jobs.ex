@@ -27,11 +27,19 @@ defmodule MirrorNeuron.Persistence.RedisStore.Jobs do
     end
   end
 
-  def persist_job(job_id, job_map) when is_map(job_map) do
+  def persist_job(job_id, job_map), do: persist_job(job_id, job_map, nil)
+
+  def persist_job(job_id, job_map, projection_workflow) when is_map(job_map) do
     with :ok <- Values.validate_identifier("job_id", job_id),
          {:ok, job_map} <- with_run_clock(job_id, job_map) do
       encoded = Jason.encode!(Map.delete(job_map, :terminal_event))
-      encoded_summary = Jason.encode!(job_summary(job_id, job_map))
+
+      summary_source =
+        if is_map(projection_workflow),
+          do: Map.put(job_map, "workflow_state", projection_workflow),
+          else: job_map
+
+      encoded_summary = Jason.encode!(job_summary(job_id, summary_source))
       encoded_guard = Jason.encode!(Guards.job_guard(job_id, job_map))
 
       with :ok <- Guards.validate_job_lease_epoch(job_id, job_map),
@@ -45,7 +53,7 @@ defmodule MirrorNeuron.Persistence.RedisStore.Jobs do
     end
   end
 
-  def persist_job(_job_id, _job_map), do: {:error, "job must be an object"}
+  def persist_job(_job_id, _job_map, _projection_workflow), do: {:error, "job must be an object"}
 
   @doc false
   def persist_terminal_transition(job_id, job_map, event) do
@@ -71,7 +79,8 @@ defmodule MirrorNeuron.Persistence.RedisStore.Jobs do
              Keys.key("job", job_id, "summary"),
              Keys.key("job", job_id, "guard"),
              Keys.key(@jobs_set),
-             Keys.key("job", job_id, "events")
+             Keys.key("job", job_id, "events"),
+             Keys.key("job", job_id, "event_cursor")
            ],
            [
              encoded,

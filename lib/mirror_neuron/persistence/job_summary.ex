@@ -88,15 +88,25 @@ defmodule MirrorNeuron.Persistence.JobSummary do
               "dynamic_instance",
               "template_id",
               "region_id",
+              "parent_step_id",
+              "child_workflow_id",
+              "child_round",
+              "child_phase",
               "patch_id",
               "attempt_count",
               "started_at",
               "ended_at",
               "last_event_at",
+              "retry_at",
+              "deadline_at",
+              "heartbeat_deadline_at",
               "terminal_outcome",
               "terminal_reason",
               "output_ref"
             ])
+            |> put_attempt(step["current_attempt"])
+            |> put_active_scopes(step, "preparation")
+            |> put_active_scopes(step, "model_waits")
           else
             %{"status" => "unknown"}
           end
@@ -125,6 +135,26 @@ defmodule MirrorNeuron.Persistence.JobSummary do
   end
 
   defp workflow_state_summary(_state), do: nil
+
+  defp put_attempt(step, attempt) when is_map(attempt),
+    do: Map.put(step, "current_attempt", Map.take(attempt, ~w(attempt attempt_id)))
+
+  defp put_attempt(step, _), do: step
+
+  defp put_active_scopes(step, source, key) do
+    case source[key] do
+      %{"active" => active} when is_map(active) ->
+        scopes =
+          Map.new(active, fn {id, scope} ->
+            {id, Map.take(scope, ~w(agent_id deadline_ms progress current_bytes))}
+          end)
+
+        Map.put(step, key, %{"active" => scopes})
+
+      _ ->
+        step
+    end
+  end
 
   defp failure_summary(job) do
     result = field(job, "result")

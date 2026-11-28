@@ -80,6 +80,7 @@ defmodule MirrorNeuron.Grpc.JobProjection do
   def run_detail(record, run_id) when is_map(record) do
     record
     |> run(run_id)
+    |> put_live_workflow(run_id)
     |> Map.put("placement", MirrorNeuron.Grpc.RunPlacement.read(record, run_id))
     |> Map.put(
       "controls",
@@ -89,6 +90,34 @@ defmodule MirrorNeuron.Grpc.JobProjection do
       end
     )
   end
+
+  # The fenced running summary follows the coordinator between durable job writes.
+  # Terminal runs have their own immutable, generation-bound ledger.
+  defp put_live_workflow(%{"status" => status} = run, run_id)
+       when status in ["queued", "pending", "running", "paused"] do
+    with {:ok, summary} <- MirrorNeuron.Persistence.RedisStore.fetch_job_summary(run_id),
+         true <- summary["attempt"] == run["attempt"],
+         %{"enabled" => true, "steps" => steps} = state <- summary["workflow_state"],
+         true <- summary["status"] in ["running", "paused"] do
+      safe_steps =
+        Map.new(steps, fn {id, step} ->
+          {id, Map.drop(step, ~w(output_ref terminal_reason))}
+        end)
+
+      projection =
+        state
+        |> Map.take(~w(enabled status graph_revision updated_at step_order))
+        |> Map.put("steps", safe_steps)
+
+      run
+      |> Map.put("status", summary["status"])
+      |> Map.put("workflow_progress_state", projection)
+    else
+      _ -> run
+    end
+  end
+
+  defp put_live_workflow(run, _id), do: run
 
   defp projection_revision(record),
     do:

@@ -12,7 +12,7 @@ defmodule MirrorNeuron.Runner.HostLocal.Beacons do
       interval_ms =
         positive_int(Map.get(config, "beacon_interval_ms"), @default_beacon_interval_ms)
 
-      timeout_ms = positive_int(Map.get(config, "beacon_timeout_ms"), @default_beacon_timeout_ms)
+      timeout_ms = timeout_ms(config)
       required = truthy?(Map.get(config, "agent_beacon_required"))
       environment = Map.get(config, "environment", %{})
       workflow = Context.workflow_context(message)
@@ -42,7 +42,7 @@ defmodule MirrorNeuron.Runner.HostLocal.Beacons do
   def beacon_state(config, opts, message) do
     now = now_ms()
     interval_ms = positive_int(Map.get(config, "beacon_interval_ms"), @default_beacon_interval_ms)
-    timeout_ms = positive_int(Map.get(config, "beacon_timeout_ms"), @default_beacon_timeout_ms)
+    timeout_ms = timeout_ms(config)
     environment = Map.get(config, "environment", %{})
     workflow = Context.workflow_context(message)
 
@@ -191,13 +191,22 @@ defmodule MirrorNeuron.Runner.HostLocal.Beacons do
 
   def emit_beacon_event(_state, _event_type, _payload), do: :ok
 
-  def beacon_missed?(%{enabled: true, required: true} = state, now) do
-    now - state.last_agent_beacon_at >= state.timeout_ms
-  end
+  def agent_deadline(state),
+    do:
+      max(
+        state.last_agent_beacon_at,
+        Map.get(state, :last_wit_check_at, state.last_agent_beacon_at)
+      ) + state.timeout_ms
+
+  def beacon_missed?(%{enabled: true, required: true} = state, now),
+    do: now >= agent_deadline(state)
 
   def beacon_missed?(_state, _now), do: false
 
   def now_ms, do: System.monotonic_time(:millisecond)
+
+  def timeout_ms(config),
+    do: positive_int(config["beacon_timeout_ms"], @default_beacon_timeout_ms)
 
   defp positive_int(value, _default) when is_integer(value) and value > 0, do: value
 

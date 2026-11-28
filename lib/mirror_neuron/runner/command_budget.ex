@@ -29,7 +29,12 @@ defmodule MirrorNeuron.Runner.CommandBudget do
             else:
               WorkflowActivity.observe(step, Map.put(payload, "agent_id", "command"), timestamp)
 
-        type when type in ["runtime_preparation_started", "runtime_preparation_finished"] ->
+        type
+        when type in [
+               "runtime_preparation_started",
+               "runtime_preparation_progress",
+               "runtime_preparation_finished"
+             ] ->
           WorkflowPreparation.observe(step, "command", type, payload, timestamp)
 
         _ ->

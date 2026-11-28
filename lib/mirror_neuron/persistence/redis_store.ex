@@ -50,6 +50,7 @@ defmodule MirrorNeuron.Persistence.RedisStore do
   @doc false
   defdelegate validate_job_attempt_epoch(job_id, epoch), to: Guards
   defdelegate persist_job(job_id, job_map), to: Jobs
+  defdelegate persist_job(job_id, job_map, projection_workflow), to: Jobs
   @doc false
   defdelegate persist_terminal_transition(job_id, job_map, event), to: Jobs
   @doc false

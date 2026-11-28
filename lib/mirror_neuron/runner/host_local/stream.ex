@@ -26,6 +26,22 @@ defmodule MirrorNeuron.Runner.HostLocal.Stream do
     timeout = receive_timeout(deadline, beacon_state)
 
     receive do
+      {:wit_model_status, ref, status} when is_reference(ref) and ref == beacon_state.wit_ref ->
+        state = MirrorNeuron.Sandbox.WitModelWait.observe(beacon_state, status, Beacons.now_ms())
+
+        collect_port_output(
+          port,
+          chunks,
+          bytes,
+          max_output_bytes,
+          deadline,
+          state,
+          owner,
+          owner_ref,
+          process_group?,
+          job_id
+        )
+
       {^port, {:data, data}}
       when beacon_state.bounded_output and
              beacon_state.wire_bytes + byte_size(data) > max_output_bytes ->
@@ -125,7 +141,7 @@ defmodule MirrorNeuron.Runner.HostLocal.Stream do
     [
       deadline,
       if(beacon_state.enabled, do: beacon_state.next_runtime_beacon_at),
-      if(beacon_state.required, do: beacon_state.last_agent_beacon_at + beacon_state.timeout_ms)
+      if(beacon_state.enabled and beacon_state.required, do: Beacons.agent_deadline(beacon_state))
     ]
     |> Enum.reject(&is_nil/1)
     |> case do

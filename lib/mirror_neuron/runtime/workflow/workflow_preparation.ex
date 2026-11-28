@@ -1,7 +1,7 @@
 defmodule MirrorNeuron.Runtime.WorkflowPreparation do
   @moduledoc false
 
-  # A preparation owns a fixed deadline; progress events cannot renew it.
+  # Each owner declares a bounded allowance. Measured WIT weight downloads use it for inactivity.
   @max_timeout_ms 86_400_000
   @max_preparations 1_024
   @events [
@@ -124,12 +124,24 @@ defmodule MirrorNeuron.Runtime.WorkflowPreparation do
          is_integer(timeout) and timeout > 0 and timeout <= @max_timeout_ms and
          map_size(clock["seen"]) < @max_preparations and not Map.has_key?(clock["seen"], id) and
          not execution_expired?(step, now) do
-      active =
-        Map.put(clock["active"], id, %{
-          "agent_id" => agent_id,
-          "deadline_ms" => millis(now) + timeout,
-          "progress" => progress(payload)
-        })
+      scope = %{
+        "agent_id" => agent_id,
+        "deadline_ms" => millis(now) + timeout,
+        "progress" => progress(payload)
+      }
+
+      scope =
+        if payload["source"] == "runtime" and payload["kind"] == "model" and
+             payload["timeout_policy"] == "download_inactivity" do
+          Map.merge(scope, %{
+            "inactivity_ms" => timeout,
+            "current_bytes" => download_bytes(payload)
+          })
+        else
+          scope
+        end
+
+      active = Map.put(clock["active"], id, scope)
 
       Map.put(step, "preparation", %{
         clock
@@ -147,9 +159,9 @@ defmodule MirrorNeuron.Runtime.WorkflowPreparation do
     id = payload["preparation_id"]
 
     case get_in(step, ["preparation", "active", id]) do
-      %{"agent_id" => ^agent_id, "deadline_ms" => deadline} when deadline > 0 ->
+      %{"agent_id" => ^agent_id, "deadline_ms" => deadline} = scope when deadline > 0 ->
         if deadline > millis(now),
-          do: put_in(step, ["preparation", "active", id, "progress"], progress(payload)),
+          do: put_in(step, ["preparation", "active", id], update_progress(scope, payload, now)),
           else: step
 
       _ ->
@@ -209,6 +221,22 @@ defmodule MirrorNeuron.Runtime.WorkflowPreparation do
   end
 
   defp change(step, _agent_id, _type, _payload, _now), do: step
+
+  defp update_progress(scope, payload, now) do
+    scope = Map.put(scope, "progress", progress(payload))
+    bytes = download_bytes(payload)
+
+    if scope["inactivity_ms"] && payload["source"] == "runtime" && bytes > scope["current_bytes"] do
+      %{scope | "current_bytes" => bytes, "deadline_ms" => millis(now) + scope["inactivity_ms"]}
+    else
+      scope
+    end
+  end
+
+  defp download_bytes(%{"phase" => "downloading", "current_bytes" => bytes})
+       when is_integer(bytes) and bytes > 0, do: bytes
+
+  defp download_bytes(_), do: 0
 
   defp progress(payload) do
     %{

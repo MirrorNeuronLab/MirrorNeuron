@@ -2,7 +2,7 @@ defmodule MirrorNeuron.Grpc.RuntimeControlServer do
   @moduledoc """
   Authenticated runtime gateway. Python host work stays in the private native
   service; it uses Core's existing scheduling and ownership commands.
-  Channels belong to one request and mutations are never retried.
+  RPCs lease multiplexed channels and attach credentials per request.
   """
   use GRPC.Server, service: Mirrorneuron.Runtime.V1.RuntimeControlService.Service
 
@@ -166,14 +166,19 @@ defmodule MirrorNeuron.Grpc.RuntimeControlServer do
   end
 
   defp with_channel(target, callback) do
-    options = MirrorNeuron.Grpc.SharedResponse.client_options(timeout: 5_000)
-    channel = GRPC.Stub.connect(target, options) |> unwrap!()
+    options = MirrorNeuron.Grpc.SharedResponse.client_options([])
+    # Streams retain their lease through the last forwarded frame. Separate
+    # targets have independent lifetimes even when the node forwards requests.
+    key = {{:runtime_control, target}, node(), target, options}
 
-    try do
-      callback.(channel)
-    after
-      GRPC.Stub.disconnect(channel)
-    end
+    MirrorNeuron.Cluster.FederationClient.invoke_unary(
+      key,
+      fn -> GRPC.Stub.connect(target, Keyword.put(options, :timeout, 5_000)) end,
+      fn channel -> {:ok, callback.(channel)} end,
+      MirrorNeuron.NativeSdkClient,
+      5_000
+    )
+    |> unwrap!()
   end
 
   defp take_first!(frames) do

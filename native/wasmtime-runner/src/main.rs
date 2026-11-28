@@ -72,6 +72,83 @@ impl Host {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread;
+
+    fn host(broker: UnixStream) -> Host {
+        Host {
+            wasi: WasiCtx::builder().build(),
+            table: ResourceTable::new(),
+            limits: StoreLimitsBuilder::new().build(),
+            broker,
+            calls: 0,
+        }
+    }
+
+    fn read_request(broker: &mut UnixStream) -> Value {
+        let mut size = [0; 4];
+        broker.read_exact(&mut size).unwrap();
+        let mut body = vec![0; u32::from_be_bytes(size) as usize];
+        broker.read_exact(&mut body).unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    #[test]
+    fn forwards_scoped_artifact_arguments_and_returns_broker_result() {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let broker = thread::spawn(move || {
+            let request = read_request(&mut server);
+            assert_eq!(
+                request,
+                json!({
+                    "service": "artifacts", "operation": "read", "args": ["proof.json", null]
+                })
+            );
+            let response = br#"{"ok":"receipt"}"#;
+            server
+                .write_all(&(response.len() as u32).to_be_bytes())
+                .unwrap();
+            server.write_all(response).unwrap();
+        });
+
+        assert_eq!(
+            host(client).request("artifacts", "read", json!(["proof.json", null])),
+            (Ok("receipt".into()),)
+        );
+        broker.join().unwrap();
+    }
+
+    #[test]
+    fn rejects_an_oversized_broker_reply_before_reading_a_body() {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let broker = thread::spawn(move || {
+            read_request(&mut server);
+            server
+                .write_all(&((FRAME_LIMIT + 1) as u32).to_be_bytes())
+                .unwrap();
+            server
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut end = [0];
+            assert_eq!(server.read(&mut end).unwrap(), 0);
+        });
+
+        assert_eq!(
+            host(client).request("artifacts", "read", json!(["proof.json", null])),
+            (Err("Run service connection failed".into()),)
+        );
+        broker.join().unwrap();
+    }
+}
+
 fn link_services(linker: &mut Linker<Host>) -> wasmtime::Result<()> {
     let mut artifacts = linker.instance("mirror-neuron:run/artifacts@1.0.0")?;
     artifacts.func_wrap(

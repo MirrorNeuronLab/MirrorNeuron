@@ -33,6 +33,135 @@ defmodule MirrorNeuron.Runner.WitServicesTest do
 
   defp call(key, args), do: WitServices.call("execution", "workflow", key, args, %{})
 
+  test "RAG waits through a growing install and resumes guest supervision when the call returns",
+       %{root: root, record: record} do
+    key = :native_sdk_grpc_job_response_client
+    client = Application.get_env(:mirror_neuron, key)
+    host = System.get_env("MN_WASMTIME_HOST_BIN")
+    rpc_timeout = System.get_env("MN_NATIVE_SDK_GRPC_TIMEOUT_MS")
+
+    on_exit(fn ->
+      restore_env(key, client)
+      restore_system_env("MN_WASMTIME_HOST_BIN", host)
+      restore_system_env("MN_NATIVE_SDK_GRPC_TIMEOUT_MS", rpc_timeout)
+    end)
+
+    System.put_env("MN_NATIVE_SDK_GRPC_TIMEOUT_MS", "95000")
+
+    dep = %{
+      "name" => "mn_sdk_workflow_context",
+      "source" => "payload",
+      "type" => "wit",
+      "version" => "1.0.0",
+      "sha256" => WitArtifacts.digest("component")
+    }
+
+    record =
+      record
+      |> put_in(["manifest", "skill_dependencies"], [dep])
+      |> Map.put("status", "validated")
+
+    assert {:ok, _} = RedisStore.persist_job("execution", record)
+
+    executable = Path.join(root, "test-embedder")
+    File.write!(Path.join(root, "worker.wasm"), <<0, "asm", 13, 0, 1, 0>>)
+
+    File.write!(executable, """
+    #!/usr/bin/env python3
+    import json, socket, struct, sys, time
+    from pathlib import Path
+    with socket.socket(socket.AF_UNIX) as peer:
+        peer.connect(sys.argv[3])
+        payload = json.dumps({"service":"skill","operation":"workflow-context.query-knowledge","args":["{}"]}).encode()
+        peer.sendall(struct.pack(">I", len(payload)) + payload)
+        with peer.makefile("rb") as reply:
+            size, = struct.unpack(">I", reply.read(4))
+            response = json.loads(reply.read(size))
+            if "error" in response:
+                sys.exit(response["error"])
+            print(response["ok"], flush=True)
+    if json.loads((Path(sys.argv[2]) / "mirror_neuron_input.json").read_text()).get("hang"):
+        time.sleep(10)
+    """)
+
+    File.chmod!(executable, 0o700)
+    System.put_env("MN_WASMTIME_HOST_BIN", executable)
+    track = start_supervised!({Agent, fn -> {nil, 0, 0} end})
+
+    Application.put_env(:mirror_neuron, key, fn _, rpc, timeout ->
+      request = Jason.decode!(rpc.resource_json)
+      id = request["observation_id"]
+
+      reply =
+        case request["kind"] do
+          "wit_skill" ->
+            assert timeout == :infinity
+            Agent.update(track, fn {_, calls, _} -> {id, calls + 1, 0} end)
+            Process.sleep(1_800)
+            %{"value" => %{"citations" => ["source"]}}
+
+          "wit_model_status" ->
+            assert timeout == 200
+
+            count =
+              Agent.get_and_update(track, fn {^id, calls, polls} ->
+                {polls + 1, {id, calls, polls + 1}}
+              end)
+
+            %{
+              "pending" => true,
+              "preparation" => %{
+                "preparation_id" => "weights",
+                "kind" => "model",
+                "purpose" => "embedding",
+                "phase" => "downloading",
+                "timeout_ms" => 700,
+                "timeout_policy" => "download_inactivity",
+                "current_bytes" => count * 100
+              }
+            }
+        end
+
+      {:ok, %Mirrorneuron.Cluster.V1.SetResourceResponse{resource_json: Jason.encode!(reply)}}
+    end)
+
+    config = %{
+      "wasm_component" => "worker.wasm",
+      "wasm_capabilities" => ["skill.workflow-context.query-knowledge"],
+      "wit_skills" => [dep["name"]],
+      "beacon_enabled" => true,
+      "agent_beacon_required" => true,
+      "beacon_interval_ms" => 100,
+      "beacon_timeout_ms" => 600,
+      "timeout_seconds" => 1
+    }
+
+    parent = self()
+
+    opts = [
+      job_id: "execution",
+      agent_id: "worker",
+      run_id: "workflow",
+      payloads_path: root,
+      event_callback: fn type, payload -> send(parent, {type, payload}) end
+    ]
+
+    assert {:ok, %{"stdout" => ~s({"citations":["source"]})}} =
+             MirrorNeuron.Sandbox.Wasmtime.run(%{}, config, opts)
+
+    assert_receive {"runtime_preparation_started",
+                    %{"purpose" => "embedding", "source" => "runtime"}}
+
+    assert_receive {"runtime_preparation_progress", %{"current_bytes" => _}}
+    assert_receive {"runtime_preparation_finished", _}
+    assert {_, 1, polls} = Agent.get(track, & &1)
+    assert polls >= 3
+    refute_received {:agent_beacon, %{"source" => "agent"}}
+
+    assert {:error, %{"error" => "agent beacon deadline exceeded"}} =
+             MirrorNeuron.Sandbox.Wasmtime.run(%{"hang" => true}, config, opts)
+  end
+
   test "the model RPC has time to prepare weights within the WASI step" do
     key = :native_sdk_grpc_job_response_client
     old_client = Application.get_env(:mirror_neuron, key)
@@ -135,6 +264,56 @@ defmodule MirrorNeuron.Runner.WitServicesTest do
       updated = put_in(record, ["manifest", "skill_dependencies"], [%{dep | "source" => source}])
       assert {:ok, _} = RedisStore.persist_job("execution", updated)
       assert request.(binding) == result
+    end
+  end
+
+  test "knowledge retrieval exposes only its bounded embedding failure", %{record: record} do
+    key = :native_sdk_grpc_job_response_client
+    client = Application.get_env(:mirror_neuron, key)
+    target = System.get_env("MN_NATIVE_SDK_GRPC_TARGET")
+
+    on_exit(fn ->
+      restore_env(key, client)
+      restore_system_env("MN_NATIVE_SDK_GRPC_TARGET", target)
+    end)
+
+    System.put_env("MN_NATIVE_SDK_GRPC_TARGET", "127.0.0.1:55052")
+
+    dep = %{
+      "name" => "mn_sdk_workflow_context",
+      "source" => "payload",
+      "type" => "wit",
+      "version" => "1.0.0",
+      "sha256" => WitArtifacts.digest("component")
+    }
+
+    assert {:ok, _} =
+             RedisStore.persist_job(
+               "execution",
+               put_in(record, ["manifest", "skill_dependencies"], [dep])
+             )
+
+    for {method, error, expected} <- [
+          {"query-knowledge", "embedding_model_unavailable", :embedding_model_unavailable},
+          {"query-knowledge", "private provider details", :native_skill_unavailable},
+          {"read-state", "embedding_model_unavailable", :native_skill_unavailable}
+        ] do
+      Application.put_env(:mirror_neuron, key, fn _, _, _ ->
+        {:ok,
+         %Mirrorneuron.Cluster.V1.SetResourceResponse{
+           resource_json: Jason.encode!(%{error: error})
+         }}
+      end)
+
+      assert {:error, ^expected} =
+               WitServices.call(
+                 "execution",
+                 "workflow",
+                 "skill.workflow-context." <> method,
+                 ["{}"],
+                 %{},
+                 %{executor: node(), skills: [dep["name"]], access: "read"}
+               )
     end
   end
 

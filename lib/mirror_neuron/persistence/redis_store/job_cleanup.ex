@@ -50,6 +50,7 @@ defmodule MirrorNeuron.Persistence.RedisStore.JobCleanup do
         Keys.key("job", job_id, "summary"),
         Keys.key("job", job_id, "retry_checkpoint"),
         Keys.key("job", job_id, "events"),
+        Keys.key("job", job_id, "event_cursor"),
         Keys.key("job", job_id, "agents"),
         Keys.key("lease", "job:#{job_id}"),
         Keys.delivery_index_key(job_id)

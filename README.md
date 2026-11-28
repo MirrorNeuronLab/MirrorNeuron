@@ -969,3 +969,8 @@ install the Wasmtime CLI and build `native/wasmtime-runner` with
 path or set `MN_WASMTIME_BIN` and `MN_WASMTIME_HOST_BIN`. The submission
 host uses `wac` to compose the declared WIT skills. Read mapped inputs from
 `/job/mirror_neuron_input.json` and return a JSON step result on stdout.
+
+WIT knowledge queries and model calls can prepare weights on first use. Core
+polls the native SDK while the guest waits. A pinned GGUF download can exceed
+the step timeout while bytes advance. Deploy the matching Core and native SDK
+on the nodes serving those calls.

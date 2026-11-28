@@ -35,13 +35,21 @@ R3="${RUN_ID}-redis-3"
 S1="${RUN_ID}-sentinel-1"
 S2="${RUN_ID}-sentinel-2"
 S3="${RUN_ID}-sentinel-3"
+AUTH_FILE=""
 
 cleanup() {
   podman rm -f "$R1" "$R2" "$R3" "$S1" "$S2" "$S3" >/dev/null 2>&1 || true
   podman network rm "$NETWORK" >/dev/null 2>&1 || true
+  if [ -n "$AUTH_FILE" ]; then rm -f -- "$AUTH_FILE"; fi
 }
 
 trap cleanup EXIT
+
+if [ -z "${MN_REDIS_TEST_IMAGE:-}" ] && [ -z "${REGISTRY_AUTH_FILE:-}" ]; then
+  AUTH_FILE="$(mktemp "${TMPDIR:-/tmp}/mn-redis-ha-auth.XXXXXXXX")"
+  printf '%s\n' '{"auths":{}}' >"$AUTH_FILE"
+  export REGISTRY_AUTH_FILE="$AUTH_FILE"
+fi
 
 podman network create "$NETWORK" >/dev/null
 
@@ -85,10 +93,11 @@ start_sentinel "$S2" "$S2_PORT"
 start_sentinel "$S3" "$S3_PORT"
 
 wait_for_primary() {
-  local attempts=40
+  local attempts=40 address
 
   while [ "$attempts" -gt 0 ]; do
-    if podman exec "$S1" redis-cli -p 26379 SENTINEL get-master-addr-by-name "$MASTER_NAME" >/dev/null 2>&1; then
+    if address="$(podman exec "$S1" redis-cli -p 26379 --raw SENTINEL get-master-addr-by-name "$MASTER_NAME" 2>/dev/null)" &&
+      [ "$address" = "$(printf '%s\n%s' "$R1" "$R1_PORT")" ]; then
       return
     fi
 
@@ -134,6 +143,8 @@ export MN_REDIS_WAIT_TIMEOUT_MS="1000"
 export MN_GRPC_PORT="$GRPC_PORT"
 export MN_API_PORT="$API_PORT"
 export MN_REDIS_HA_MASTER_CONTAINER="$R1"
+export MN_REDIS_HA_SENTINEL_CONTAINER="$S1"
+export MN_REDIS_HA_REPLICA_CONTAINERS="$R2,$R3"
 
 cd "$ROOT_DIR"
 
@@ -152,7 +163,32 @@ job_id = "redis-ha-smoke-" <> Integer.to_string(System.unique_integer([:positive
 IO.puts("initial_write_ok=#{job_id}")
 
 {_output, 0} = System.cmd("podman", ["kill", System.fetch_env!("MN_REDIS_HA_MASTER_CONTAINER")])
-Process.sleep(12_000)
+sentinel = System.fetch_env!("MN_REDIS_HA_SENTINEL_CONTAINER")
+master = System.fetch_env!("MN_REDIS_SENTINEL_MASTER")
+replicas = String.split(System.fetch_env!("MN_REDIS_HA_REPLICA_CONTAINERS"), ",")
+deadline = System.monotonic_time(:millisecond) + 30_000
+
+wait_for_failover = fn wait ->
+  {output, status} = System.cmd("podman", ["exec", sentinel, "redis-cli", "-p", "26379", "--raw", "SENTINEL", "get-master-addr-by-name", master], stderr_to_stdout: true)
+
+  case {status, String.split(String.trim(output), "\n")} do
+    {0, [host, _port]} when host != "" ->
+      if host in replicas do
+        :ok
+      else
+        if System.monotonic_time(:millisecond) >= deadline, do: raise("Sentinel retained the original master")
+        Process.sleep(250)
+        wait.(wait)
+      end
+
+    _ ->
+      if System.monotonic_time(:millisecond) >= deadline, do: raise("Sentinel did not report a promoted replica")
+      Process.sleep(250)
+      wait.(wait)
+  end
+end
+
+:ok = wait_for_failover.(wait_for_failover)
 
 case RedisStore.persist_job(job_id, %{
        "job_id" => job_id,

@@ -40,9 +40,12 @@ Download percentages reflect measurements; unknown loading progress remains
 indeterminate and is separate from workflow completion.
 
 `runtime_preparation_started`, `runtime_preparation_progress` and
-`runtime_preparation_finished` share one identity and fixed timeout. Progress
-never renews that timeout. The owner ledger retains safe progress for reconnects;
-completion, cancellation and retries retire the active preparation.
+`runtime_preparation_finished` share one identity and timeout. Ordinary setup
+has a fixed deadline. A host-observed WIT model download can declare
+`timeout_policy: "download_inactivity"`. Only a new high-water mark in
+downloaded bytes renews its inactivity allowance. The owner ledger retains safe
+progress for reconnects. Completion, cancellation and retries retire the active
+preparation.
 `runtime_model_wait_started` and `runtime_model_wait_finished` describe gateway
 requests whose loading and inference cannot be separated. Their durable wait
 receipts never extend execution budgets and have no percentage. Upgrade Core,
@@ -433,6 +436,13 @@ Logical workflow steps are bounded by generated step-source/join/sink controls.
 Internal worker communication does not independently complete a logical step.
 The workflow ledger and persisted job status are the durable account of
 progress; events are the observable account of transitions.
+
+The fenced running summary exposes each step's first start, final outcome and
+current attempt. A terminal run uses its immutable workflow ledger. The
+authenticated `activity` channel on `StreamEvents` pages through the owner's
+retained event journal. Redis assigns sequence numbers at append time. If a
+resume cursor has expired, the observer refreshes the workflow snapshot and
+continues from the retained window.
 
 `MirrorNeuron.Runner.DockerCompose` is a native-host runner for a declared,
 payload-relative Compose source tree. Core communicates with the selected
@@ -1457,8 +1467,15 @@ Core authorizes each WIT host operation for the current run and the step's
 explicit grants. The host may provide durable artifacts, model calls, human
 review and mailbox services. Core schedules children from validated plan data.
 Native WIT imports also require the worker to select a versioned, digest-pinned component. SDK interfaces bind to their `mn_sdk_<interface>` package name and payload source. A skill binds to its catalog name, with hyphens in the WIT interface written as underscores in the component name.
-The WIT model call can prepare weights within the step deadline. The SDK starts
-its inference timeout once the model is ready.
+Core polls the native SDK for the outstanding `model.generate-json` or
+`workflow-context.query-knowledge` call by its private observation ID. A matching
+pending response establishes liveness while the guest is blocked in that import.
+Core excludes SDK-reported preparation time from execution. For pinned GGUF
+weights the model owner measures growth across the model and projector. The
+gateway inference budget starts after the owner's preparation lease completes.
+The `workflow-context.query-knowledge` WIT result reports
+`embedding_model_unavailable` when the embedding provider cannot serve the
+request. The guest receives a fixed code without provider response bodies.
 
 A command that links a native skill declares both the digest-pinned component in
 `wit_skills` and the step grant `skill.<skill-name>.<method>`. The linker accepts

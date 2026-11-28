@@ -78,7 +78,7 @@ defmodule MirrorNeuron.Runner.HostLocal.EventDecoder do
                 MirrorNeuron.Runner.CommandBudget.observe(
                   state.budget,
                   type,
-                  payload,
+                  Map.delete(payload, "source"),
                   Beacons.now_ms()
                 )
           }

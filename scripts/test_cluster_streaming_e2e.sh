@@ -385,7 +385,7 @@ trap cleanup_all EXIT
 stop_runtime_local
 stop_runtime_remote
 bash "$ROOT_DIR/scripts/ensure_test_podman.sh"
-ssh "$BOX2_IP" "$REMOTE_PATH_PREFIX bash -s" < "$ROOT_DIR/scripts/ensure_test_podman.sh"
+ssh "$BOX2_IP" "$REMOTE_PATH_PREFIX bash -s" <"$ROOT_DIR/scripts/ensure_test_podman.sh"
 ensure_local_gateway
 ensure_remote_gateway
 sync_remote_repo

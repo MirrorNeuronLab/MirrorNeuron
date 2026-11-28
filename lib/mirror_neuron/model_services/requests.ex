@@ -75,6 +75,10 @@ defmodule MirrorNeuron.ModelServices.Requests do
     "runtime model preparation is owned by mn-python-sdk/API/CLI; #{inspect(@native_sdk_grpc_target_env)} is not configured, so Core cannot forward this request to the node-local SDK service"
   end
 
+  defp native_sdk_timeout(:infinity), do: :infinity
+
+  defp native_sdk_timeout({:at_most, ms}), do: min(ms, native_sdk_timeout(ms))
+
   defp native_sdk_timeout(timeout) when is_integer(timeout) and timeout > 0 do
     env_timeout =
       @native_sdk_grpc_timeout_env

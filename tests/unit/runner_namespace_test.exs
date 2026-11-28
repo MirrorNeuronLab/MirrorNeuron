@@ -68,18 +68,25 @@ defmodule MirrorNeuron.RunnerNamespaceTest do
     end
   end
 
-  test "implicit OpenShell selection uses the same control adapter" do
+  test "a prepared sandbox selects OpenShell and other implicit workers use Wasmtime" do
     config = %{
       "environment" => %{"MN_WORKFLOW_STEP_HANDLER" => "mn_sdk.integrations.block_auxiliary"}
     }
 
-    assert MirrorNeuron.Runner.control_profile(config) ==
+    assert MirrorNeuron.Runner.control_profile(config) == %{
+             readiness: :invocation,
+             restart_after_stop: false
+           }
+
+    prepared = Map.put(config, "sandbox_name", "test-sandbox")
+
+    assert MirrorNeuron.Runner.control_profile(prepared) ==
              MirrorNeuron.Runner.control_profile(
-               Map.put(config, "runner_module", "MirrorNeuron.Runner.OpenShell")
+               Map.put(prepared, "runner_module", "MirrorNeuron.Runner.OpenShell")
              )
 
-    assert MirrorNeuron.Runner.control_profile(config).readiness == :reported
-    refute MirrorNeuron.Runner.resumable_after_stop?(config)
+    assert MirrorNeuron.Runner.control_profile(prepared).readiness == :reported
+    refute MirrorNeuron.Runner.resumable_after_stop?(prepared)
   end
 
   test "all process adapters share monitored-service control semantics" do

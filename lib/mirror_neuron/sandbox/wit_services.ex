@@ -5,12 +5,15 @@ defmodule MirrorNeuron.Sandbox.WitServices do
   alias MirrorNeuron.Runtime.Interactions
   alias MirrorNeuron.Runner.HostLocal.Context
   alias MirrorNeuron.Sandbox.Wasmtime
+  alias MirrorNeuron.Sandbox.WitModelWait
   alias MirrorNeuron.Sandbox.WitArtifacts, as: Artifacts
 
   def dispatch(config, opts, message) do
     execution = Keyword.fetch!(opts, :job_id)
     coordinator = Keyword.get(opts, :coordinator_node, node())
     workflow = Context.workflow_context(message)["run_id"] || Keyword.get(opts, :run_id)
+    runner = self()
+    wit_ref = Keyword.get(opts, :wit_ref)
 
     model =
       Map.take(
@@ -24,7 +27,9 @@ defmodule MirrorNeuron.Sandbox.WitServices do
       access: get_in(config, ["environment", "MN_JOB_DATA_ACCESS"])
     }
 
-    fn key, args ->
+    dispatch = fn key, args, observation ->
+      native = Map.put(native, :observation, observation)
+
       if coordinator == node() do
         call(execution, workflow, key, args, model, native)
       else
@@ -33,11 +38,20 @@ defmodule MirrorNeuron.Sandbox.WitServices do
           __MODULE__,
           :call,
           [execution, workflow, key, args, model, native],
-          if(key == "model.generate-json" or String.starts_with?(key, "skill."),
-            do: model_timeout_ms() + 5_000,
-            else: 100_000
-          )
+          dispatch_timeout(key, observation)
         )
+      end
+    end
+
+    fn key, args ->
+      if is_reference(wit_ref) and
+           key in ["model.generate-json", "skill.workflow-context.query-knowledge"] do
+        sdk_node = if key == "model.generate-json", do: coordinator, else: native.executor
+        timeout = MirrorNeuron.Runner.HostLocal.Beacons.timeout_ms(config)
+
+        WitModelWait.run(runner, wit_ref, sdk_node, timeout, fn id -> dispatch.(key, args, id) end)
+      else
+        dispatch.(key, args, nil)
       end
     end
   end
@@ -96,6 +110,9 @@ defmodule MirrorNeuron.Sandbox.WitServices do
           else
             _ -> {:error, :invalid_publication}
           end
+
+        {"model.generate-json", [system, input, schema]} ->
+          generate(system, input, schema, scope, model, native[:observation])
 
         _ ->
           perform(key, args, scope, dir, model)
@@ -178,29 +195,6 @@ defmodule MirrorNeuron.Sandbox.WitServices do
          do: {:ok, record}
   end
 
-  defp perform("model.generate-json", [system, input, schema], scope, _, model)
-       when is_binary(system) and byte_size(system) <= 32_768 and is_binary(input) and
-              byte_size(input) <= 100_000 and is_binary(schema) and byte_size(schema) <= 32_768 do
-    with {:ok, _} <- Jason.decode(input),
-         {:ok, spec} when is_map(spec) <- Jason.decode(schema),
-         {:ok, %{"value" => value}} <-
-           Commands.job_response_command(
-             %{
-               "kind" => "wit_model",
-               "scope" => scope,
-               "model_binding" => model,
-               "system" => system,
-               "input" => input,
-               "schema" => spec
-             },
-             model_timeout_ms()
-           ) do
-      {:ok, Jason.encode!(value)}
-    else
-      _ -> {:error, :model_request_failed}
-    end
-  end
-
   defp perform("mailbox.list", [filters], scope, _, _) do
     with {:ok, filters} when is_map(filters) <- Jason.decode(filters),
          do: mailbox(scope, "list_mailbox_messages", filters)
@@ -250,6 +244,39 @@ defmodule MirrorNeuron.Sandbox.WitServices do
   end
 
   defp perform(_, _, _, _, _), do: {:error, :invalid_service_request}
+
+  defp generate(system, input, schema, scope, model, observation)
+       when is_binary(system) and byte_size(system) <= 32_768 and is_binary(input) and
+              byte_size(input) <= 100_000 and is_binary(schema) and byte_size(schema) <= 32_768 do
+    with {:ok, _} <- Jason.decode(input),
+         {:ok, spec} when is_map(spec) <- Jason.decode(schema),
+         {:ok, %{"value" => value}} <-
+           Commands.job_response_command(
+             WitModelWait.bind(
+               %{
+                 "kind" => "wit_model",
+                 "scope" => scope,
+                 "model_binding" => model,
+                 "system" => system,
+                 "input" => input,
+                 "schema" => spec
+               },
+               observation
+             ),
+             if(observation, do: :infinity, else: model_timeout_ms())
+           ) do
+      {:ok, Jason.encode!(value)}
+    else
+      _ -> {:error, :model_request_failed}
+    end
+  end
+
+  defp generate(_, _, _, _, _, _), do: {:error, :model_request_failed}
+
+  defp dispatch_timeout(_, id) when is_binary(id), do: :infinity
+  defp dispatch_timeout("skill." <> _, _), do: model_timeout_ms() + 5_000
+  defp dispatch_timeout("model.generate-json", _), do: model_timeout_ms() + 5_000
+  defp dispatch_timeout(_, _), do: 100_000
 
   # First use may prepare model weights before the SDK starts its inference timer.
   # The runner still enforces the deadline of the enclosing step.

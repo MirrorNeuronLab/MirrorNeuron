@@ -106,31 +106,32 @@ defmodule MirrorNeuron.Sandbox.Wasmtime do
         |> Map.put("timeout_seconds", timeout)
         |> Map.put("max_output_bytes", limit(config["max_output_bytes"], @max_output))
 
-      execute = fn command ->
-        Execution.run_command(
-          command,
-          [],
-          workspace,
-          limits,
-          Keyword.merge(opts, bounded_command_output: true, wasm_guest: true),
-          message
+      wit_ref = make_ref()
+
+      opts =
+        Keyword.merge(opts,
+          bounded_command_output: true,
+          wasm_guest: true,
+          wit_ref: wit_ref,
+          message: message
         )
-      end
 
       result =
-        case Map.fetch(config, "wasm_capabilities") do
-          {:ok, grants} ->
-            WitBroker.with_socket(
-              grants,
-              WitServices.dispatch(config, opts, message),
-              fn socket ->
-                execute.([executable, component, guest, socket])
-              end
-            )
+        Execution.with_command([], workspace, limits, opts, message, fn execute ->
+          case Map.fetch(config, "wasm_capabilities") do
+            {:ok, grants} ->
+              WitBroker.with_socket(
+                grants,
+                WitServices.dispatch(config, opts, message),
+                fn socket ->
+                  execute.([executable, component, guest, socket])
+                end
+              )
 
-          :error ->
-            execute.(args)
-        end
+            :error ->
+              execute.(args)
+          end
+        end)
 
       with {:ok, output, status} <- result do
         result = %{

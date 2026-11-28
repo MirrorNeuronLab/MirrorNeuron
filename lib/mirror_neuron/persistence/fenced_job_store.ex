@@ -29,15 +29,20 @@ defmodule MirrorNeuron.Persistence.FencedJobStore do
   redis.call('SET', KEYS[3], guard)
   local added = redis.call('SADD', KEYS[4], ARGV[4])
   if ARGV[6] ~= '' then
+    redis.call('SETNX', KEYS[6], redis.call('LLEN', KEYS[5]))
+    redis.call('INCR', KEYS[6])
     redis.call('RPUSH', KEYS[5], ARGV[6])
     local maximum = tonumber(ARGV[8])
     if maximum > 0 then redis.call('LTRIM', KEYS[5], -maximum, -1) end
     local ttl = tonumber(ARGV[9])
-    if ttl > 0 then redis.call('EXPIRE', KEYS[5], ttl) end
+    if ttl > 0 then
+      redis.call('EXPIRE', KEYS[5], ttl)
+      redis.call('EXPIRE', KEYS[6], ttl)
+    end
     redis.call('PUBLISH', ARGV[10], ARGV[6])
   end
   return added
   """
 
-  def write(command, keys, args), do: command.(["EVAL", @script, "5" | keys ++ args])
+  def write(command, keys, args), do: command.(["EVAL", @script, "6" | keys ++ args])
 end

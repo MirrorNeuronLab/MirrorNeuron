@@ -61,6 +61,7 @@ defmodule MirrorNeuron.Persistence.RedisStore.JobRetention do
       Keys.key("job", job_id, "summary"),
       Keys.key("job", job_id, "guard"),
       Keys.key("job", job_id, "events"),
+      Keys.key("job", job_id, "event_cursor"),
       Keys.key("job", job_id, "agents")
     ]
     |> Enum.each(&Connection.persist_key/1)
@@ -76,6 +77,7 @@ defmodule MirrorNeuron.Persistence.RedisStore.JobRetention do
       Keys.key("job", job_id, "summary"),
       Keys.key("job", job_id, "guard"),
       Keys.key("job", job_id, "events"),
+      Keys.key("job", job_id, "event_cursor"),
       Keys.key("job", job_id, "agents")
     ]
     |> Enum.each(&Connection.expire_key(&1, ttl_seconds))

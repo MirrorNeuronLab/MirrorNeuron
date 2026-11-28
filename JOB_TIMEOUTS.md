@@ -42,8 +42,11 @@ successful inspection completes, replays or increments an attempt.
 
 `runtime_preparation_started` and `runtime_preparation_finished` carry a current
 attempt ID, unique preparation ID, kind (`model`, `dependencies`, `service`) and
-finite timeout in milliseconds, at most one day. Duplicate starts cannot move
-that deadline, and a late finish cannot erase an expired preparation. Core and
+finite allowance in milliseconds, at most one day. A WIT model preparation with
+`download_inactivity` uses that allowance between observed increases in file
+bytes. Its persisted byte count survives ledger recovery. Other preparation
+scopes retain a fixed deadline. Duplicate starts preserve the original scope,
+and a late finish cannot erase an expired preparation. Core and
 the command runners exclude the union of overlapping preparation intervals,
 once, from execution/progress clocks. The gap between sequential preparations
 still consumes execution time. Explicit liveness and cancellation remain active.

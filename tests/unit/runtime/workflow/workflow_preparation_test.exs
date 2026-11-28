@@ -132,6 +132,53 @@ defmodule MirrorNeuron.Runtime.WorkflowPreparationTest do
     assert Enum.any?(actions, &match?({:terminate_agent, _, _}, &1))
   end
 
+  test "a WIT download survives hours of byte growth, including recovery, and fails on stalled bytes" do
+    download =
+      Map.merge(payload(), %{
+        "source" => "runtime",
+        "purpose" => "embedding",
+        "timeout_policy" => "download_inactivity",
+        "phase" => "downloading",
+        "current_bytes" => 0
+      })
+
+    state = event(state(), "started", download, 0)
+
+    state =
+      Enum.reduce(1..32, state, fn quarter, state ->
+        seconds = quarter * 900
+
+        state =
+          event(state, "progress", Map.put(download, "current_bytes", seconds * 10), seconds)
+
+        {state, [], []} = reconcile(state, at(seconds))
+        state
+      end)
+
+    restored = state |> Jason.encode!() |> Jason.decode!()
+    # Duplicates, lower counters, unrelated attempts and guest claims cannot renew the lease.
+    stalled =
+      restored
+      |> event("progress", Map.put(download, "current_bytes", 288_000), 29_000)
+      |> event("progress", Map.put(download, "current_bytes", 1), 29_200)
+      |> event(
+        "progress",
+        Map.merge(download, %{"attempt_id" => "old", "current_bytes" => 300_000}),
+        29_400
+      )
+      |> event(
+        "progress",
+        Map.merge(download, %{"source" => "agent", "current_bytes" => 300_000}),
+        29_600
+      )
+
+    {_, [], []} = reconcile(stalled, at(29_999))
+    {failed, _, _} = reconcile(stalled, at(30_000))
+    assert failed["steps"]["plan"]["status"] == "failed"
+    completed = event(restored, "finished", download, 29_000)
+    assert completed["steps"]["plan"]["deadline_at"] == at(29_300)
+  end
+
   test "gateway waits survive snapshots without changing execution deadlines" do
     payload =
       payload() |> Map.merge(%{"purpose" => "llm", "phase" => "waiting", "model" => "PRIVATE"})
